@@ -1,0 +1,431 @@
+---
+knitr:
+  opts_chunk:
+    cache.path: "../_cache/introduction/"
+---
+
+# Introduction {#sec-introduction}
+
+```{r}
+#| label: introduction-setup
+#| include: false
+source("../R/_common.R")
+
+# ------------------------------------------------------------------------------
+
+library(stringr)
+library(tidymodels)
+library(textrecipes) # requires pks textfeatures and stopwords
+library(gt)
+
+# ------------------------------------------------------------------------------
+# Set options
+
+tidymodels_prefer()
+theme_set(theme_transparent())
+set_options()
+```
+
+Machine learning (ML) models are mathematical equations that take inputs, called _predictors_, and try to estimate some future output value. The output, often called an _outcome_ or _target_, can be numbers, categories, or other types of values. 
+
+For example, in the next chapter, we try to predict how long it takes to deliver food ordered from a restaurant. The outcome is the time from the initial order (in minutes). There are multiple predictors, including: the distance from the restaurant to the delivery location, the date/time of the order, and which items were included in the order. These data are _tabular_; they can be arranged in a table-like way (such as a spreadsheet or database table) where variables are arranged in columns and individual data points (i.e., instances of food orders) in rows, as shown in @tbl-deliveries^[Non-tabular data are later in this chapter.].  
+
+```{r}
+#| label: simple-deliveries
+
+source("../R/setup_deliveries.R")
+
+set.seed(28)
+delivery_tbl <-
+  delivery_train %>%
+  mutate(
+    group_1 = ntile(time_to_delivery, 15),
+    group_2 = item_01 > 1
+    ) %>% 
+  group_by(group_1, group_2) %>% 
+  sample_n(1) %>% 
+  ungroup() %>% 
+  slice(1:4, 12:15) %>% 
+  sample_n(8) %>%
+  select(-starts_with("group")) %>%
+  select(time_to_delivery:item_02, item_27) %>% 
+  setNames(c("Time to Delivery", "Hour of Order", "Day of Order", "Distance", 
+             paste("   ", c(1, 2, 27), "   "))) %>%
+  mutate(
+    blank = "  ...  ",
+    `Time to Delivery` = round(`Time to Delivery`, 2),
+    `Hour of Order` = round(`Hour of Order`, 1),
+    Distance = round(Distance, 2)
+    ) %>%
+  relocate(blank, .after = "    2    ")
+
+lm_fit <- lm(log(time_to_delivery) ~ distance, data = delivery_train)
+eq_coef <- format(coef(lm_fit), digits = 2)
+```
+
+```{r}
+#| label: tbl-deliveries
+#| tbl-cap: "A random selection of several rows from a tabular data set on food delivery times."
+
+delivery_tbl %>% 
+  gt() %>% 
+  cols_label_with(fn = function(x) ifelse(x == "blank", "...", x)) %>% 
+  tab_spanner(label = "Item Counts", columns = c((ncol(delivery_tbl)-3):ncol(delivery_tbl))) %>% 
+  tab_style(
+    style = cell_borders(sides = c("bottom"),  weight = px(1.8)),
+    locations = cells_body(rows = nrow(delivery_tbl))
+  ) %>% 
+  tab_style(
+    style = cell_borders(sides = c("top", "bottom"),  weight = px(1.8)),
+    locations = cells_column_labels()
+  ) %>% 
+  cols_width(c(starts_with(" ")) ~ px(100))
+```
+
+Note that the predictor values are almost always known. For future data, the outcome is not; it is a machine learning model's job to predict unknown outcome values. 
+
+How does it do that? A specific machine learning model has a defined mathematical _prediction equation_ defining exactly how the predictors relate to the outcome. We'll see two very different prediction equations shortly. 
+
+The prediction equation includes some unknown parameters. These are placeholders for values that help us best predict the outcomes. The process of model training (also called "fitting" or "estimation") takes our existing predictor and outcome data and uses them to find the "optimal" values of these unknown parameters. Once we estimate these unknowns, we can use them and specific predictor values to estimate future outcome values. 
+
+Here is a simple example of a prediction equation with a single predictor (the distance) and two unknown parameters that have been estimated: 
+
+$$ 
+delivery\:time = \exp\left[`r eq_coef[1]` + `r eq_coef[2]` \: distance\right] 
+$$ {#eq-log-linear}
+
+We could use this equation for new orders: 
+
+ - If we had placed an order at the restaurant (i.e., a zero distance) we predict that it would take $e^{`r round(coef(lm_fit)[1], 3)`} \approx `r round(exp(coef(lm_fit)[1]), 1)`$ minutes. 
+ - If we were four miles away, the predicted delivery time is $e^{(`r round(coef(lm_fit)[1], 3)` + `r round(4 * coef(lm_fit)[2], 3)`)} \approx `r round(exp(predict(lm_fit, data.frame(distance = 4))), 2)`$ minutes.
+ 
+and so on.
+
+This is an incredibly reductive approach; it assumes that the relationship between the distance and time are log-linearly related and is not influenced by any other characteristics of the process. On the bright side, the exponential function ensures that there are no negative time predictions, and it is straightforward to explain.  
+
+How did we arrive at values of `r round(coef(lm_fit)[1], 3)` and `r round(coef(lm_fit)[2], 3)`? They were _estimated from data_ once we made a few assumptions about our model. We started off by proposing a format for the prediction equation: an _additive, log-linear function_^[This is a linear regression model.] that includes unknown parameters $\beta_0$ and $\beta_1$:  
+
+$$ 
+{ \color{darkseagreen} \underbrace{\color{black} log(time)}_{\text{the outcome}} } = 
+{ \color{darkseagreen} \overbrace{\color{black} \beta_0+\beta_1\, distance}^{\text{an additive function of the predictors}} } +  
+{ \color{darkseagreen} \underbrace{\color{black} \epsilon}_{\text{the errors}} }
+$$
+
+To estimate the parameters, we chose some type of criterion to quantify what it means to be "good" values  (called an objective function or performance metric). Here we will pick values of the $\beta$ parameters that minimize the squared error, with the error ($\epsilon$) defined as the difference in the observed and predicted times (on the log scale). 
+
+Based on this criterion, we can define intermediate equations that, if we solve them, will result in the best possible parameter estimates given the data and our choices for the prediction equation and objective function. 
+
+```{r}
+#| label: pred-values
+#| echo: false
+dist_grid <-
+  tibble(
+    distance = 
+      seq(
+        min(delivery_val$distance),
+        max(delivery_val$distance),
+        length.out = 500
+      )
+  )
+
+pred_val <- 
+  dist_grid %>% 
+  mutate(
+    `linear regression` = exp(predict(lm_fit, dist_grid)),
+    `regression tree` = 
+      24.7 * (distance <= 3.125) + 
+      27.6 * (distance <= 4.465 & distance > 3.125) + 
+      32.3 * (distance <= 5.985 & distance > 4.465) + 
+      39.6 * (distance > 5.985)
+  ) %>% 
+  pivot_longer(cols = c(-distance), names_to = "Model", values_to = "prediction")
+```
+
+Sadly, @eq-log-linear, while better than a random guess, is not very effective. It does the best it can with the data and a the single predictor. It just isn't very accurate. 
+
+To illustrate the diversity of different ML models, @eq-tree-2d shows a completely different kind of prediction equation. This was estimated from a model called a regression tree. The function $I(\cdot)$ is one if the logical statement is true and zero otherwise.  Two predictors (distance and day of the week) were used in this case. 
+
+$$
+\begin{align}
+time = \:&23.0\, I\left(distance <  4.465   \text{ miles and } day \in \{Mon, Tue, Wed, Sun\}\right)  + \notag \\
+       \:&27.0\, I\left(distance <  4.465   \text{ miles and } day \in \{Thu, Fri, Sat\}\right)  + \notag \\
+       \:&29.8\, I\left(distance \ge  4.465 \text{ miles and } day \in \{Mon, Tue, Wed, Sun\}\right)  + \notag \\
+       \:&36.5\, I\left(distance \ge  4.465 \text{ miles and } day \in \{Thu, Fri, Sat\}\right)\notag
+\end{align}
+$$ {#eq-tree-2d}
+
+A regression tree determines the best predictors(s) to "split" the data, making smaller and smaller subsets of the data in a way that attempts to make the subsets within each split have about the same outcome value. The coefficients for each logical group are the average of the delivery times for each subset defined by the statement with the $I(\cdot)$ terms. Note that these logical statements, called rules, are mutually exclusive; only one of the four subsets will be true for any data point being predicted. 
+
+Like the linear regression model that produced @eq-log-linear, the performance of @eq-tree-2d is quite poor. There are only four possible predicted delivery times. This particular model is not known for its predictive ability, but it can be highly predictive when combined with other regression trees into an ensemble model.  
+
+This book is focused on the practice of applying various ML models to data to make accurate predictions. Before proceeding, we'll discuss different types of the data used to estimate models and then explore some aspects of ML models, particularly neural networks. 
+
+## Non-Tabular Data  {#sec-nontabular}
+
+The columns shown in @tbl-deliveries are defined within a small scope. For example, the delivery hour column encapsulates everything about that order characteristic: 
+
+- You don't need any other columns to define it. 
+- A single number is all that is required to describe that information. 
+
+Non-tabular data does not have the same properties. Consider images, such as the one shown @fig-cells that depicts four cells from a biological experiment [@Yucells]. These cells that have been stained with pigments that fluoresce at different wavelengths to "paint" different parts of the cells. In this image, blue reflects the part of the cell called the cytoskeleton, which encompasses the entire cell body. The red color corresponds to a stain that only attaches itself to the contents of the cell nucleus, specifically DNA. This image^[This is a smaller version of a larger image that is 1392  pixels by 1040 pixels.] is 371 pixels by 341 pixels with quantification of two colors. 
+
+```{r}
+#| label: fig-cells
+#| echo: false
+#| out-width: "40%"
+#| fig-align: "center"
+#| fig-cap: "An example image of several cells using two colors. Image from @Yucells."
+
+knitr::include_graphics("../premade/cells.png")
+```
+
+From a data perspective, this image is represented as a three-dimensional array (371 rows, 341 columns, and 2 colors). Probably the most important attribute of this data is the spatial relationships between pixels. It is critical to know where each value in the 3D array resides, but knowing what the nearby values are is at least as important. We could "flatten" the array into 371 $\times$ 341 $\times$ 2 = 253,022 columns to use in a table^[The original image would produce `r format(1392 * 1040 * 2, big.mark = ",")` flattened features.]. However, this would break the spatial link between the data points; each column is no longer as self-contained as the columns from the delivery data. The result is that we have to consider the 3D array as the data instead of each pixel location/color combination. 
+
+Additionally, images often have different dimensions which results in different array sizes. From a tabular data perspective, a flattened version of such data would have a different number of columns for different-sized images. 
+
+Videos are an extension of image data if we were to consider it a four-dimensional array (with time as the additional dimension). The temporal aspects of such data are critical to understanding and predicting values. 
+
+Text data is often thought of as non-tabular data. As an example, consider text from @oathbringer:
+
+> "The most important step a man can take. It's not the first one, is it? It's the next one. Always the next step, Dalinar."
+
+With text data, it is common to define the "token": the unit of text that should be analyzed. This could be a paragraph,  sentence, word, etc. Suppose that we used sentences as tokens. In this case, the table for this quote would have four rows. Where do we go from here? The sequence of words (or characters) is likely to be important, and this makes a case for keeping the sentences as strings. However, as will be seen shortly, we might be able to convert these four tokens to numeric columns in a way that preserves the information required for prediction. 
+
+Perhaps a better text example relates to the structure of chemicals. A chemical is a three-dimensional molecule but is often described using a SMILES string [@ChemoinformaticsBook,chap. 3]. This is a textual description of molecule that lists its elements and how they relate to one another.  For example, the SMILES string `CC(C)CC1=CC=C(C=C1)C(C)C(=O)O` defines the anti-inflammatory drug Ibuprofen. The letters describe the elements (C is carbon, O is oxygen, etc) and the other characters defines the bonds between the elements. The character sequence within this string is critical to understanding the data. 
+
+Our motives for categorizing data as tabular and non-tabular are related to how we choose an appropriate model. Our opinion is that most modeling projects involve tabular data (or data that can be effectively represented as tabular). Models for non-tabular data are very specialized and, while these ML approaches are the most discussed in the social media, they tend not to be the best approach for tabular data. 
+
+## Converting Non-Tabular Data to Tabular  {#sec-nontabular-convert}
+
+In some situations, non-tabular data can be effectively converted to a tabular format, depending on the specific problem and data. 
+
+For some modeling projects using images, we might not be interested in every pixel. For  @fig-cells, we really care about the cells in the image. It is important to understand within-cell characteristics (e.g. shape or size) and some between-cell information (e.g., the distance between cells). The vast majority of the pixels don't need to be analyzed. 
+
+We can pre-analyze the 3D arrays to determine which pixels in an image correspond to specific cells (or nuclei within a cell). Segmentation [@holmes2018modern] is the process of estimating regions of an image that define some object(s).  @fig-segmented shows the same cells with lines generated from a simple segmentation. 
+
+```{r}
+#| label: fig-segmented
+#| echo: false
+#| out-width: "40%"
+#| fig-align: "center"
+#| fig-cap: "The cell segmentation results for the four neuroblastomas shown in @fig-cells."
+
+knitr::include_graphics("../premade/segmented.png")
+```
+
+Once our cells have been segmented, we can compute various statistics of interest based on size, shape, or color. If a cell is our unit of data, we can create a tabular format where rows are cells and columns are cell characteristics (@tbl-cells). The result is a data table that has more rows than the original non-tabular structure since there are multiple cells in an image. There are far fewer columns but these columns are designed to be more informative than the raw pixel data since the researchers define the cell characteristics that the desire. 
+
+
+```{r}
+#| label: tbl-cells
+#| tbl-cap: "Cells, such as those found in @fig-cells, translated into a tabular format using three features for the nuclear and non-nuclear regions of the segmented cells."
+
+cell_data <- 
+tibble::tribble(
+  ~ID,  ~n_ecc,  ~c_ecc, ~blank_1, ~n_area, ~c_area, ~blank_2, ~n_mean, ~c_mean,
+  17L, 0.49375, 0.83583,      " ",   3352L,  11699L,      " ", 0.27438, 0.15497,
+  18L,  0.7077, 0.54952,      " ",   1777L,   4980L,      " ", 0.27805, 0.20983,
+  21L, 0.49524, 0.80247,      " ",   1274L,   3081L,      " ", 0.32611, 0.21763,
+  22L, 0.80864, 0.97505,      " ",   1169L,   3933L,      " ", 0.58297, 0.22871
+  ) %>% 
+  rename_with(~ gsub("n_", "Nucleus_", .x), starts_with("n_")) %>% 
+  rename_with(~ gsub("c_", "Cell_", .x), starts_with("c_"))
+
+cell_data %>% 
+  gt() %>% 
+  fmt_integer(columns = c(contains("area"))) %>% 
+  fmt_number(columns = c(contains("ecc"), contains("mean")), n_sigfig = 3) %>%   
+  cols_label(blank_1 = " ", blank_2 = " ") %>% 
+  cols_label_with(fn = function(x) gsub("(_area)|(_mean)|(_ecc)", "", x)) %>% 
+  tab_spanner(label = "Area", columns = c(ends_with("area"))) %>% 
+  tab_spanner(label = "Intensity", columns = c(ends_with("mean"))) %>% 
+  tab_spanner(label = "Eccentricity", columns = c(ends_with("ecc")))
+```
+
+
+This conversion to tabular data isn't appropriate for all image analysis problems. If you want to know if an image contains a cat or not it probably isn't a good idea. 
+
+Let's also consider the text examples. For the book quote, @tbl-sanderson shows a few simple predictors that are tabular in nature: 
+
+* Presence/absence columns for each word in the entire document.   @tbl-sanderson shows columns corresponding to the words "always", "can", and "take". These are represented as counts. 
+* Sentence summaries, such as the number of commas, words, characters, first-person speech, etc. 
+
+There are many more ways to represent these data. More complex numeric _embeddings_ that are built on separate large databases can reflect different parts of speech, text sequences (called n-grams), and others. @hvitfeldt2021supervised describes these and other tools for analyzing tabular versions of text.
+
+```{r}
+#| label: tbl-sanderson
+#| echo: false
+#| tbl-cap: "An example of converting non-numeric data to a numeric, tabular format."
+
+steps <- 
+  tibble(Sentence = 
+           c("The most important step a man can take.",
+             "It's not the first one, is it?",
+             "It's the next one.",
+             "Always the next step, Dalinar.")
+  )
+
+steps_data <-
+  recipe(~ Sentence, data = steps) %>% 
+  step_textfeature(Sentence, keep_original_cols = TRUE) %>%
+  step_tokenize(Sentence) %>%
+  step_stopwords(Sentence) %>%
+  step_tf(Sentence) %>%
+  prep() %>% 
+  bake(new_data = NULL) %>% 
+  rename_with(~ paste0('"', .x, '"'), c(starts_with("tf_Sentence_"))) %>% 
+  rename_with(~ gsub("tf_Sentence_", "", .x), c(everything())) %>% 
+  rename_with(~ gsub("textfeature_Sentence_n_", "", .x), c(everything())) %>% 
+  rename_with(~ gsub("textfeature_Sentence_", "", .x), c(everything())) %>% 
+  mutate(`   ` = "...") %>% 
+  select(`"always"`:`"can"`, `   `, `"take"`, Characters = charS, Commas = commas)
+
+bind_cols(steps, steps_data) %>% 
+  gt()%>% 
+  cols_align(align = "center", columns = c(-Sentence)) %>% 
+  tab_style(
+    style = cell_borders(sides = c("top", "bottom"),  weight = px(1.8)),
+    locations = cells_column_labels()
+    ) %>% 
+  tab_style(
+    style = cell_borders(sides = c("bottom"),  weight = px(1.8)),
+    locations = cells_body(rows = 4)
+    ) %>% 
+  cols_label_with(fn = function(x) ifelse(x == "   ", "...", x))
+```
+
+For the chemical structure of Ibuprofen, there is a rich field of molecular descriptors [@IntroToChem, chap. 3;@ChemoinformaticsBook] that can be used to produce thousands of informative predictor columns. For example, we might be interested in the size of the molecule (perhaps measured by surface area), its electrical charge, or whether it contains specific sub-structures. 
+
+The process of determining the best data representations is called _feature engineering_. This is a critical task in machine learning and is often overlooked. Part 2 of this book spends some time looking at feature engineering methods (once the data are in a tabular format). 
+
+## Models and Machine Learning   {#sec-model-types}
+
+Since we have mentioned linear regression and regression trees, it makes sense to talk about possible machine learning scenarios. There are many, but we will focus on two types. 
+
+_Regression models_ have a numeric outcome (e.g., delivery time) and our goal is to predict that value. There are some cases where our outcome is a number, but we are mostly interested in ranking new data (as opposed to accurately predicting the value). 
+
+The other scenario that we discuss is _classification models_. In this case, the outcome is a qualitative categorical value (e.g., "cat" or "no cat" in an image). One interesting aspect of these models is that there are two main types of predictions: 
+
+- _hard predictions_ correspond to the original outcome value. 
+- _soft predictions_ return the probability of each possible outcome (e.g., there is a 27% chance that a cat is in the image). 
+
+The number of categories is important; some models are specific to two classes, while others can accommodate any number of outcome categories. Most classification outcomes have mutually exclusive classes (one of all possible class values). There are also ordered class values where, while categorical, there is some type of ordering. For example, tumors are often classified in stages, with stage I being a localized malignancy and stage IV corresponding to one that has spread throughout the body.  
+
+_Multi-label_ outcomes can have multiple classes per row. For example, if we were trying to predict which languages that someone can speak, multilingual people would have multiple outcome values. 
+
+We are focused on prediction problems. This implies that our data will contain an outcome. Such scenarios falls under the broader class of _supervised models_. An _unsupervised model_ is one where the is no true outcome value. Tools such as clustering, principal component analysis (PCA), and others look to quantify patterns in the data without some prediction goal. We'll encounter unsupervised methods in our pre-model activities such as feature engineering described in Part 2. 
+
+Several synonyms for machine learning include statistical learning, predictive modeling, pattern recognition, and others. While many specific models are designed for machine learning, we suggest that users think about machine learning as the problem and not the solution. Any model that can adequately predict the outcome values deserves the title. A commonly used argument for this position is that two models that are conventionally thought of as tools to make inferences (e.g., p-values) are _linear regression_ and _logistic regression_. @eq-log-linear is a simplistic linear regression model. As will be seen in future chapters, linear and logistic regression models can produce highly accurate predictions for complex problems. 
+
+
+## Data Characteristics  {#sec-data-types}
+
+It's helpful to discuss different nomenclature and types of data. With tabular data, there are a number of ways to refer to a row. The terms sample, instance, observation, and/or data point are commonly used. The first, "sample", can be used in a few different contexts; we will also use it to describe a subset of a greater data collection (as in "we took a random sample of the data".). 
+
+For predictors, there are also many synonyms. In statistical nomenclature, _independent variable_ or _covariate_ are used. More generic terms are _attribute_ and _descriptor_. The term _feature_ is generally equated to predictors, and we'll use both.  An additional adjective may also be assigned to "feature". Consider the date and time of the orders shown in @tbl-deliveries. The "original feature" is the data/time column in the data. The table includes two "derived features" in the form of the decimal hour and the day of the week. This distinction will be important when discussing feature engineering, importance scores, and explaining models. 
+
+Outcomes/target columns can also be called the dependent variable or response. 
+
+For numeric columns, we will make some distinctions. A real number is numeric with potentially fractional values (e.g., time to delivery). Integers are whole numbers, often reflecting counts. Binary data take two possible values that are almost always represented with zero and one. 
+
+Dense data describes a collection of numeric values with many possible values, also reflected by the delivery time and distances in  @tbl-deliveries. Sparse data have fewer possible values or when only a few values are contained in the observed data. The product counts in the delivery data are good examples. They are integer counts and are mostly represented by zeros and some ones. There are very few values greater than two. 
+
+While numeric data are quantitative, qualitative data cannot be represented by a numeric scale^[Also known as "discrete" or "nominal" data.]. The day of the week data are categories with seven possible values. Binary categorical data have two categories, such as alive/dead. 
+
+The item columns in @tbl-deliveries are interesting too. If the order could only contain one item, we might configure that data with a qualitative single column. However, these data are multiple-choice and, as such, are shown in multiple integer columns with zero, reflecting that it was not in the order. 
+
+value types, skewness, colinearity, distributions, ordinal
+
+
+## What Defines the Model? {#sec-model-pipeline} 
+
+When discussing the modeling process, it is traditional to think the parameter estimation steps occur only when the model is fit. However, as more complex techniques are used to prepare predictor values for the model, it is crucial to understand that important quantities are also being estimated before the model. Here are a few examples: 
+
+* Imputation methods, discussed in Chapter TODO, create sub-models that estimate missing predictor values. These are applied to the data before modeling to complete the data set. 
+* Feature selection tools [@fes] often compute measures of predictor importance to remove uninformative predictors before passing the data to the model. 
+* Effect encoding tools, discussed in Section TODO, embed the effect of the predictor on the outcome into the model as a predictor. 
+* Post-model adjustments to predictions, such as model calibration ([Section -@sec-calibration-whole-game] and TODO), are examples of postprocessing operations.
+
+::: {.callout-note}
+## The modeling pipeline
+
+These operations can profoundly affect the overall results, yet they are not usually considered part of "the model." We’ll use the more expansive term "modeling pipeline" to describe any estimation for the model or operations before or after the model: 
+
+<p style="text-align: center;"><b>model pipeline = preprocessing + supervised model + postprocessing</b></p>
+:::
+
+This is important to understand: a common pitfall in ML is only validating the model fitting step instead of the whole process. This can lead to performance statistics that can be extraordinarily optimistic and might deceive a practitioner into believing that their model is much better than it truly is.  
+
+## Deep Learning  {#sec-deep-learning}
+
+While many models can be used for machine learning, _neural networks_ are the elephant in the room. These complex, nonlinear models are frequently used in machine learning to the point where, in some domains, these models are synonymous with ML. One class of neural network models is _deep learning (DL) models_ [@goodfellow2016deep;@udl2023]. Here, "deep" means that the models have many structural layers, resulting in extraordinary amount of complexity defined by the tools. 
+
+For example, @fig-vgg16 shows a diagram of a type of deep learning model called a convolutional neural network that is often used for making predictions on images. It consists of several layers that manipulate the data. This particular model, dubbed VGG16, was proposed by @simonyan2014very. 
+
+The color image on the left is a data point. The first block has three layers. The two larger yellow boxes are convolutional layers. They move a small multidimensional array over the larger data array to compute localized features. For example, for an image that is 150 x 150 pixels, a convolution that uses a 3x3 filter will move this small rectangle across the array. At the (2,2) position, it takes the average of all adjacent pixel locations. 
+
+After the convolutional operations, a smaller _pooling layer_ is shown in orange. Pooling, usually by finding the maximum feature value across different image regions, compresses/downsamples the larger feature set so a smaller size without diminishing features with large signals. 
+
+The next three blocks consist of similar convolutional and pooling layers but of different dimensions. The idea behind these blocks is to reduce the image data to a smaller dimension width/height dimension in a way that extracts potentially important hierarchical features from the image.
+
+After block 5, the data are flattened into a single array, similar to the columns in a tabular data set. Up to this point, the network has been focused on preprocessing the image data. If our initial image were 150 pixels by 150 pixels, the flattening process would result in over 8 thousand predictors that would be used in a supervised ML model. The network would have over 14 million model parameters to estimate from the data to get to this point. 
+
+After flattening, the final two layers correspond to the classic supervised neural network model [@Bishop1995]. The original paper used four large supervised neural network layers; for simplicity, @fig-vgg16 shows a single dense layer. This can add dozens of millions of additional parameters for a modest-sized dense layer. 
+
+```{r}
+#| label: fig-vgg16
+#| echo: false
+#| out-width: "100%"
+#| fig-align: "center"
+#| fig-cap: A simplified version of the convolutional neural network deep learning model proposed by @simonyan2014very. This version only includes a single dense layer (instead of four).
+
+knitr::include_graphics("../premade/vgg16.jpg")
+```
+
+There are many types of deep learning models. Another example is recurrent neural networks, which create layers that are proficient at modeling data that occur in sequences such as time series data or sentences (i.e., a sequence of words).
+
+Very sophisticated deep learning models have generated, by far, the best predictive ability for images and similar data. It would seem natural to think these models would be just as effective for tabular data. However, this has not been the case. Machine learning competitions, which are very different from day-to-day machine learning work, have shown that many other models can consistently do as well or likely better on tabular data sets. This has generated an explosion of literature^[To be honest, the literature in this area has been fairly poor (as of this writing).] and social media posts that try to explain why this is the case. For example, see @borisov2022deep and @mcelfresh2023neural. 
+
+We believe that exceptionally complex DL models are handicapped in several ways when taken out of the environments where they have been successful.  
+
+First, the complexity of these models requires extreme amounts of data, and the constraints of such large data sets drive how the models are developed. 
+
+For example, keeping very large data sets in a computer's memory is almost impossible. As discussed earlier, we use the data to find optimal values of our parameters for some objective functions (such as classification accuracy). Using traditional optimization procedures, this is very difficult if the data cannot be accessed simultaneously. Deep learning models use more modern optimization methods, such as stochastic gradient descent (SGD) methods, for estimating parameters. It does not simultaneously hold all of the data in memory and fits the model on small incremental batches of data. This is a very effective technique, but it is not an approach one would use with data set sizes that are more common (e.g., less than a million data points). SGD is less effective for smaller data sizes than traditional in-memory optimizers. Another consequence of huge data requirements is that model training can take an excruciatingly long time. As a result, efficient model development can require specialized hardware. It can also drive how models are optimized and compared. DL models are often optimized by sequentially adjusting the model. Other ML models can be optimized with a more methodical simultaneous design that is often more efficient, systematic, and effective than sequential optimizers used with deep learning. 
+
+Another issue with deep learning models is that their size and mathematical structure are associated with a very difficult optimization problem; their objective function is _non-convex_. We'd like to have an optimization problem that has some guarantees that a global optimal value exists (or can be found). That is often not the case for these models. For example, if we want to estimate the VGG16 model parameters with the goal of maximizing the classification accuracy for finding dogs in an image, it can be difficult to get a reliable example and, if we do, we don't know if it is really the correct answer. 
+
+Because the optimization problem is so difficult, much of the user's time is spent optimizing the model parameters or tuning the network structure to find the best results. When combined with how long it takes for a single model fit, deep learning models are very high maintenance compared to other models when used on tabular data. They can probably produce a model that is marginally better than the others, but doing so requires an inordinate amount of time, effort, and constraints. DL models are superior for certain hard problems with large data sets. For other situations, other ML models can go probably go further and faster^[That said, simple neural network models can be very effective. While still a bit more high maintenance than other models, it's a good idea to give them a try (as we will see in the following chapter).]. 
+
+Finally, there are some data-centric reasons that deep learning models don't automatically translate to tabular data. There are characteristics of tabular data that don't often occur in stereotypical DL applications. For example: 
+
+- In some cases, a group of predictors might be highly correlated with one another. This can compromise some of the mathematical operations used to estimate parameters in neural networks (and many other models). 
+- Unless we have extensive prior experience with our data, we don't know which are informative and which are irrelevant for predicting an outcome. As the number of non-informative predictors increases, the performance of neural networks decreases. See Section 19.1 of @apm. 
+- Predictors with "irregular" distributions, such as skewness or heavy tails, can harm performance [@mcelfresh2023neural].
+- Missing predictor data are not naturally handled in basic neural networks. 
+- "Small" sample sizes or data dimensions with at least as many predictors as rows. 
+
+as well as others. These issues can be overcome by adding layers to a network designed to counter specific challenges. However, in the end, this ends up adding more complexity. We propose that there are a multitude of other models, and many of them are resistant or robust to these types of data-specific characteristics. It is better to have different tools in our toolbox; making a more complex hammer may not help us put a screw in a wall. 
+
+The deep learning literature has resulted in many collateral benefits for the broader machine learning field. We'll describe a few techniques that have improved machine learning, especially for smaller neural networks. 
+
+## Modeling Philosophies {#sec-aspects}
+
+talk about subject-matter knowledge/intuition vs "let the machine figure it out". biased versus unbiased model development.
+
+assistive vs automated usage
+
+## Outline of These Materials  {#sec-outline}
+
+This work is organized into parts: 
+
+ - **Introduction**: The next chapter shows an abbreviated example to illustrate important concepts used later. 
+ - **Preparation**: These chapters discuss topics such as data splitting and feature engineering. These activities occur before the actual training of the machine learning model but are critically important. 
+ - **Optimization**: To find the model that has the best performance, we often need to tune them so that they are effective but do not overfit. These chapters describe overfitting, methods to measure performance, and two different classes of optimization methods. 
+ - **Classification**: Classification models have outcomes that are not numbers (e.g. yes/no, etc). Various models for classification are described in this part. 
+ - **Regression**: Models that predict some sort of number are often called regression models. These chapter describe such models. 
+ - **Characterization**: Once you have a model, how do you describe it or its predictions? How do you know when you should question the results of your model? We'll address these questions in this part. 
+ - **Finalization**: Post-modeling activities such as monitoring performance are discussed. 
+
+Before diving into the process of creating a good model, let's have a short case study. The next chapter is designed to give you a sense of the overall process and illustrate important ideas and concepts that will appear later in the materials. 
+
+## Chapter References {.unnumbered}
