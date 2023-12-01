@@ -55,25 +55,14 @@ Two classes of transformations will be considered here: those that resolve distr
 
 ### Resolving skewness
 
-For example, @fig-ames-lot-area (panel a) shows the training set distribution of the lot area of houses in Ames. The data are significantly right-skewed (with a skewness value of `r signif(e1071::skewness(ames_train$Lot_Area), 3)`). There are `r sum(ames_train$Lot_Area > 100000)` samples in the training set that sit far beyond the mainstream of the data. 
+The skew of a distribution can be quantified using the skewness statistic: 
 
-One might infer that "samples far beyond the mainstream of the data" is synonymous with the term "outlier"; The Cambridge dictionary defines an outlier as
-
-> a person, thing, or fact that is very different from other people, things, or facts [...]
-
-or 
-
-> a place that is far from the main part of something
-
-These statements imply that outliers belong to a different distribution than the bulk of the data, perhaps due to a typographical error or an incorrect merging of data sources.
-
-The @nist describes them as 
-
-> an observation that lies an abnormal distance from other values in a random sample from a population
-
-In our experience, researchers are quick to label (and discard) extreme data points as outliers. Often, especially when the sample size is not large, these data points are not abnormal but belong to a highly skewed distribution. They are ordinary in a distributional sense. That is the most likely case here; some houses in Ames have very large lot areas, but they certainly fall under the definition of "houses in Ames, Iowa." These values are genuine, just extreme.
-
-This, by itself, is okay. However, suppose that this column is used in a calculation that involves squaring values, such as Euclidean distance or the sample variance. Extreme values in a skewed distribution can influence some predictive models and cause them to place more emphasis on these predictors^[The field of robust techniques is predicated on making statistical calculations insensitive to these types of data points.]. When the predictor is left in its original form, the extreme samples can end up degrading a model's predictive performance.
+$$\begin{align}
+  skewness &= \frac{1}{(n-1)v^{3/2}} \sum_{1=1}^n (x_i-\overline{x})^3 \notag \\
+  \text{where}\quad  v &= \frac{1}{(n-1)}\sum_{1=1}^n (x_i-\overline{x})^2 \notag
+\end{align}
+$$
+where values near zero indicate a symmetric distribution, positive values correspond a right skew, and negative values left skew.  For example, @fig-ames-lot-area (panel a) shows the training set distribution of the lot area of houses in Ames. The data are significantly right-skewed (with a skewness value of `r signif(e1071::skewness(ames_train$Lot_Area), 3)`). There are `r sum(ames_train$Lot_Area > 100000)` samples in the training set that sit far beyond the mainstream of the data. 
 
 ```{r}
 #| label: ames-lot-area-calcs
@@ -137,9 +126,52 @@ lot_area_pctl <-
 (lot_area_raw  +  lot_area_yj) / (lot_area_pctl + lot_area_norm)
 ```
 
+
+One might infer that "samples far beyond the mainstream of the data" is synonymous with the term "outlier"; The Cambridge dictionary defines an outlier as
+
+> a person, thing, or fact that is very different from other people, things, or facts [...]
+
+or 
+
+> a place that is far from the main part of something
+
+These statements imply that outliers belong to a different distribution than the bulk of the data, perhaps due to a typographical error or an incorrect merging of data sources.
+
+The @nist describes them as 
+
+> an observation that lies an abnormal distance from other values in a random sample from a population
+
+In our experience, researchers are quick to label (and discard) extreme data points as outliers. Often, especially when the sample size is not large, these data points are not abnormal but belong to a highly skewed distribution. They are ordinary in a distributional sense. That is the most likely case here; some houses in Ames have very large lot areas, but they certainly fall under the definition of "houses in Ames, Iowa." These values are genuine, just extreme.
+
+This, by itself, is okay. However, suppose that this column is used in a calculation that involves squaring values, such as Euclidean distance or the sample variance. Extreme values in a skewed distribution can influence some predictive models and cause them to place more emphasis on these predictors^[The field of robust techniques is predicated on making statistical calculations insensitive to these types of data points.]. When the predictor is left in its original form, the extreme samples can end up degrading a model's predictive performance.
+
 One way to resolve skewness is to apply a transformation that makes the data more symmetric. There are several methods to do this. The first is to use a standard transformation, such as logarithmic or the square root, the latter being a better choice when the skewness is not drastic, and the data contains zeros. A simple visualization of the data can be enough to make this choice. The problem is when there are many numeric predictors; it may be inefficient to visually inspect each predictor to make a subjective judgment on what if any, transformation function to apply. 
 
-box-cox
+@Box1964p3648 defined a power family of transformations that use a single parameter, $\lambda$, for different methods: 
+
+:::: {.columns}
+
+::: {.column width="10%"}
+:::
+
+::: {.column width="40%"}
+- no transformation via $\lambda = 1.0$
+- square ($x^2$) via $\lambda = 2$
+- logarithmic ($\log{x}$) via $\lambda = 0.0$
+:::
+
+::: {.column width="40%"}
+- square root ($\sqrt{x}$) via $\lambda = 0.5$
+- inverse square root ($1/\sqrt{x}$) via $\lambda = -0.5$
+- inverse ($1/x$) via $\lambda = -1.0$
+:::
+
+::: {.column width="10%"}
+:::
+
+::::
+
+and others in between. The transformed version of the variable is:
 
 $$
 x^* =
@@ -149,7 +181,7 @@ log(x) &\text{if $\lambda = 0$.}
 \end{cases}
 $$
 
-yeo-johnson
+Their paper defines this as a supervised transformation of a non-negative outcome ($y$) in a linear regression model. They find a value of $\lambda$ that minimizes the residual sums of squared errors. In our case, we can co-opt this method to use for unsupervised transformations of non-negative predictors. @yeojohnson extend this method by allowing the data to be negative via a slightly different transformation: 
 
 $$
 x^* =
@@ -161,11 +193,11 @@ log(x + 1) &\text{if $\lambda = 0$ and $x \ge 0$.} \\
 \end{cases}
 $$
 
-Maximum likelihood is also used to estimate the $\lambda$ parameter.
+In either case, maximum likelihood is also used to estimate the $\lambda$ parameter. 
 
-In practice, these two transformations might be limited to predictors with acceptable density. For example, the transformation may only be appropriate for a predictor with a few unique values. A threshold of five or so unique values might be a proper rule of thumb (see the discussion in @sec-near-zero-var). Also, on occasion, the maximum likelihood estimates of $\lambda$ diverge to huge values; it is also sensible to use values within a suitable range.
+In practice, these two transformations might be limited to predictors with acceptable density. For example, the transformation may only be appropriate for a predictor with a few unique values. A threshold of five or so unique values might be a proper rule of thumb (see the discussion in @sec-near-zero-var). On occasion the maximum likelihood estimates of $\lambda$ diverge to huge values; it is also sensible to use values within a suitable range. Also, the estimate will never be absolute zero. Implementations usually apply a log transformation when the $\hat{\lambda}$ is within some range of zero (say between $\pm 0.01$)^[If you've never seen it, the "hat" notation (e.g. $\hat{\lambda}$) indicates an estimate of some unknown parameter.]. 
 
-For the lot area predictor, the Box-Cox and Yeo-Johnson techniques both produce a value of $\hat{\lambda} = `r round(yj_est, 3)`$.. The results are shown in @fig-ames-lot-area (panel b). There is undoubtedly less right-skew, and the data are more symmetric with a new skewness value of `r signif(bc_skew, 3)` (much closer to zero).
+For the lot area predictor, the Box-Cox and Yeo-Johnson techniques both produce an estimate of $\hat{\lambda} = `r round(yj_est, 3)`$. The results are shown in @fig-ames-lot-area (panel b). There is undoubtedly less right-skew, and the data are more symmetric with a new skewness value of `r signif(bc_skew, 3)` (much closer to zero). However, there are still outlying points.
 
 Skewness can also be resolved using techniques related to distributional percentiles. A percentile is a value with a specific proportion of data below it. For example, for the original lot area data, the 0.1 percentile is `r format(quantile(ames_train$Lot_Area, prob = .1), big.mark = ",")` square feet, which means that 10{{< pct >}} of the training set has lot areas less than `r format(quantile(ames_train$Lot_Area, prob = .1), big.mark = ",")` square feet. The minimum, median, and maximum are the 0.0, 0.5, and 1.0 percentiles, respectively.
 
@@ -173,16 +205,17 @@ Numeric predictors can be converted to their percentiles, and these data, inhere
 
 Additionally, the original predictor data can be coerced to a specific probability distribution. @ORQ define the Ordered Quantile (ORQ) normalization procedure. It estimates a transformation of the data to emulate the true normalizing function where "normalization" literally maps the data to a standard normal distribution. @fig-ames-lot-area (panel d) illustrates the result for the lot area. In this instance, the resulting distribution is precisely what would be seen if the true distribution was Gaussian with zero mean and a standard deviation of one.
  
+In @sec-spatial-sign below, another tool for attenuating outliers in _groups_ of predictors is discussed.  
  
 ### Standardizing to a common scale 
 
 Another goal for transforming individual predictors is to convert them to a common scale. This is a pre-processing requirement for some models. For example, a _K_-nearest neighbors model computes the distances between data points. Suppose Euclidean distance is used with the Ames data. One predictor, the year a house was built, has training set values ranging between `r min(ames_train$Year_Built)` and `r max(ames_train$Year_Built)`. Another, the number of bathrooms, ranges from `r min(ames_train$Baths)` to `r max(ames_train$Baths)`. If these raw data were used to compute the distance, the value would be inappropriately dominated by the year variable simply because its values were large. See TODO appendix for a summary of which models require a common scale.
 
-The previous section discussed two transformations that automatically convert predictors to a common distribution. The percentile transformation generates values roughly uniformly distributed on the `[0, 1]` scale, and the ORQ transformation results in predictors with standard normal distributions. Otherwise, there are a few common main approaches that are used. 
+The previous section discussed two transformations that automatically convert predictors to a common distribution. The percentile transformation generates values roughly uniformly distributed on the `[0, 1]` scale, and the ORQ transformation results in predictors with standard normal distributions. However, two standardization methods are commonly used. 
 
-centering/scaling
+First is centering and scaling. To convert to a common scale, the mean ($\bar{x}$) and standard deviation ($\hat{s}$) are computed from the training data and the standardized version of the data is $x^* = (x - \bar{x}) / \hat{s}$. The shape of the original distribution is preserved; only the location and scale are modified to be zero and one, respectively.  
 
-When centering and scaling, what should be done with predictors converted from categorical predictors to binary features?  These should be treated the same as the dense numeric predictors. The result is that a binary column will still have two unique values, one positive and one negative. The values will depend on the prevalence of the zeros and ones in the training data. While this seems awkward, it is required to ensure each predictor has the same mean and standard deviation. Note that if the predictor set is _only_ scaled, @twosd suggests that the indicator variables be divided by two standard deviations instead of one. 
+In the next chapter, methods are discussed to convert categorical predictors to a numeric format. The standard tool is to create a set of columns consisting of zeros and ones called _indicator_ or _dummy variables_. When centering and scaling, what with these binary features?  These should be treated the same as the dense numeric predictors. The result is that a binary column will still have two unique values, one positive and one negative. The values will depend on the prevalence of the zeros and ones in the training data. While this seems awkward, it is required to ensure each predictor has the same mean and standard deviation. Note that if the predictor set is _only_ scaled, @twosd suggests that the indicator variables be divided by two standard deviations instead of one. 
 
 @fig-standardization(b) shows the results of centering and scaling the gross living area predictor from the Ames data. Note that the shape of the distribution does not change; only the magnitude of the values is different. 
 
@@ -196,7 +229,7 @@ gross_area_raw <-
   ames_train %>% 
   ggplot(aes(Gr_Liv_Area)) + 
   geom_histogram(bins = 20, col = "white", fill = "#8E195C", alpha = 1 / 2) +
-  labs(x = "Gross Living Area") +
+  labs(x = "Gross Living Area", title = "(a) original") +
   geom_rug(alpha = 1 / 2, length = unit(0.02, "npc"))
 
 gross_area_norm <- 
@@ -206,7 +239,7 @@ gross_area_norm <-
   bake(new_data = NULL) %>% 
   ggplot(aes(Gr_Liv_Area)) + 
   geom_histogram(bins = 20, col = "white", fill = "#8E195C", alpha = 1 / 2) +
-  labs(x = "Gross Living Area", y = "") +
+  labs(x = "Gross Living Area", y = "", title = "(b) centered and scaled") +
   geom_rug(alpha = 1 / 2, length = unit(0.02, "npc"))
 
 
@@ -217,7 +250,7 @@ gross_area_range <-
   bake(new_data = NULL) %>% 
   ggplot(aes(Gr_Liv_Area)) + 
   geom_histogram(bins = 20, col = "white", fill = "#8E195C", alpha = 1 / 2) +
-  labs(x = "Gross Living Area", y = "") +
+  labs(x = "Gross Living Area", y = "", title = "(c) range scaled") +
   geom_rug(alpha = 1 / 2, length = unit(0.02, "npc"))
 
 gross_area_raw + gross_area_norm + gross_area_range
