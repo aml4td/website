@@ -1,0 +1,840 @@
+---
+knitr:
+  opts_chunk:
+    cache.path: "../_cache/add-remove-predictors/"
+---
+
+# Adding and Removing Predictors {#sec-add-remove-features}
+
+[TODO: Add background for this chapter and why it is important for preparation.]
+
+```{r}
+#| label: add-remove-setup
+#| include: false
+
+source("../R/_common.R")
+
+# ------------------------------------------------------------------------------
+
+library(pamr)
+library(splines2)
+library(tidymodels)
+library(embed)
+library(patchwork)
+library(doParallel)
+library(ggmosaic)
+
+# ------------------------------------------------------------------------------
+# set options
+
+tidymodels_prefer()
+theme_set(theme_transparent())
+cl <- makePSOCKcluster(parallel::detectCores(logical = TRUE))
+registerDoParallel(cl)
+
+set_options()
+```
+
+```{r}
+#| label: data-setup
+#| include: false
+
+source("../R/setup_ames.R")
+source("../R/setup_hotel_rates.R")
+source("../R/setup_deliveries.R")
+```
+
+## Interactions {#sec-interactions}
+
+When building models for prediction, the majority of variation in the response is generally explained by the cumulative effect of the important individual predictors.  For many problems, additional variation in the response can be explained by the effect of two or more predictors working in conjunction with each other.  The healthcare industry has long understood the concept of interactions among drugs for treating specific diseases [@singh2017suppressive, @mokhtari2017combination, and @altorki2021neoadjuvant].  As an example of an interaction, consider treatment for the disease non-small cell lung cancer (NSCLC).  In a recent study, patients with an advanced stage of NSCLC with an EGFR mutation were given either osimertinib alone or osimertinib in combination with traditional chemotherapy [@tragrisso2023].   Patients taking the combination treatment had a significantly longer progression-free survival time than patients taking osmertinib alone.  Hence the interaction of the treatments is more effective than the single treatment.  To summarize, two (or more) predictors interact if their combined impact is different (less or greater) than what would be expected from the added impact of each predictor alone.
+
+Consider the hotel data from @sec-hotel-rates. @fig-delivery-hour-main
+
+```{r}
+#| label: fig-delivery-hour-main
+#| fig-width: 5
+#| fig-height: 5
+#| out-width: "50%"
+#| fig-cap: "An alternate version of @fig-delivery-predictors(d) where the underlying data did _not_ contain an interaction between the delivery day and hour."
+
+main_effects_mod <- lm(time_to_delivery ~ day + splines2::naturalSpline(hour, df = 10), delivery_train)
+main_effects_pred <- augment(main_effects_mod, delivery_train)
+
+day_cols <-  c("#000000FF", "#24FF24FF", "#009292FF",  "#B66DFFFF", 
+               "#6DB6FFFF",  "#920000FF",  "#FFB6DBFF")
+
+main_effects_pred %>% 
+  arrange(day, hour) %>% 
+  ggplot(aes(x = hour)) +
+  labs(y = "Time Until Delivery (min)", x = "Order Time (decimal hours)") +
+  geom_path(aes(y = .fitted, col = day), linewidth = 1) + 
+  scale_color_manual(values = day_cols) +
+  theme(legend.title = element_blank(), legend.position = "top")
+```
+
+The previous example illustrates an interaction between a continuous and categorical predictor. cat x cat 
+
+```{r}
+#| label: fig-delivery-items
+#| fig-width: 8
+#| fig-height: 4
+#| out-width: "80%"
+#| fig-cap: "adadad"
+
+no_int <- 
+  delivery_train %>% 
+  mutate(
+    item_02 = factor(ifelse(item_02 > 0, "yes", "no")),
+    `Contains Item 1` = factor(ifelse(item_01 > 0, "yes", "no"))
+  ) %>% 
+  nest(.by = c("Contains Item 1", "item_02")) %>% 
+  mutate(
+    stats = map(data, ~ t.test(.x$time_to_delivery, conf.level = 0.9) %>% tidy())
+  ) %>% 
+  select(`Contains Item 1`, item_02, stats) %>% 
+  unnest(stats) %>% 
+  ggplot(aes(item_02, estimate, col = `Contains Item 1`, group = `Contains Item 1`)) + 
+  geom_point() + 
+  geom_errorbar(aes(ymin = conf.low, ymax = conf.high), width = 1 / 20) + 
+  geom_line() +
+  labs(x = "Contains Item 2", y = "Mean ADR", title = "(a) no interaction") +
+  theme(legend.position = "bottom")
+
+has_int <- 
+  delivery_train %>% 
+  mutate(
+    item_10 = factor(ifelse(item_10 > 0, "yes", "no")),
+    `Contains Item 1` = factor(ifelse(item_01 > 0, "yes", "no"))
+  ) %>% 
+  nest(.by = c("Contains Item 1", "item_10")) %>% 
+  mutate(
+    stats = map(data, ~ t.test(.x$time_to_delivery, conf.level = 0.9) %>% tidy())
+  ) %>% 
+  select(`Contains Item 1`, item_10, stats) %>% 
+  unnest(stats) %>% 
+  ggplot(aes(item_10, estimate, col = `Contains Item 1`, group = `Contains Item 1`)) + 
+  geom_point() + 
+  geom_errorbar(aes(ymin = conf.low, ymax = conf.high), width = 1 / 20) + 
+  geom_line() +
+  labs(x = "Contains Item 10", y = " ", title = "(b) interaction") +
+  theme(legend.position = "bottom")
+
+no_int + has_int +
+  plot_layout(guides = 'collect')  & 
+  theme(legend.position = "bottom")
+```
+
+As a third example, interactions may occur between continuous predictors. 
+
+The concept of an interaction between two predictors, $x_1$ and $x_2$, can be illustrated using a simple linear equation:
+
+$$ y = \beta_0 + \beta_{1}x_1 + \beta_{2}x_2 + \beta_{3}x_{1}x_{2} + error$$
+
+In this equation, the $\beta$ coefficients represent the overall average response ($\beta_0$), the average rate of change for each individual predictor ($\beta_1$ and $\beta_2$), and the incremental rate of change due to the combined effect of $x_1$ and $x_2$ ($\beta_3$) that goes beyond what $x_1$ and $x_2$ can explain alone.  The parameters for this equation can be estimated using a technique such as linear regression.  The sign and magnitude of $\beta_3$ indicate how and the extent to which the two predictors interact.  When $\beta_3$ is positive, the interaction is _synergystic_ since the response is increasing beyond the effect of either predictor alone.  Alternatively, when $\beta_3$ is negative, the interaction is _antagonistic_ since the response is decreasing beyond the effect of either predictor alone.  A third scenario is when $\beta_3$ is essentially zero.  In this case, there is no interaction between the predictors and the relationship between the predictors is _additive_.  Finally, for some data sets we may find that neither predictor is important individually (i.e. $\beta_1$ and $\beta_2$ are zero).  However, the coefficient on the interaction term is not zero.  Because this case occurs infrequently, it is called _atypical_. 
+
+An ideal scenario would be that prior to modeling the data we would know which predictors interact.  If this would be the case, then these terms could be included in a model.  The model would then have better predictive performance than if the interactions were not included.  Unfortunately, knowledge of which predictors interact is usually not available prior to initiating the modeling process.  
+
+If important interactions cannot be known before modeling, can models still discover and utilize these potentially important features? Recent studies using a variety of advanced modeling techniques have shown that some techniques can inherently detect interactions. For example, tree-based models [@elith2008working], random forests [@garcia2009evaluating], boosted trees [@lampa2014identification], and support vector machines [@chen2008support] are effective at uncovering them. [TO DO:  Update references]
+
+If modern modeling techniques can naturally find and utilize interactions, then why is it necessary to spend any time uncovering these relationships?  The reason is primarily one of interpretation.  Recall the trade-off between prediction and interpretation that was discussed in Chapter X.  More complex models are less interpretable and generally more predictive, while simpler models are more interpretable and less predictive.  By identifying essential interactions, we can include them in simpler models, improving predictive performance.  The following sections provide some tools for uncovering interactions.
+
+### Detecting Interactions
+
+## Basis Expansions and Splines {#sec-splines}
+
+In @sec-tour, @fig-head-acceleration illustrated a highly nonlinear relationship between the predictor (time) and outcome (acceleration). Initially, a linear model was considered, and, to fit a nonlinear pattern, a group of quadratic features in time was used as predictors. The result did generate a flexible curve but still needed to be improved. Additionally, @fig-acceleration-lm-resampled showed severe variability in the model fit at the tails of the predictor distribution.
+
+Adding extra features derived from a single column to increase its flexibility as a predictor is called a basis expansion. Previously, the polynomial basis function was used. Unsurprisingly, there are a lot of basis functions to choose from.
+
+```{r}
+#| label: spline-sim-example
+nonlin_sim <- function(x, error = 0.05) {
+  f <- (x^3) +  2 * exp(-6 * (x - 0.3)^2) 
+  if (error > 0) {
+    f <- f + rnorm(length(x), sd = error)
+  }
+  f
+}
+
+grid <- seq(-1, 1, length.out = 1000)
+truth <- tibble(x = grid, y = nonlin_sim(grid, error = 0))
+set.seed(1)
+x <- sort(runif(100, -1, 1))
+
+y <- nonlin_sim(x)
+
+spline_example <- tibble(x = x, y = y)
+
+fit_region <- function(region, truth = NULL) {
+  region_data <- spline_example %>% filter({{region}})
+  region_fit <- lm(y ~  x + I(x^2) + I(x^3), data = region_data)
+  dat <- data.frame(x = grid) %>% filter({{region}})
+  dat$y <- predict(region_fit, dat)
+  if (!is.null(truth)) {
+    truth <- truth %>% filter({{region}})
+    truth$pred <- predict(region_fit, truth[, "x", drop = FALSE])
+  }
+  list(grid = dat, fit = region_fit, truth = truth)
+}
+
+global_cubic <- lm(y ~ poly(x, 3), data = spline_example)
+global_cubic_pred <- predict(global_cubic, truth[, "x"])
+global_cubic_rmse <- rmse_vec(truth$y, global_cubic_pred)
+
+regional_1 <- fit_region(x <= 0, truth)
+regional_2 <- fit_region(x > 0 & x <= 0.8, truth)
+regional_3 <- fit_region(x > 0.8, truth)
+regional_pred <- bind_rows(regional_1$truth, regional_2$truth, regional_3$truth)
+regional_rmse <- rmse_vec(regional_pred$y, regional_pred$pred)
+
+spline_fit <- lm(y ~ naturalSpline(x, df = 10), data = spline_example)
+spline_pred <- predict(spline_fit, truth[, "x"])
+spline_rmse <- rmse_vec(truth$y, spline_pred)
+```
+
+Another example is shown in @fig-poly-to-splines(a). A single predictor has a clear nonlinear relationship with the outcome; the trend has concave and convex patterns. If a polynomial is used, we should consider at least a cubic function. Panel (b) shows a quartic (fourth order) fit to the entire data set. It isn't awful but can obviously be improved. The issue here is that a global polynomial pattern is often insufficient because of nonlinear relationships' ups and downs in different data sections. There may be steep increases in one area and gradual increases in others. Rather than using a global polynomial, what if we used different basis expansions in regions with more manageable or simplistic trends rather than a global polynomial? 
+
+Looking at the data, the pattern is reasonably linear when the predictor is less than zero. Consider a basis function that is only applied to this portion of the data. For values above zero and below 0.8, the pattern goes up, peaks then decreases. A separate polynomial could be used in this region, and values above 0.8 could also have a distinct trend. In this context, the values used to divide up regions of the predictor space are called _knots_. 
+
+Panel (c) shows this fit. Each region has a better fit, although the right-most area may be over-fitting the data. The main issue is that the trend lines for each area don't meet; there are discontinuities in the trend. 
+```{r}
+#| label: fig-poly-to-splines
+#| fig-cap: "Data with a nonlinear trend (a) and fits using a global polynomial (b), piecewise polynomials (c), and a natural spline function (d)."
+#| out-width: 80%
+
+spline_1 <- 
+  spline_example %>% 
+  ggplot(aes(x = x, y = y)) +
+  geom_point(alpha = 1/4) + 
+  labs(x = "predictor", y = "response") +
+  ggtitle("(a) simulated data")
+
+spline_2 <- 
+  spline_example %>% 
+  ggplot(aes(x = x, y = y)) +
+  geom_point(alpha = 1/7, cex = 1) +
+  geom_smooth(
+    formula = y ~ poly(x, 4),
+    method = lm,
+    se = FALSE,
+    col = "#377EB8",
+    linewidth = 1
+  ) +
+  labs(x = "predictor", y = "response") +
+  ggtitle("(b) global quartic fit")
+
+spline_3 <-
+  spline_example %>% 
+  ggplot(aes(x = x, y = y)) +
+  geom_point(alpha = 1/7, cex = 1) +
+  geom_path(data = regional_1$grid, col = "#1B9E77", linewidth = 1) + 
+  geom_path(data = regional_2$grid, col = "#D95F02", linewidth = 1) + 
+  geom_path(data = regional_3$grid, col = "#7570B3", linewidth = 1) +
+  labs(x = "predictor", y = "response") +
+  ggtitle("(c) separate local cubic fits")
+
+spline_4 <-
+  spline_example %>% 
+  ggplot(aes(x = x, y = y)) +
+  geom_point(alpha = 1/7, cex = 1) +
+  geom_smooth(
+    formula = y ~ naturalSpline(x, df = 10),
+    method = lm,
+    se = FALSE,
+    col = "#E6AB02",
+    linewidth = 1
+  ) +
+  labs(x = "predictor", y = "response") +
+  ggtitle("(d) natural spline")
+
+(spline_1 + spline_2) / (spline_3 + spline_4)
+```
+
+Is there a way to make the edges meet, and even better, can they meet smoothly? Spline functions (or just "splines") are specialized basis functions that use polynomial trends in specific regions defined by a set of knots. They are designed so that the transitions between regions are continuous and smooth^[This is accomplished by constrains on the basis functions that allow the functions, and some of their derivatives, to be continuous at the knots. See @ruppert2003semiparametric and @arnold2019computational.]. There are many types of splines but one, the "natural spline," is shown in Panel (d) of @fig-poly-to-splines. The function demonstrates an excellent fit to the data with smooth transitions between regions. 
+
+Splines can be configured in different ways. Two details to specify are how many regions should be separately modeled and how they are apportioned. The number of regions is related to how many features are used in the basis expansion. As the number of regions increases, so does the ability of the spline to adapt to whatever trend might be in the data. However, the risk of over-fitting the model to individual data points increases as the flexibility increases.
+
+For this reason, we often tune the amount of complexity that the spline will accommodate. Generally, since the number of regions is related to the number of features, we'll refer to the complexity of the basis function via the number of degrees of freedom afforded by the spline. We don't necessarily know how many degrees of freedom to use. There are two ways to determine this. First, we can treat the complexity of the spline as a tuning parameter and optimize it with the tuning methods mentioned in Chapters [-@sec-grid] and [-@sec-iterative]. Another option is to over-specify the number of degrees of freedom and let specialized training methods solve the potential issue of over-fitting. From @wood2006generalized: 
+
+> An alternative to controlling smoothness by altering the basis dimension, is to keep the basis dimension fixed, at a size a little larger than it is believed it could reasonably be necessary, but to control the model’s smoothness by adding a “wiggliness” penalty to the least squares fitting objective. 
+
+This approach is advantageous when there are separate basis expansions for multiple predictors. The overall smoothness can be estimated along with the parameter estimates in the model. The process could be used with general linear models (Chapters [-@sec-ols] and [-@sec-ordinary-logistic-regression]) or other parametric linear models. 
+
+How do we choose the knots? We can select them manually, and some authors advocate for this point of view. As stated by Breiman (1988): 
+
+> My impression, after much experimentation, is the same - that few knots suffice providing that they are in the right place.
+
+A good example is seen in @fig-head-acceleration, where there are clear regions that are linear and nonlinear. Specifying two interior knows at roughly 14s and 45s would suffice. However hand curating each feature becomes practically infeasible as the number of features increases.  Otherwise, they can be set algorithmically.
+
+There are two main choices for automatic knot selection. The first uses a sequence of equally-spaced values encompassing the predictor space. The second is to estimate percentiles of the predictor data so that regions have about the same number of values they capture. For example, a fourth degree of freedom spline would have three split points within the data arranged at the 25th, 50th, and 75th percentiles (with the minimum and maximum values bracketing the outer regions).
+
+Many, but not all, splines specify how complex the fit should be in the area between the knots. However, cubic splines are a common choice because they allow for greater flexibility than linear or quadratic fits, but are not overly flexible, which could lead to over-fitting. Increasing the polynomial degree beyond three has more disadvantages than advantages. Recall from @fig-acceleration-lm-resampled the issue of explosive variance at the ends of the predictor distribution. This is exacerbated as the polynomial degree increases. 
+
+One way to address the variability at the ends of the predictor space is to use a _natural spline_. It employs a cubic polynomial but only uses a linear fit in the two most extreme regions of the predictor space. 
+
+```{r}
+#| label: natural-spline-expansion
+natural_6_res <- naturalSpline(ames_train$Latitude, df = 6)
+natural_6_knots <- attributes(natural_6_res)$knots
+natural_6_res <- t(apply(natural_6_res, 1, I))
+colnames(natural_6_res) <- names0(ncol(natural_6_res), "natural spline ")
+natural_6_res <- as_tibble(natural_6_res)
+natural_6_res$Latitude <- ames_train$Latitude
+
+feature_plot <- 
+  natural_6_res %>%
+  pivot_longer(starts_with("natural spline"), names_to = "feature", values_to = "value") %>%
+  filter(value > 0) %>%
+  ggplot(aes(x = Latitude)) +
+  geom_vline(xintercept = natural_6_knots, lty = 3) +
+  geom_line(aes(y = value)) +
+  facet_wrap(~ feature) + 
+  geom_rug(data = ames_train, aes(x = Latitude), alpha = 1/5, linewidth = 1/15)
+
+# ------------------------------------------------------------------------------
+
+natural_20_res <- naturalSpline(ames_train$Latitude, df = 20)
+natural_20_knots <- attributes(natural_20_res)$knots
+natural_20_res <- t(apply(natural_20_res, 1, I))
+colnames(natural_20_res) <- names0(ncol(natural_20_res), "natural spline ")
+natural_20_res <- as_tibble(natural_20_res)
+natural_20_res$Latitude <- ames_train$Latitude
+natural_20_res <-
+  natural_20_res %>%
+  pivot_longer(starts_with("natural spline"), names_to = "feature", values_to = "value") %>%
+  filter(value > 0)
+
+ames_latitude <-
+  ames_train %>%
+  ggplot(aes(Latitude, Sale_Price)) +
+  geom_point(alpha = 1 / 5, cex = 1 / 2) +
+  ylab("Sale Price (log10)")
+
+
+ames_latitude_fit <- 
+  ames_latitude +
+  geom_smooth(
+    se = FALSE,
+    formula = y ~ splines::ns(x, df = 20),
+    method = lm,
+    col = "red"
+  ) +
+  theme(
+    plot.margin = margin(t = -20, r = 0, b = 0, l = 0)
+  )
+
+ames_latitude_fit <-
+  ames_train %>%
+  ggplot(aes(Latitude, Sale_Price)) +
+  geom_point(alpha = 1 / 5, cex = 1 / 2) +
+  geom_smooth(
+    se = FALSE,
+    formula = y ~ splines::ns(x, df = 20),
+    method = lm,
+    col = "red"
+  ) +
+  theme(plot.margin = margin(t = -20, r = 0, b = 0, l = 0))
+
+spline_20df <-
+  natural_20_res %>%
+  ggplot(aes(Latitude, value, group = feature, col = feature)) +
+  geom_line(show.legend = FALSE) +
+  theme_void() +
+  theme(plot.margin = margin(t = 0, r = 0, b = -20, l = 0))
+```
+
+As another example, consider the Ames housing data. The (log10) sale price is related to the geo-location of the properties. @fig-ames-latitude shows a scatter plot of the training data where the latitude values are a predictor. There is a gap in the data toward the left-hand side (corresponding to the location of [Iowa State University](https://www.google.com/maps/@42.0266573,-93.6464516,15z)). 
+
+```{r}
+#| label: fig-ames-latitude
+#| echo: false
+#| out-width: 60%
+#| fig-width: 6
+#| fig-height: 4.25
+#| fig-cap: The price of houses in Ames versus latitude.
+
+ames_latitude
+```
+
+How would the data be modeled if a natural spline with six degrees of freedom were created from this predictor? @fig-spline-features shows how each spline feature relates to the underlying data, where the dashed lines delineate the regions defined by the appropriate percentiles. The solid lines indicate the weight the term puts on any particular latitude value. We can see that the third feature isolates latitudes between 42.02 and 42.05, while the sixth spline value focuses on latitudes greater than 42.035. 
+
+```{r}
+#| label: fig-spline-features
+#| echo: false
+#| out-width: 70%
+#| fig-width: 7
+#| fig-height: 4
+#| fig-cap: Predictor coverage of six natural spline terms based on latitude. 
+
+feature_plot
+```
+
+Let’s use a set of 20 natural spline features to model these data using ordinary linear regression. Figure @fig-ames-latitude-fit shows the resulting fit on the training set. The red line shows the fitted curve resulting from the 21 parameter estimates. The different curves on the top of the plot area indicate how much each feature represents each portion of the predictor space.  This illustration demonstrates that as the number of features increases, the model fit becomes more flexible.
+
+```{r}
+#| label: fig-ames-latitude-fit
+#| echo: false
+#| out-width: 60%
+#| fig-width: 6
+#| fig-height: 5
+#| fig-cap: "The price of houses in Ames versus latitude with a 20 degree of freedom natural spline. The curves above the plot illustrate how much each of the 20 features represents a different portion of the predictor space."
+
+spline_20df / ames_latitude_fit + plot_layout(heights = c(1, 4))
+```
+
+Splines are extremely useful and are especially handy when we want to encourage a simple model (such as linear regression) to approximate the predictive performance of a much more complex black-box model (e.g., a neural network or tree ensemble). We’ll also see splines and spline-like features used within different modeling techniques, such as generalized additive models (Sections [-@sec-reg-gam] and [-@sec-cls-gam]), multivariate adaptive regression splines (@sec-mars), and a few others.  
+
+## Discretization
+
+```{r}
+#| label: fig-wall-of-pie
+#| echo: false
+#| out-width: 60%
+#| fig-width: 6
+#| fig-height: 5
+
+pie_n <-
+  delivery_train %>%
+  mutate(
+    hour = cut(hour, breaks = 2 * (6:11), include.lowest = TRUE),
+    delivery_time = cut(
+      time_to_delivery,
+      breaks = c(10, 20, 30, 100),
+      include.lowest = TRUE
+    )
+  )  %>%
+  count(hour, day, delivery_time, .drop = FALSE)
+
+pie_by_group <-
+  pie_n %>%
+  summarize(n_group = sum(n),
+            .by = c(hour, day))
+
+pie_prop <-
+  full_join(pie_n, pie_by_group, by = c("hour", "day")) %>%
+  mutate(rate = n / n_group * 100) %>%
+  filter(!is.na(hour))
+
+pie_prop %>%
+  ggplot(aes(x = 1, y = rate, fill = delivery_time)) +
+  geom_bar(stat = "identity", width = 1) +
+  scale_x_discrete(drop = FALSE) +
+  coord_polar(theta = "y") +
+  facet_grid(hour ~ day) +
+  scale_fill_brewer(palette = "Blues") +
+  theme_minimal() +
+  theme(
+    legend.position = "none",
+    panel.grid  = element_blank(),
+    axis.ticks = element_blank(),
+    axis.text = element_blank()
+  ) +
+  labs(y = "Day", x = "Hour")
+```
+
+Our general advice, described in more detail in @fes, is that the first inclination should never be to engineer continuous predictors via discretization. Other tools, such as splines, are both theoretically and practically superior to converting quantitative data to qualitative data. 
+
+The literature supporting this is extensive, such as: @Cohen1983mn, @Altman1991ro, @Maxwell1993ig, @Altman1994oa, @Buettner1997bt, @Altman1998vs, @Taylor2002jj, @MacCallum2002ox, @Irwin2003mp, @Owen2005do, @Altman2006gn, @Royston2006md, @VanWalraven2008ne, @Fedorov2009jy, @Naggara2011xu, @Bennette2012ua, @Kuss2013zi, @Kenny2013cf, @BarnwellMenard2015xa, @Fernandes2019na, as well as the references shown in @harrell2017regression. These articles identify the main problems of discretization as follows:
+
+* Arbitrary (non-methodological) choice of breaks for binning can lead to significant bias. 
+* The predictor suffers a significant loss of information, making it less effective. Moreover, there is reduced statistical power to detect differences between groups when they exist.
+* The number of features are increased, thus exacerbating the challenge of feature selection. 
+* Correlations between predictors are inflated due to the unrealistic reduction in the variance of predictors. 
+
+@pettersson2016quantitative shows differences in analyses with and without discretization. Their Fig. 1 shows a common binning analysis: a continuous outcome and one or more predictors are converted to qualitative formats and a grid of pie charts is created. Inferences are made from this visualization. One main problem is related to uncertainty. The noise in the continuous data is squashed so that any visual signal that is seen appears more factual than it is in reality^[@Kenny2013cf does an excellent job illustrating this issue.]. Also, the pie charts do not show measures of uncertainty; how do we know when two different pie charts are "significant"? 
+
+Alternatively, Figs. 4 and 5 of their paper shows the results of a logistic regression model where all predictors were left as-is and splines were used to model the probability of the outcome. This has a much simpler interpretation and confidence bands give the reader a sense that the differences are real. 
+
+As a counter-example that shows appropriate discretization, one type of measurement that is often appropriately discretized is date. For example, @fes show a data set where daily ridership data was collected for the Chicago elevated train system. The primary trend in the data was whether or not the day was a weekday. Ridership was significantly higher when people commute to work. A simple indicator for Saturday/Sunday (as well as major holiday indicators) was the driving force behind many regression models on those data. In this case, making qualitative versions of the date was rational, non-arbitrary, and driven by data analysis.
+
+Note that several models, such as classification/regression trees and multivariate adaptive regression splines, estimate cut points in the model-building process. The difference between these methodologies and manual binning is that the models use all the predictors to derive bins based on a single objective (such as maximizing accuracy). They evaluate many variables simultaneously and are usually based on statistically sound methodologies.  
+
+If it is the last resort, how should one go about discretizing predictors? First and most important: _any_ methodology should be well validated using data that were not used to build the model (or choose the cut points for binning). To convert data to a qualitative format, there are both supervised and unsupervised methods. 
+  
+The most reliable unsupervised approach is to choose the number of new features and use an appropriate number of percentiles to bin the data. For example, if four new features are required, the 0, 25%, 50%, 75%, and 100% quantiles would be used. This ensures that each resulting bin contains about the same number of samples from the training set.  
+  
+If you noticed that this is basically the same approach suggested for choosing spline knots in the discussion earlier in this chapter, you are correct. This connection helps illustrate how superior the spline approach is; fitting a model with the discrete bins is the same as using a zero degree of freedom spline model. In essence, we are severely handicapping our data analysis by fitting a flat model to the data within the bins. 
+ 
+A supervised approach would, given a specific number of new features to create, determine the breakpoints by optimizing a performance measure (e.g., RMSE, classification accuracy, etc.). A good example is a tree-based model (as mentioned above). After fitting a single tree or, better yet, an ensemble of trees, the split values in the trees can be used as the breakpoints.  
+
+```{r}
+#| label: ames-bins
+#| cache: true
+rmse_only <- metric_set(rmse)
+ctrl <- control_grid(save_workflow = TRUE)
+
+rec <- recipe(Sale_Price ~ Latitude, data = ames_train)
+
+rec_unsup <- 
+  rec %>% 
+  step_discretize(Latitude, num_breaks = tune())
+
+rec_tree_splits<- 
+  rec %>%
+  step_discretize_cart(
+    Latitude,
+    outcome = "Sale_Price",
+    cost_complexity = tune(),
+    min_n = 5,
+    tree_depth = 25
+  )
+
+unsuper_wflow <- rec_unsup %>% workflow(linear_reg())
+unsuper_res <-
+  unsuper_wflow %>%
+  tune_grid(
+    resamples = ames_rs,
+    grid = tibble(num_breaks = 2:25),
+    metrics = rmse_only,
+    control = ctrl
+  )
+
+super_wflow <- rec_tree_splits %>% workflow(linear_reg())
+set.seed(724)
+super_res <-
+  super_wflow %>%
+  tune_grid(
+    resamples = ames_rs,
+    grid = 25,
+    metrics = rmse_only,
+    control = ctrl
+  )
+
+
+bin_lvls <- c("unsupervised", "supervised")
+bin_cols <- c("#E31A1C", "#6A3D9A")
+names(bin_cols) <- bin_lvls
+bin_resampling <- 
+  unsuper_res %>% 
+  collect_metrics() %>% 
+  mutate(method = "unsupervised") %>% 
+  bind_rows(
+    super_res %>% 
+      collect_metrics() %>% 
+      mutate(method = "supervised")
+  ) %>% 
+  mutate(
+    lower = mean - qnorm(.95) * std_err,
+    upper = mean + qnorm(.95) * std_err,
+    method = factor(method, levels = bin_lvls)
+  ) 
+
+super_breaks <- 
+  fit_best(super_res) %>% 
+  extract_recipe() %>% 
+  tidy(number = 1) %>% 
+  mutate(
+    method = "supervised",
+    method = factor(method, levels = bin_lvls)
+    ) 
+num_super_breaks <- length(unique(super_breaks$value))
+
+super_pred <- 
+  fit_best(super_res) %>% 
+  augment(ames_train) %>% 
+  mutate(
+    method = "supervised",
+    method = factor(method, levels = bin_lvls)
+  )
+
+unsuper_breaks <- 
+  fit_best(unsuper_res) %>% 
+  extract_recipe() %>% 
+  tidy(number = 1) %>% 
+  mutate(
+    method = "unsupervised",
+    method = factor(method, levels = bin_lvls)
+  ) %>% 
+  rename(value = value)%>% 
+  filter(!is.infinite(value))
+num_unsuper_breaks <- length(unique(unsuper_breaks$value))
+
+unsuper_pred <- 
+  fit_best(unsuper_res) %>% 
+  augment(ames_train) %>% 
+  mutate(
+    method = "unsupervised",
+    method = factor(method, levels = bin_lvls)
+  )
+
+best_unsuper <- show_best(unsuper_res, metric = "rmse")
+best_super   <- show_best(super_res, metric = "rmse")
+```
+
+Let's again use the Ames housing data, specifically the latitude predictor, illustrated in @fig-ames-latitude. We can fit a linear regression with qualitative terms for latitude derived using: 
+
+- An unsupervised approach using percentiles. 
+- A supervised approach where a boosted tree model is used to set the breakpoints for the bins. 
+
+In each case, the number of new features requires tuning. Using the basic grid search tools described in @sec-grid, the number of required terms was set for each method (ranging from `r min(collect_metrics(super_res)$num_breaks)` to `r max(collect_metrics(super_res)$num_breaks)` terms) by minimizing the RMSE from a simple linear regression model. The results are that both approaches required the same number of new features and produced about the same level of performance; the unsupervised approach required `r num_unsuper_breaks` breaks to achieve an RMSE of `r signif(best_unsuper$mean[1], 3)` and the supervised model has an RMSE of `r signif(best_super$mean[1], 3)` with `r num_super_breaks` cut points. @fig-ames-bins shows the fitted model using the unsupervised terms. 
+
+```{r}
+#| label: fig-ames-bins
+#| out-width: 70%
+#| fig-width: 6
+#| fig-height: 4.25
+#| fig-cap: The estimated relationship between sale price and latitude using discretization methods. The fitted line corresponds to an unsupervised set of features and the "rugs" at the top and bottom of the plots illustrate where the breakpoints were estimated.
+
+ames_train %>% 
+  ggplot() + 
+  geom_point(aes(Latitude, Sale_Price), alpha = 1 / 8, cex = 1 / 2) +
+  geom_rug(data = super_breaks, aes(x = value, col = method)) +
+  geom_rug(data = unsuper_breaks, aes(x = value, col = method), sides = "t") +
+  geom_line(data = super_pred,
+            aes(Latitude, .pred),
+            col = bin_cols["supervised"],
+            lwd = 3 / 4) +
+  geom_line(data = unsuper_pred,
+            aes(Latitude, .pred),
+            col = bin_cols["unsupervised"],
+            lwd = 3 / 4) +  
+  scale_color_manual(values = bin_cols) +
+  ylab("Sale Price (log10)")
+```
+
+The blue and red marks on the top and bottom of the plot show the locations of the breakpoints for each procedure. They are remarkably similar to one another. The blocky nature of the fitted trend reflects that, within each bin, a simple mean is used to estimate the sale price. For this fit, `r best_unsuper$num_breaks[1]` means were estimated. This number is likely larger than the corresponding number of parameters required by a spline model to produce a smooth trend line. 
+
+## Other Features
+
+Occasionally, predictor pairs work better in unison rather than as main effects. For example, consider the data in @fig-two-class-corr(a), where two predictors are: 
+
+- strictly positive,
+- significantly right-skewed, and
+- highly correlated. 
+
+In the predictors' original form there is a great degree of overlap between the two classes of samples.  However, when the ratio of the predictors is used, the newly derived predictor better discriminates between classes (shown in @fig-two-class-corr(b)). While not a general rule, the three data characteristics above suggest that the modeler attempt to form ratios from two or more predictors.
+
+```{r}
+#| label: fig-two-class-corr
+#| echo: false
+#| out-width: 70%
+#| fig-width: 7
+#| fig-height: 4
+#| fig-cap: "Panel (a): two highly correlated, right-skewed predictors with two classes. Panel (b): sepration of classes using $log(A/B)$."
+#| fig-alt: "Panel (a): two highly correlated, right-skewed predictors with two classes. Panel (b): sepration of classes using $log(A/B)$."
+
+data(bivariate)
+
+biv_cols <- c(One = "#4DAF4A", Two = "#984EA3")
+biv_scat <- 
+  bivariate_train %>% 
+  ggplot(aes(A, B, col = Class, pch = Class)) + 
+  geom_point(alpha = 1 / 2, cex = 2) +
+  coord_fixed(ratio = 20) + 
+  scale_color_manual(values = biv_cols) +
+  ggtitle("(a)") +
+  theme(legend.position = "top")
+
+ratio_features <-
+  bivariate_train %>% 
+  mutate(
+    `Log-Ratio` = log(A / B)
+  ) 
+
+biv_ratio <-
+  ratio_features %>% 
+  ggplot(aes(Class, `Log-Ratio`, fill = Class)) + 
+  geom_boxplot(alpha = 1 / 2, show.legend = FALSE)+ 
+  scale_fill_manual(values = biv_cols) +
+  ggtitle("(b)")
+
+biv_scat + biv_ratio
+```
+
+```{r}
+#| label: fig-two-class-features
+#| eval: false
+data(bivariate)
+
+trans_features <- 
+  bivariate_train %>% 
+  recipe(Class ~ ., data = bivariate_train) %>% 
+  step_YeoJohnson(A, B) %>% 
+  prep() %>% 
+  bake(new_data = NULL)
+
+raw_features <- 
+  trans_features %>% 
+  pivot_longer(c(A, B), names_to = "feature", values_to = "value") %>% 
+  mutate(feature = paste(feature, "(YJ)"))
+
+ratio_features <-
+  bivariate_train %>% 
+  mutate(
+    feature = "Log-Ratio",
+    value = log(A / B)
+  ) %>% 
+  select(feature, value, Class)
+
+pca_features <- 
+  recipe(Class ~ ., data = bivariate_train) %>% 
+  step_YeoJohnson(A, B) %>% 
+  step_normalize(A, B) %>% 
+  step_pca(A, B, num_comp = 2) %>% 
+  prep() %>% 
+  bake(new_data = NULL) %>% 
+  pivot_longer(c(PC1, PC2), names_to = "feature", values_to = "value")
+
+# prcomp(bivariate_train[, 1:2], center = TRUE, scale. = TRUE)$rotation
+# cor_mat <- cor(bivariate_train[, 1:2])
+# princomp(cor_mat, cor = TRUE)$loading
+# 
+# theta <- function(mat) {
+#   a <- mat[1,1]
+#   b <- mat[1,2]
+#   d <- mat[2,2]
+#   1 / 2 * atan2(2 * a * b + 2 * b * d , a ^ 2 - d ^ 2)
+# }
+# cos(theta(cor_mat))
+# princomp(cor_mat, cor = TRUE)$loading[1,1]
+
+
+all_features <- 
+  bind_rows(ratio_features, pca_features) %>% 
+  mutate(
+    feature = factor(feature, levels = c("Log-Ratio", "PC1", "PC2"))
+  )
+
+all_features %>% 
+  ggplot(aes(Class, value, fill = Class)) + 
+  geom_boxplot(alpha = 1 / 2) +
+  facet_wrap(~ feature, scales = "free_y") + 
+  scale_fill_manual(values = biv_cols) +
+  labs(y = NULL)
+```
+
+Another common approach to creating features is to calculate distances between landmarks or pairs of predictors. For example, the distance to desirable grade schools (or the university campus) could affect house prices in the Ames housing data. Potential predictors can be created that measure how close each home is to these points of interest. To calculate distance, a simple Euclidean metric can be used. However, for spatial data across longer distances, the Haversine metric [@sinnott1984virtues] is a better alternative because it takes into account the curvature of the earth.
+
+Note that distance-based features are often right skewed.  When a metric produces a right-skewed distribution, the log-transformation often helps improve predictive performance when the predictor is truly informative. 
+
+Distance-based features can also be effective for classification models. A centroid is another name for the multivariate mean of a collection of data. It is possible to compute class-specific centroids using only the data from each class. When a new sample is predicted, this distance to each class centroid can be used as a predictor. These features would be helpful when a model could be better at detecting/emulating linear class boundaries. An example of this would be tree-based models; these models have to work hard to approximate linear trends in the data. Supplementing the data with simple centroid features might improve performance. 
+
+Again, there are several choices for the distance metric.  Mahalanobis distance is a good choice when there is not an overwhelming number of predictors:
+
+$$
+D_c(\boldsymbol{x}_0) = (\boldsymbol{x}_0 - \boldsymbol{\bar{x}}_{c})' \boldsymbol{S}^{-1}_c (\boldsymbol{x}_0 - \boldsymbol{\bar{x}}_{c})
+$$
+
+where $\boldsymbol{x}_0$ is the new data point being predicted, $\boldsymbol{\bar{x}}$ is a vector of sample means, $\boldsymbol{S}$ is the estimated covariance matrix (the subscript of $c$ denotes the class-specific statistics). This metric requires fewer data points within each class than the number of predictors being used. It also assumes that there are no linear dependencies between the predictors. 
+ 
+When the model has many features, regularizing the centroid distances can be a good approach. This approach, similar to the tools described in @sec-effect-encodings, will shrink the class-specific centroids towards the overall (class-nonspecific) centroid at different rates. If a predictor does have any discriminative ability in the training set, its contribution to the class-specific centroids can be removed. 
+
+We'll let $x_{ij}$ denote sample $i$ ($i=1\ldots N$) for predictor $j$ ($j=1\ldots p$). The approach by @tibshirani2003class estimates the standardized difference between the class-specific centroid and the global centroid using the following:
+
+\begin{align}
+\delta_{jc} &= \frac{\bar{x}_{jc} - \bar{x}_j}{w_c s_j} &&\text{ where } \notag \\
+\bar{x}_{jc} &= \frac{1}{N_c}\sum_{i=1}^{N_c} x_{ij} I(y_i = c) && \text{\textcolor{grey}{(class-specific centroid elements)}} \notag \\
+\bar{x}_{j} &= \frac{1}{N}\sum_{i=1}^{N} x_{ij}  && \text{\textcolor{grey}{(global centroid elements)}}\notag \\
+w_c &= \sqrt{\frac{1}{N_c}  - \frac{1}{N}}  && \text{\textcolor{grey}{{(weights)}}} \notag \\
+s_j &= \frac{1}{N-C}\sum_{c=1}^C\sum_{i=1}^N \left(x_{ij} - \bar{x}_{jc}\right)^2 I(y_i == c)  && \text{\textcolor{grey}{(pooled standard deviation for predictor $j$)}}\notag 
+\end{align}
+
+$I(x)$ is a function that returns a value of one when $x$ is true. 
+
+To shrink this difference towards zero, a tuning parameter $\lambda$ is used to create a modified version of the each predictors contribution to the difference:
+
+\begin{equation}
+\delta^*_{jc} = sign(\delta_{jc}) h(|\delta_{jc}| - \lambda)
+\end{equation}
+
+where $h(x) = x$ when $x > 0$ and zero otherwise. If the difference between the class-specific and global centroid is small (relative to $\lambda$), $\delta^*_{jc} = 0$ and predictor $j$ does not functionally affect the calculations for class $c$. The class-specific shrunken centroid is then
+
+\begin{equation}
+\bar{x}^*_{jc}= \bar{x}_j + w_c s_j \delta^*_{jc}
+\end{equation}
+
+New features are added to the model based on the distance between $\boldsymbol{x}_0$ and $\boldsymbol{\bar{x}}^*_{c}$. The amount of shrinkage is best optimized using the tuning methods described in later chapters. There are several variations of this specific procedure. @wangImprovedCentroids describe several different approaches and @efron2009empirical demonstrates the connection to Bayesian methods. 
+
+```{r}
+#| label: ncs-comp
+#| results: hide
+
+set.seed(92)
+
+dat_1 <- MASS::mvrnorm(n = 200, c(1, -1), matrix(c(1, .5, .5, 1), 2, 2)) 
+dat_2 <- MASS::mvrnorm(n = 200, c(1, 3), matrix(c(1, -.75, -.75, 1), 2, 2))
+dat_3 <- MASS::mvrnorm(n = 200, c(-1, -1), matrix(c(1, 0, 0, 1), 2, 2))
+
+colnames(dat_1) <- colnames(dat_2) <- colnames(dat_3) <- c("x_1", "x_2")
+
+three_class_dat <- 
+  bind_rows(
+  dat_1 %>% as_tibble() %>% mutate(class = "class 1"),
+  dat_2 %>% as_tibble() %>% mutate(class = "class 2"),
+  dat_3 %>% as_tibble() %>% mutate(class = "class 3")
+) 
+
+dat <-
+  list(
+    x = t(as.matrix(three_class_dat[, 1:2])),
+    y = three_class_dat$class,
+    geneid = c("x_1", "x_2")
+  )
+res <- pamr.train(dat)
+cent_overall <- matrix(res$centroid.overall, ncol = 2)
+colnames(cent_overall) <- c("x_1", "x_2")
+cent_overall <- as_tibble(cent_overall)
+cent_class <- as_tibble(t(res$centroids)) %>% mutate(class = paste("class", 1:3))
+
+shrink <- function(threshold, object) {
+  res <- pamr.predict(object, threshold = threshold, type = "centroid")
+  out <- as_tibble(t(res))
+  out$class <- colnames(res)
+  out$threshold <- threshold
+  out
+}
+
+cent_shrunk <- map_dfr(res$threshold, shrink, object = res)
+```
+```{r}
+#| label: fig-nsc
+#| echo: false
+#| out-width: 70%
+#| fig-width: 6.25
+#| fig-height: 4
+#| fig-cap: An example of shrunken, class-specific centroids. Panel (a) shows data where there are three classes. Panel(b) demonstrates how, with increasing regularization, the centorids converge towards the global centroid (in black). 
+#| fig-alt: Nearest centroids
+
+three_class_points <- 
+  three_class_dat %>% 
+  ggplot(aes(x_1, x_2)) + 
+  geom_point(aes(col = class, pch = class), alpha = 0.65, show.legend = FALSE) +
+  labs(x = expression(x[1]), y = expression(x[2])) +
+  scale_color_brewer(palette = "Dark2") + 
+  scale_shape_manual(values = 0:2) +
+  ggtitle("(a)")
+
+three_class_path <- 
+  three_class_dat %>% 
+  ggplot(aes(x_1, x_2)) + 
+  geom_point(aes(col = class, pch = class), alpha = 0.15, pch = 1) +
+  geom_point(data = cent_class, aes(col = class, pch = class), cex = 4) +
+  geom_path(data = cent_shrunk, aes(col = class), show.legend = FALSE) +
+  geom_point(data = cent_overall, col = "black", cex = 4, pch = 16, show.legend = FALSE)  +
+  labs(x = expression(x[1]), y = expression(x[2])) +
+  scale_color_brewer(palette = "Dark2") + 
+  scale_shape_manual(values = 0:2) +
+  ggtitle("(b)")
+
+
+three_class_points + three_class_path + plot_layout(guides = 'collect')
+```
+
+@fig-nsc shows the impact of regularization for a simple data set with two predictors and three classes. The data are shown in Panel (a), while Panel (b) displays the raw, class-specific centroids. As regularization is added, the lines indicate the path each takes toward the global centroid (in black). Notice that the centroid for the first class eventually does not use predictor $x_1$; the path becomes completely vertical when that predictor is removed from the calculations. As a counter-example, the centroid for the third class moves in a straight line towards the center. This indicates that both predictors showed a strong signal, and neither was removed as regularization increased.  
+
+Like distance-based methods, predictors based on _data depth_ [@liu1999multivariate; @ghosh2005data;  @mozharovskyi2015classifying] can be helpful for separating classes. The depth of the data was initially defined by @tukey1975mathematics, and it can be roughly understood as the inverse of the distance to a centroid. For example, Mahalanobis depth would be:
+
+$$
+Depth_c(\boldsymbol{x}_0) = \left[1 + D_c(\boldsymbol{x}_0)\right]^{-1}
+$$
+
+There are more complex depth methods, and some are known for their robustness to outliers. Again, like distances, class-specific depth features can be used as features in a model. 
+
+## Chapter References {.unnumbered}
+
+```{r}
+#| label: teardown-cluster
+#| include: false
+
+stopCluster(cl)
+```
