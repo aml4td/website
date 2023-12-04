@@ -22,7 +22,6 @@ library(tidymodels)
 library(embed)
 library(patchwork)
 library(doParallel)
-library(ggmosaic)
 
 # ------------------------------------------------------------------------------
 # set options
@@ -54,7 +53,7 @@ Consider the hotel data from @sec-hotel-rates. @fig-delivery-hour-main
 #| label: fig-delivery-hour-main
 #| fig-width: 5
 #| fig-height: 5
-#| out-width: "50%"
+#| out-width: "40%"
 #| fig-cap: "An alternate version of @fig-delivery-predictors(d) where the underlying data did _not_ contain an interaction between the delivery day and hour."
 
 main_effects_mod <- lm(time_to_delivery ~ day + splines2::naturalSpline(hour, df = 10), delivery_train)
@@ -78,7 +77,7 @@ The previous example illustrates an interaction between a continuous and categor
 #| label: fig-delivery-items
 #| fig-width: 8
 #| fig-height: 4
-#| out-width: "80%"
+#| out-width: "70%"
 #| fig-cap: "adadad"
 
 no_int <- 
@@ -95,7 +94,7 @@ no_int <-
   unnest(stats) %>% 
   ggplot(aes(item_02, estimate, col = `Contains Item 1`, group = `Contains Item 1`)) + 
   geom_point() + 
-  geom_errorbar(aes(ymin = conf.low, ymax = conf.high), width = 1 / 20) + 
+  geom_errorbar(aes(ymin = conf.low, ymax = conf.high), width = 1 / 20, alpha = 2 / 3) + 
   geom_line() +
   labs(x = "Contains Item 2", y = "Mean ADR", title = "(a) no interaction") +
   theme(legend.position = "bottom")
@@ -114,7 +113,7 @@ has_int <-
   unnest(stats) %>% 
   ggplot(aes(item_10, estimate, col = `Contains Item 1`, group = `Contains Item 1`)) + 
   geom_point() + 
-  geom_errorbar(aes(ymin = conf.low, ymax = conf.high), width = 1 / 20) + 
+  geom_errorbar(aes(ymin = conf.low, ymax = conf.high), width = 1 / 20, alpha = 2 / 3) + 
   geom_line() +
   labs(x = "Contains Item 10", y = " ", title = "(b) interaction") +
   theme(legend.position = "bottom")
@@ -139,6 +138,8 @@ If important interactions cannot be known before modeling, can models still disc
 If modern modeling techniques can naturally find and utilize interactions, then why is it necessary to spend any time uncovering these relationships?  The reason is primarily one of interpretation.  Recall the trade-off between prediction and interpretation that was discussed in Chapter X.  More complex models are less interpretable and generally more predictive, while simpler models are more interpretable and less predictive.  By identifying essential interactions, we can include them in simpler models, improving predictive performance.  The following sections provide some tools for uncovering interactions.
 
 ### Detecting Interactions
+
+
 
 ## Basis Expansions and Splines {#sec-splines}
 
@@ -369,7 +370,7 @@ How would the data be modeled if a natural spline with six degrees of freedom we
 feature_plot
 ```
 
-Let’s use a set of 20 natural spline features to model these data using ordinary linear regression. Figure @fig-ames-latitude-fit shows the resulting fit on the training set. The red line shows the fitted curve resulting from the 21 parameter estimates. The different curves on the top of the plot area indicate how much each feature represents each portion of the predictor space.  This illustration demonstrates that as the number of features increases, the model fit becomes more flexible.
+Let’s use a set of 20 natural spline features to model these data using ordinary linear regression. @fig-ames-latitude-fit shows the resulting fit on the training set. The red line shows the fitted curve resulting from the 21 parameter estimates. The different curves on the top of the plot area indicate how much each feature represents each portion of the predictor space.  This illustration demonstrates that as the number of features increases, the model fit becomes more flexible.
 
 ```{r}
 #| label: fig-ames-latitude-fit
@@ -391,36 +392,43 @@ Splines are extremely useful and are especially handy when we want to encourage 
 #| echo: false
 #| out-width: 60%
 #| fig-width: 6
-#| fig-height: 5
+#| fig-height: 3
+#| fig-cap: "An unfortunate visualization of two predictors and the outcome in the food delivery data. The colors of the pie chart reflect delivery time cut points are 20 and 30 minutes with lighter blue indicating eariler times."
+
+dist_pctl <- quantile(delivery_train$distance, probs = seq(0, 1, length.out = 4))
+dist_pctl <- round(dist_pctl, 1)
+dist_pctl[1] <- 1.7
 
 pie_n <-
   delivery_train %>%
   mutate(
-    hour = cut(hour, breaks = 2 * (6:11), include.lowest = TRUE),
+    distance0 = distance,
+    distance = cut(distance, breaks = dist_pctl, include.lowest = TRUE),
+    distance = factor(as.character(distance), levels = rev(levels(distance))),
+    hour = cut(hour, breaks = 2 * (5:11), include.lowest = TRUE),
     delivery_time = cut(
       time_to_delivery,
       breaks = c(10, 20, 30, 100),
       include.lowest = TRUE
     )
   )  %>%
-  count(hour, day, delivery_time, .drop = FALSE)
+  count(hour, distance, delivery_time, .drop = FALSE)
 
 pie_by_group <-
   pie_n %>%
   summarize(n_group = sum(n),
-            .by = c(hour, day))
+            .by = c(hour, distance))
 
 pie_prop <-
-  full_join(pie_n, pie_by_group, by = c("hour", "day")) %>%
-  mutate(rate = n / n_group * 100) %>%
-  filter(!is.na(hour))
+  full_join(pie_n, pie_by_group, by = c("hour", "distance")) %>%
+  mutate(rate = n / n_group * 100) 
 
 pie_prop %>%
   ggplot(aes(x = 1, y = rate, fill = delivery_time)) +
   geom_bar(stat = "identity", width = 1) +
   scale_x_discrete(drop = FALSE) +
   coord_polar(theta = "y") +
-  facet_grid(hour ~ day) +
+  facet_grid(distance ~ hour, switch = "both") +
   scale_fill_brewer(palette = "Blues") +
   theme_minimal() +
   theme(
@@ -429,7 +437,7 @@ pie_prop %>%
     axis.ticks = element_blank(),
     axis.text = element_blank()
   ) +
-  labs(y = "Day", x = "Hour")
+  labs(x = "Distance", y = "Hour")
 ```
 
 Our general advice, described in more detail in @fes, is that the first inclination should never be to engineer continuous predictors via discretization. Other tools, such as splines, are both theoretically and practically superior to converting quantitative data to qualitative data. 
@@ -563,8 +571,8 @@ best_super   <- show_best(super_res, metric = "rmse")
 
 Let's again use the Ames housing data, specifically the latitude predictor, illustrated in @fig-ames-latitude. We can fit a linear regression with qualitative terms for latitude derived using: 
 
-- An unsupervised approach using percentiles. 
-- A supervised approach where a boosted tree model is used to set the breakpoints for the bins. 
+- An unsupervised approach using percentiles at cut-points. 
+- A supervised approach where a regression tree model is used to set the breakpoints for the bins. 
 
 In each case, the number of new features requires tuning. Using the basic grid search tools described in @sec-grid, the number of required terms was set for each method (ranging from `r min(collect_metrics(super_res)$num_breaks)` to `r max(collect_metrics(super_res)$num_breaks)` terms) by minimizing the RMSE from a simple linear regression model. The results are that both approaches required the same number of new features and produced about the same level of performance; the unsupervised approach required `r num_unsuper_breaks` breaks to achieve an RMSE of `r signif(best_unsuper$mean[1], 3)` and the supervised model has an RMSE of `r signif(best_super$mean[1], 3)` with `r num_super_breaks` cut points. @fig-ames-bins shows the fitted model using the unsupervised terms. 
 
@@ -580,14 +588,16 @@ ames_train %>%
   geom_point(aes(Latitude, Sale_Price), alpha = 1 / 8, cex = 1 / 2) +
   geom_rug(data = super_breaks, aes(x = value, col = method)) +
   geom_rug(data = unsuper_breaks, aes(x = value, col = method), sides = "t") +
-  geom_line(data = super_pred,
+  geom_step(data = super_pred,
             aes(Latitude, .pred),
             col = bin_cols["supervised"],
-            lwd = 3 / 4) +
-  geom_line(data = unsuper_pred,
+            lwd = 1,
+            alpha = 2 / 3) +
+  geom_step(data = unsuper_pred,
             aes(Latitude, .pred),
             col = bin_cols["unsupervised"],
-            lwd = 3 / 4) +  
+            lwd = 1,
+            alpha = 2 / 3) +  
   scale_color_manual(values = bin_cols) +
   ylab("Sale Price (log10)")
 ```
@@ -723,10 +733,10 @@ We'll let $x_{ij}$ denote sample $i$ ($i=1\ldots N$) for predictor $j$ ($j=1\ldo
 
 \begin{align}
 \delta_{jc} &= \frac{\bar{x}_{jc} - \bar{x}_j}{w_c s_j} &&\text{ where } \notag \\
-\bar{x}_{jc} &= \frac{1}{N_c}\sum_{i=1}^{N_c} x_{ij} I(y_i = c) && \text{\textcolor{grey}{(class-specific centroid elements)}} \notag \\
+\bar{x}_{jc} &= \frac{1}{N_c}\sum_{i=1}^{N_c} x_{ij}\, I(y_i = c) && \text{\textcolor{grey}{(class-specific centroid elements)}} \notag \\
 \bar{x}_{j} &= \frac{1}{N}\sum_{i=1}^{N} x_{ij}  && \text{\textcolor{grey}{(global centroid elements)}}\notag \\
 w_c &= \sqrt{\frac{1}{N_c}  - \frac{1}{N}}  && \text{\textcolor{grey}{{(weights)}}} \notag \\
-s_j &= \frac{1}{N-C}\sum_{c=1}^C\sum_{i=1}^N \left(x_{ij} - \bar{x}_{jc}\right)^2 I(y_i == c)  && \text{\textcolor{grey}{(pooled standard deviation for predictor $j$)}}\notag 
+s_j &= \frac{1}{N-C}\sum_{c=1}^C\sum_{i=1}^N \left(x_{ij} - \bar{x}_{jc}\right)^2 I(y_i = c)  && \text{\textcolor{grey}{(pooled standard deviation for predictor $j$)}}\notag 
 \end{align}
 
 $I(x)$ is a function that returns a value of one when $x$ is true. 
@@ -734,13 +744,13 @@ $I(x)$ is a function that returns a value of one when $x$ is true.
 To shrink this difference towards zero, a tuning parameter $\lambda$ is used to create a modified version of the each predictors contribution to the difference:
 
 \begin{equation}
-\delta^*_{jc} = sign(\delta_{jc}) h(|\delta_{jc}| - \lambda)
+\delta^*_{jc} = sign(\delta_{jc})\,h(|\delta_{jc}| - \lambda)
 \end{equation}
 
 where $h(x) = x$ when $x > 0$ and zero otherwise. If the difference between the class-specific and global centroid is small (relative to $\lambda$), $\delta^*_{jc} = 0$ and predictor $j$ does not functionally affect the calculations for class $c$. The class-specific shrunken centroid is then
 
 \begin{equation}
-\bar{x}^*_{jc}= \bar{x}_j + w_c s_j \delta^*_{jc}
+\bar{x}^*_{jc}= \bar{x}_j + w_c\, s_j\, \delta^*_{jc}
 \end{equation}
 
 New features are added to the model based on the distance between $\boldsymbol{x}_0$ and $\boldsymbol{\bar{x}}^*_{c}$. The amount of shrinkage is best optimized using the tuning methods described in later chapters. There are several variations of this specific procedure. @wangImprovedCentroids describe several different approaches and @efron2009empirical demonstrates the connection to Bayesian methods. 
