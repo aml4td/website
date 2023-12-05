@@ -18,8 +18,10 @@ source("../R/_common.R")
 
 library(pamr)
 library(splines2)
+library(hstats)
 library(tidymodels)
 library(embed)
+library(rules)
 library(patchwork)
 library(doParallel)
 
@@ -139,6 +141,54 @@ If modern modeling techniques can naturally find and utilize interactions, then 
 
 ### Detecting Interactions
 
+
+```{r}
+#| label: cubist-hstats
+#| echo: false
+#| cache: true
+#| eval: false
+
+set.seed(967)
+cb_fit <- 
+  workflow() %>% 
+  add_model(cubist_rules(committees = 100)) %>% 
+  add_formula(time_to_delivery ~ .) %>% 
+  fit(data = delivery_train)
+
+# currently giving an error of "String '_:_' found in grid values at unlucky position."
+cv_hstats <-
+  hstats(cb_fit,
+         X = delivery_train %>% select(-time_to_delivery),
+         pairwise_m = 10,
+         verbose = FALSE)
+cv_two_way_int_obj <- h2_pairwise(cv_hstats, zero = TRUE)
+int_vars <-
+  strsplit(rownames(cv_two_way_int_obj), ":") %>%
+  map(sort) %>%
+  map(~gsub("_0", " ", .x)) %>%
+  map(~gsub("_", " ", .x)) %>%
+  map_chr( ~ paste(.x[1], "x", .x[2]))
+cv_two_way_int <-
+  tibble(terms = int_vars, effect = cv_two_way_int_obj$M[, 1]) %>%
+  mutate(terms = factor(terms),
+         terms = reorder(terms, effect)) %>% 
+  filter(effect > 0.001)
+```
+
+```{r}
+#| label: fig-cubist-interaction
+#| echo: false
+#| out-width: 60%
+#| fig-width: 6
+#| fig-height: 4.25
+#| fig-cap: H statistics for pairwise interaction terms.
+#| eval: false
+
+cv_two_way_int %>% 
+  ggplot(aes(x = effect, y = terms)) + 
+  geom_bar(stat = "identity") +
+  labs(y = NULL, x = "Proportion of Joint Effect Variability")
+```
 
 
 ## Basis Expansions and Splines {#sec-splines}
