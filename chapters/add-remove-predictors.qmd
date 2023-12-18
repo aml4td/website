@@ -21,7 +21,7 @@ library(splines2)
 library(hstats)
 library(tidymodels)
 library(embed)
-library(rules)
+library(baguette)
 library(patchwork)
 library(doParallel)
 
@@ -75,54 +75,66 @@ main_effects_pred %>%
 
 The previous example illustrates an interaction between a continuous and categorical predictor. cat x cat 
 
+
+@fig-delivery-items displays interaction plots where the mean effect is estimated for each combination of the categorical predictors. The mean delivery time and 90% confidence were computed using the bootstrap, as in @sec-eda-whole-game. The interaction plot’s left panel shows no real change in effect for whether item 1 was ordered for different values of item 9 since their profiles have the same pattern. On the right-hand side, there is a strong interaction between items 1 and 10. The mean delivery times are very similar when neither is contained in the order. Also, when only one of the two items is in the order, the average time is similarly small. However, when both are included, the delivery time becomes much larger.  This means that you cannot consider the effect or either item 1 or 10 alone; their effect on the outcome occurs jointly. 
+
+```{r}
+#| label: compute-mean-int-times
+#| echo: false
+#| cache: true
+mean_time <- function(x) {
+  x %>% 
+    pivot_longer(
+      cols = c(-time_to_delivery, -item_01),
+      names_to = "predictor",
+      values_to = "count"
+    )%>% 
+    mutate(
+      ordered = ifelse(count > 0, "yes", "no"),
+      ordered = paste(ordered, gsub("item_", "", predictor)),
+      item_01 = ifelse(item_01 > 0, "yes", "no"),
+      term = paste(item_01, ordered)
+    )%>% 
+    summarize(
+      estimate = mean(time_to_delivery),
+      .by = c(term)
+    ) %>% 
+    select(term, estimate)
+}
+
+set.seed(78)
+resampled_ratios <-
+  delivery_train %>% 
+  select(time_to_delivery, item_01, item_09, item_10)%>% 
+  bootstraps(times = 5000) %>% 
+  mutate(stats = map(splits, ~ mean_time(analysis(.x)))) %>% 
+  int_pctl(stats, alpha = 0.1) %>% 
+  mutate(
+    split_up = strsplit(term, " "),
+    item_01 = map_chr(split_up, ~ .x[1]),
+    Ordered = map_chr(split_up, ~ .x[2]),
+    Item = map_chr(split_up, ~  gsub("^0", " ", .x[3]))
+  )
+```
+
 ```{r}
 #| label: fig-delivery-items
-#| fig-width: 8
+#| fig-width: 7
 #| fig-height: 4
 #| out-width: "70%"
-#| fig-cap: "adadad"
+#| fig-cap: "Interaction examples with two categorical predictors. Items 1 and 9 (left panel) do not interaction, while items 1 and 10 appear to have a strong  interaction (right panel)."
 
-no_int <- 
-  delivery_train %>% 
-  mutate(
-    item_02 = factor(ifelse(item_02 > 0, "yes", "no")),
-    `Contains Item 1` = factor(ifelse(item_01 > 0, "yes", "no"))
-  ) %>% 
-  nest(.by = c("Contains Item 1", "item_02")) %>% 
-  mutate(
-    stats = map(data, ~ t.test(.x$time_to_delivery, conf.level = 0.9) %>% tidy())
-  ) %>% 
-  select(`Contains Item 1`, item_02, stats) %>% 
-  unnest(stats) %>% 
-  ggplot(aes(item_02, estimate, col = `Contains Item 1`, group = `Contains Item 1`)) + 
+resampled_ratios %>% 
+  ggplot(aes(item_01, .estimate, col = Ordered, group = Ordered)) + 
   geom_point() + 
-  geom_errorbar(aes(ymin = conf.low, ymax = conf.high), width = 1 / 20, alpha = 2 / 3) + 
   geom_line() +
-  labs(x = "Contains Item 2", y = "Mean ADR", title = "(a) no interaction") +
-  theme(legend.position = "bottom")
-
-has_int <- 
-  delivery_train %>% 
-  mutate(
-    item_10 = factor(ifelse(item_10 > 0, "yes", "no")),
-    `Contains Item 1` = factor(ifelse(item_01 > 0, "yes", "no"))
-  ) %>% 
-  nest(.by = c("Contains Item 1", "item_10")) %>% 
-  mutate(
-    stats = map(data, ~ t.test(.x$time_to_delivery, conf.level = 0.9) %>% tidy())
-  ) %>% 
-  select(`Contains Item 1`, item_10, stats) %>% 
-  unnest(stats) %>% 
-  ggplot(aes(item_10, estimate, col = `Contains Item 1`, group = `Contains Item 1`)) + 
-  geom_point() + 
-  geom_errorbar(aes(ymin = conf.low, ymax = conf.high), width = 1 / 20, alpha = 2 / 3) + 
-  geom_line() +
-  labs(x = "Contains Item 10", y = " ", title = "(b) interaction") +
-  theme(legend.position = "bottom")
-
-no_int + has_int +
-  plot_layout(guides = 'collect')  & 
-  theme(legend.position = "bottom")
+  facet_wrap(~ Item, labeller = "label_both") +
+  geom_errorbar(aes(ymin = .lower, ymax = .upper),
+                width = 1 / 20,
+                alpha = 2 / 3) +
+  lims(y = c(25, 44)) +
+  labs(x = "Contains Item 1", y = "Mean Delivery Time") +
+  theme(legend.position = "top")
 ```
 
 As a third example, interactions may occur between continuous predictors. 
@@ -141,50 +153,83 @@ If modern modeling techniques can naturally find and utilize interactions, then 
 
 ### Detecting Interactions
 
+ - Adding many to a model and comparing performance with and without the extra terms. 
+ - Feasible solutions algorithm 
+ - Friedman's H-statistic.
+
+We can estimate the joint effect of a set of predictors on the outcome as well as the effect of individual predictors. If we thought that only main effects and two-factor interactions were possible, we could factor out the individual effects from the joint effect. The leftover predictive ability would then be due to interactions. Suppose that we had a linear regression model with two predictors. The joint effect would include all possible model terms associated with a predictor. We can also create main effects too: 
+
+\begin{align}
+f(x_1, x_2) &= \beta_{1}x_1 + \beta_{2}x_2 + \beta_{3}x_{1}x_{2} \notag \\
+f(x_1) &= \beta_{1}x_1  \notag \\
+f(x_2) &= \beta_{2}x_2 \notag 
+\end{align}
+
+To isolate the potential interaction effect: 
+
+$$
+f(x_1\times x_2) = f(x_1, x_2) - f(x_1) - f(x_2) = \beta_{3}x_{1}x_{2}
+$$
+
+Friedman's H-statistic does exactly this. 
+
+
+One important aspect of this strategy is that you have to start with a model that is capable of effectively modeling the interaction effects, either formally, as with the two-factor linear regression example, or via more black-box methods. The latter would include models such as tree-based models, neural networks, support vector machines, and others. 
+
+This raises the question of how to capture the results; at the level of the original predictor or for specific derived features. 
+
+
 
 ```{r}
-#| label: cubist-hstats
+#| label: bagging-hstats
 #| echo: false
 #| cache: true
-#| eval: false
+#| eval: true
+
+bagging_spec <- 
+  bag_tree() %>% 
+  set_mode("regression") %>% 
+  set_engine("rpart", times = 10)
 
 set.seed(967)
-cb_fit <- 
+bagging_fit <- 
   workflow() %>% 
-  add_model(cubist_rules(committees = 100)) %>% 
+  add_model(bagging_spec) %>% 
   add_formula(time_to_delivery ~ .) %>% 
   fit(data = delivery_train)
 
 # currently giving an error of "String '_:_' found in grid values at unlucky position."
-cv_hstats <-
-  hstats(cb_fit,
-         X = delivery_train %>% select(-time_to_delivery),
-         pairwise_m = 10,
+bagging_hstats <-
+  hstats(bagging_fit,
+         X = delivery_val %>% select(-time_to_delivery),
+         pairwise_m = 15,
+         approx = TRUE,
+         n_max = 1000,
          verbose = FALSE)
-cv_two_way_int_obj <- h2_pairwise(cv_hstats, zero = TRUE)
+bagging_two_way_int_obj <- h2_pairwise(bagging_hstats, zero = TRUE)
 int_vars <-
-  strsplit(rownames(cv_two_way_int_obj), ":") %>%
+  strsplit(rownames(bagging_two_way_int_obj), ":") %>%
   map(sort) %>%
   map(~gsub("_0", " ", .x)) %>%
   map(~gsub("_", " ", .x)) %>%
   map_chr( ~ paste(.x[1], "x", .x[2]))
-cv_two_way_int <-
-  tibble(terms = int_vars, effect = cv_two_way_int_obj$M[, 1]) %>%
+bagging_two_way_int <-
+  tibble(terms = int_vars, effect = bagging_two_way_int_obj$M[, 1]) %>%
   mutate(terms = factor(terms),
          terms = reorder(terms, effect)) %>% 
-  filter(effect > 0.001)
+  filter(effect > 0.005)
 ```
 
 ```{r}
-#| label: fig-cubist-interaction
+#| label: fig-hstats-interaction
 #| echo: false
 #| out-width: 60%
 #| fig-width: 6
 #| fig-height: 4.25
 #| fig-cap: H statistics for pairwise interaction terms.
-#| eval: false
+#| eval: true
 
-cv_two_way_int %>% 
+bagging_two_way_int %>% 
   ggplot(aes(x = effect, y = terms)) + 
   geom_bar(stat = "identity") +
   labs(y = NULL, x = "Proportion of Joint Effect Variability")
