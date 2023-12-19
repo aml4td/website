@@ -41,6 +41,10 @@ We definitely want to decouple the content of this work from specific software. 
 
 But, don't worry, we will still make code available for readers!  The sources for the material use R, and early adopters can find them in the [GitHub repository](https://github.com/aml4td/website).   In addition, we will create other websites with computing supplements for R and, hopefully, at some point in the future, Python. Those will become finalized around the time we finish the first version of the materials. 
 
+## Will there be exercises?
+
+Many readers found the Exercise sections of Applied Predictive Modeling to be helpful for solidifying the concepts presented in each chapter.  Like the computing sections, we intend to create exercises for most of the chapters but will store these on a website rather than on physical book page.  The problems will revolve around the data sets used in the book as well as the code used for the analyses in the text.
+
 ## How can I ask questions? 
 
 If you have questions about the content, it is probably best to ask on a public forum, like [cross-validated](https://stats.stackexchange.com/). You'll most likely get a faster answer there if you take the time to ask the questions in the best way possible.   
