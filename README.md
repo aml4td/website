@@ -37,11 +37,9 @@ If you would like a more theoretical treatment of machine learning models, then 
 
 ## Is there code? 
 
-We definitely want to decouple the content from specific software. [One of our other books](http://appliedpredictivemodeling.com/) on modeling had computing sections. They are nice to peruse, and people enjoyed having them there. However, they can quickly become outdated and take up a lot of space. 
+We definitely want to decouple the content of this work from specific software. [One of our other books](http://appliedpredictivemodeling.com/) on modeling had computing sections. Many people found these sections to be a useful resource at the time of the book's publication. However, code can quickly become outdated in today's computational environment.  In addition, this information takes up a lot of page space that would be better used for other topics.
 
-The sources for the material use R, and early adopters can find them in the [GitHub repository](https://github.com/aml4td/website). 
-
-However, we will create other websites with computing supplements for R and Python (hopefully more in the future). Those will become finalized around the time we finish the first version of the materials. 
+But, don't worry, we will still make code available for readers!  The sources for the material use R, and early adopters can find them in the [GitHub repository](https://github.com/aml4td/website).   In addition, we will create other websites with computing supplements for R and, hopefully, at some point in the future, Python. Those will become finalized around the time we finish the first version of the materials. 
 
 ## How can I ask questions? 
 
