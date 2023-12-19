@@ -1,6 +1,5 @@
 # Website sources for Applied Machine Learning for Tabular Data
 
-
 Welcome! This is a work in progress. We want to create a practical guide to developing quality predictive models from tabular data. We'll publish materials here as we create them and welcome community contributions in the form of discussions, suggestions, and edits. 
 
 We also want these materials to be reusable and open. The sources are in the source [GitHub repository](https://github.com/aml4td/website) with a Creative Commons license attached (see below).
@@ -39,11 +38,15 @@ If you would like a more theoretical treatment of machine learning models, then 
 
 We definitely want to decouple the content of this work from specific software. [One of our other books](http://appliedpredictivemodeling.com/) on modeling had computing sections. Many people found these sections to be a useful resource at the time of the book's publication. However, code can quickly become outdated in today's computational environment.  In addition, this information takes up a lot of page space that would be better used for other topics.
 
-But, don't worry, we will still make code available for readers!  The sources for the material use R, and early adopters can find them in the [GitHub repository](https://github.com/aml4td/website).   In addition, we will create other websites with computing supplements for R and, hopefully, at some point in the future, Python. Those will become finalized around the time we finish the first version of the materials. 
+We will create _computing supplements_ to go along with the materials. Since we use R's tidymodels framework for calculations, the supplement currently in-progress is:  
 
-## Will there be exercises?
+- [`tidymodels.aml4td.org`](https://tidymodels.aml4td.org)
 
-Many readers found the Exercise sections of Applied Predictive Modeling to be helpful for solidifying the concepts presented in each chapter.  Like the computing sections, we intend to create exercises for most of the chapters but will store these on a website rather than on physical book page.  The problems will revolve around the data sets used in the book as well as the code used for the analyses in the text.
+If you are interested in working on a python/scikit-learn supplement, please [file an issue](https://github.com//aml4td/website/issues)  
+
+## Are there be exercises?
+
+Many readers found the Exercise sections of _Applied Predictive Modeling_ to be helpful for solidifying the concepts presented in each chapter. The current set can be found at [`exercises.aml4td.org`](https://exercises.aml4td.org)
 
 ## How can I ask questions? 
 
