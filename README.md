@@ -1,13 +1,13 @@
 # Website sources for Applied Machine Learning for Tabular Data
 
 
-Welcome! This is a work in progress. We want to create a practical guide to creating quality predictive models from tabular data. We'll publish materials here as we create them and welcome community contributions in the form of discussions, suggestions, and edits. 
+Welcome! This is a work in progress. We want to create a practical guide to developing quality predictive models from tabular data. We'll publish materials here as we create them and welcome community contributions in the form of discussions, suggestions, and edits. 
 
 We also want these materials to be reusable and open. The sources are in the source [GitHub repository](https://github.com/aml4td/website) with a Creative Commons license attached (see below).
 
 Our intention is to write these materials and, when we feel we're done, pick a publishing partner to produce a print version.
 
-The book takes a holistic view of this process and focuses on a few areas that are usually left out of similar works. For example, the effectiveness of the model can be driven by how the predictors are represented. We tightly couple feature engineering methods with machine learning models. Also, quite a lot of work happens after we have determined our best model and created the final fit. Post-modeling activities are also described here. 
+The book takes a holistic view of the predictive modeling process and focuses on a few areas that are usually left out of similar works. For example, the effectiveness of the model can be driven by how the predictors are represented.  Because of this, we tightly couple feature engineering methods with machine learning models.  Also, quite a lot of work happens after we have determined our best model and created the final fit.  These post-modeling activities are an important part of the model development process and will be described in detail. 
 
 To cite this work, we suggest: 
 
