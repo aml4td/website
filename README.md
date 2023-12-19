@@ -29,11 +29,11 @@ This work is licensed under a [Creative Commons Attribution-NonCommercial-ShareA
 
 ## Intended Audience
 
-Our intended audience is data analysts of many types: statisticians, data scientists, laboratory scientists, and anyone else who needs to create a model for prediction. We don't expect readers to be experts in these methods or the math behind them. Our approach is applied. We want readers to have intuition about what are good and bad ideas for their data and what to look out for. 
+Our intended audience includes data analysts of many types: statisticians, data scientists, professors and instructors of machine learning courses, laboratory scientists, and anyone else who desires to understand how to create a model for prediction.  We don't expect readers to be experts in these methods or the math behind them. Instead, our approach throughout this work is applied.  That is, we want readers to use this material to build intuition about the predictive modeling process.  What are good and bad ideas for the modeling process?  What pitfalls should we look out for?  How can we be confident that the model will be predictive for new samples?  What are advantages and disadvantages of different types of models?  These are just some of the questions that this work will address.
 
-Some background in modeling and statistics is required. Having seen or used basic regression models is good, and understanding basic statistical concepts, such as variance, correlation, populations, samples, etc., is needed. There is some mathematical notation, so you'll need to be able to read those. There are a few more statistically sophisticated sections, but these are not pivotal topics. 
+Some background in modeling and statistics will be extremely useful. Having seen or used basic regression models is good, and an understanding of basic statistical concepts such as variance, correlation, populations, samples, etc., is needed.  There will also be some mathematical notation, so you'll need to be able to grasp these abstractions.  But we will keep this to those parts where it is absolutely necessary.  There are a few more statistically sophisticated sections for some of the more advanced topics. 
 
-If you want a more theoretical treatment of machine learning models, we recommend Hastie et al. (2017). Other books for learning more about machine learning are Bishop and Nasrabadi (2006), Arnold et al. (2019) and, for more of a deep learning focus, Goodfellow et al. (2016).
+If you would like a more theoretical treatment of machine learning models, then we recommend Hastie et al. (2017). Other books for gaining a more in-depth understanding of machine learning are Bishop and Nasrabadi (2006), Arnold et al. (2019) and, for more of a deep learning focus, Goodfellow et al. (2016).
 
 ## Is there code? 
 
