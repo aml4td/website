@@ -44,7 +44,7 @@ We will create _computing supplements_ to go along with the materials. Since we 
 
 If you are interested in working on a python/scikit-learn supplement, please [file an issue](https://github.com//aml4td/website/issues)  
 
-## Are there be exercises?
+## Are there exercises?
 
 Many readers found the Exercise sections of _Applied Predictive Modeling_ to be helpful for solidifying the concepts presented in each chapter. The current set can be found at [`exercises.aml4td.org`](https://exercises.aml4td.org)
 
