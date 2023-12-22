@@ -10,5 +10,7 @@ Release notes
 - [ ] `quarto render`
 - [ ] `quarto preview`
 - [ ] review results
+- [ ] bump the version number in `DESCRIPTION`
+- [ ] `usethis::use_github_release()`
 - [ ] `quarto publish gh-pages --no-render`
 
