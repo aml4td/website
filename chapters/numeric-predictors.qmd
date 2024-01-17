@@ -1,0 +1,634 @@
+---
+knitr:
+  opts_chunk:
+    cache.path: "../_cache/transformations/"
+---
+
+# Transforming Numeric Predictors {#sec-numeric-predictors}
+
+```{r}
+#| label: transformations-setup
+#| include: false
+
+source("../R/_common.R")
+
+# ------------------------------------------------------------------------------
+library(MASS)
+library(tidymodels)
+library(embed)
+library(bestNormalize)
+library(patchwork)
+library(scales)
+library(modeldatatoo) # remove this later with setup file
+library(ggforce)
+library(viridis)
+
+# ------------------------------------------------------------------------------
+# set options
+tidymodels_prefer()
+theme_set(theme_transparent())
+set_options()
+```
+
+```{r}
+#| label: data-import
+#| include: false
+source("../R/setup_ames.R")
+source("../R/setup_chemometrics.R")
+```
+
+## Embeddings
+
+When there are a multitude of predictors, it might make sense to condense them into a smaller number of artificial features. This smaller set should represent what is essential in the original data to be useful. This process is often called _feature extraction_ or _manifold learning_. We’ll use a more general term currently en vogue: **embeddings**. Embedding methods can be used for more than feature extraction. For example, some are designed to convert non-numeric data (such as text) into a more usable numeric format. 
+
+This section will examine two primary classes of embedding methods that can achieve multiple purposes. First, we’ll consider linear methods that take a numeric input matrix $X$ that is $n \times p$ and create a different, probably smaller set of features $X^*$ ($n \times m$) using the transformation $X^* = XA$. After describing linear methods, consider a different class of transformations that focus on the distances between data points called _multidimensional scaling_. These tools create a new set of features that are not necessarily linear combinations of the original features but often use some of the same math as the linear techniques. 
+
+Before beginning, we'll introduce another data set that will be used here as well forthcoming chapters. 
+
+### Example: Predicting Barley Amounts
+
+@larsen2019deep and @pierna2020applicability describe a data set where laboratory measurements are used to predict what percentage of a mixture was lucerne, soy oil, or barley oil^[Retreived from [`https://chemom2019.sciencesconf.org/resource/page/id/13.html`](https://chemom2019.sciencesconf.org/resource/page/id/13.html)]. An instrument is used to measure how much of particular wavelengths of light are absorbed by the mixture to help determine chemical composition. We will focus on using the lab measurements to predict the percentage of barley oil in the mixture. The distribution of these values is shown in @fig-barley-data(a). 
+
+```{r}
+#| label: base-rec
+#| echo: false
+#| cache: true
+
+barley_base <-
+  recipe(barley ~ ., data = barley_train) %>%
+  update_role(barley_bin, new_role = "groupings") %>%
+  step_nzv(all_predictors()) %>%
+  step_orderNorm(all_numeric_predictors()) %>%
+  prep()
+```
+
+```{r}
+#| label: fig-barley-data 
+#| echo: false
+#| warning: false
+#| out-width: 60%
+#| fig-width: 5
+#| fig-height: 6
+#| fig-cap: "(a) The distribution of the outcome for the entire data set. The bar colors reflect the percent barley distribution and are used in subsequent sections. (b) Selected training set spectra for four barley samples. Each line represents the set of 550 predictors in the data."
+
+key <- tibble(
+  barley_bin = levels(chimiometrie_2019$barley_bin),
+  midpoint = barley_breaks[-length(barley_breaks)] + diff(barley_breaks)/2
+)
+
+barley_p <- 
+  chimiometrie_2019 %>% 
+  summarize(
+    count = n(),
+    median = median(barley),
+    .by = barley_bin
+    ) %>% 
+  full_join(key, by = "barley_bin") %>% 
+  ggplot(aes(midpoint / 100, count, fill = median)) +
+  geom_bar(stat = "identity", show.legend = FALSE) +
+  scale_fill_viridis(option = "viridis") +
+  labs(x = "Barley", title = "(a)") + 
+  scale_x_continuous(labels = scales::label_percent())
+
+set.seed(41) 
+spect_p <- 
+    barley_train %>% 
+    filter(barley_bin %in% c("[0,2]", "(18,20]", "(38,40]", "(52,54]")) %>% 
+    slice_sample(n = 1, by = "barley_bin") %>% 
+    add_rowindex() %>% 
+    pivot_longer(c(starts_with("wv"))) %>% 
+    mutate(index = as.numeric(gsub("wvlgth_", "", name))) %>% 
+    full_join(wave, by = "index") %>%
+    ggplot(aes(wavelength, value, col = barley, group = .row)) + 
+    geom_line(show.legend = FALSE, linewidth = 1, alpha = 1) +
+    scale_color_viridis(option = "viridis") +
+    labs(y = "Measurement", x = "Wavelength (2nm)", title = "(b)") 
+
+barley_p / spect_p
+```
+
+Note that most of the data have very little barley oil. About `r round(mean(chimiometrie_2019$barley <= 1) * 100, 0)`% of the data are less than 1% and the median barley oil percentage is `r round(median(chimiometrie_2019$barley), 2)`%.
+
+The `r nrow(wave)` predictors are the light absorbance for sequential values in the light region of interest (believed to be from wavelengths between `r min(wave$wavelength)` to `r max(wave$wavelength)`). @fig-barley-data(b) shows a selection of four samples from the data. The darker lines represent samples with lower barley content. 
+
+These predictor values, called _spectra_, have a very high serial correlation between predictor values in a sample. The median correlation between the predictors was `r round(median(wave_corr), 2)`. This is a major factor for the analysis of these data and we use it here; a high degree of between-predictor correlation can easily undermine some types of models. However, some embedding methods are especially suited for decorrelating predictors. 
+
+In the computations that follow, each predictor was standardized using the orderNorm transformation mentioned earlier (unless otherwise noted). 
+
+The data originated from a modeling competition to find the most accurate model and specific samples were allocated to training and test sets. However, there were no outcome values for the test set; our analysis will treat the `r format(nrow(chimiometrie_2019), big.mark = ",")` samples in their training set as the overall pool of samples. This is enough data to split into separate training ($n_{tr} =$ `r format(nrow(barley_train), big.mark = ",")`) , validation ($n_{val} =$ `r format(nrow(barley_val), big.mark = ",")`), and test sets ($n_{te} =$ `r format(nrow(barley_test), big.mark = ",")`). Stratified sampling, using the outcome data, was used to split the initial data pool. 
+
+
+### Linear Transformations
+
+### Distance-Based Methods
+
+Multidimensional scaling (MDS) [@torgerson1952multidimensional] is a feature extraction tool that creates embeddings that try to preserve the geometric distances between training set points. In other words, the distances between points in the smaller dimensions should be comparable to those in the original dimensions. Since the methods in this section use distances, the predictors should be standardized to equivalent units before the embedding is trained.  
+
+Take @fig-mds-example(a) as an example. There are ten points in two dimensions (colored by three outcome classes). If we were to project these points down to a single dimension, we'd like points that are close in two dimensions to remain close when projected down to a single dimension. Panel (c) shows two such solutions. Each does reasonably well with some exceptions (i.e., points five and six are not very close for Metric MDS). 
+
+```{r}
+#| label: mds-example-computations
+#| include: false
+
+pens <- penguins[complete.cases(penguins),]
+
+n <- 10
+set.seed(119)
+pen_subset <-
+  pens %>%
+  sample_n(n) %>%
+  select(length = bill_length_mm, depth = bill_depth_mm, species) %>%
+  arrange(length, depth) %>%
+  mutate(
+    sample = row_number(),
+    length = as.vector(scale(length)),
+    depth = as.vector(scale(depth)))
+
+pen_subset %>%
+  ggplot(aes(x = length, y = depth, color = species)) +
+  geom_point()
+
+ar <- diff(range(pen_subset$length)) / diff(range(pen_subset$depth))
+
+### Compute distances and KNN
+
+pen_dist <-
+  dist(pen_subset[, 1:2]) %>%
+  as.matrix()
+
+dist_alt <- pen_dist
+diag(dist_alt) <- 10^38
+
+nearest <- vector(mode = "list", length = n)
+k <- 2
+
+for (i in 1:n) {
+  nearest[[i]] <- order(dist_alt[i,])[1:k]
+}
+
+### 
+
+mds_1D <- sammon(pen_dist, k = 1, tol = 0.000001, niter = 1000)$points[, 1]
+mds_1D_df <-
+  tibble(
+    MDS_1 = as.vector(scale(mds_1D)),
+    species = pen_subset$species,
+    sample = pen_subset$sample,
+    method = "Non-Metric MDS"
+  )
+
+### 
+
+iso_data <- 
+  recipe(species ~ length + depth, data = pen_subset) %>% 
+  step_isomap(all_numeric_predictors(), neighbors = 2, num_terms = 1) %>% 
+  prep()
+
+isomap_1D_df <-
+  tibble(
+    MDS_1 = as.vector(scale(iso_data$steps[[1]]$res@data@data[,1])),
+    species = pen_subset$species,
+    sample = pen_subset$sample,
+    method = "Isomap"
+  )
+
+one_d_df <- bind_rows(mds_1D_df, isomap_1D_df)
+```
+```{r}
+#| label: fig-mds-example
+#| echo: false
+#| dev: "ragg_png"
+#| out-width: 70%
+#| fig-width: 8
+#| fig-height: 8
+#| fig-cap: "(a) A collection of samples associated with three outcome classes. (b) A diagram of the two nearest neighbors. (c) A one-dimensional projection using two different methods: non-metric MDS and Isomap."
+
+base_p <- 
+  pen_subset %>%
+  ggplot(aes(x = length, y = depth)) +
+  coord_fixed(ratio = ar) +
+  scale_color_brewer(palette = "Dark2")
+
+orig_p <-
+  base_p +
+  geom_point(
+    pch = 16,
+    cex = 8,
+    fill = "white",
+    col = "white",
+    show.legend = FALSE
+  ) +
+  geom_point(
+    pch = 1,
+    cex = 8,
+    aes(col = species),
+    fill = "white",
+    show.legend = FALSE
+  ) +
+  geom_text(aes(label = sample, col = species), show.legend = FALSE) +
+  labs(title = "(a) Original Data", x = "Predictor A", y = "Predictor B")
+
+### 
+
+knn_p <- base_p
+
+for(i in 1:n) {
+  tmp <- pen_subset[nearest[[i]], 1:2] %>% rename_with(~paste0(., "_end"))
+  dat <- pen_subset %>% slice(rep(i, 2)) %>% bind_cols(tmp)
+
+  knn_p <-
+    knn_p +
+    geom_segment(data = dat, aes(xend = length_end, yend = depth_end),
+                 col = "grey")
+}
+knn_p <-
+  knn_p +
+  geom_point(
+    pch = 16,
+    cex = 8,
+    fill = "white",
+    col = "white",
+    show.legend = FALSE
+  ) +
+  geom_point(
+    pch = 1,
+    cex = 8,
+    aes(col = species),
+    fill = "white",
+    show.legend = FALSE
+  ) +
+  geom_text(aes(label = sample, col = species), show.legend = FALSE) +
+  labs(title = "(b) 2-Nearest Neighbors", x = "Predictor A", y = "Predictor B") 
+
+### 
+
+  one_d_p <-
+    one_d_df %>%
+    ggplot(aes(x = MDS_1, y = method)) +
+    geom_point(
+      pch = 16,
+      cex = 8,
+      fill = "white",
+      col = "white",
+      show.legend = FALSE
+    ) +
+    geom_point(
+      pch = 1,
+      cex = 8,
+      aes(col = species),
+      fill = "white",
+      show.legend = FALSE
+    ) +
+    geom_text(aes(label = sample, col = species), show.legend = FALSE) +
+    labs(title = "(c) 1 Dimensional MDS (two ways)", y = NULL, 
+         x = "Embedded Value") +
+    scale_color_brewer(palette = "Dark2")
+  
+### 
+
+layout <- "
+AAAAAAAA
+AAAAAAAA
+AAAAAAAA
+AAAAAAAA
+AAAAAAAA
+AAAAAAAA
+#BBBBBB#
+#BBBBBB#
+"
+
+((orig_p + knn_p) / one_d_p) +
+  plot_layout(design = layout)
+```
+
+
+There are many different MDS methods. @Ghojogh2023 has an excellent review of them and their nuances. 
+
+Some MDS methods compute all pairwise distances between points and uses this as the input to the embedding algorithm. This is similar to how PCA can be estimated using the covariance or correlation matrices. One technique, _Non-Metric MDS_ [@kruskal1964multidimensional;@kruskal1964nonmetric;@sammon1969nonlinear], finds embeddings that minimize an objective function called "stress":
+
+$$
+\text{Stress} = \sqrt{\frac{\sum\limits^{n_{tr}}_{i = 1}\;\sum\limits^{n_{tr}}_{j = i+1}\left(d(x_i, x_j) - d(x^*_i, x^*_j)\right)^2}{\sum\limits^{n_{tr}}_{i = 1}\;\sum\limits^{n_{tr}}_{j = i+1}d(x_i, x_j)^2}}
+$$
+
+The denominator uses the squared difference between the pairwise distances in the original values ($x$) and the smaller embedded dimension ($x^*$). The summations only move along one diagonal of the distance matrices to reduce redundant computations. Panel (c, top row) has the resulting one dimensional projection of our two-dimensional data.
+
+This can be an effective dimension reduction procedure, although there are a few issues. First, the entire matrix of distances is required (with $n_{tr}(n_{tr}-1)/2$ entries). For large training sets, this can be unwieldy and time-consuming.  Second, like PCA, it is a global method. We might be able to achieve more nuanced embeddings by focusing on local structures. Finally, metric MDS is not easily made to be projective; how can we apply the same process to new data? 
+
+#### Modern Distance-Based Embeddings
+
+To start, we'll focus on _Isomap_ [@tenenbaum2000global]. This nonlinear MDS method uses a specialized distance function to find the embedded features. First, the _K_ nearest neighbors are determined for each training set point using standard functions, such as Euclidean distance. @fig-mds-example(b) shows the _K_ = 2 nearest neighbors for our example data. Many nearest-neighbor algorithms can be very computational efficient and their use eliminates the need to compute all of the pairwise distances. 
+
+The connections between neighbors form a _graph structure_ that defines which data points are closely related to one another. From this, a new metric called _geodesic distance_ can be approximated. For a graph, we can compute the approximate geodesic distance using the shortest path between two points on the graph. With our example data, the Euclidean distance between points four and five is not large. However, its approximate geodesic distance is greater because the shortest path is through points nine, eight, and seven. @Ghojogh2023 use a wonderful analogy: 
+
+> A real-world example is the distance between Toronto and Athens. The Euclidean distance is to dig the Earth from Toronto to reach Athens directly. The geodesic distance is to move from Toronto to Athens on the curvy Earth by the shortest path between two cities. The approximated geodesic distance is to dig the Earth from Toronto to London in the UK, then dig from London to Frankfurt in Germany, then dig from Frankfurt to Rome in Italy, then dig from Rome to Athens.
+
+The Isomap embeddings are a function of the eigenvalues computed on the geodesic distance matrix. The $m$ embedded features are functions of the first $m$ eigenvectors. Although eigenvalues are associated with linear embeddings (e.g., PCA), nonlinear geodesic distance results in a global nonlinear embedding. @fig-mds-example(c, bottom row) shows the 1D results for the example data set. For a new data point, its nearest-neighbors in the training set are determined so that the approximate geodesic distance can be computed. The estimated eigenvectors and eigenvalues are used to project the new point into the embedding space. 
+
+For Isomap, the number of nearest neighbors and the number of embeddings are commonly optimized. @fig-barley-isomap shows a two-dimensional Isomap embedding for the barley data with varying numbers of neighbors. In each configuration, the higher barley values are differentiated from the small (mostly zero) barley samples. There does seem to be two clusters of data associated with small outcome values. 
+
+associated with smaller values of the first feature and larger values of the second Isomap feature. The new features become more densely packed as the number of neighbors increases.
+
+```{r}
+#| label: barley-isomap-computations
+#| include: false
+#| cache: true
+
+
+neighbor_grid <- c(5, 20, 50)
+
+isomap_grid <- NULL
+for (i in neighbor_grid) {
+  set.seed(1)
+  tmp_rec <- 
+    barley_base %>% 
+    step_isomap(all_numeric_predictors(), neighbors = i, num_terms = 2) %>% 
+    prep()
+
+  tmp_iso <- 
+    bake(tmp_rec, new_data = barley_val) %>% 
+    mutate(Neighbors = i)
+  
+  isomap_grid <- bind_rows(isomap_grid, tmp_iso)
+}
+```
+
+```{r}
+#| label: fig-barley-isomap
+#| echo: false
+#| dev: png
+#| out-width: 80%
+#| fig-width: 8
+#| fig-height: 3.4
+#| fig-cap: "Isomap for the barley data for different number of nearest neighbors. The training set was used to fit the model and these results show the projections on the validation set. Lighter colors indicate larger values of the outcome."
+
+isomap_grid %>%
+  ggplot(aes(Isomap1, Isomap2, col = barley)) +
+  geom_point(alpha = 1 / 3, cex = 2)  +
+  facet_wrap(~ Neighbors, nrow = 1, labeller = "label_both") +
+  scale_color_viridis(option = "viridis") +
+  labs(x = "Isomap Embedding #1", y = "Isomap Embedding #2") +
+  guides(col = guide_colourbar(barheight = 0.5))
+```
+
+There are many other approaches to preserve local distances. One is _Laplacian eigenmaps_ [@belkin2001laplacian]. Like Isomap, it uses nearest neighbors to define a graph of connected training set points. For each connected point, a weight between graph nodes is computed that becomes smaller as the distance between points in the input space increases. The radial basis kernel (also referred to as the "heat kernel") is a good choice for the weighting function: 
+
+$$
+w_{ij} = \exp\frac{-||\boldsymbol{x}_i - \boldsymbol{x}_j||^2}{\sigma}
+$$
+
+where $\sigma$ is a scaling parameter that can be tuned. If two points are not neighbors, or if $i = j$, the weights $w_{ij} = 0$. Note that the equation above uses Euclidean distance. For the 2-nearest neighbor graph shown in @fig-mds-example(b) and $\sigma = 1 / 2$, the weight matrix is roughly
+
+```{r}
+#| label: wt-matrix
+#| echo: false
+#| results: asis
+
+sigma <- 1 / 2
+wt_mat <- exp(-pen_dist/sigma)
+
+adj_mat <- pen_dist * 0
+
+for (i in 1:n) {
+  nn <-  nearest[[i]]
+  for (j in seq_along(nn)) {
+    adj_mat[i, nn[j]] <- 1
+    adj_mat[nn[j], i] <- 1
+  }
+}
+
+wt_mat <- adj_mat * wt_mat
+
+rounded_mat <- round(wt_mat, 1)
+
+chr_wt_mat <- format(rounded_mat)
+chr_wt_mat[lower.tri(chr_wt_mat)] <- ""
+chr_wt_mat[chr_wt_mat == "0.0"] <- "\\0"
+chr_wt_mat[6, 3] <- "sym"
+
+tex_1 <- apply(chr_wt_mat, 1, function(x) paste(x, collapse = " & "))
+tex_2 <- paste0(tex_1, collapse = "\\\\\n")
+cat("$$\n")
+cat("\\newcommand{\\0}{{\\color{lightgray} 0.0}}\n")
+cat("W = \\begin{bmatrix}\n")
+cat(tex_2, "\n")
+cat("\\end{bmatrix}\n$$\n")
+```
+
+The use of nearest neighbors means that the matrix can be very sparse and the zero values help define locality for each data point. Recall that samples 2 and 3 are fairly close to one another while samples 1 and 2 are father away. The weighting scheme gives the former pair a `r rounded_mat[2,3] / rounded_mat[1,2]`-fold larger weight in the graph than the latter pair. 
+
+Laplacian eigenmaps rely heavily on graph theory. This method computes a _graph Laplacian_ matrix, defined as $L = D - W$ where the matrix $D$ has zero non-diagonal entries and diagonals equal to the sum of the weights for each row. For our example data the matrix is: 
+
+```{r}
+#| label: Laplacian-matrix
+#| echo: false
+#| results: asis
+
+laplacian <- diag(apply(rounded_mat, 1, sum)) - rounded_mat
+
+rounded_L <- round(laplacian, 1)
+
+chr_L <- format(rounded_L)
+chr_L[lower.tri(chr_L)] <- ""
+chr_L[chr_L == "0.0" | chr_L == " 0.0"] <- "\\0"
+chr_L[6, 3] <- "sym"
+
+tex_1 <- apply(chr_L, 1, function(x) paste(x, collapse = " & "))
+tex_2 <- paste0(tex_1, collapse = "\\\\\n")
+cat("$$\n")
+cat("\\newcommand{\\0}{{\\color{lightgray} 0.0}}\n")
+cat("L = \\begin{bmatrix}\n")
+cat(tex_2, "\n")
+cat("\\end{bmatrix}\n$$\n")
+```
+
+The eigenvalues and eignevectors of this matrix are used as the main ingredient for the embeddings. @Bengio2003advances shows that, since these methods eventually use eigenvalues in the embeddings, they be easily used to project new data. 
+
+The Uniform Manifold Approximation and Projection (UMAP) [@sainburg2020parametric] technique is one of the most popular distance-based methods. Its precursors, stochastic neighbor embedding (SNE) [@hinton2002stochastic] and  Student’s t-distributed stochastic neighbor embedding (t-SNE) [@van2008visualizing], redefined feature extraction, particularly for visualizations. UMAP borrows significantly from Laplacian eigenmaps and t-SNE but has a more theoretically sound motivation. 
+ 
+As with Laplacian eigenmaps, UMAP converts the training data points to a sparse graph structure. Given a set of nearest neighbors, it computes values similar to the previously shown weights, which we will think of as the probability that point $j$ is a neighbor of point $i$: 
+
+$$
+p_{j|i} = \exp\frac{-\left(||\boldsymbol{x}_i - \boldsymbol{x}_j||^2 - \rho_i\right)}{\sigma_i}
+$$
+
+where $\rho_i$ is the distance from $\boldsymbol{x}_i$ to it's closest neighbor and $\sigma_i$ is a scale parameter that now varies with each sample ($i$). To compute $\sigma_i$, we can solve the equation   
+ 
+$$
+\sum_{i=1}^K  \exp\frac{-\left(||\boldsymbol{x}_i - \boldsymbol{x}_j||^2 - \rho_i\right)}{\sigma_i} = \log_2(K)
+$$
+
+Unlike the previous weighting system, the resulting $n \times n$ matrix may not be symmetric, so the final weights are computed using $p_{ij} = p_{j|i} + p_{i|j} - p_{j|i}p_{i|j}$. 
+
+UMAP performs a similar calculation for the embedded values $x^*$. We'll denote the probability that embedded points $\boldsymbol{x}_i^*$ and $\boldsymbol{x}_j^*$ are connected as $q_{ij}$. 
+
+Numerical optimization methods^[Specifically gradient descent with a user-defined learning rate.] used to estimate the $n \times m$ values $x^*_{ij}$. The process is initialized using a very sparse Laplacian eigenmap, the first few PCA components, or random uniform numbers. The objective function is based on cross-entropy and attempts to make the graphs in the input and embedded dimensions as similar as possible by minimizing: 
+
+$$
+CE = \sum_{i=1}^{n_{tr}}\sum_{j=i+1}^{n_{tr}} \left[p_{ij}\, \log\frac{p_{ij}}{q_{ij}} + (1 - p_{ij})\log\frac{1-p_{ij}}{1-q_{ij}}\right]
+$$
+
+Unlike the other embedding methods shown in this section, UMAP can also create supervised embeddings so that the resulting features are more predictive of a qualitative or quantitative outcome value. See @sainburg2020parametric.
+
+Besides the number of neighbors and embedding dimensions, several more tuning parameters exist.  The optimization process's number of optimization iterations (i.e., epochs) and the learning rate can significantly affect the final results. A distance-based tuning parameter, often called _min-dist_, specifies how "packed" points should be in the reduced dimensions. Values typically range from zero to one. However, the original authors state:
+
+> We view min-dist as an essentially aesthetic parameter governing the appearance of the embedding, and thus is more important when using UMAP for visualization.
+
+As will be seen below, the initialization scheme is an important tuning parameter. 
+
+For supervised UMAP, there is an additional weighting parameter (between zero and one) that is used to balance the importance of the supervised and unsupervised aspects of the results. 
+
+@fig-umap shows an interactive visualization of how UMAP can change with different tuning parameters. Each combination was trained for 1,000 epochs and used a learning rate of 1.0. For illustrative purposes, the resulting embeddings were scaled to a common range. 
+
+::: {#fig-umap}
+
+::: {.figure-content}
+
+```{shinylive-r}
+#| label: fig-umap
+#| viewerHeight: 550
+#| standalone: true
+
+library(shiny)
+library(ggplot2)
+library(bslib)
+library(viridis)
+
+# ------------------------------------------------------------------------------
+
+light_bg <- "#fcfefe" # from aml4td.scss
+grid_theme <- bs_theme(
+  bg = light_bg, fg = "#595959"
+)
+
+# ------------------------------------------------------------------------------
+
+theme_light_bl<- function(...) {
+
+  ret <- ggplot2::theme_bw(...)
+
+  col_rect <- ggplot2::element_rect(fill = light_bg, colour = light_bg)
+  ret$panel.background  <- col_rect
+  ret$plot.background   <- col_rect
+  ret$legend.background <- col_rect
+  ret$legend.key        <- col_rect
+
+  ret$legend.position <- "top"
+
+  ret
+}
+
+# ------------------------------------------------------------------------------
+
+ui <- fluidPage(
+  theme = grid_theme,
+  fluidRow(
+
+    column(
+      width = 4,
+      sliderInput(
+        inputId = "min_dist",
+        label = "Min Distance",
+        min = 0.0,
+        max = 1.0,
+        value = 0.2,
+        width = "100%",
+        step = 0.2
+      )
+    ), # min distance
+    column(
+      width = 4,
+      sliderInput(
+        inputId = "neighbors",
+        label = "Neighbors",
+        min = 5,
+        max = 45,
+        value = 5,
+        width = "100%",
+        step = 10
+      )
+    ), # nearest neighbors
+
+    column(
+      width = 4,
+      sliderInput(
+        inputId = "supervised",
+        label = "Amount of Supervision",
+        min = 0.0,
+        max = 0.7,
+        value = 0,
+        width = "100%",
+        step = 0.1
+      )
+    ),
+    fluidRow(
+      column(
+        width = 4,
+        radioButtons(
+          inputId = "initial",
+          label = "Initialization",
+          choices = list("Laplacian Eigenmap" = "spectral", "PCA" = "pca", 
+                         "Random" = "random")
+        )
+      ),
+      column(
+        width = 6,
+        align = "center",
+        plotOutput('umap')
+      )
+    )
+  ) # top fluid row
+)
+
+server <- function(input, output) {
+  load(url("https://raw.githubusercontent.com/aml4td/website/mds-start/RData/umap_results.RData"))
+
+  output$umap <-
+    renderPlot({
+      
+      dat <-
+        umap_results[
+          umap_results$neighbors == input$neighbors &
+            umap_results$min_dist == input$min_dist &
+            umap_results$initial == input$initial &
+            # log10(umap_results$learn_rate) == input$learn_rate &
+            umap_results$supervised == input$supervised,
+        ]
+
+      p <-
+        ggplot(dat, aes(UMAP1, UMAP2, col = barley)) +
+        geom_point(alpha = 1 / 3, cex = 3) +
+        scale_color_viridis(option = "viridis") +
+        theme_light_bl() +
+        coord_fixed() +
+        labs(x = "UMAP Embedding #1", y = "UMAP Embedding #2") +
+        guides(col = guide_colourbar(barheight = 0.5))
+
+      print(p)
+
+    })
+}
+
+app <- shinyApp(ui = ui, server = server)
+```
+:::
+
+A visualization of UMAP results for the barley data using different values for several tuning parameters. The points are the validation set values. 
+
+:::
+
+There are a few notable patterns in these results: 
+
+ - The initialization method can heavily impact the patterns in the embeddings. 
+ - As with Isomap, there are two clusters of data points with small barley values. 
+ - When the amount of supervision is increased, one or more circular structures begin to form for data points with small outcome values. 
+ - The minimum distance parameter can drastically change the results. 
+
+t-SNE and UMAP have become very popular tools for visualizing complex data. Visually, they often appear to show interesting patterns that linear methods such as PCA cannot. However, they are computationally slow and not very stable over different tuning parameter values. Also, it is easy to believe that the UMAP distances between embedding points are important or quantitatively predictive. That is not the case; the distances can be easily manipulated using the tuning parameters (especially the minimum distance). 
+
+
+#### Other Methods
+
+
+## Chapter References {.unnumbered}
+
+
