@@ -41,9 +41,11 @@ source("../R/setup_chemometrics.R")
 
 When there are a multitude of predictors, it might make sense to condense them into a smaller number of artificial features. This smaller set should represent what is essential in the original data to be useful. This process is often called _feature extraction_ or _manifold learning_. We’ll use a more general term currently en vogue: **embeddings**. Embedding methods can be used for more than feature extraction. For example, some are designed to convert non-numeric data (such as text) into a more usable numeric format. 
 
-This section will examine two primary classes of embedding methods that can achieve multiple purposes. First, we’ll consider linear methods that take a numeric input matrix $X$ that is $n \times p$ and create a different, probably smaller set of features $X^*$ ($n \times m$) using the transformation $X^* = XA$. After describing linear methods, consider a different class of transformations that focus on the distances between data points called _multidimensional scaling_. These tools create a new set of features that are not necessarily linear combinations of the original features but often use some of the same math as the linear techniques. 
+This section will examine two primary classes of embedding methods that can achieve multiple purposes. First, we’ll consider linear methods that take a numeric input matrix $X$ that is $n \times p$ and create a different, probably smaller set of features $X^*$ ($n \times m$)^[With $m <<< p$.] using the transformation $X^* = XA$. 
 
-Before beginning, we'll introduce another data set that will be used here as well forthcoming chapters. 
+After describing linear methods, consider a different class of transformations focusing on the distances between data points called _multidimensional scaling_. These tools create a new set of $m$ features that are not necessarily linear combinations of the original features but often use some of the same math as the linear techniques. 
+
+Before beginning, we’ll introduce another data set that will be used here and in forthcoming chapters.
 
 ### Example: Predicting Barley Amounts
 
@@ -101,31 +103,33 @@ spect_p <-
     ggplot(aes(wavelength, value, col = barley, group = .row)) + 
     geom_line(show.legend = FALSE, linewidth = 1, alpha = 1) +
     scale_color_viridis(option = "viridis") +
-    labs(y = "Measurement", x = "Wavelength (2nm)", title = "(b)") 
+    labs(y = "Measurement", x = "Wavelength (nm)", title = "(b)") 
 
 barley_p / spect_p
 ```
 
-Note that most of the data have very little barley oil. About `r round(mean(chimiometrie_2019$barley <= 1) * 100, 0)`% of the data are less than 1% and the median barley oil percentage is `r round(median(chimiometrie_2019$barley), 2)`%.
+Note that most of the data have very little barley oil. About `r round(mean(chimiometrie_2019$barley <= 1) * 100, 0)`% of the data are less than 1%, and the median barley oil percentage is `r round(median(chimiometrie_2019$barley), 2)`%.
 
-The `r nrow(wave)` predictors are the light absorbance for sequential values in the light region of interest (believed to be from wavelengths between `r min(wave$wavelength)` to `r max(wave$wavelength)`). @fig-barley-data(b) shows a selection of four samples from the data. The darker lines represent samples with lower barley content. 
+The `r nrow(wave)` predictors are the light absorbance for sequential values in the light region of interest (believed to be from wavelengths between `r min(wave$wavelength)` and `r max(wave$wavelength)` nm). @fig-barley-data(b) shows a selection of four samples from the data. The darker lines represent samples with lower barley content. 
 
 These predictor values, called _spectra_, have a very high serial correlation between predictor values in a sample. The median correlation between the predictors was `r round(median(wave_corr), 2)`. This is a major factor for the analysis of these data and we use it here; a high degree of between-predictor correlation can easily undermine some types of models. However, some embedding methods are especially suited for decorrelating predictors. 
 
-Analyses of similar data sets can be found in @wtf2024 as well as [Section 9.1](https://bookdown.org/max/FES/illustrative-data-pharmaceutical-manufacturing-monitoring.html) of @fes.
+Analyses of similar data sets can be found in [Section 9.1](https://bookdown.org/max/FES/illustrative-data-pharmaceutical-manufacturing-monitoring.html) of @fes and @wtf2024.
 
-In the computations that follow, each predictor was standardized using the orderNorm transformation mentioned earlier (unless otherwise noted). 
+In the following computations, each predictor was standardized using the orderNorm transformation mentioned earlier (unless otherwise noted). 
 
-The data originated from a modeling competition to find the most accurate model and specific samples were allocated to training and test sets. However, there were no outcome values for the test set; our analysis will treat the `r format(nrow(chimiometrie_2019), big.mark = ",")` samples in their training set as the overall pool of samples. This is enough data to split into separate training ($n_{tr} =$ `r format(nrow(barley_train), big.mark = ",")`) , validation ($n_{val} =$ `r format(nrow(barley_val), big.mark = ",")`), and test sets ($n_{te} =$ `r format(nrow(barley_test), big.mark = ",")`). Stratified sampling, using the outcome data, was used to split the initial data pool. 
+The data originated from a modeling competition to find the most accurate model and specific samples were allocated to training and test sets. However, there were no outcome values for the test set; our analysis will treat the `r format(nrow(chimiometrie_2019), big.mark = ",")` samples in their training set as the overall pool of samples. This is enough data to split into separate training ($n_{tr} =$ `r format(nrow(barley_train), big.mark = ",")`), validation ($n_{val} =$ `r format(nrow(barley_val), big.mark = ",")`), and test sets ($n_{te} =$ `r format(nrow(barley_test), big.mark = ",")`). Stratified sampling, using the outcome data, was used to split the initial data pool. 
 
 
 ### Linear Transformations
+
+pca, pls, ica, etc. Small section on the math of svd. Kernel methods as well as regularized/sparse techniques
 
 ### Distance-Based Methods
 
 Multidimensional scaling (MDS) [@torgerson1952multidimensional] is a feature extraction tool that creates embeddings that try to preserve the geometric distances between training set points. In other words, the distances between points in the smaller dimensions should be comparable to those in the original dimensions. Since the methods in this section use distances, the predictors should be standardized to equivalent units before the embedding is trained.  
 
-Take @fig-mds-example(a) as an example. There are ten points in two dimensions (colored by three outcome classes). If we were to project these points down to a single dimension, we'd like points that are close in two dimensions to remain close when projected down to a single dimension. Panel (c) shows two such solutions. Each does reasonably well with some exceptions (i.e., points five and six are not very close for Metric MDS). 
+Take @fig-mds-example(a) as an example. There are ten points in two dimensions (colored by three outcome classes). If we were to project these points down to a single dimension, we'd like points that are close in two dimensions to remain close when projected down to a single dimension. Panel (c) shows two such solutions. Each does reasonably well with some exceptions (i.e., points five and six are not very close for non-Metric MDS). 
 
 ```{r}
 #| label: mds-example-computations
@@ -305,7 +309,7 @@ AAAAAAAA
 
 There are many different MDS methods. @Ghojogh2023 has an excellent review of them and their nuances. 
 
-Some MDS methods compute all pairwise distances between points and uses this as the input to the embedding algorithm. This is similar to how PCA can be estimated using the covariance or correlation matrices. One technique, _Non-Metric MDS_ [@kruskal1964multidimensional;@kruskal1964nonmetric;@sammon1969nonlinear], finds embeddings that minimize an objective function called "stress":
+Some MDS methods compute all pairwise distances between points and use this as the input to the embedding algorithm. This is similar to how PCA can be estimated using the covariance or correlation matrices. One technique, _Non-Metric MDS_ [@kruskal1964multidimensional;@kruskal1964nonmetric;@sammon1969nonlinear], finds embeddings that minimize an objective function called "stress":
 
 $$
 \text{Stress} = \sqrt{\frac{\sum\limits^{n_{tr}}_{i = 1}\;\sum\limits^{n_{tr}}_{j = i+1}\left(d(x_i, x_j) - d(x^*_i, x^*_j)\right)^2}{\sum\limits^{n_{tr}}_{i = 1}\;\sum\limits^{n_{tr}}_{j = i+1}d(x_i, x_j)^2}}
@@ -315,9 +319,7 @@ The denominator uses the squared difference between the pairwise distances in th
 
 This can be an effective dimension reduction procedure, although there are a few issues. First, the entire matrix of distances is required (with $n_{tr}(n_{tr}-1)/2$ entries). For large training sets, this can be unwieldy and time-consuming.  Second, like PCA, it is a global method. We might be able to achieve more nuanced embeddings by focusing on local structures. Finally, metric MDS is not easily made to be projective; how can we apply the same process to new data? 
 
-#### Modern Distance-Based Embeddings
-
-To start, we'll focus on _Isomap_ [@tenenbaum2000global]. This nonlinear MDS method uses a specialized distance function to find the embedded features. First, the _K_ nearest neighbors are determined for each training set point using standard functions, such as Euclidean distance. @fig-mds-example(b) shows the _K_ = 2 nearest neighbors for our example data. Many nearest-neighbor algorithms can be very computational efficient and their use eliminates the need to compute all of the pairwise distances. 
+To start, we'll focus on _Isomap_ [@tenenbaum2000global]. This nonlinear MDS method uses a specialized distance function to find the embedded features. First, the _K_ nearest neighbors are determined for each training set point using standard functions, such as Euclidean distance. @fig-mds-example(b) shows the _K_ = 2 nearest neighbors for our example data. Many nearest-neighbor algorithms can be very computationally efficient and their use eliminates the need to compute all of the pairwise distances. 
 
 The connections between neighbors form a _graph structure_ that defines which data points are closely related to one another. From this, a new metric called _geodesic distance_ can be approximated. For a graph, we can compute the approximate geodesic distance using the shortest path between two points on the graph. With our example data, the Euclidean distance between points four and five is not large. However, its approximate geodesic distance is greater because the shortest path is through points nine, eight, and seven. @Ghojogh2023 use a wonderful analogy: 
 
@@ -325,9 +327,7 @@ The connections between neighbors form a _graph structure_ that defines which da
 
 The Isomap embeddings are a function of the eigenvalues computed on the geodesic distance matrix. The $m$ embedded features are functions of the first $m$ eigenvectors. Although eigenvalues are associated with linear embeddings (e.g., PCA), nonlinear geodesic distance results in a global nonlinear embedding. @fig-mds-example(c, bottom row) shows the 1D results for the example data set. For a new data point, its nearest-neighbors in the training set are determined so that the approximate geodesic distance can be computed. The estimated eigenvectors and eigenvalues are used to project the new point into the embedding space. 
 
-For Isomap, the number of nearest neighbors and the number of embeddings are commonly optimized. @fig-barley-isomap shows a two-dimensional Isomap embedding for the barley data with varying numbers of neighbors. In each configuration, the higher barley values are differentiated from the small (mostly zero) barley samples. There does seem to be two clusters of data associated with small outcome values. 
-
-associated with smaller values of the first feature and larger values of the second Isomap feature. The new features become more densely packed as the number of neighbors increases.
+For Isomap, the number of nearest neighbors and the number of embeddings are commonly optimized. @fig-barley-isomap shows a two-dimensional Isomap embedding for the barley data with varying numbers of neighbors. In each configuration, the higher barley values are differentiated from the small (mostly zero) barley samples. There does seem to be two clusters of data associated with small outcome values. The new features become more densely packed as the number of neighbors increases.
 
 ```{r}
 #| label: barley-isomap-computations
@@ -360,7 +360,7 @@ for (i in neighbor_grid) {
 #| out-width: 80%
 #| fig-width: 8
 #| fig-height: 3.4
-#| fig-cap: "Isomap for the barley data for different number of nearest neighbors. The training set was used to fit the model and these results show the projections on the validation set. Lighter colors indicate larger values of the outcome."
+#| fig-cap: "Isomap for the barley data for different numbers of nearest neighbors. The training set was used to fit the model and these results show the projections on the validation set. Lighter colors indicate larger values of the outcome."
 
 isomap_grid %>%
   ggplot(aes(Isomap1, Isomap2, col = barley)) +
@@ -371,13 +371,13 @@ isomap_grid %>%
   guides(col = guide_colourbar(barheight = 0.5))
 ```
 
-There are many other approaches to preserve local distances. One is _Laplacian eigenmaps_ [@belkin2001laplacian]. Like Isomap, it uses nearest neighbors to define a graph of connected training set points. For each connected point, a weight between graph nodes is computed that becomes smaller as the distance between points in the input space increases. The radial basis kernel (also referred to as the "heat kernel") is a good choice for the weighting function: 
+There are many other approaches to preserve local distances. One is _Laplacian eigenmaps_ [@belkin2001laplacian]. Like Isomap, it uses nearest neighbors to define a graph of connected training set points. For each connected point, a weight between graph nodes is computed that becomes smaller as the distance between points in the input space increases. The radial basis kernel (also referred to as the "heat kernel") is a good choice for the weighting function^[A note about some notation... We commonly think of the _norm_ notation as $\|\boldsymbol{x}\|_p = \left(|x_1|^p + |x_2|^p + \ldots + |x_n|^p\right)^{1/p}$. So what does the lack of a subscript in $||\boldsymbol{x}||^2$ mean? The convention is the sum of squares:  $||\boldsymbol{x}||^2 = x_1^2 + x_2^2 + \ldots + x_n^2$.]: 
 
 $$
 w_{ij} = \exp\frac{-||\boldsymbol{x}_i - \boldsymbol{x}_j||^2}{\sigma}
 $$
 
-where $\sigma$ is a scaling parameter that can be tuned. If two points are not neighbors, or if $i = j$, the weights $w_{ij} = 0$. Note that the equation above uses Euclidean distance. For the 2-nearest neighbor graph shown in @fig-mds-example(b) and $\sigma = 1 / 2$, the weight matrix is roughly
+where $\sigma$ is a scaling parameter that can be tuned. If two points are not neighbors, or if $i = j$, then $w_{ij} = 0$. Note that the equation above uses Euclidean distance. For the 2-nearest neighbor graph shown in @fig-mds-example(b) and $\sigma = 1 / 2$, the weight matrix is roughly
 
 ```{r}
 #| label: wt-matrix
@@ -415,9 +415,9 @@ cat(tex_2, "\n")
 cat("\\end{bmatrix}\n$$\n")
 ```
 
-The use of nearest neighbors means that the matrix can be very sparse and the zero values help define locality for each data point. Recall that samples 2 and 3 are fairly close to one another while samples 1 and 2 are father away. The weighting scheme gives the former pair a `r rounded_mat[2,3] / rounded_mat[1,2]`-fold larger weight in the graph than the latter pair. 
+The use of nearest neighbors means that the matrix can be very sparse and the zero values help define locality for each data point. Recall that samples 2 and 3 are fairly close to one another, while samples 1 and 2 are farther away. The weighting scheme gives the former pair a `r rounded_mat[2,3] / rounded_mat[1,2]`-fold larger weight in the graph than the latter pair. 
 
-Laplacian eigenmaps rely heavily on graph theory. This method computes a _graph Laplacian_ matrix, defined as $L = D - W$ where the matrix $D$ has zero non-diagonal entries and diagonals equal to the sum of the weights for each row. For our example data the matrix is: 
+Laplacian eigenmaps rely heavily on graph theory. This method computes a _graph Laplacian_ matrix, defined as $L = D - W$ where the matrix $D$ has zero non-diagonal entries and diagonals equal to the sum of the weights for each row. For our example data, the matrix is: 
 
 ```{r}
 #| label: Laplacian-matrix
@@ -442,17 +442,17 @@ cat(tex_2, "\n")
 cat("\\end{bmatrix}\n$$\n")
 ```
 
-The eigenvalues and eignevectors of this matrix are used as the main ingredient for the embeddings. @Bengio2003advances shows that, since these methods eventually use eigenvalues in the embeddings, they be easily used to project new data. 
+The eigenvalues and eigenvectors of this matrix are used as the main ingredients for the embeddings. @Bengio2003advances shows that, since these methods eventually use eigenvalues in the embeddings, they can be easily used to project new data. 
 
 The Uniform Manifold Approximation and Projection (UMAP) [@sainburg2020parametric] technique is one of the most popular distance-based methods. Its precursors, stochastic neighbor embedding (SNE) [@hinton2002stochastic] and  Student’s t-distributed stochastic neighbor embedding (t-SNE) [@van2008visualizing], redefined feature extraction, particularly for visualizations. UMAP borrows significantly from Laplacian eigenmaps and t-SNE but has a more theoretically sound motivation. 
  
-As with Laplacian eigenmaps, UMAP converts the training data points to a sparse graph structure. Given a set of nearest neighbors, it computes values similar to the previously shown weights, which we will think of as the probability that point $j$ is a neighbor of point $i$: 
+As with Laplacian eigenmaps, UMAP converts the training data points to a sparse graph structure. Given a set of nearest neighbors, it computes values similar to the previously shown weights, which we will think of as the probability that point $j$ is a neighbor of point $i$:  
 
 $$
 p_{j|i} = \exp\frac{-\left(||\boldsymbol{x}_i - \boldsymbol{x}_j||^2 - \rho_i\right)}{\sigma_i}
 $$
 
-where $\rho_i$ is the distance from $\boldsymbol{x}_i$ to it's closest neighbor and $\sigma_i$ is a scale parameter that now varies with each sample ($i$). To compute $\sigma_i$, we can solve the equation   
+where $\rho_i$ is the distance from $\boldsymbol{x}_i$ to its closest neighbor, and $\sigma_i$ is a scale parameter that now varies with each sample ($i$). To compute $\sigma_i$, we can solve the equation   
  
 $$
 \sum_{i=1}^K  \exp\frac{-\left(||\boldsymbol{x}_i - \boldsymbol{x}_j||^2 - \rho_i\right)}{\sigma_i} = \log_2(K)
@@ -462,7 +462,7 @@ Unlike the previous weighting system, the resulting $n \times n$ matrix may not 
 
 UMAP performs a similar calculation for the embedded values $x^*$. We'll denote the probability that embedded points $\boldsymbol{x}_i^*$ and $\boldsymbol{x}_j^*$ are connected as $q_{ij}$. 
 
-Numerical optimization methods^[Specifically gradient descent with a user-defined learning rate.] used to estimate the $n \times m$ values $x^*_{ij}$. The process is initialized using a very sparse Laplacian eigenmap, the first few PCA components, or random uniform numbers. The objective function is based on cross-entropy and attempts to make the graphs in the input and embedded dimensions as similar as possible by minimizing: 
+Numerical optimization methods^[Specifically gradient descent with a user-defined learning rate.] used to estimate the $n \times m$ values $x^*_{ij}$. The process is initialized using a very sparse Laplacian eigenmap, the first few PCA components, or random uniform numbers. The objective function is based on cross-entropy and attempts to make the graphs in the input and embedded dimensions as similar as possible by minimizing:   
 
 $$
 CE = \sum_{i=1}^{n_{tr}}\sum_{j=i+1}^{n_{tr}} \left[p_{ij}\, \log\frac{p_{ij}}{q_{ij}} + (1 - p_{ij})\log\frac{1-p_{ij}}{1-q_{ij}}\right]
@@ -621,14 +621,15 @@ There are a few notable patterns in these results:
 
  - The initialization method can heavily impact the patterns in the embeddings. 
  - As with Isomap, there are two clusters of data points with small barley values. 
- - When the amount of supervision is increased, one or more circular structures begin to form for data points with small outcome values. 
+ - When the amount of supervision increases, one or more circular structures form that are associated with small outcome values. 
  - The minimum distance parameter can drastically change the results. 
 
-t-SNE and UMAP have become very popular tools for visualizing complex data. Visually, they often appear to show interesting patterns that linear methods such as PCA cannot. However, they are computationally slow and not very stable over different tuning parameter values. Also, it is easy to believe that the UMAP distances between embedding points are important or quantitatively predictive. That is not the case; the distances can be easily manipulated using the tuning parameters (especially the minimum distance). 
+t-SNE and UMAP have become very popular tools for visualizing complex data. Visually, they often show interesting patterns that linear methods such as PCA cannot. However, they are computationally slow and unstable over different tuning parameter values. Also, it is easy to believe that the UMAP distances between embedding points are important or quantitatively predictive. That is not the case; the distances can be easily manipulated using the tuning parameters (especially the minimum distance). 
+ 
 
+### Other Methods
 
-#### Other Methods
-
+autoencoders
 
 ## Chapter References {.unnumbered}
 
