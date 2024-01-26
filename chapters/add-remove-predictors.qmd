@@ -6,7 +6,11 @@ knitr:
 
 # Adding and Removing Predictors {#sec-add-remove-features}
 
-[TODO: Add background for this chapter and why it is important for preparation.]
+TODO:
+
+ - Rename this chapter. "Feature Engineering by Adding Features"? "Data Focused Transformations"? "Features for Nonlinearity" ¯\_(ツ)_/¯
+ - Add background for this chapter and why it is important for preparation
+ - Decide whether to split this chapter into two (adding predictors and removing predictors)
 
 ```{r}
 #| label: add-remove-setup
@@ -46,18 +50,122 @@ source("../R/setup_hotel_rates.R")
 source("../R/setup_deliveries.R")
 ```
 
+Previous chapters have mostly focused on transforming one predictor "in place." For example, embeddings take groups of predictors and represent them in a smaller dimension. Other transformations have described different ways to encode data. Examples of this are converting qualitative predictors to numeric encodings via indicator variables, hashing variables, etc. In either case, these methods are often motivated by _what the model needs_. If a model is sensitive to colinearity, then embeddings are a way to compensate for that weakness. If a model cannot consumer qualitative predictors as non-numeric data, then we have to find numerical encodings for them. 
+
+In this chapter, we’ll discuss techniques that address _what the data require_. For example, if the relationship between a predictor is nonlinear, how can we represent that predictor so that the relationship can be modeled? This is a _dataset-specific issue_ and not directly motivated by the model. This is one of the primary applications of **feature engineering**: what can we do to make it easier for the model to understand and predict the outcome? 
+
+Let’s look at a simple example. Occasionally, predictor pairs work better in unison rather than as main effects. For example, consider the data in @fig-two-class-corr(a), where two predictors are: 
+
+- strictly positive,
+- significantly right-skewed, and
+- highly correlated. 
+
+In the predictors' original form there is a great degree of overlap between the two classes of samples.  However, when the ratio of the predictors is used, the newly derived predictor better discriminates between classes (shown in @fig-two-class-corr(b)). While not a general rule, the three data characteristics above suggest that the modeler attempt to form ratios from two or more predictors.
+
+```{r}
+#| label: fig-two-class-corr
+#| echo: false
+#| out-width: 80%
+#| fig-width: 7
+#| fig-height: 4
+#| fig-cap: "Panel (a): two highly correlated, right-skewed predictors with two classes. Panel (b): sepration of classes using $log(A/B)$."
+#| fig-alt: "Panel (a): two highly correlated, right-skewed predictors with two classes. Panel (b): sepration of classes using $log(A/B)$."
+
+data(bivariate)
+
+biv_cols <- c(One = "#4DAF4A", Two = "#984EA3")
+biv_scat <- 
+  bivariate_train %>% 
+  ggplot(aes(A, B, col = Class, pch = Class)) + 
+  geom_point(alpha = 1 / 2, cex = 2) +
+  coord_fixed(ratio = 20) + 
+  scale_color_manual(values = biv_cols) +
+  ggtitle("(a)") +
+  theme(legend.position = "top")
+
+ratio_features <-
+  bivariate_train %>% 
+  mutate(
+    `Log-Ratio` = log(A / B)
+  ) 
+
+biv_ratio <-
+  ratio_features %>% 
+  ggplot(aes(Class, `Log-Ratio`, fill = Class)) + 
+  geom_boxplot(alpha = 1 / 2, show.legend = FALSE)+ 
+  scale_fill_manual(values = biv_cols) +
+  ggtitle("(b)")
+
+biv_scat + biv_ratio
+```
+
+```{r}
+#| label: fig-two-class-features
+#| eval: false
+data(bivariate)
+
+trans_features <- 
+  bivariate_train %>% 
+  recipe(Class ~ ., data = bivariate_train) %>% 
+  step_YeoJohnson(A, B) %>% 
+  prep() %>% 
+  bake(new_data = NULL)
+
+raw_features <- 
+  trans_features %>% 
+  pivot_longer(c(A, B), names_to = "feature", values_to = "value") %>% 
+  mutate(feature = paste(feature, "(YJ)"))
+
+ratio_features <-
+  bivariate_train %>% 
+  mutate(
+    feature = "Log-Ratio",
+    value = log(A / B)
+  ) %>% 
+  select(feature, value, Class)
+
+pca_features <- 
+  recipe(Class ~ ., data = bivariate_train) %>% 
+  step_YeoJohnson(A, B) %>% 
+  step_normalize(A, B) %>% 
+  step_pca(A, B, num_comp = 2) %>% 
+  prep() %>% 
+  bake(new_data = NULL) %>% 
+  pivot_longer(c(PC1, PC2), names_to = "feature", values_to = "value")
+
+all_features <- 
+  bind_rows(ratio_features, pca_features) %>% 
+  mutate(
+    feature = factor(feature, levels = c("Log-Ratio", "PC1", "PC2"))
+  )
+
+all_features %>% 
+  ggplot(aes(Class, value, fill = Class)) + 
+  geom_boxplot(alpha = 1 / 2) +
+  facet_wrap(~ feature, scales = "free_y") + 
+  scale_fill_manual(values = biv_cols) +
+  labs(y = NULL)
+```
+
+It is essential to understand that the _data_ requires this transformation. We can put the original predictors into a model as-is. The model won’t produce an error but won’t have good predictive performance. We can induce a separation of the classes when a joint feature is used. 
+
+This aspect of feature engineering depends on the data set so it is difficult to enumerate all possible techniques. In this chapter, we’ll describe a few commonly used methods: splines, interactions, and discretization (a.k.a. binning). 
+
 ## Interactions {#sec-interactions}
 
-When building models for prediction, the majority of variation in the response is generally explained by the cumulative effect of the important individual predictors.  For many problems, additional variation in the response can be explained by the effect of two or more predictors working in conjunction with each other.  The healthcare industry has long understood the concept of interactions among drugs for treating specific diseases [@singh2017suppressive, @mokhtari2017combination, and @altorki2021neoadjuvant].  As an example of an interaction, consider treatment for the disease non-small cell lung cancer (NSCLC).  In a recent study, patients with an advanced stage of NSCLC with an EGFR mutation were given either osimertinib alone or osimertinib in combination with traditional chemotherapy [@tragrisso2023].   Patients taking the combination treatment had a significantly longer progression-free survival time than patients taking osmertinib alone.  Hence the interaction of the treatments is more effective than the single treatment.  To summarize, two (or more) predictors interact if their combined impact is different (less or greater) than what would be expected from the added impact of each predictor alone.
+When building models for prediction, the majority of variation in the response is generally explained by the cumulative effect of the important individual predictors.  For many problems, additional variation in the response can be explained by the effect of two or more predictors working in conjunction with each other.  
+
+The healthcare industry has long understood the concept of interactions among drugs for treating specific diseases [@singh2017suppressive, @mokhtari2017combination, and @altorki2021neoadjuvant].  As an example of an interaction, consider treatment for the disease non-small cell lung cancer (NSCLC).  In a recent study, patients with an advanced stage of NSCLC with an EGFR mutation were given either osimertinib alone or osimertinib in combination with traditional chemotherapy [@tragrisso2023].   Patients taking the combination treatment had a significantly longer progression-free survival time than patients taking osmertinib alone.  Hence the interaction of the treatments is more effective than the single treatment.  To summarize, two (or more) predictors interact if their combined impact is different (less or greater) than what would be expected from the added impact of each predictor alone.
 
 Consider the hotel data from @sec-hotel-rates. @fig-delivery-hour-main
 
 ```{r}
 #| label: fig-delivery-hour-main
-#| fig-width: 5
-#| fig-height: 5
-#| out-width: "40%"
-#| fig-cap: "An alternate version of @fig-delivery-predictors(d) where the underlying data did _not_ contain an interaction between the delivery day and hour."
+#| fig-width: 8
+#| fig-height: 4
+#| out-width: "85%"
+#| warning: false
+#| fig-cap: "Delivery times versues the time of the order, colored by the day of the week. (a) A duplicate of a panel from @fig-delivery-predictors. (b) The same data with trends lines where the underlying data did _not_ contain an interaction between the delivery day and hour."
 
 main_effects_mod <- lm(time_to_delivery ~ day + splines2::naturalSpline(hour, df = 10), delivery_train)
 main_effects_pred <- augment(main_effects_mod, delivery_train)
@@ -65,13 +173,29 @@ main_effects_pred <- augment(main_effects_mod, delivery_train)
 day_cols <-  c("#000000FF", "#24FF24FF", "#009292FF",  "#B66DFFFF", 
                "#6DB6FFFF",  "#920000FF",  "#FFB6DBFF")
 
-main_effects_pred %>% 
+time_lims <- c(8, 34)
+
+with_interactions <- 
+  delivery_train %>% 
+  ggplot(aes(x = hour, time_to_delivery, col = day)) +
+  labs(y = "Time Until Delivery (min)", x = "Order Time (decimal hours)", title = "(a)") +
+  geom_smooth(se = FALSE) + 
+  scale_color_manual(values = day_cols) + 
+  ylim(time_lims) +
+  guides(color = guide_legend(nrow = 1, title = NULL))
+
+no_interactions <- 
+  main_effects_pred %>% 
   arrange(day, hour) %>% 
   ggplot(aes(x = hour)) +
-  labs(y = "Time Until Delivery (min)", x = "Order Time (decimal hours)") +
-  geom_path(aes(y = .fitted, col = day), linewidth = 1) + 
-  scale_color_manual(values = day_cols) +
-  theme(legend.title = element_blank(), legend.position = "top")
+  labs(y = NULL, x = "Order Time (decimal hours)", title = "(b)") +
+  geom_path(aes(y = .fitted, col = day), linewidth = 1, show.legend = FALSE) + 
+  scale_color_manual(values = day_cols) + 
+  ylim(time_lims)
+
+((with_interactions + no_interactions) +
+  plot_layout(guides = 'collect')  ) &
+  theme(legend.position = "bottom")
 ```
 
 The previous example illustrates an interaction between a continuous and categorical predictor. cat x cat 
@@ -219,7 +343,7 @@ val_stats <-
     collect_metrics(lin_reg_some_int_res) %>% 
       mutate(Interactions = "Add Two Item Interactions"),
     collect_metrics(lin_reg_all_int_res) %>% 
-      mutate(Interactions = "Add All Item Interactions")
+      mutate(Interactions = "Add 349 Item Interactions")
   ) %>% 
   filter(.metric != "rsq") %>% 
   mutate(.metric = toupper(.metric)) %>% 
@@ -255,7 +379,7 @@ anova_res <-
 ) %>% 
   tidy() %>%
   mutate(
-    Interactions = c("Hour x Day", "Add Two Item Interactions", "Add All Item Interactions"),
+    Interactions = c("Hour x Day", "Add Two Item Interactions", "Add 349 Item Interactions"),
     Decimal = sqrt(rss / df.residual),
     `p-Value` = paste0("10<sup>", round(log10(p.value), 1), "</sup>"),
     Time = map_chr(sqrt(rss / df.residual), dec_to_time),
@@ -318,7 +442,7 @@ Recall that the original linear regression analysis in @sec-model-development-wh
 #| fig-height: 3.5
 #| fig-cap: Validation set predicted vs. observed delivery times for linear regression models with and without additional interactions.
 
-lvls <- c("Previous Results", "Two Addtional Interactions", "All Item Interactions")
+lvls <- c("Previous Results", "Two Addtional Interactions", "349 Item Interactions")
 
 lin_reg_res %>% 
   collect_predictions() %>% 
@@ -331,7 +455,7 @@ lin_reg_res %>%
   bind_rows(
     lin_reg_all_int_res %>% 
       collect_predictions() %>% 
-      mutate(Model = "All Item Interactions")
+      mutate(Model = "349 Item Interactions")
   ) %>%
   mutate(
     Model = factor(Model, levels = lvls)
@@ -485,50 +609,54 @@ Panel (c) shows this fit. Each region has a better fit, although the right-most 
 ```{r}
 #| label: fig-poly-to-splines
 #| fig-cap: "Data with a nonlinear trend (a) and fits using a global polynomial (b), piecewise polynomials (c), and a natural spline function (d)."
-#| out-width: 80%
+#| out-width: 90%
+
+alphas <- 1 / 2
 
 spline_1 <- 
   spline_example %>% 
   ggplot(aes(x = x, y = y)) +
-  geom_point(alpha = 1/4) + 
+  geom_point(alpha = 1 / 4) + 
   labs(x = "predictor", y = "response") +
   ggtitle("(a) simulated data")
 
 spline_2 <- 
   spline_example %>% 
   ggplot(aes(x = x, y = y)) +
-  geom_point(alpha = 1/7, cex = 1) +
-  geom_smooth(
-    formula = y ~ poly(x, 4),
-    method = lm,
+  geom_point(alpha = 1 / 4) + 
+  stat_smooth(
+    geom = 'line', 
     se = FALSE,
+    formula = y ~ poly(x, 4),
+    method = lm,    
     col = "#377EB8",
-    linewidth = 1
-  ) +
+    linewidth = 2.8, 
+    alpha = alphas) +
   labs(x = "predictor", y = "response") +
   ggtitle("(b) global quartic fit")
 
 spline_3 <-
   spline_example %>% 
   ggplot(aes(x = x, y = y)) +
-  geom_point(alpha = 1/7, cex = 1) +
-  geom_path(data = regional_1$grid, col = "#1B9E77", linewidth = 1) + 
-  geom_path(data = regional_2$grid, col = "#D95F02", linewidth = 1) + 
-  geom_path(data = regional_3$grid, col = "#7570B3", linewidth = 1) +
+  geom_point(alpha = 1 / 4) + 
+  geom_path(data = regional_1$grid, col = "#1B9E77", linewidth = 2.8, alpha = alphas) + 
+  geom_path(data = regional_2$grid, col = "#D95F02", linewidth = 2.8, alpha = alphas) + 
+  geom_path(data = regional_3$grid, col = "#7570B3", linewidth = 2.8, alpha = alphas) +
   labs(x = "predictor", y = "response") +
   ggtitle("(c) separate local cubic fits")
 
 spline_4 <-
   spline_example %>% 
   ggplot(aes(x = x, y = y)) +
-  geom_point(alpha = 1/7, cex = 1) +
-  geom_smooth(
-    formula = y ~ naturalSpline(x, df = 10),
-    method = lm,
+  geom_point(alpha = 1 / 4) + 
+  stat_smooth(
+    geom = 'line', 
     se = FALSE,
+    formula = y ~ naturalSpline(x, df = 10),
+    method = lm,    
     col = "#E6AB02",
-    linewidth = 1
-  ) +
+    linewidth = 2.8, 
+    alpha = alphas) +
   labs(x = "predictor", y = "response") +
   ggtitle("(d) natural spline")
 
@@ -541,7 +669,7 @@ Splines can be configured in different ways. Two details to specify are how many
 
 For this reason, we often tune the amount of complexity that the spline will accommodate. Generally, since the number of regions is related to the number of features, we'll refer to the complexity of the basis function via the number of degrees of freedom afforded by the spline. We don't necessarily know how many degrees of freedom to use. There are two ways to determine this. First, we can treat the complexity of the spline as a tuning parameter and optimize it with the tuning methods mentioned in Chapters [-@sec-grid] and [-@sec-iterative]. Another option is to over-specify the number of degrees of freedom and let specialized training methods solve the potential issue of over-fitting. From @wood2006generalized: 
 
-> An alternative to controlling smoothness by altering the basis dimension, is to keep the basis dimension fixed, at a size a little larger than it is believed it could reasonably be necessary, but to control the model’s smoothness by adding a “wiggliness” penalty to the least squares fitting objective. 
+> An alternative to controlling smoothness by altering the basis dimension, is to keep the basis dimension fixed, at a size a little larger than it is believed it could reasonably be necessary, but to control the model’s smoothness by adding a "wiggliness" penalty to the least squares fitting objective. 
 
 This approach is advantageous when there are separate basis expansions for multiple predictors. The overall smoothness can be estimated along with the parameter estimates in the model. The process could be used with general linear models (Chapters [-@sec-ols] and [-@sec-ordinary-logistic-regression]) or other parametric linear models. 
 
@@ -890,112 +1018,6 @@ The blue and red marks on the top and bottom of the plot show the locations of t
 
 ## Other Features
 
-Occasionally, predictor pairs work better in unison rather than as main effects. For example, consider the data in @fig-two-class-corr(a), where two predictors are: 
-
-- strictly positive,
-- significantly right-skewed, and
-- highly correlated. 
-
-In the predictors' original form there is a great degree of overlap between the two classes of samples.  However, when the ratio of the predictors is used, the newly derived predictor better discriminates between classes (shown in @fig-two-class-corr(b)). While not a general rule, the three data characteristics above suggest that the modeler attempt to form ratios from two or more predictors.
-
-```{r}
-#| label: fig-two-class-corr
-#| echo: false
-#| out-width: 70%
-#| fig-width: 7
-#| fig-height: 4
-#| fig-cap: "Panel (a): two highly correlated, right-skewed predictors with two classes. Panel (b): sepration of classes using $log(A/B)$."
-#| fig-alt: "Panel (a): two highly correlated, right-skewed predictors with two classes. Panel (b): sepration of classes using $log(A/B)$."
-
-data(bivariate)
-
-biv_cols <- c(One = "#4DAF4A", Two = "#984EA3")
-biv_scat <- 
-  bivariate_train %>% 
-  ggplot(aes(A, B, col = Class, pch = Class)) + 
-  geom_point(alpha = 1 / 2, cex = 2) +
-  coord_fixed(ratio = 20) + 
-  scale_color_manual(values = biv_cols) +
-  ggtitle("(a)") +
-  theme(legend.position = "top")
-
-ratio_features <-
-  bivariate_train %>% 
-  mutate(
-    `Log-Ratio` = log(A / B)
-  ) 
-
-biv_ratio <-
-  ratio_features %>% 
-  ggplot(aes(Class, `Log-Ratio`, fill = Class)) + 
-  geom_boxplot(alpha = 1 / 2, show.legend = FALSE)+ 
-  scale_fill_manual(values = biv_cols) +
-  ggtitle("(b)")
-
-biv_scat + biv_ratio
-```
-
-```{r}
-#| label: fig-two-class-features
-#| eval: false
-data(bivariate)
-
-trans_features <- 
-  bivariate_train %>% 
-  recipe(Class ~ ., data = bivariate_train) %>% 
-  step_YeoJohnson(A, B) %>% 
-  prep() %>% 
-  bake(new_data = NULL)
-
-raw_features <- 
-  trans_features %>% 
-  pivot_longer(c(A, B), names_to = "feature", values_to = "value") %>% 
-  mutate(feature = paste(feature, "(YJ)"))
-
-ratio_features <-
-  bivariate_train %>% 
-  mutate(
-    feature = "Log-Ratio",
-    value = log(A / B)
-  ) %>% 
-  select(feature, value, Class)
-
-pca_features <- 
-  recipe(Class ~ ., data = bivariate_train) %>% 
-  step_YeoJohnson(A, B) %>% 
-  step_normalize(A, B) %>% 
-  step_pca(A, B, num_comp = 2) %>% 
-  prep() %>% 
-  bake(new_data = NULL) %>% 
-  pivot_longer(c(PC1, PC2), names_to = "feature", values_to = "value")
-
-# prcomp(bivariate_train[, 1:2], center = TRUE, scale. = TRUE)$rotation
-# cor_mat <- cor(bivariate_train[, 1:2])
-# princomp(cor_mat, cor = TRUE)$loading
-# 
-# theta <- function(mat) {
-#   a <- mat[1,1]
-#   b <- mat[1,2]
-#   d <- mat[2,2]
-#   1 / 2 * atan2(2 * a * b + 2 * b * d , a ^ 2 - d ^ 2)
-# }
-# cos(theta(cor_mat))
-# princomp(cor_mat, cor = TRUE)$loading[1,1]
-
-
-all_features <- 
-  bind_rows(ratio_features, pca_features) %>% 
-  mutate(
-    feature = factor(feature, levels = c("Log-Ratio", "PC1", "PC2"))
-  )
-
-all_features %>% 
-  ggplot(aes(Class, value, fill = Class)) + 
-  geom_boxplot(alpha = 1 / 2) +
-  facet_wrap(~ feature, scales = "free_y") + 
-  scale_fill_manual(values = biv_cols) +
-  labs(y = NULL)
-```
 
 Another common approach to creating features is to calculate distances between landmarks or pairs of predictors. For example, the distance to desirable grade schools (or the university campus) could affect house prices in the Ames housing data. Potential predictors can be created that measure how close each home is to these points of interest. To calculate distance, a simple Euclidean metric can be used. However, for spatial data across longer distances, the Haversine metric [@sinnott1984virtues] is a better alternative because it takes into account the curvature of the earth.
 
