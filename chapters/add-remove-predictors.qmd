@@ -15,7 +15,7 @@ knitr:
 source("../R/_common.R")
 
 # ------------------------------------------------------------------------------
-
+library(gt)
 library(pamr)
 library(splines2)
 library(hstats)
@@ -154,9 +154,190 @@ If modern modeling techniques can naturally find and utilize interactions, then 
 
 ### Detecting Interactions
 
+```{r}
+#| label: lm-more-interactions
+#| echo: false
+#| warning: false
+
+load("../RData/deliveries_lm.RData")
+
+reg_metrics <- metric_set(mae, rmse, rsq)
+rs_ctrl <- control_resamples(save_pred = TRUE, save_workflow = TRUE)
+
+base_rec <- 
+  recipe(time_to_delivery ~ ., data = delivery_train) %>% 
+  step_dummy(all_factor_predictors()) %>% 
+  step_zv(all_predictors()) %>% 
+  step_spline_natural(hour, distance, deg_free = 10)
+
+###
+
+some_int_rec <- 
+  base_rec %>% 
+  step_interact(
+    ~ starts_with("hour"):starts_with("day") + 
+      item_01:item_10 + item_09:item_10
+  )
+
+lin_reg_some_int_wflow <- 
+  workflow() %>% 
+  add_model(linear_reg()) %>% 
+  add_recipe(some_int_rec)
+
+set.seed(3838)
+lin_reg_some_int_res <-
+  fit_resamples(lin_reg_some_int_wflow,
+                delivery_rs,
+                control = rs_ctrl,
+                metrics = reg_metrics)
+
+###
+
+all_int_rec <- 
+  base_rec  %>% 
+  step_interact(
+    ~ starts_with("hour"):starts_with("day") + 
+      starts_with("item"):starts_with("item")
+  ) 
+
+lin_reg_all_int_wflow <- 
+  workflow() %>% 
+  add_model(linear_reg()) %>% 
+  add_recipe(all_int_rec)
+
+set.seed(3838)
+lin_reg_all_int_res <-
+  fit_resamples(lin_reg_all_int_wflow,
+                delivery_rs,
+                control = rs_ctrl,
+                metrics = reg_metrics)
+
+val_stats <- 
+  bind_rows(
+    collect_metrics(lin_reg_res) %>% 
+      mutate(Interactions = "Hour x Day"),
+    collect_metrics(lin_reg_some_int_res) %>% 
+      mutate(Interactions = "Add Two Item Interactions"),
+    collect_metrics(lin_reg_all_int_res) %>% 
+      mutate(Interactions = "Add All Item Interactions")
+  ) %>% 
+  filter(.metric != "rsq") %>% 
+  mutate(.metric = toupper(.metric)) %>% 
+  select(Interactions, .metric, mean) %>% 
+  pivot_wider(
+    id_cols = c(Interactions),
+    names_from = .metric,
+    values_from = mean
+  ) %>% 
+  mutate(.order = row_number())
+```
+
+
  - Adding many to a model and comparing performance with and without the extra terms. 
  - Feasible solutions algorithm 
  - Friedman's H-statistic.
+
+
+```{r}
+#| label: tbl-interaction-anova
+#| tbl-cap: "ANOVA table and validation set statistics for three models with different interaction sets."
+#| echo: false
+
+hour_day_fit <- fit_best(lin_reg_res)
+some_int_fit <- fit_best(lin_reg_some_int_res)
+all_int_fit <- fit_best(lin_reg_all_int_res)
+
+anova_res <- 
+  anova(
+  hour_day_fit %>% extract_fit_engine(), 
+  some_int_fit %>% extract_fit_engine(),
+  all_int_fit %>% extract_fit_engine()
+) %>% 
+  tidy() %>%
+  mutate(
+    Interactions = c("Hour x Day", "Add Two Item Interactions", "Add All Item Interactions"),
+    Decimal = sqrt(rss / df.residual),
+    `p-Value` = paste0("$10^", round(log10(p.value), 1), "$"),
+    Time = map_chr(sqrt(rss / df.residual), dec_to_time),
+    Time = gsub(" minutess and ", "m, ", Time),
+    Time = gsub(" seconds", "s", Time),
+    Time = paste0("(", Time, ")")
+  ) %>% 
+  rename(
+    `Deg. Free.` = df.residual,
+    `# Added` = df
+  ) %>% 
+  select(Interactions, Decimal, Time, `Deg. Free.`, `# Added`, `p-Value`) %>% 
+  full_join(val_stats,  by = "Interactions") %>% 
+  arrange(.order) %>% 
+  select(-.order)
+
+blank_na <- function(x) {
+  x[grepl("NA", x)] <- ""
+  x
+}
+
+anova_res <- 
+  anova_res %>% 
+  as.data.frame() %>% 
+  format(digits = 3, big.mark = ",") %>% 
+  apply(2, blank_na) %>% 
+  as_tibble()
+
+anova_res %>% 
+  gt() %>%
+  tab_style(
+    style = cell_borders(sides = c("bottom"),  weight = px(1.8)),
+    locations = cells_body(rows = nrow(anova_res))
+  ) %>% 
+  tab_style(
+    style = cell_borders(sides = c("top", "bottom"),  weight = px(1.8)),
+    locations = cells_column_labels()
+  ) %>% 
+  tab_spanner(label = "Training Set RMSE", columns = c(Decimal, Time)) %>% 
+  tab_spanner(label = "Validation Set", columns = c(RMSE, MAE))
+```
+
+
+Recall that the original linear regression analysis in @sec-model-development-whole-game had a validation set MAE of `r dec_to_time_rs(lin_reg_res)`. The observed and predicted visualization is in the left panel of @fig-lin-reg-interactions. Adding the two additional interactions derived in @fig-hstats-interaction results in a validation set MAE of `r dec_to_time_rs(lin_reg_some_int_res)`, a slight numerical improvement. However, the visualization in the middle panel shows fewer very large residuals. That there are `r choose(27, 2)` potential two-way interactions using the item predictors, would adding the remaining `r choose(27, 2) - 2` interactions further improve the model? The answer, it turns out, is no. The MAE for that model is `r dec_to_time_rs(lin_reg_all_int_res)`, and the right panel shows no proportional reduction in large residuals. 
+
+```{r}
+#| label: fig-lin-reg-interactions
+#| echo: false
+#| warning: false
+#| message: false
+#| out-width: 90%
+#| fig-width: 9
+#| fig-height: 3.5
+#| fig-cap: Validation set predicted vs. observed delivery times for linear regression models with and without additional interactions.
+
+lvls <- c("Previous Results", "Two Addtional Interactions", "All Item Interactions")
+
+lin_reg_res %>% 
+  collect_predictions() %>% 
+  mutate(Model = "Previous Results") %>% 
+  bind_rows(
+    lin_reg_some_int_res %>% 
+      collect_predictions() %>% 
+      mutate(Model = "Two Addtional Interactions")
+  ) %>% 
+  bind_rows(
+    lin_reg_all_int_res %>% 
+      collect_predictions() %>% 
+      mutate(Model = "All Item Interactions")
+  ) %>%
+  mutate(
+    Model = factor(Model, levels = lvls)
+  ) %>%
+  ggplot(aes(time_to_delivery, .pred)) +
+  geom_abline(col = "green", lty = 2) +
+  geom_point(alpha = 0.4, cex = 1) +
+  geom_smooth(se = FALSE, col = "red") +
+  coord_obs_pred() +
+  facet_wrap( ~ Model, ncol = 3) +
+  labs(x = "Observed Delivery Time", y = "Predicted Delivery Time")
+```
+
 
 We can estimate the joint effect of a set of predictors on the outcome as well as the effect of individual predictors. If we thought that only main effects and two-factor interactions were possible, we could factor out the individual effects from the joint effect. The leftover predictive ability would then be due to interactions. Suppose that we had a linear regression model with two predictors. The joint effect would include all possible model terms associated with a predictor. We can also create main effects too: 
 
@@ -236,102 +417,6 @@ bagging_two_way_int %>%
   labs(y = NULL, x = "Proportion of Joint Effect Variability")
 ```
 
-```{r}
-#| label: lm-more-interactions
-#| echo: false
-#| warning: false
-
-load("../RData/deliveries_lm.RData")
-
-reg_metrics <- metric_set(mae, rmse, rsq)
-
-base_rec <- 
-  recipe(time_to_delivery ~ ., data = delivery_train) %>% 
-  step_dummy(all_factor_predictors()) %>% 
-  step_zv(all_predictors()) %>% 
-  step_spline_natural(hour, distance, deg_free = 10)
-
-###
-
-some_int_rec <- 
-  base_rec %>% 
-  step_interact(
-    ~ starts_with("hour"):starts_with("day") + 
-      item_01:item_10 + item_09:item_10
-  )
-
-lin_reg_some_int_wflow <- 
-  workflow() %>% 
-  add_model(linear_reg()) %>% 
-  add_recipe(some_int_rec)
-
-set.seed(3838)
-lin_reg_some_int_res <-
-  fit_resamples(lin_reg_some_int_wflow,
-                delivery_rs,
-                control = control_resamples(save_pred = TRUE),
-                metrics = reg_metrics)
-
-###
-
-all_int_rec <- 
-  base_rec  %>% 
-  step_interact(
-    ~ starts_with("hour"):starts_with("day") + 
-      starts_with("item"):starts_with("item")
-  ) 
-
-lin_reg_all_int_wflow <- 
-  workflow() %>% 
-  add_model(linear_reg()) %>% 
-  add_recipe(all_int_rec)
-
-set.seed(3838)
-lin_reg_all_int_res <-
-  fit_resamples(lin_reg_all_int_wflow,
-                delivery_rs,
-                control = control_resamples(save_pred = TRUE),
-                metrics = reg_metrics)
-```
-
-Recall that the original linear regression analysis in @sec-model-development-whole-game had a validation set MAE of `r dec_to_time_rs(lin_reg_res)`. The observed and predicted visualization is in the left panel of @fig-lin-reg-interactions. Adding the two additional interactions derived in @fig-hstats-interaction results in a validation set MAE of `r dec_to_time_rs(lin_reg_some_int_res)`, a slight numerical improvement. However, the visualization in the middle panel shows fewer very large residuals. That there are `r choose(27, 2)` potential two-way interactions using the item predictors, would adding the remaining `r choose(27, 2) - 2` interactions further improve the model? The answer, it turns out, is no. The MAE for that model is `r dec_to_time_rs(lin_reg_all_int_res)`, and the right panel shows no proportional reduction in large residuals. 
-
-```{r}
-#| label: fig-lin-reg-interactions
-#| echo: false
-#| warning: false
-#| message: false
-#| out-width: 90%
-#| fig-width: 9
-#| fig-height: 3.5
-#| fig-cap: Validation set predicted vs. observed delivery times for linear regression models with and without additional interactions.
-
-lvls <- c("Previous Results", "Two Addtional Interactions", "All Item Interactions")
-
-lin_reg_res %>% 
-  collect_predictions() %>% 
-  mutate(Model = "Previous Results") %>% 
-  bind_rows(
-    lin_reg_some_int_res %>% 
-      collect_predictions() %>% 
-      mutate(Model = "Two Addtional Interactions")
-  ) %>% 
-  bind_rows(
-    lin_reg_all_int_res %>% 
-      collect_predictions() %>% 
-      mutate(Model = "All Item Interactions")
-  ) %>%
-  mutate(
-    Model = factor(Model, levels = lvls)
-  ) %>%
-  ggplot(aes(time_to_delivery, .pred)) +
-  geom_abline(col = "green", lty = 2) +
-  geom_point(alpha = 0.4, cex = 1) +
-  geom_smooth(se = FALSE, col = "red") +
-  coord_obs_pred() +
-  facet_wrap( ~ Model, ncol = 3) +
-  labs(x = "Observed Delivery Time", y = "Predicted Delivery Time")
-```
 
 ## Basis Expansions and Splines {#sec-splines}
 
@@ -766,7 +851,7 @@ Let's again use the Ames housing data, specifically the latitude predictor, illu
 - An unsupervised approach using percentiles at cut-points. 
 - A supervised approach where a regression tree model is used to set the breakpoints for the bins. 
 
-In each case, the number of new features requires tuning. Using the basic grid search tools described in @sec-grid, the number of required terms was set for each method (ranging from `r min(collect_metrics(super_res)$num_breaks)` to `r max(collect_metrics(super_res)$num_breaks)` terms) by minimizing the RMSE from a simple linear regression model. The results are that both approaches required the same number of new features and produced about the same level of performance; the unsupervised approach required `r num_unsuper_breaks` breaks to achieve an RMSE of `r signif(best_unsuper$mean[1], 3)` and the supervised model has an RMSE of `r signif(best_super$mean[1], 3)` with `r num_super_breaks` cut points. @fig-ames-bins shows the fitted model using the unsupervised terms. 
+In each case, the number of new features requires tuning. Using the basic grid search tools described in @sec-grid, the number of required terms was set for each method (ranging from `r min(collect_metrics(unsuper_res)$num_breaks)` to `r max(collect_metrics(unsuper_res)$num_breaks)` terms) by minimizing the RMSE from a simple linear regression model. The results are that both approaches required the same number of new features and produced about the same level of performance; the unsupervised approach required `r num_unsuper_breaks` breaks to achieve an RMSE of `r signif(best_unsuper$mean[1], 3)` and the supervised model has an RMSE of `r signif(best_super$mean[1], 3)` with `r num_super_breaks` cut points. @fig-ames-bins shows the fitted model using the unsupervised terms. 
 
 ```{r}
 #| label: fig-ames-bins
