@@ -50,9 +50,14 @@ source("../R/setup_hotel_rates.R")
 source("../R/setup_deliveries.R")
 ```
 
-Previous chapters have mostly focused on transforming one predictor "in place." For example, embeddings take groups of predictors and represent them in a smaller dimension. Other transformations have described different ways to encode data. Examples of this are converting qualitative predictors to numeric encodings via indicator variables, hashing variables, etc. In either case, these methods are often motivated by _what the model needs_. If a model is sensitive to colinearity, then embeddings are a way to compensate for that weakness. If a model cannot consumer qualitative predictors as non-numeric data, then we have to find numerical encodings for them. 
+Previous chapters have primarily focused on preprocessing predictor columns. Models can have sensitivities to aspects of predictors. For instance: 
 
-In this chapter, we’ll discuss techniques that address _what the data require_. For example, if the relationship between a predictor is nonlinear, how can we represent that predictor so that the relationship can be modeled? This is a _dataset-specific issue_ and not directly motivated by the model. This is one of the primary applications of **feature engineering**: what can we do to make it easier for the model to understand and predict the outcome? 
+- If a model is sensitive to colinearity, then embeddings are a way to compensate for that weakness.
+- We must find numerical encodings if a model cannot consumer qualitative predictors as non-numeric data. 
+
+We call methods associated _what the model needs_ as preprocessing.
+
+In this chapter, we’ll discuss techniques that address _what the data requires_. For example, if the relationship between a predictor is nonlinear, how can we represent that predictor so that the relationship can be modeled? This is an _outcome-specific issue_ and not directly motivated by the model. This is one of the primary applications of **feature engineering**: what can we do to make it easier for the model to understand and predict the outcome? 
 
 Let’s look at a simple example. Occasionally, predictor pairs work better in unison rather than as main effects. For example, consider the data in @fig-two-class-corr(a), where two predictors are: 
 
@@ -60,7 +65,7 @@ Let’s look at a simple example. Occasionally, predictor pairs work better in u
 - significantly right-skewed, and
 - highly correlated. 
 
-In the predictors' original form there is a great degree of overlap between the two classes of samples.  However, when the ratio of the predictors is used, the newly derived predictor better discriminates between classes (shown in @fig-two-class-corr(b)). While not a general rule, the three data characteristics above suggest that the modeler attempt to form ratios from two or more predictors.
+In the predictors' original form, there is a significant overlap between the two classes of samples.  However, when the ratio of the predictors is used, the newly derived predictor better discriminates between classes (shown in @fig-two-class-corr(b)). While not a general rule, the three data characteristics above suggest that the modeler attempts to form ratios from two or more predictors ^[Alternatively, PCA after skewness-correcting transformations may be another good option.].
 
 ```{r}
 #| label: fig-two-class-corr
@@ -147,25 +152,27 @@ all_features %>%
   labs(y = NULL)
 ```
 
-It is essential to understand that the _data_ requires this transformation. We can put the original predictors into a model as-is. The model won’t produce an error but won’t have good predictive performance. We can induce a separation of the classes when a joint feature is used. 
+It is essential to understand that these _data_ require transformation. We can put the original predictors into a model as-is. The model won’t produce an error but won’t have good predictive performance. We can induce a separation of the classes when a joint feature is used. 
 
 This aspect of feature engineering depends on the data set so it is difficult to enumerate all possible techniques. In this chapter, we’ll describe a few commonly used methods: splines, interactions, and discretization (a.k.a. binning). 
 
 ## Interactions {#sec-interactions}
 
-When building models for prediction, the majority of variation in the response is generally explained by the cumulative effect of the important individual predictors.  For many problems, additional variation in the response can be explained by the effect of two or more predictors working in conjunction with each other.  
+When building models for prediction, the majority of variation in the outcome is generally explained by the cumulative effect of the important individual predictors.  For many problems, additional variation in the response can be explained by the effect of two or more predictors working in conjunction with each other.  
 
-The healthcare industry has long understood the concept of interactions among drugs for treating specific diseases [@singh2017suppressive, @mokhtari2017combination, and @altorki2021neoadjuvant].  As an example of an interaction, consider treatment for the disease non-small cell lung cancer (NSCLC).  In a recent study, patients with an advanced stage of NSCLC with an EGFR mutation were given either osimertinib alone or osimertinib in combination with traditional chemotherapy [@tragrisso2023].   Patients taking the combination treatment had a significantly longer progression-free survival time than patients taking osmertinib alone.  Hence the interaction of the treatments is more effective than the single treatment.  To summarize, two (or more) predictors interact if their combined impact is different (less or greater) than what would be expected from the added impact of each predictor alone.
+The healthcare industry has long understood the concept of interactions among drugs for treating specific diseases [@singh2017suppressive, @mokhtari2017combination, and @altorki2021neoadjuvant].  As an example of an interaction, consider treatment for the disease non-small cell lung cancer (NSCLC).  In a recent study, patients with an advanced stage of NSCLC with an EGFR mutation were given either osimertinib alone or osimertinib in combination with traditional chemotherapy [@tragrisso2023].   Patients taking the combination treatment had a significantly longer progression-free survival time than patients taking osmertinib alone.  Hence, the interaction of the treatments is more effective than the single treatment.  To summarize, two (or more) predictors interact if their combined impact is different (less or greater) than what would be expected from the added impact of each predictor alone.
 
-Consider the hotel data from @sec-hotel-rates. @fig-delivery-hour-main
+We’ve already encountered an example of an interaction in @sec-eda-whole-game where the relationship between delivery time and the time of order differed across days of the week. This trend is reproduced in @fig-delivery-no-interact(a). The telltale sign of the interaction is that the trendlines are not parallel with one another; they have different rates of increase and cross. 
+
+How would this plot change if there was no interaction between the order time and day? To illustrate, we estimated trendlines in a way that coerced the nonlinear trend for order time to be the same.  @fig-delivery-no-interact(b) shows the results: parallel lines for each day of the week. 
 
 ```{r}
-#| label: fig-delivery-hour-main
+#| label: fig-delivery-no-interact
 #| fig-width: 8
 #| fig-height: 4
 #| out-width: "85%"
 #| warning: false
-#| fig-cap: "Delivery times versues the time of the order, colored by the day of the week. (a) A duplicate of a panel from @fig-delivery-predictors. (b) The same data with trends lines where the underlying data did _not_ contain an interaction between the delivery day and hour."
+#| fig-cap: "Delivery times versus the time of the order, colored by the day of the week. (a) A duplicate of a panel from @fig-delivery-predictors. (b) The same data with trendlines where the underlying model did _not_ allow an interaction between the delivery day and hour." 
 
 main_effects_mod <- lm(time_to_delivery ~ day + splines2::naturalSpline(hour, df = 10), delivery_train)
 main_effects_pred <- augment(main_effects_mod, delivery_train)
@@ -198,10 +205,11 @@ no_interactions <-
   theme(legend.position = "bottom")
 ```
 
-The previous example illustrates an interaction between a continuous and categorical predictor. cat x cat 
+This example demonstrates an interaction between a numeric predictor (hour of order) and a categorical predictor (day of the week). Interactions between any type of predictor can involve more than two variables. Using the delivery data, let’s examine potential interactions solely between categorical predictor columns. 
 
+For regression problems, one visualization technique is to compute the means (or medians) for all combinations of variables and then plot these means in a manner similar to the previous figure. Let’s look at the 27 predictors columns for whether a specific item was included in the order. The original data is a count, but the data are mostly zero or one. We’ll look at two variables at a time and plot the four combinations of whether the item was ordered at all (versus not at all). @fig-delivery-items shows two potential sets of interactions. The x-axis indicates whether Item 1 was in the order or not. The y-axis is the mean delivery time with 90% confidence intervals^[These were computed using the bootstrap, as in @sec-eda-whole-game.].
 
-@fig-delivery-items displays interaction plots where the mean effect is estimated for each combination of the categorical predictors. The mean delivery time and 90% confidence were computed using the bootstrap, as in @sec-eda-whole-game. The interaction plot’s left panel shows no real change in effect for whether item 1 was ordered for different values of item 9 since their profiles have the same pattern. On the right-hand side, there is a strong interaction between items 1 and 10. The mean delivery times are very similar when neither is contained in the order. Also, when only one of the two items is in the order, the average time is similarly small. However, when both are included, the delivery time becomes much larger.  This means that you cannot consider the effect or either item 1 or 10 alone; their effect on the outcome occurs jointly. 
+The left panel shows the joint effect of items 1 and 9. The lines connecting the means are parallel. This indicates that each of these two predictors affects the outcome independently of one another. The right panel has means for items 1 and 10. The mean delivery times are very similar when neither is contained in the order. Also, when only one of the two items is in the order, the average time is similarly small. However, when both are included, the delivery time becomes much larger.  This means that you cannot consider the effect or either item 1 or 10 alone; their effect on the outcome occurs jointly. 
 
 ```{r}
 #| label: compute-mean-int-times
@@ -259,25 +267,164 @@ resampled_ratios %>%
                 alpha = 2 / 3) +
   lims(y = c(25, 44)) +
   labs(x = "Contains Item 1", y = "Mean Delivery Time") +
-  theme(legend.position = "top")
+  theme(legend.position = "top") + 
+  guides(col = guide_legend(title = "Contains Item 9 or 10"))
 ```
 
-As a third example, interactions may occur between continuous predictors. 
+As a third example, interactions may occur between continuous predictors. It can be difficult to discover the interaction via visualization for two numeric predictors without converting one of the predictors to categorical bins. To illustrate the _concept_ of an interaction between two numeric predictors, $x_1$ and $x_2$, let’s use a simple linear equation:
 
-The concept of an interaction between two predictors, $x_1$ and $x_2$, can be illustrated using a simple linear equation:
+$$ y = \beta_0 + \beta_{1}x_1 + \beta_{2}x_2 + \beta_{3}x_{1}x_{2} + \epsilon$$
 
-$$ y = \beta_0 + \beta_{1}x_1 + \beta_{2}x_2 + \beta_{3}x_{1}x_{2} + error$$
+The $\beta$ coefficients represent the overall average response ($\beta_0$), the average rate of change for each individual predictor ($\beta_1$ and $\beta_2$), and the incremental rate of change due to the combined effect of $x_1$ and $x_2$ ($\beta_3$) that goes beyond what $x_1$ and $x_2$ can explain alone.  The parameters for this equation can be estimated using a technique such as ordinary least squares (REF).  The sign and magnitude of $\beta_3$ indicate how and the extent to which the two predictors interact:   
 
-In this equation, the $\beta$ coefficients represent the overall average response ($\beta_0$), the average rate of change for each individual predictor ($\beta_1$ and $\beta_2$), and the incremental rate of change due to the combined effect of $x_1$ and $x_2$ ($\beta_3$) that goes beyond what $x_1$ and $x_2$ can explain alone.  The parameters for this equation can be estimated using a technique such as linear regression.  The sign and magnitude of $\beta_3$ indicate how and the extent to which the two predictors interact.  When $\beta_3$ is positive, the interaction is _synergystic_ since the response is increasing beyond the effect of either predictor alone.  Alternatively, when $\beta_3$ is negative, the interaction is _antagonistic_ since the response is decreasing beyond the effect of either predictor alone.  A third scenario is when $\beta_3$ is essentially zero.  In this case, there is no interaction between the predictors and the relationship between the predictors is _additive_.  Finally, for some data sets we may find that neither predictor is important individually (i.e. $\beta_1$ and $\beta_2$ are zero).  However, the coefficient on the interaction term is not zero.  Because this case occurs infrequently, it is called _atypical_. 
+ - When $\beta_3$ is positive, the interaction is _synergistic_ since the response increases beyond the effect of either predictor alone.  
+ - Alternatively, when $\beta_3$ is negative, the interaction is _antagonistic_ since the response decreases beyond the effect of either predictor alone.  
+ - A third scenario is when $\beta_3$ is essentially zero.  In this case, there is no interaction between the predictors and the relationship between the predictors is _additive_. 
+ - Finally, for some data sets, we may find that neither predictor is important individually (i.e., $\beta_1$ and $\beta_2$ are zero).  However, the coefficient on the interaction term is not zero.  Because this case occurs very infrequently, it is called _atypical_. 
+ 
+To understand this better, @fig-interaction-contours shows a contour plot of a predicted linear regression model with various combinations of the model slope parameters. The two predictors are centered at zero with values ranging within $x_j \pm 4.0$). The default setting shows a moderate synergistic interaction effect since all of the $\beta_j = 1.0$). In the plot, darker values indicate smaller predicted values.   
 
-An ideal scenario would be that prior to modeling the data we would know which predictors interact.  If this would be the case, then these terms could be included in a model.  The model would then have better predictive performance than if the interactions were not included.  Unfortunately, knowledge of which predictors interact is usually not available prior to initiating the modeling process.  
+::: {#fig-interaction-contours}
 
-If important interactions cannot be known before modeling, can models still discover and utilize these potentially important features? Recent studies using a variety of advanced modeling techniques have shown that some techniques can inherently detect interactions. For example, tree-based models [@elith2008working], random forests [@garcia2009evaluating], boosted trees [@lampa2014identification], and support vector machines [@chen2008support] are effective at uncovering them. [TO DO:  Update references]
+::: {.figure-content}
 
-If modern modeling techniques can naturally find and utilize interactions, then why is it necessary to spend any time uncovering these relationships?  The reason is primarily one of interpretation.  Recall the trade-off between prediction and interpretation that was discussed in Chapter X.  More complex models are less interpretable and generally more predictive, while simpler models are more interpretable and less predictive.  By identifying essential interactions, we can include them in simpler models, improving predictive performance.  The following sections provide some tools for uncovering interactions.
+```{shinylive-r}
+#| label: fig-interaction-contours
+#| viewerHeight: 600
+#| standalone: true
+
+library(shiny)
+library(ggplot2)
+library(bslib)
+
+ui <- fluidPage(
+  theme = bs_theme(bg = "#fcfefe", fg = "#595959"),
+  mainPanel(
+    fluidRow(
+      column(
+        width = 4,
+        align = "center",
+        sliderInput(
+          "beta_1",
+          label = "Predictor 1 slope",
+          min = -4.0,
+          max =  4.0,
+          step = 0.5,
+          value = 1
+        )
+      ),
+      column(
+        width = 4,
+        align = "center",
+        sliderInput(
+          "beta_2",
+          label = "Predictor 2 slope",
+          min = -4.0,
+          max =  4.0,
+          step = 0.5,
+          value = 1
+        )
+      ),
+      column(
+        width = 4,
+        align = "center",
+        sliderInput(
+          "beta_int",
+          label = "Interaction slope",
+          min = -4.0,
+          max =  4.0,
+          step = 0.5,
+          value = 1
+        )
+      )
+    ), # row
+    fluidRow(
+      column(width =  1),
+      column(width = 10.0, align = "center", plotOutput('contours')),
+      column(width =  1)
+    ) # row
+  )  # main
+) # ui page
+
+
+
+server <- function(input, output) {
+  
+  light_bg <- "#fcfefe" # from aml4td.scss
+  grid_theme <- bs_theme(
+    bg = "#fcfefe", fg = "#595959"
+  )
+  
+  # ------------------------------------------------------------------------------
+  
+  theme_light_bl<- function(...) {
+    
+    ret <- ggplot2::theme_bw(...)
+    
+    col_rect <- ggplot2::element_rect(fill = light_bg, colour = light_bg)
+    ret$panel.background  <- col_rect
+    ret$plot.background   <- col_rect
+    ret$legend.background <- col_rect
+    ret$legend.key        <- col_rect
+    
+    ret$legend.position <- "top"
+    
+    ret
+  }
+  
+  # ------------------------------------------------------------------------------
+  
+  n_grid <- 100
+  grid_1d <- seq(-1, 1, length.out = n_grid)
+  grid <- expand.grid(A = grid_1d, B = grid_1d)
+
+  output$contours <-
+    renderPlot({
+      # browser()
+      grid$outcome <- 
+        input$beta_1 * grid$A + input$beta_2 * grid$B + 
+        input$beta_int * grid$A * grid$B
+      
+      p <- 
+        ggplot(grid, aes(A, B)) +
+        coord_equal() +
+        labs(x = "Predictor 1", y = "Predictor 1") +
+        theme_light_bl()
+      
+      if (length(unique(grid$outcome)) >= 15) {
+        p <- p + 
+          geom_contour_filled(aes(z = scale(outcome)), bins = 15, show.legend = FALSE) +
+          scale_fill_viridis_d(option = "G")
+      }
+
+      print(p)
+      
+    })
+}
+
+app <- shinyApp(ui, server)
+```
+
+:::
+
+Prediction contours for a linear regression model with equation $y = \beta_1 x_1 + \beta_2 x_2 + \beta_{3}x_1x_2$. Darker values indicate smaller predictions. 
+
+:::
+
+
+what about categorical data
+
+hierarchical principal; decreasing likelihood of existence with number of terms. 
+
 
 ### Detecting Interactions
 
+An ideal scenario would be that we would know which predictors interact before modeling the data.  If this would be the case, then these terms could be included in a model.  The model would have better predictive performance than a model with no interactions.  Unfortunately, knowledge of which predictors interact is usually not available prior to initiating the modeling process.  
+
+If meaningful interactions are unknown before modeling, can models still discover and utilize these potentially important features? Recent studies using various advanced modeling techniques have shown that some methods can inherently detect interactions. For example, tree-based models [@elith2008working], random forests [@garcia2009evaluating], boosted trees [@lampa2014identification], and support vector machines [@chen2008support] are effective at uncovering them. [TO DO:  Update references]
+
+If modern modeling techniques can naturally find and utilize interactions, then why is it necessary to spend any time uncovering these relationships?  The first reason is interpretability.  Recall the trade-off between prediction and interpretation that was discussed in Chapter TODO.  More complex models are less interpretable and generally more predictive, while simpler models are more interpretable and less predictive. A second reason is that, by identifying essential interactions, we can include them in simpler models to improve predictive performance and maintain easy interpretability.  
+ 
 ```{r}
 #| label: lm-more-interactions
 #| echo: false
@@ -425,10 +572,6 @@ anova_res %>%
   cols_width(c(Interactions) ~ px(100)) %>% 
   cols_width(c(`p-Value`) ~ px(80))
 ```
-
-
-
-
 
 Recall that the original linear regression analysis in @sec-model-development-whole-game had a validation set MAE of `r dec_to_time_rs(lin_reg_res)`. The observed and predicted visualization is in the left panel of @fig-lin-reg-interactions. Adding the two additional interactions derived in @fig-hstats-interaction results in a validation set MAE of `r dec_to_time_rs(lin_reg_some_int_res)`, a slight numerical improvement. However, the visualization in the middle panel shows fewer very large residuals. That there are `r choose(27, 2)` potential two-way interactions using the item predictors, would adding the remaining `r choose(27, 2) - 2` interactions further improve the model? The answer, it turns out, is no. The MAE for that model is `r dec_to_time_rs(lin_reg_all_int_res)`, and the right panel shows no proportional reduction in large residuals. 
 
