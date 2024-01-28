@@ -273,7 +273,9 @@ resampled_ratios %>%
 
 As a third example, interactions may occur between continuous predictors. It can be difficult to discover the interaction via visualization for two numeric predictors without converting one of the predictors to categorical bins. To illustrate the _concept_ of an interaction between two numeric predictors, $x_1$ and $x_2$, let’s use a simple linear equation:
 
-$$ y = \beta_0 + \beta_{1}x_1 + \beta_{2}x_2 + \beta_{3}x_{1}x_{2} + \epsilon$$
+$$ 
+y = \beta_0 + \beta_{1}x_1 + \beta_{2}x_2 + \beta_{3}x_{1}x_{2} + \epsilon
+$$ {#eq-two-way-int}
 
 The $\beta$ coefficients represent the overall average response ($\beta_0$), the average rate of change for each individual predictor ($\beta_1$ and $\beta_2$), and the incremental rate of change due to the combined effect of $x_1$ and $x_2$ ($\beta_3$) that goes beyond what $x_1$ and $x_2$ can explain alone.  The parameters for this equation can be estimated using a technique such as ordinary least squares (REF).  The sign and magnitude of $\beta_3$ indicate how and the extent to which the two predictors interact:   
 
@@ -424,6 +426,7 @@ An ideal scenario would be that we would know which predictors interact before m
 If meaningful interactions are unknown before modeling, can models still discover and utilize these potentially important features? Recent studies using various advanced modeling techniques have shown that some methods can inherently detect interactions. For example, tree-based models [@elith2008working], random forests [@garcia2009evaluating], boosted trees [@lampa2014identification], and support vector machines [@chen2008support] are effective at uncovering them. [TO DO:  Update references]
 
 If modern modeling techniques can naturally find and utilize interactions, then why is it necessary to spend any time uncovering these relationships?  The first reason is interpretability.  Recall the trade-off between prediction and interpretation that was discussed in Chapter TODO.  More complex models are less interpretable and generally more predictive, while simpler models are more interpretable and less predictive. A second reason is that, by identifying essential interactions, we can include them in simpler models to improve predictive performance and maintain easy interpretability.  
+
  
 ```{r}
 #| label: lm-more-interactions
@@ -501,18 +504,7 @@ val_stats <-
     values_from = mean
   ) %>% 
   mutate(.order = row_number())
-```
 
-
- - Adding many to a model and comparing performance with and without the extra terms. 
- - Feasible solutions algorithm 
- - Friedman's H-statistic.
-
-
-```{r}
-#| label: tbl-interaction-anova
-#| tbl-cap: "ANOVA table and validation set statistics for three models with different interaction sets."
-#| echo: false
 
 hour_day_fit <- fit_best(lin_reg_res)
 some_int_fit <- fit_best(lin_reg_some_int_res)
@@ -542,6 +534,19 @@ anova_res <-
   full_join(val_stats,  by = "Interactions") %>% 
   arrange(.order) %>% 
   select(-.order)
+
+added_all_pairs <- anova_res$`# Added`[3]
+impr_add_two <- sprintf("%3.2f", (anova_res$Decimal[1] - anova_res$Decimal[2]))
+impr_add_all <- sprintf("%3.2f", (anova_res$Decimal[2] - anova_res$Decimal[3]))
+```
+
+ 
+What should we do if we already have candidate interaction sets?  If we use a more formal statistical model, such as linear or logistic regression, the traditional tool for evaluating whether additional model terms in a set of nested models are worth including is the conventional analysis of variance (ANOVA). This uses the statistical likelihood value as the objective function. This is equivalent to comparing the RMSE values between models for linear regression ^[It so happens that the Gaussian likelihood function is equivalent to the sums of squared errors (SSE). That, in turn, is equivalent to the RMSE. That simplification does not automatically occur for other probability distributions.]. The error reduction and how many additional terms are responsible for the improvement are computed. Using these results and some probability assumptions about the data, we can formally test the null hypothesis that the additional parameters all have coefficient values of zero. Looking at the delivery data, our model in TODO included a single set of interactions (e.g., hour-by-day). What if we included two more interactions based on the item predictors: item 1 $\times$ item 10 and item 9 $\times$ item 10? @tbl-interaction-anova shows the ANOVA results ^[We’ll see why we include the second interaction term shortly.]. The RMSE _computed on the training set_ is listed in the first and second rows. The reduction by including these two additional model terms is `r impr_add_two` (decimal minutes). Assuming normality of the model residuals, the p-value for this test is exceedingly small. This indicates that there is no evidence that these two model parameters are truly zero. This statistical difference may not make much of a practical difference. However, machine learning models often behave like "a game of inches" where every small improvement adds up to an overall improvement that matters. 
+
+```{r}
+#| label: tbl-interaction-anova
+#| tbl-cap: "ANOVA table and validation set statistics for three models with different interaction sets."
+#| echo: false
 
 blank_na <- function(x) {
   x[grepl("NA", x)] <- ""
@@ -573,7 +578,11 @@ anova_res %>%
   cols_width(c(`p-Value`) ~ px(80))
 ```
 
-Recall that the original linear regression analysis in @sec-model-development-whole-game had a validation set MAE of `r dec_to_time_rs(lin_reg_res)`. The observed and predicted visualization is in the left panel of @fig-lin-reg-interactions. Adding the two additional interactions derived in @fig-hstats-interaction results in a validation set MAE of `r dec_to_time_rs(lin_reg_some_int_res)`, a slight numerical improvement. However, the visualization in the middle panel shows fewer very large residuals. That there are `r choose(27, 2)` potential two-way interactions using the item predictors, would adding the remaining `r choose(27, 2) - 2` interactions further improve the model? The answer, it turns out, is no. The MAE for that model is `r dec_to_time_rs(lin_reg_all_int_res)`, and the right panel shows no proportional reduction in large residuals. 
+What if there are other two-way interactions between the other item predictors? Since the training set is fairly large (compared to the current number of model parameters), it might be feasible to include the remaining `r added_all_pairs` pairwise interactions and use the ANOVA method to validate this choice. These results are contained in the third row of @tbl-interaction-anova where the RMSE dropped further by `r impr_add_all` minutes. The p-value is also very small, indicating that there is no evidence that all of the  `r added_all_pairs` parameter estimates are zero. More extensive testing would be required to determine which actually are zero. This can be tedious and a potentially dangerous "Fishing expedition" that could result in serious bias creeping into the modeling process. 
+
+One problem with the ANOVA method is that it calculates the model error using the training set, which we know may not indicate what would occur with previously unseen data. In fact, it is well known that, for linear regression via ordinary least squares estimation, it is impossible for the training set error to ever increase when adding new model terms. You can see this in @tbl-interaction-anova where the validation set RMSE and MAE values are included. Note that, when the large set of interactions were added, these metrics both _increase_ in the validation set, a result contrary to what the ANOVA results tell us.  
+
+The observed and predicted visualizations for each model in @tbl-interaction-anova are shown in @fig-lin-reg-interactions. Adding the two additional interactions yielded a slight numerical improvement. However, the visualization in the middle panel shows fewer very large residuals. The figure also shows the model results that include the full set of  `r choose(27, 2)` two-way interactions; this panel shows no significant reduction in large residuals, further casting doubt on using the entire set. 
 
 ```{r}
 #| label: fig-lin-reg-interactions
@@ -612,8 +621,9 @@ lin_reg_res %>%
   labs(x = "Observed Delivery Time", y = "Predicted Delivery Time")
 ```
 
+So far, we have used visualizations to unearth potential interactions. This can be an effective strategy when the number of potential interactions is large, but the visual nature of this process is subjective. There are some specialized quantitative tools for identifying interactions. For example, @lim2015learning used regularized generalized linear models (sections X and X) to estimate all possible two-way interactions and use a penalization method to determine which should be retained. X and X describe the feasible solution algorithm, an iterative search method for interaction discovery. Another, which we will now describe in more detail, is Friedman's H-statistic (refs). 
 
-We can estimate the joint effect of a set of predictors on the outcome as well as the effect of individual predictors. If we thought that only main effects and two-factor interactions were possible, we could factor out the individual effects from the joint effect. The leftover predictive ability would then be due to interactions. Suppose that we had a linear regression model with two predictors. The joint effect would include all possible model terms associated with a predictor. We can also create main effects too: 
+We can estimate the joint effect of a set of predictors on the outcome as well as the effect of individual predictors. If we thought that only main effects and two-factor interactions were possible, we could factor out the individual effects from the joint effect. The leftover predictive ability would then be due to interactions. Consider the linear model in @eq-two-way-int. The joint effect would include all possible model terms associated with a predictor. We can also create main effects too: 
 
 \begin{align}
 f(x_1, x_2) &= \beta_{1}x_1 + \beta_{2}x_2 + \beta_{3}x_{1}x_{2} \notag \\
