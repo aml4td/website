@@ -246,7 +246,7 @@ resampled_ratios <-
 #| label: fig-delivery-items
 #| fig-width: 7
 #| fig-height: 4
-#| out-width: "70%"
+#| out-width: "80%"
 #| fig-cap: "Interaction examples with two categorical predictors. Items 1 and 9 (left panel) do not interaction, while items 1 and 10 appear to have a strong  interaction (right panel)."
 
 resampled_ratios %>% 
@@ -555,113 +555,255 @@ show an example of a nonlinear relationship
 
 Adding extra features derived from a single column to increase its flexibility as a predictor is called a basis expansion. Previously, the polynomial basis function was used. Unsurprisingly, there are a lot of basis functions to choose from.
 
-```{r}
-#| label: spline-sim-example
-nonlin_sim <- function(x, error = 0.05) {
-  f <- (x^3) +  2 * exp(-6 * (x - 0.3)^2) 
-  if (error > 0) {
-    f <- f + rnorm(length(x), sd = error)
+Another example is shown in @fig-poly-to-splines(a). A single predictor has a clear nonlinear relationship with the outcome; the trend has concave and convex patterns. If a polynomial is used, we should consider at least a cubic function. Panel (b) shows a quartic (fourth order) fit to the entire data set. It isn't awful but can obviously be improved. The issue here is that a global polynomial pattern is often insufficient because of nonlinear relationships' ups and downs in different data sections. There may be steep increases in one area and gradual increases in others. Rather than using a global polynomial, what if we used different basis expansions in regions with more manageable or simplistic trends rather than a global polynomial? 
+
+::: {#fig-basis-expansions}
+
+::: {.figure-content}
+
+```{shinylive-r}
+#| label: fig-basis-expansions
+#| viewerHeight: 600
+#| standalone: true
+
+library(shiny)
+library(dplyr)
+library(tidyr)
+library(ggplot2)
+library(splines2)
+library(bslib)
+library(viridis)
+
+ui <- fluidPage(
+  theme = bs_theme(bg = "#fcfefe", fg = "#595959"),
+  mainPanel(
+    tabsetPanel(
+      id = "tabset",
+      tabPanel(
+        "(a) Global polynomials.",
+        fluidRow(
+          column(width = 3),
+          column(
+            width = 6,
+            align = "center",
+            sliderInput(
+              "global_deg",
+              label = "Polynomial Degree",
+              min = 0L,
+              max = 20L,
+              step = 1L,
+              value = 3L
+            )
+          )
+        ),
+        plotOutput('global')
+      ), 
+      tabPanel(
+        "(b) Piecewise polynimials.", 
+        label = "Polynomial Degree",
+        fluidRow(
+          column(
+            width = 6,
+            align = "center",
+            sliderInput(
+              "piecewise_deg",
+              label = "Polynomial Degree",
+              min = 0L,
+              max = 6L,
+              step = 1L,
+              value = 3L
+            )
+          ),
+          column(
+            width = 6,
+            align = "center",
+            sliderInput(
+              "cuts",
+              label = "Cutpoints",
+              min = -0.8,
+              max = 0.8,
+              step = 0.1,
+              value = c(-0.3, 0.3)
+            )
+          )
+        ),
+        plotOutput('pieces')
+      ),
+      tabPanel(
+        "(c) Natural splines.",
+        fluidRow(
+          column(width = 3),
+          column(
+            width = 6,
+            align = "center",
+            sliderInput(
+              "spline_df",
+              label = "# Spline Terms",
+              min = 3L,
+              max = 20L,
+              step = 1L,
+              value = 5L
+            )
+          )
+        ),
+        plotOutput('spline') 
+      )
+    )
+  )
+)
+
+server <- function(input, output, session) {
+  
+  light_bg <- "#fcfefe" # from aml4td.scss
+  grid_theme <- bs_theme(
+    bg = "#fcfefe", fg = "#595959"
+  )
+  
+  # ------------------------------------------------------------------------------
+  
+  theme_light_bl<- function(...) {
+    
+    ret <- ggplot2::theme_bw(...)
+    
+    col_rect <- ggplot2::element_rect(fill = light_bg, colour = light_bg)
+    ret$panel.background  <- col_rect
+    ret$plot.background   <- col_rect
+    ret$legend.background <- col_rect
+    ret$legend.key        <- col_rect
+    
+    ret$legend.position <- "top"
+    
+    ret
   }
-  f
+  
+  # ------------------------------------------------------------------------------
+  
+  nonlin_sim <- function(x, error = 0.05) {
+    f <- (x^3) +  2 * exp(-6 * (x - 0.3)^2) 
+    if (error > 0) {
+      f <- f + rnorm(length(x), sd = error)
+    }
+    f
+  }
+  sigma <- 0.2
+  grid <- seq(-1, 1, length.out = 1000)
+  truth <- tibble(x = grid, y = nonlin_sim(grid, error = 0))
+  set.seed(1)
+  x <- sort(runif(100, -1, 1))
+  
+  y <- nonlin_sim(x, error = sigma)
+  
+  spline_example <- tibble(x = x, y = y)
+  alphas <- 1 / 4
+  line_wd <- 1.0
+  
+  base_p <- 
+    spline_example %>% 
+    ggplot(aes(x = x, y = y)) +
+    geom_point(alpha = 3 / 4, pch = 1, cex = 3) + 
+    geom_line(data = truth, col = "black", lty = 2, linewidth = 1) +
+    labs(x = "predictor", y = "response") +
+    theme_light_bl()
+  
+  output$global <- renderPlot({
+    
+    global_p <- base_p 
+    
+    if (input$global_deg > 0) {
+      global_p <- 
+        global_p+ 
+        geom_smooth(
+          se = TRUE,
+          formula = y ~ poly(x, input$global_deg),
+          method = lm,    
+          col = "#377EB8",
+          linewidth = line_wd, 
+          alpha = 1 / 7)
+      
+    }
+    print(global_p)
+    
+  })
+  
+  output$pieces <- renderPlot({
+    maybe_lm <- function(x) {
+      try(lm(y ~ poly(x, input$piecewise_deg), data = x), silent = TRUE) 
+    }
+    cuts <- c(-1, sort(input$cuts), 1)
+    piece_cols <- c("#1B9E77", "#D95F02", "#7570B3")
+    piece_p <- base_p
+    
+    if (input$piecewise_deg > 0) {
+      data_splt <- 
+        spline_example %>% 
+        dplyr::mutate(x_cut = cut(x, breaks = cuts, include.lowest = TRUE)) %>% 
+        tidyr::nest(.by = x_cut) %>% 
+        mutate(
+          fit = lapply(data, maybe_lm)
+        )
+      grid_splt <- 
+        dplyr::tibble(x = grid) %>% 
+        dplyr::mutate(x_cut = cut(x, breaks = cuts, include.lowest = TRUE))  %>% 
+        tidyr::nest(.by = x_cut)
+      
+      for (i in 1:3) {
+        sub_pred <- grid_splt$data[[i]]
+        if (!inherits(data_splt$fit[[i]], "try-error")) {
+          sub_pred <- 
+            sub_pred %>% 
+            dplyr::bind_cols(predict(data_splt$fit[[i]], sub_pred, interval = "conf"))
+          
+          piece_p <- 
+            piece_p + 
+            geom_ribbon(
+              data = sub_pred,
+              aes(y = NULL, ymin = lwr, ymax = upr),
+              alpha = 1 / 15
+            ) + 
+            geom_line(
+              data = sub_pred,
+              aes(y = fit),
+              col = piece_cols[i],
+              linewidth = line_wd
+            )
+        }
+      }
+    }
+    
+    print(piece_p)
+    
+  })
+  
+  output$spline <- renderPlot({
+    
+    spline_p <- base_p + 
+      geom_smooth(
+        se = TRUE,
+        formula = y ~ naturalSpline(x, df = input$spline_df),
+        method = lm,    
+        col = "#E6AB02",
+        linewidth = line_wd, 
+        alpha = 1 / 7)
+    
+    print(spline_p)
+    
+  })
+  
 }
 
-grid <- seq(-1, 1, length.out = 1000)
-truth <- tibble(x = grid, y = nonlin_sim(grid, error = 0))
-set.seed(1)
-x <- sort(runif(100, -1, 1))
-
-y <- nonlin_sim(x)
-
-spline_example <- tibble(x = x, y = y)
-
-fit_region <- function(region, truth = NULL) {
-  region_data <- spline_example %>% filter({{region}})
-  region_fit <- lm(y ~  x + I(x^2) + I(x^3), data = region_data)
-  dat <- data.frame(x = grid) %>% filter({{region}})
-  dat$y <- predict(region_fit, dat)
-  if (!is.null(truth)) {
-    truth <- truth %>% filter({{region}})
-    truth$pred <- predict(region_fit, truth[, "x", drop = FALSE])
-  }
-  list(grid = dat, fit = region_fit, truth = truth)
-}
-
-global_cubic <- lm(y ~ poly(x, 3), data = spline_example)
-global_cubic_pred <- predict(global_cubic, truth[, "x"])
-global_cubic_rmse <- rmse_vec(truth$y, global_cubic_pred)
-
-regional_1 <- fit_region(x <= 0, truth)
-regional_2 <- fit_region(x > 0 & x <= 0.8, truth)
-regional_3 <- fit_region(x > 0.8, truth)
-regional_pred <- bind_rows(regional_1$truth, regional_2$truth, regional_3$truth)
-regional_rmse <- rmse_vec(regional_pred$y, regional_pred$pred)
-
-spline_fit <- lm(y ~ naturalSpline(x, df = 10), data = spline_example)
-spline_pred <- predict(spline_fit, truth[, "x"])
-spline_rmse <- rmse_vec(truth$y, spline_pred)
+app <- shinyApp(ui = ui, server = server)
 ```
 
-Another example is shown in @fig-poly-to-splines(a). A single predictor has a clear nonlinear relationship with the outcome; the trend has concave and convex patterns. If a polynomial is used, we should consider at least a cubic function. Panel (b) shows a quartic (fourth order) fit to the entire data set. It isn't awful but can obviously be improved. The issue here is that a global polynomial pattern is often insufficient because of nonlinear relationships' ups and downs in different data sections. There may be steep increases in one area and gradual increases in others. Rather than using a global polynomial, what if we used different basis expansions in regions with more manageable or simplistic trends rather than a global polynomial? 
+:::
+
+Several approaches to modeling the nonlinear relationship $y = x^3 +2exp[-6(x - 0.3)^2] $. The black dashed line is the true function and the shaded regions are 95% confidence intervals around the mean. 
+
+:::
+
 
 Looking at the data, the pattern is reasonably linear when the predictor is less than zero. Consider a basis function that is only applied to this portion of the data. For values above zero and below 0.8, the pattern goes up, peaks then decreases. A separate polynomial could be used in this region, and values above 0.8 could also have a distinct trend. In this context, the values used to divide up regions of the predictor space are called _knots_. 
 
 Panel (c) shows this fit. Each region has a better fit, although the right-most area may be over-fitting the data. The main issue is that the trend lines for each area don't meet; there are discontinuities in the trend. 
-```{r}
-#| label: fig-poly-to-splines
-#| fig-cap: "Data with a nonlinear trend (a) and fits using a global polynomial (b), piecewise polynomials (c), and a natural spline function (d)."
-#| out-width: 90%
-
-alphas <- 1 / 2
-
-spline_1 <- 
-  spline_example %>% 
-  ggplot(aes(x = x, y = y)) +
-  geom_point(alpha = 1 / 4) + 
-  labs(x = "predictor", y = "response") +
-  ggtitle("(a) simulated data")
-
-spline_2 <- 
-  spline_example %>% 
-  ggplot(aes(x = x, y = y)) +
-  geom_point(alpha = 1 / 4) + 
-  stat_smooth(
-    geom = 'line', 
-    se = FALSE,
-    formula = y ~ poly(x, 4),
-    method = lm,    
-    col = "#377EB8",
-    linewidth = 2.8, 
-    alpha = alphas) +
-  labs(x = "predictor", y = "response") +
-  ggtitle("(b) global quartic fit")
-
-spline_3 <-
-  spline_example %>% 
-  ggplot(aes(x = x, y = y)) +
-  geom_point(alpha = 1 / 4) + 
-  geom_path(data = regional_1$grid, col = "#1B9E77", linewidth = 2.8, alpha = alphas) + 
-  geom_path(data = regional_2$grid, col = "#D95F02", linewidth = 2.8, alpha = alphas) + 
-  geom_path(data = regional_3$grid, col = "#7570B3", linewidth = 2.8, alpha = alphas) +
-  labs(x = "predictor", y = "response") +
-  ggtitle("(c) separate local cubic fits")
-
-spline_4 <-
-  spline_example %>% 
-  ggplot(aes(x = x, y = y)) +
-  geom_point(alpha = 1 / 4) + 
-  stat_smooth(
-    geom = 'line', 
-    se = FALSE,
-    formula = y ~ naturalSpline(x, df = 10),
-    method = lm,    
-    col = "#E6AB02",
-    linewidth = 2.8, 
-    alpha = alphas) +
-  labs(x = "predictor", y = "response") +
-  ggtitle("(d) natural spline")
-
-(spline_1 + spline_2) / (spline_3 + spline_4)
-```
 
 Is there a way to make the edges meet, and even better, can they meet smoothly? Spline functions (or just "splines") are specialized basis functions that use polynomial trends in specific regions defined by a set of knots. They are designed so that the transitions between regions are continuous and smooth^[This is accomplished by constrains on the basis functions that allow the functions, and some of their derivatives, to be continuous at the knots. See @ruppert2003semiparametric and @arnold2019computational.]. There are many types of splines but one, the "natural spline," is shown in Panel (d) of @fig-poly-to-splines. The function demonstrates an excellent fit to the data with smooth transitions between regions. 
 
@@ -720,7 +862,7 @@ natural_20_res <-
 ames_latitude <-
   ames_train %>%
   ggplot(aes(Latitude, Sale_Price)) +
-  geom_point(alpha = 1 / 5, cex = 1 / 2) +
+  geom_point(pch = 1, alpha = 1 / 3) +
   ylab("Sale Price (log10)")
 
 
@@ -784,16 +926,162 @@ feature_plot
 
 Let’s use a set of 20 natural spline features to model these data using ordinary linear regression. @fig-ames-latitude-fit shows the resulting fit on the training set. The red line shows the fitted curve resulting from the 21 parameter estimates. The different curves on the top of the plot area indicate how much each feature represents each portion of the predictor space.  This illustration demonstrates that as the number of features increases, the model fit becomes more flexible.
 
-```{r}
-#| label: fig-ames-latitude-fit
-#| echo: false
-#| out-width: 60%
-#| fig-width: 6
-#| fig-height: 5
-#| fig-cap: "The price of houses in Ames versus latitude with a 20 degree of freedom natural spline. The curves above the plot illustrate how much each of the 20 features represents a different portion of the predictor space."
+::: {#fig-ames-latitude-fit}
 
-spline_20df / ames_latitude_fit + plot_layout(heights = c(1, 4))
+::: {.figure-content}
+
+```{shinylive-r}
+#| label: fig-ames-latitude-fit
+#| viewerHeight: 550
+#| standalone: true
+
+library(shiny)
+library(ggplot2)
+library(bslib)
+library(viridis)
+library(patchwork)
+library(splines2)
+library(rsample)
+library(modeldata)
+
+# from recipes::names0
+names0 <- function (num, prefix = "x")  {
+  ind <- format(seq_len(num))
+  ind <- gsub(" ", "0", ind)
+  paste0(prefix, ind)
+}
+
+# ------------------------------------------------------------------------------
+
+light_bg <- "#fcfefe" # from aml4td.scss
+grid_theme <- bs_theme(
+  bg = light_bg, fg = "#595959"
+)
+
+# ------------------------------------------------------------------------------
+
+theme_light_bl<- function(...) {
+
+  ret <- ggplot2::theme_bw(...)
+
+  col_rect <- ggplot2::element_rect(fill = light_bg, colour = light_bg)
+  ret$panel.background  <- col_rect
+  ret$plot.background   <- col_rect
+  ret$legend.background <- col_rect
+  ret$legend.key        <- col_rect
+
+  ret$legend.position <- "top"
+
+  ret
+}
+
+# ------------------------------------------------------------------------------
+
+ui <- fluidPage(
+  theme = grid_theme,
+  fluidRow(
+    column(width = 2),
+    column(
+      width = 4,
+      align = "center",
+      sliderInput(
+        inputId = "num_terms",
+        label = "Degrees of Freedom",
+        min = 2L,
+        max = 50L,
+        value = 20L,
+        width = "100%",
+        step = 1L
+      )
+    )
+  ),
+  fluidRow(
+    column(
+      width = 8,
+      align = "center",
+      plotOutput('latitude')
+    )
+  )
+)
+
+server <- function(input, output) {
+
+  data(ames, package = "modeldata")
+
+  ames$Sale_Price <- log10(ames$Sale_Price)
+
+  set.seed(3024)
+  ames_split <- initial_split(ames, strata = Sale_Price, breaks = 5)
+  ames_train <- training(ames_split)
+  ames_test  <- testing(ames_split)
+
+  latitude_p <-
+    ggplot(ames_train, aes(Latitude, Sale_Price)) +
+    geom_point(pch = 1, alpha = 1 / 3) +
+    ylab("Sale Price (log10)")
+
+  col_rect <- ggplot2::element_rect(fill = light_bg, colour = light_bg)
+
+  output$latitude <-
+    renderPlot({
+
+      natural_res <- naturalSpline(ames_train$Latitude, df = input$num_terms)
+      natural_knots <- attributes(natural_res)$knots
+      natural_res <- t(apply(natural_res, 1, I))
+      colnames(natural_res) <- names0(ncol(natural_res), "natural spline ")
+      natural_res <- as.data.frame(natural_res)
+      natural_res <- stack(natural_res)
+      colnames(natural_res) <- c("value", "feature")
+      natural_res$Latitude <- rep(ames_train$Latitude, input$num_terms)
+      natural_res <- natural_res[natural_res$value > 0,]
+
+      latitude_fit_p <-
+        latitude_p +
+        geom_smooth(
+          se = FALSE,
+          formula = y ~ splines2::naturalSpline(x, df = input$num_terms),
+          method = lm,
+          col = "red"
+        ) +
+        theme_bw() +
+        theme(
+          plot.margin = margin(t = -20, r = 0, b = 0, l = 0),
+          panel.background = col_rect,
+          plot.background = col_rect,
+          legend.background = col_rect,
+          legend.key = col_rect
+        )
+
+      spline_p <-
+        ggplot(natural_res, aes(Latitude, value, group = feature, col = feature)) +
+        geom_line(show.legend = FALSE, linewidth = 1, alpha = 1 / 2) +
+        theme_void() +
+        theme(
+          plot.margin = margin(t = 0, r = 0, b = -20, l = 0),
+          panel.background = col_rect,
+          plot.background = col_rect,
+          legend.background = col_rect,
+          legend.key = col_rect
+        ) +
+        scale_color_viridis(discrete = TRUE, option = "turbo")
+
+      p <- (spline_p / latitude_fit_p) + plot_layout(heights = c(1, 4))
+
+      print(p)
+
+    })
+}
+
+app <- shinyApp(ui = ui, server = server)
 ```
+
+
+:::
+
+The price of houses in Ames versus latitude with a 20 degree of freedom natural spline. The curves above the plot illustrate how much each of the 20 features represents a different portion of the predictor space.
+
+:::
+
 
 Splines are extremely useful and are especially handy when we want to encourage a simple model (such as linear regression) to approximate the predictive performance of a much more complex black-box model (e.g., a neural network or tree ensemble). We’ll also see splines and spline-like features used within different modeling techniques, such as generalized additive models (Sections [-@sec-reg-gam] and [-@sec-cls-gam]), multivariate adaptive regression splines (@sec-mars), and a few others.  
 
@@ -997,7 +1285,7 @@ In each case, the number of new features requires tuning. Using the basic grid s
 
 ames_train %>% 
   ggplot() + 
-  geom_point(aes(Latitude, Sale_Price), alpha = 1 / 8, cex = 1 / 2) +
+  geom_point(aes(Latitude, Sale_Price), pch = 1, alpha = 1 / 5) +
   geom_rug(data = super_breaks, aes(x = value, col = method)) +
   geom_rug(data = unsuper_breaks, aes(x = value, col = method), sides = "t") +
   geom_step(data = super_pred,
