@@ -1,4 +1,4 @@
-load("../RData/deliveries.RData")
+data(deliveries, package = "modeldata")
 
 set.seed(991)
 delivery_split <- initial_validation_split(deliveries, prop = c(0.6, 0.2), strata = time_to_delivery)
