@@ -45,7 +45,7 @@ After describing linear methods, consider a different class of transformations f
 
 Before beginning, we’ll introduce another data set that will be used here and in forthcoming chapters.
 
-## Example: Predicting Barley Amounts
+## Example: Predicting Barley Amounts  {#sec-barley}
 
 @larsen2019deep and @pierna2020applicability describe a data set where laboratory measurements are used to predict what percentage of a liquid was lucerne, soy oil, or barley oil^[Retreived from [`https://chemom2019.sciencesconf.org/resource/page/id/13.html`](https://chemom2019.sciencesconf.org/resource/page/id/13.html)]. An instrument is used to measure how much of particular wavelengths of light are absorbed by the mixture to help determine chemical composition. We will focus on using the lab measurements to predict the percentage of barley oil in the mixture. The distribution of these values is shown in @fig-barley-data(a). 
 
@@ -119,11 +119,11 @@ In the following computations, each predictor was standardized using the orderNo
 The data originated from a modeling competition to find the most accurate model and specific samples were allocated to training and test sets. However, there were no public outcome values for the test set; our analysis will treat the `r format(nrow(chimiometrie_2019), big.mark = ",")` samples in their training set as the overall pool of samples. This is enough data to split into separate training ($n_{tr} =$ `r format(nrow(barley_train), big.mark = ",")`), validation ($n_{val} =$ `r format(nrow(barley_val), big.mark = ",")`), and test sets ($n_{te} =$ `r format(nrow(barley_test), big.mark = ",")`). Stratified sampling, using the outcome data, was used to allocate the samples to each of these three data sets. 
 
 
-## Linear Transformations
+## Linear Transformations  {#sec-linear-embed}
 
 pca, pls, ica, etc. Small section on the math of svd. Kernel methods as well as regularized/sparse techniques
 
-## Multidimensional Scaling
+## Multidimensional Scaling {#sec-mds}
 
 Multidimensional scaling [@torgerson1952multidimensional] is a feature extraction tool that creates embeddings that try to preserve the geometric distances between training set points. In other words, the distances between points in the smaller dimensions should be comparable to those in the original dimensions. Since the methods in this section use distances, the predictors should be standardized to equivalent units before the embedding is trained. We also recommend transformations to resolve skewness. 
 
@@ -316,6 +316,8 @@ The denominator uses the squared difference between the pairwise distances in th
 
 This can be an effective dimension reduction procedure, although there are a few issues. First, the entire matrix of distances is required (with $n_{tr}(n_{tr}-1)/2$ entries). For large training sets, this can be unwieldy and time-consuming.  Second, like PCA, it is a global method. We might be able to achieve more nuanced embeddings by focusing on local structures. Finally, metric MDS is not easily made to be projective; how can we apply the same process to new data? 
 
+### Isomap  {#sec-isomap}
+
 To start, we'll focus on _Isomap_ [@tenenbaum2000global]. This nonlinear MDS method uses a specialized distance function to find the embedded features. First, the _K_ nearest neighbors are determined for each training set point using standard functions, such as Euclidean distance. @fig-mds-example(b) shows the _K_ = 2 nearest neighbors for our example data. Many nearest-neighbor algorithms can be very computationally efficient and their use eliminates the need to compute all of the pairwise distances. 
 
 The connections between neighbors form a _graph structure_ that defines which data points are closely related to one another. From this, a new metric called _geodesic distance_ can be approximated. For a graph, we can compute the approximate geodesic distance using the shortest path between two points on the graph. With our example data, the Euclidean distance between points four and five is not large. However, its approximate geodesic distance is greater because the shortest path is through points nine, eight, and seven. @Ghojogh2023 use a wonderful analogy: 
@@ -367,6 +369,8 @@ isomap_grid %>%
   labs(x = "Isomap Embedding #1", y = "Isomap Embedding #2") +
   guides(col = guide_colourbar(barheight = 0.5))
 ```
+
+### Laplacian Eigenmaps  {#sec-eigenmaps}
 
 There are many other approaches to preserve local distances. One is _Laplacian eigenmaps_ [@belkin2001laplacian]. Like Isomap, it uses nearest neighbors to define a graph of connected training set points. For each connected point, a weight between graph nodes is computed that becomes smaller as the distance between points in the input space increases. The radial basis kernel (also referred to as the "heat kernel") is a good choice for the weighting function^[A note about some notation... We commonly think of the _norm_ notation as $\|\boldsymbol{x}\|_p = \left(|x_1|^p + |x_2|^p + \ldots + |x_n|^p\right)^{1/p}$. So what does the lack of a subscript in $||\boldsymbol{x}||^2$ mean? The convention is the sum of squares:  $||\boldsymbol{x}||^2 = x_1^2 + x_2^2 + \ldots + x_n^2$.]: 
 
@@ -441,28 +445,30 @@ cat("\\end{bmatrix}\n$$\n")
 
 The eigenvalues and eigenvectors of this matrix are used as the main ingredients for the embeddings. @Bengio2003advances shows that, since these methods eventually use eigenvalues in the embeddings, they can be easily used to project new data. 
 
+### UMAP {#sec-umap}
+
 The Uniform Manifold Approximation and Projection (UMAP) [@sainburg2020parametric] technique is one of the most popular distance-based methods. Its precursors, stochastic neighbor embedding (SNE) [@hinton2002stochastic] and  Student’s t-distributed stochastic neighbor embedding (t-SNE) [@van2008visualizing], redefined feature extraction, particularly for visualizations. UMAP borrows significantly from Laplacian eigenmaps and t-SNE but has a more theoretically sound motivation. 
  
-As with Laplacian eigenmaps, UMAP converts the training data points to a sparse graph structure. Given a set of nearest neighbors, it computes values similar to the previously shown weights, which we will think of as the probability that point $j$ is a neighbor of point $i$:  
+As with Laplacian eigenmaps, UMAP converts the training data points to a sparse graph structure. Given a set of nearest neighbors, it computes values similar to the previously shown weights ($W$ matrix), which we will think of as the probability that point $j$ is a neighbor of point $i$:  
 
 $$
-p_{j|i} = \exp\frac{-\left(||\boldsymbol{x}_i - \boldsymbol{x}_j||^2 - \rho_i\right)}{\sigma_i}
+p_{j|i} = \exp\left(\frac{-\left(||\boldsymbol{x}_i - \boldsymbol{x}_j||^2 - \rho_i\right)}{\sigma_i}\right)
 $$
 
 where $\rho_i$ is the distance from $\boldsymbol{x}_i$ to its closest neighbor, and $\sigma_i$ is a scale parameter that now varies with each sample ($i$). To compute $\sigma_i$, we can solve the equation   
  
 $$
-\sum_{i=1}^K  \exp\frac{-\left(||\boldsymbol{x}_i - \boldsymbol{x}_j||^2 - \rho_i\right)}{\sigma_i} = \log_2(K)
+\sum_{i=1}^K  \exp\left(\frac{-\left(||\boldsymbol{x}_i - \boldsymbol{x}_j||^2 - \rho_i\right)}{\sigma_i}\right) = \log_2(K)
 $$
 
 Unlike the previous weighting system, the resulting $n \times n$ matrix may not be symmetric, so the final weights are computed using $p_{ij} = p_{j|i} + p_{i|j} - p_{j|i}p_{i|j}$. 
 
-UMAP performs a similar calculation for the embedded values $x^*$. We'll denote the probability that embedded points $\boldsymbol{x}_i^*$ and $\boldsymbol{x}_j^*$ are connected as $q_{ij}$. 
+UMAP performs a similar calculation for the embedded values $x^*$. We'll denote the probability that embedded points $\boldsymbol{x}_i^*$ and $\boldsymbol{x}_j^*$ are connected as $p_{ij}^*$. 
 
 Numerical optimization methods^[Specifically gradient descent with a user-defined learning rate.] used to estimate the $n \times m$ values $x^*_{ij}$. The process is initialized using a very sparse Laplacian eigenmap, the first few PCA components, or random uniform numbers. The objective function is based on cross-entropy and attempts to make the graphs in the input and embedded dimensions as similar as possible by minimizing:   
 
 $$
-CE = \sum_{i=1}^{n_{tr}}\sum_{j=i+1}^{n_{tr}} \left[p_{ij}\, \log\frac{p_{ij}}{q_{ij}} + (1 - p_{ij})\log\frac{1-p_{ij}}{1-q_{ij}}\right]
+CE = \sum_{i=1}^{n_{tr}}\sum_{j=i+1}^{n_{tr}} \left[p_{ij}\, \log\frac{p_{ij}}{p_{ij}^*} + (1 - p_{ij})\log\frac{1-p_{ij}}{1-p_{ij}^*}\right]
 $$
 
 Unlike the other embedding methods shown in this section, UMAP can also create supervised embeddings so that the resulting features are more predictive of a qualitative or quantitative outcome value. See @sainburg2020parametric.
@@ -624,9 +630,11 @@ There are a few notable patterns in these results:
 t-SNE and UMAP have become very popular tools for visualizing complex data. Visually, they often show interesting patterns that linear methods such as PCA cannot. However, they are computationally slow and unstable over different tuning parameter values. Also, it is easy to believe that the UMAP distances between embedding points are important or quantitatively predictive. That is not the case; the distances can be easily manipulated using the tuning parameters (especially the minimum distance). 
  
 
-## Centroid-Based Methods
+## Centroid-Based Methods  {#sec-centroids}
 
 prototype-based methods
+
+## Embedding Qualitative Predictors  {#sec-qual-embedding}
 
 ## Other Methods
 
