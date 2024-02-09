@@ -24,6 +24,7 @@ library(baguette)
 library(patchwork)
 library(probably)
 library(doParallel)
+library(MASS)
 
 # ------------------------------------------------------------------------------
 # set options
@@ -34,6 +35,8 @@ cl <- makePSOCKcluster(parallel::detectCores(logical = TRUE))
 registerDoParallel(cl)
 
 set_options()
+
+data(mcycle)
 ```
 
 ```{r}
@@ -817,19 +820,31 @@ The H-statistic can be an incredibly valuable tool for learning about the data e
 
 ## Basis Expansions and Splines {#sec-splines}
 
-show an example of a nonlinear relationship
+In the food delivery data, we have thoroughly demonstrated that there are quantitative predictors that have nonlinear relationships with the outcome. In @sec-model-development-whole-game, two of the three models for these data could naturally estimate nonlinear trends. Linear regression, however, could not. To fix this, the hour predictor spawned multiple features called spline terms and adding these to the model enables it to fit nonlinear patterns. This approach is called a _basis expansion_. In this section, we’ll consider a few techniques for this purpose. 
 
-Adding extra features derived from a single column to increase its flexibility as a predictor is called a basis expansion. Previously, the polynomial basis function was used. Unsurprisingly, there are a lot of basis functions to choose from.
+The most traditional approach is a polynomial expansion. If we start with a simple linear regression model with a single predictor: 
 
-Another example is shown in @fig-poly-to-splines(a). A single predictor has a clear nonlinear relationship with the outcome; the trend has concave and convex patterns. If a polynomial is used, we should consider at least a cubic function. Panel (b) shows a quartic (fourth order) fit to the entire data set. It isn't awful but can obviously be improved. The issue here is that a global polynomial pattern is often insufficient because of nonlinear relationships' ups and downs in different data sections. There may be steep increases in one area and gradual increases in others. Rather than using a global polynomial, what if we used different basis expansions in regions with more manageable or simplistic trends rather than a global polynomial? 
+$$ y_i = \beta_0 + \beta_1 x_{i} + \epsilon_i$$
+
+the expansion would contain addition terms $x_{ip}$ with values of time to the $p^{th}$ power^[In actuality, a more computationally preferred method is to use _orthogonal polynomials_ which rescale the variables before we exponentiate them. We’ll denote these modified versions of time in equation @eq-poly-linear-reg as just $t$ to reduce mathematical clutter.]. For a cubic polynomial model, the result is
+
+$$ y_i = \beta_0 + \beta_1 x_{i} + \beta_2 x_{i}^2 + \beta_3 x_{i}^3 + \epsilon_i$$
+
+This is a _linear model_ in the sense that it is linear in the statistical parameters (the $\beta$ values), so we can use standard parameter estimation procedures (e.g., least squares). 
+
+@fig-basis-expansions(a) shows data from @Silverman collected to measure the efficacy of motorcycle helmets. After a set amount of time since impact, device readings were taken to measure the acceleration of the head. The data set contains `r nrow(mcycle)` data points for these two variables. The relationship is highly nonlinear, with an initial period with no acceleration followed by periods of decreasing results and then significantly increasing acceleration. The final phase of the data is a relatively constant period of no acceleration (but with a fairly high scatter). 
+
+The default 13-degree polynomial is used in the visualization. It fits well in the middle of the data where the pattern is most dynamic. At the edges of the distribution, where the pattern is flat, it is too wiggly. Decreasing the polynomial degree will result in less complex patterns that tend to underfit the data. Increasing the degree will result in the fitted line being closer to the data, but, as evidenced by the confidence interval in the shaded region, the uncertainty in the model explodes (especially on the far right side). This is due to severe overfitting. Eventually, you can increase the degree until the curve passes through every data point. However, the fit for any other values will be wildly inaccurate and unstable.
 
 ::: {#fig-basis-expansions}
 
 ::: {.figure-content}
 
+::: centered-content
 ```{shinylive-r}
 #| label: fig-basis-expansions
 #| viewerHeight: 600
+#| viewerWidth: "100%"
 #| standalone: true
 
 library(shiny)
@@ -839,6 +854,9 @@ library(ggplot2)
 library(splines2)
 library(bslib)
 library(viridis)
+library(MASS)
+
+data(mcycle)
 
 ui <- fluidPage(
   theme = bs_theme(bg = "#fcfefe", fg = "#595959"),
@@ -858,14 +876,14 @@ ui <- fluidPage(
               min = 0L,
               max = 20L,
               step = 1L,
-              value = 3L
+              value = 13L
             )
           )
         ),
         plotOutput('global')
-      ), 
+      ),
       tabPanel(
-        "(b) Piecewise polynimials.", 
+        "(b) Piecewise polynimials.",
         label = "Polynomial Degree",
         fluidRow(
           column(
@@ -886,10 +904,10 @@ ui <- fluidPage(
             sliderInput(
               "cuts",
               label = "Cutpoints",
-              min = -0.8,
-              max = 0.8,
-              step = 0.1,
-              value = c(-0.3, 0.3)
+              min = 5L,
+              max = 52L,
+              step = 3,
+              value = c(20, 38)
             )
           )
         ),
@@ -908,124 +926,110 @@ ui <- fluidPage(
               min = 3L,
               max = 20L,
               step = 1L,
-              value = 5L
+              value = 9L
             )
           )
         ),
-        plotOutput('spline') 
+        plotOutput('spline')
       )
     )
   )
 )
 
 server <- function(input, output, session) {
-  
+
   light_bg <- "#fcfefe" # from aml4td.scss
   grid_theme <- bs_theme(
     bg = "#fcfefe", fg = "#595959"
   )
-  
+
   # ------------------------------------------------------------------------------
-  
+
   theme_light_bl<- function(...) {
-    
+
     ret <- ggplot2::theme_bw(...)
-    
+
     col_rect <- ggplot2::element_rect(fill = light_bg, colour = light_bg)
     ret$panel.background  <- col_rect
     ret$plot.background   <- col_rect
     ret$legend.background <- col_rect
     ret$legend.key        <- col_rect
-    
+
     ret$legend.position <- "top"
-    
+
     ret
   }
-  
+
   # ------------------------------------------------------------------------------
-  
-  nonlin_sim <- function(x, error = 0.05) {
-    f <- (x^3) +  2 * exp(-6 * (x - 0.3)^2) 
-    if (error > 0) {
-      f <- f + rnorm(length(x), sd = error)
-    }
-    f
-  }
-  sigma <- 0.2
-  grid <- seq(-1, 1, length.out = 1000)
-  truth <- tibble(x = grid, y = nonlin_sim(grid, error = 0))
-  set.seed(1)
-  x <- sort(runif(100, -1, 1))
-  
-  y <- nonlin_sim(x, error = sigma)
-  
-  spline_example <- tibble(x = x, y = y)
+
+  spline_example <- tibble(x = mcycle$times, y = mcycle$accel)
+  grid <- seq(min(mcycle$times), max(mcycle$times), length.out = 1000)
   alphas <- 1 / 4
   line_wd <- 1.0
-  
-  base_p <- 
-    spline_example %>% 
+
+  base_p <-
+    spline_example %>%
     ggplot(aes(x = x, y = y)) +
-    geom_point(alpha = 3 / 4, pch = 1, cex = 3) + 
-    geom_line(data = truth, col = "black", lty = 2, linewidth = 1) +
+    geom_point(alpha = 3 / 4, pch = 1, cex = 3) +
+    # geom_line(data = truth, col = "black", lty = 2, linewidth = 1) +
     labs(x = "predictor", y = "response") +
     theme_light_bl()
-  
+
   output$global <- renderPlot({
-    
-    global_p <- base_p 
-    
+
+    global_p <- base_p
+
     if (input$global_deg > 0) {
-      global_p <- 
-        global_p+ 
+      global_p <-
+        global_p+
         geom_smooth(
           se = TRUE,
           formula = y ~ poly(x, input$global_deg),
-          method = lm,    
+          method = lm,
           col = "#377EB8",
-          linewidth = line_wd, 
+          linewidth = line_wd,
           alpha = 1 / 7)
-      
+
     }
     print(global_p)
-    
+
   })
-  
+
   output$pieces <- renderPlot({
     maybe_lm <- function(x) {
-      try(lm(y ~ poly(x, input$piecewise_deg), data = x), silent = TRUE) 
+      try(lm(y ~ poly(x, input$piecewise_deg), data = x), silent = TRUE)
     }
-    cuts <- c(-1, sort(input$cuts), 1)
+    cuts <- c(0, sort(input$cuts), 60)
     piece_cols <- c("#1B9E77", "#D95F02", "#7570B3")
     piece_p <- base_p
-    
+
     if (input$piecewise_deg > 0) {
-      data_splt <- 
-        spline_example %>% 
-        dplyr::mutate(x_cut = cut(x, breaks = cuts, include.lowest = TRUE)) %>% 
-        tidyr::nest(.by = x_cut) %>% 
+      data_splt <-
+        spline_example %>%
+        dplyr::mutate(x_cut = cut(x, breaks = cuts, include.lowest = TRUE)) %>%
+        tidyr::nest(.by = x_cut) %>%
         mutate(
           fit = lapply(data, maybe_lm)
         )
-      grid_splt <- 
-        dplyr::tibble(x = grid) %>% 
-        dplyr::mutate(x_cut = cut(x, breaks = cuts, include.lowest = TRUE))  %>% 
+      grid_splt <-
+        dplyr::tibble(x = grid) %>%
+        dplyr::mutate(x_cut = cut(x, breaks = cuts, include.lowest = TRUE))  %>%
         tidyr::nest(.by = x_cut)
-      
+
       for (i in 1:3) {
         sub_pred <- grid_splt$data[[i]]
         if (!inherits(data_splt$fit[[i]], "try-error")) {
-          sub_pred <- 
-            sub_pred %>% 
+          sub_pred <-
+            sub_pred %>%
             dplyr::bind_cols(predict(data_splt$fit[[i]], sub_pred, interval = "conf"))
-          
-          piece_p <- 
-            piece_p + 
+
+          piece_p <-
+            piece_p +
             geom_ribbon(
               data = sub_pred,
               aes(y = NULL, ymin = lwr, ymax = upr),
               alpha = 1 / 15
-            ) + 
+            ) +
             geom_line(
               data = sub_pred,
               aes(y = fit),
@@ -1035,26 +1039,26 @@ server <- function(input, output, session) {
         }
       }
     }
-    
+
     print(piece_p)
-    
+
   })
-  
+
   output$spline <- renderPlot({
-    
-    spline_p <- base_p + 
+
+    spline_p <- base_p +
       geom_smooth(
         se = TRUE,
         formula = y ~ naturalSpline(x, df = input$spline_df),
-        method = lm,    
+        method = lm,
         col = "#E6AB02",
-        linewidth = line_wd, 
+        linewidth = line_wd,
         alpha = 1 / 7)
-    
+
     print(spline_p)
-    
+
   })
-  
+
 }
 
 app <- shinyApp(ui = ui, server = server)
@@ -1062,16 +1066,22 @@ app <- shinyApp(ui = ui, server = server)
 
 :::
 
+:::
+
 Several approaches to modeling the nonlinear relationship $y = x^3 +2exp[-6(x - 0.3)^2] $. The black dashed line is the true function and the shaded regions are 95% confidence intervals around the mean. 
 
 :::
 
+The issue here is that a global polynomial pattern is often insufficient because of the nonlinear relationships is different in different data sections. There may be steep increases in one area, gradual increases in others, and potnetially flat regions. Rather than using a global polynomial, what if we used different basis expansions in regions with more manageable or simplistic trends rather than a global polynomial? 
 
-Looking at the data, the pattern is reasonably linear when the predictor is less than zero. Consider a basis function that is only applied to this portion of the data. For values above zero and below 0.8, the pattern goes up, peaks then decreases. A separate polynomial could be used in this region, and values above 0.8 could also have a distinct trend. In this context, the values used to divide up regions of the predictor space are called _knots_. 
+Panel (b) shows a crude approach where three different regions have different polynomial fits with the same degree. This isn’t terribly effective. Achieving a good fit in the interior region produces poor fits in the two exterior regions where the pattern is nearly constant. Also, as it stands, the curves do not connect to one another, and this discontinuity is visually discordant, but it is most likely inconsistent with the true, underlying pattern that we are attempting to estimate. We can resolve the latter issue with a more complex modeling approach that guarantees that the curves touch (and even touch smoothly).   However, let’s move on to a much better approach for basis expansions.
 
-Panel (c) shows this fit. Each region has a better fit, although the right-most area may be over-fitting the data. The main issue is that the trend lines for each area don't meet; there are discontinuities in the trend. 
+Spline functions (or just "splines") are specialized basis functions that use polynomial trends in specific regions defined by a set of knots. They are designed so that the transitions between regions are continuous and smooth^[This is accomplished by constrains on the basis functions that allow the functions, and some of their derivatives, to be continuous at the knots. See @ruppert2003semiparametric and @arnold2019computational.]. 
 
-Is there a way to make the edges meet, and even better, can they meet smoothly? Spline functions (or just "splines") are specialized basis functions that use polynomial trends in specific regions defined by a set of knots. They are designed so that the transitions between regions are continuous and smooth^[This is accomplished by constrains on the basis functions that allow the functions, and some of their derivatives, to be continuous at the knots. See @ruppert2003semiparametric and @arnold2019computational.]. There are many types of splines but one, the "natural spline," is shown in Panel (d) of @fig-poly-to-splines. The function demonstrates an excellent fit to the data with smooth transitions between regions. 
+There are many types of splines but one, the "natural spline," is shown in Panel (c) of @fig-basis-expansions. 
+
+
+The function demonstrates an excellent fit to the data with smooth transitions between regions. 
 
 Splines can be configured in different ways. Two details to specify are how many regions should be separately modeled and how they are apportioned. The number of regions is related to how many features are used in the basis expansion. As the number of regions increases, so does the ability of the spline to adapt to whatever trend might be in the data. However, the risk of over-fitting the model to individual data points increases as the flexibility increases.
 
