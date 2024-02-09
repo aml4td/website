@@ -17,6 +17,7 @@ library(gt)
 library(pamr)
 library(splines2)
 library(hstats)
+library(DALEXtra)
 library(tidymodels)
 library(embed)
 library(baguette)
@@ -327,10 +328,10 @@ ui <- fluidPage(
         sliderInput(
           "beta_int",
           label = "Interaction slope",
-          min = -4.0,
-          max =  4.0,
-          step = 0.5,
-          value = 1
+          min = -2.0,
+          max =  2.0,
+          step = 0.25,
+          value = 0.5
         )
       )
     ), # row
@@ -403,7 +404,7 @@ app <- shinyApp(ui, server)
 
 :::
 
-Prediction contours for a linear regression model with equation $y = \beta_1 x_1 + \beta_2 x_2 + \beta_{3}x_1x_2$. Darker values indicate smaller predictions. 
+Prediction contours for a linear regression model with @eq-two-way-int with $\beta_0 = 0$. Darker values indicate smaller predictions. 
 
 :::
 
@@ -426,6 +427,7 @@ If modern modeling techniques can naturally find and utilize interactions, then 
 #| label: lm-more-interactions
 #| echo: false
 #| warning: false
+#| cache: true
 
 load("../RData/deliveries_lm.RData")
 
@@ -535,7 +537,7 @@ impr_add_all <- sprintf("%3.2f", (anova_res$Decimal[2] - anova_res$Decimal[3]))
 ```
 
  
-What should we do if we already have candidate interaction sets?  If we use a more formal statistical model, such as linear or logistic regression, the traditional tool for evaluating whether additional model terms in a set of nested models are worth including is the conventional analysis of variance (ANOVA). This uses the statistical likelihood value as the objective function. This is equivalent to comparing the RMSE values between models for linear regression ^[It so happens that the Gaussian likelihood function is equivalent to the sums of squared errors (SSE). That, in turn, is equivalent to the RMSE. That simplification does not automatically occur for other probability distributions.]. The error reduction and how many additional terms are responsible for the improvement are computed. Using these results and some probability assumptions about the data, we can formally test the null hypothesis that the additional parameters all have coefficient values of zero. Looking at the delivery data, our model in TODO included a single set of interactions (e.g., hour-by-day). What if we included two more interactions based on the item predictors: item 1 $\times$ item 10 and item 9 $\times$ item 10? @tbl-interaction-anova shows the ANOVA results ^[We’ll see why we include the second interaction term shortly.]. The RMSE _computed on the training set_ is listed in the first and second rows. The reduction by including these two additional model terms is `r impr_add_two` (decimal minutes). Assuming normality of the model residuals, the p-value for this test is exceedingly small. This indicates that there is no evidence that these two model parameters are truly zero. This statistical difference may not make much of a practical difference. However, machine learning models often behave like "a game of inches" where every small improvement adds up to an overall improvement that matters. 
+What should we do if we already have candidate interaction sets?  If we use a more formal statistical model, such as linear or logistic regression, the traditional tool for evaluating whether additional model terms in a set of nested models are worth including is the conventional analysis of variance (ANOVA). This uses the statistical likelihood value as the objective function. This is equivalent to comparing the RMSE values between models for linear regression ^[It so happens that the Gaussian likelihood function is equivalent to the sums of squared errors (SSE). That, in turn, is equivalent to the RMSE. That simplification does not automatically occur for other probability distributions.]. The error reduction and how many additional terms are responsible for the improvement are computed. Using these results and some probability assumptions about the data, we can formally test the null hypothesis that the additional parameters all have coefficient values of zero. Looking at the delivery data, our model in @sec-model-development-whole-game included a single set of interactions (e.g., hour-by-day). What if we included two more interactions based on the item predictors: item 1 $\times$ item 10 and item 9 $\times$ item 10? @tbl-interaction-anova shows the ANOVA results ^[We’ll see why we include the second interaction term shortly.]. The RMSE _computed on the training set_ is listed in the first and second rows. The reduction by including these two additional model terms is `r impr_add_two` (decimal minutes). Assuming normality of the model residuals, the p-value for this test is exceedingly small. This indicates that there is no evidence that these two model parameters are truly zero. This statistical difference may not make much of a practical difference. However, machine learning models often behave like "a game of inches" where every small improvement adds up to an overall improvement that matters. 
 
 ```{r}
 #| label: tbl-interaction-anova
@@ -629,27 +631,25 @@ To isolate the potential interaction effect:
 
 $$
 f(x_1\times x_2) = f(x_1, x_2) - f(x_1) - f(x_2) = \beta_{3}x_{1}x_{2}
-$$
+$$ {#eq-int-isolate}
 
-Friedman's H-statistic does exactly this. 
+This shows that, for this situation, we can isolate the effect of an interaction by removing any other systematic effects in the data. This approach doesn't work if the model is not _capable_ of detecting one; not all models can. Tree-based ensembles are good at estimating them, as are other complex black-box models such as neural networks and support vector machines. 
 
+@eq-int-isolate shows a simple parametric linear model. For models with more complex prediction equations, we can’t analytically pick out which model parameters should be used to investigate potential interactions. 
 
-One important aspect of this strategy is that you have to start with a model that is capable of effectively modeling the interaction effects, either formally, as with the two-factor linear regression example, or via more black-box methods. The latter would include models such as tree-based models, neural networks, support vector machines, and others. 
+However, for any model, the joint and marginal effects can be quantified using _partial dependence profiles_ (PDP). First, we determine a sequence of values covering the observed range of the predictor(s) of interest. Then we randomly sample a data point, perhaps from the training set, and over-ride the value of the predictor of interest with values from the grid. This produces a prediction profile over the grid. We can repeat this process many times to approximate $f(\cdot)$ by averaging the multiple prediction values for each grid point. 
 
-This raises the question of how to capture the results; at the level of the original predictor or for specific derived features. 
-
-
+@fig-bagging-pdp visualizes the PDP data derived from using the emsembles of regression trees for $f(hour)$, $f(day)$, and $f(hour, day)$. The first panel shows the random realizations of the relationship between delivery time and order hour from 1,000 randomly sampled rows of the training set. The single trend line in panel (b) is the average of these profiles for each value of the predictor (delivery hour). There appears to be, on average, a nonlinear effect of the delivery hour^[We can see a similarity between these results and the initial visualizations in @fig-delivery-predictors.]. The day of the week is an informative predictor and the _joint effect_ profile in panel (d) shows that its effect induces different patterns in the delivery hour. If this were not the case, the patterns in panels (b) and (c) would, when combined, approximate the pattern in panel (d).  
 
 ```{r}
-#| label: bagging-hstats
+#| label: hstat-pdp-calcs
+#| warning: false
 #| echo: false
 #| cache: true
-#| eval: true
-
 bagging_spec <- 
   bag_tree() %>% 
   set_mode("regression") %>% 
-  set_engine("rpart", times = 10)
+  set_engine("rpart", times = 50)
 
 set.seed(967)
 bagging_fit <- 
@@ -658,14 +658,127 @@ bagging_fit <-
   add_formula(time_to_delivery ~ .) %>% 
   fit(data = delivery_train)
 
-# currently giving an error of "String '_:_' found in grid values at unlucky position."
 bagging_hstats <-
   hstats(bagging_fit,
          X = delivery_val %>% select(-time_to_delivery),
-         pairwise_m = 15,
+         pairwise_m = 10,
          approx = TRUE,
          n_max = 1000,
          verbose = FALSE)
+
+bagging_explainer <-
+  explain_tidymodels(
+    bagging_fit,
+    data = delivery_train %>% select(-time_to_delivery),
+    y = delivery_train$time_to_delivery,
+    label = "bagging",
+    verbose = FALSE
+  )
+  
+set.seed(1805)
+pdp_hour <- model_profile(bagging_explainer, N = 1000, variables = "hour")
+set.seed(1805)
+pdp_day <- model_profile(bagging_explainer, N = 1000, variables = "day")
+set.seed(1805)
+pdp_int <- model_profile(bagging_explainer, N = 1000, variables = "hour",
+                         groups = "day")
+
+
+# The PDP data to plot.
+format_mean_prof <- function(x) {
+  dat <-
+    dplyr::as_tibble(x$agr_profiles) %>%
+    dplyr::select(predictor = `_vname_`, value = `_x_`, dplyr::any_of("_groups_"),
+                  prediction = `_yhat_`)
+  # If the 'groups' argument to `model_profile()` is used:
+  if (any(grepl("_groups_", names(dat)))) {
+    dat <- dplyr::rename(dat, group = `_groups_`)
+  }
+  dat
+}
+
+# The individual profiles (with all of the data)
+format_ind_prof <- function(x) {
+  dat <- dplyr::as_tibble(x$cp_profiles)
+  col <- x$agr_profiles$`_vname_`[1]
+  dat$value <- dat[[col]]
+  dat %>%
+    dplyr::select(predictor = `_vname_`, value, prediction = `_yhat_`, id = `_ids_`)
+}                         
+```
+
+```{r}
+#| label: fig-bagging-pdp
+#| echo: false
+#| warning: false
+#| out-width: 70%
+#| fig-width: 6
+#| fig-height: 6
+#| fig-cap: “Partial dependence profiles for the food delivery hour and day, derived for the tree-based ensemble. Panel (a) shows the individual grid predictions from 1,000 randomly sampled points in the training set. The other panels show the average trends.” 
+#| eval: true
+
+day_cols <- c(
+  "#000000FF", "#24FF24FF", "#009292FF", "#B66DFFFF",
+  "#6DB6FFFF", "#920000FF", "#FFB6DBFF"
+)
+
+p_hour_ind <-
+  pdp_hour %>%
+  format_ind_prof() %>%
+  ggplot(aes(value, prediction, group = id)) +
+  geom_line(alpha = 1 / 50) +
+  labs(x = "Order Hour", y = "Delivery Time", title = "(a)")
+
+pred_rng <- range(p_hour_ind$data$prediction)
+
+p_hour <-
+  pdp_hour %>%
+  format_mean_prof() %>%
+  ggplot(aes(value, prediction)) +
+  geom_line(linewidth = 1) +
+  labs(x = "Order Hour", y = NULL, title = "(b)") +
+  ylim(pred_rng)
+
+p_day <-
+  pdp_day %>%
+  format_mean_prof() %>%
+  dplyr::rename(Day = value) %>%
+  ggplot(aes(Day, prediction, col = Day)) +
+  geom_point(cex = 2) +
+  labs(x = "Order Day", y = "Delivery Time", title = "(c)") +
+  ylim(pred_rng) +
+  scale_color_manual(values = day_cols)
+
+p_hour_day <-
+  pdp_int %>%
+  format_mean_prof() %>%
+  dplyr::rename(Day = group) %>%
+  ggplot(aes(value, prediction)) +
+  geom_line(aes(col = Day), linewidth = 1, show_legend = FALSE) +
+  labs(x = "Order Hour", y = NULL, title = "(d)") +
+  ylim(pred_rng) +
+  scale_color_manual(values = day_cols)
+
+(((p_hour_ind + p_hour) / (p_day + p_hour_day)) +
+  plot_layout(guides = "collect")) &
+  theme(legend.position = "bottom")
+```
+
+Friedman’s H-statistic can quantify the effect of interaction terms using partial dependence profiles. When investigating two-factor interactions between predictors $j$ and $j'$, the statistic is 
+
+$$
+H^2_{jj'}=\frac{\sum_\limits{i=1}^B\left[\hat{f}(x_{ij},x_{ij'})-\hat{f}(x_{ij})-\hat{f}(x_{ij'})\right]}{ \sum_\limits{i=1}^B\hat{f}^2(x_{ij}, x_{ij'})}
+$$
+
+where the $\hat{f}(x_{ij})$ term represents the partial dependence profile for predictor $j$ for sample point $i$ along the grid for that predictor.  The denominator captures the total joint effect of predictors $j$ and $j'$ so that $H^2$ can be interpreted as the fraction of the joint effect explained by the potential interaction. 
+
+For a set of $p$ predictors, we could compute all $p(p-1)/2$ pairwise interactions and rank potential interactions by their statistic values. This can become computationally intractable at some point. One potential shortcut is to quantify the importance of the $p$ predictors and look at all pairwise combinations of the $p^*$ more important values.  For $p^* = 10$, @fig-hstats-interaction shows the top five interactions detected by this procedure. We’ve already visually identified the hour $\times$ day interaction, so seeing this in the rankings is comforting. However, the largest interaction effect corresponds to the variables for items #1 and #10. Discovering this led us to visually confirm the effect back in @fig-delivery-items. There was also a much smaller interaction between items #1 and #9; this second item interaction was included in the analysis summarized in @tbl-interaction-anova and @fig-lin-reg-interactions.
+
+```{r}
+#| label: bagging-hstats
+#| echo: false
+#| eval: true
+
 bagging_two_way_int_obj <- h2_pairwise(bagging_hstats, zero = TRUE)
 int_vars <-
   strsplit(rownames(bagging_two_way_int_obj), ":") %>%
@@ -686,7 +799,7 @@ bagging_two_way_int <-
 #| out-width: 60%
 #| fig-width: 6
 #| fig-height: 4.25
-#| fig-cap: H statistics for pairwise interaction terms.
+#| fig-cap: "The top five $H^2$ statistics for pairwise interaction terms."
 #| eval: true
 
 bagging_two_way_int %>% 
@@ -694,6 +807,12 @@ bagging_two_way_int %>%
   geom_bar(stat = "identity") +
   labs(y = NULL, x = "Proportion of Joint Effect Variability")
 ```
+
+Note that the _overall_ importance of the features are being quantified. From this analysis alone, we are not informed that the relationships between the hour and distance predictors and the outcome are nonlinear. It also doesn’t give any sense of the direction of the interaction (e.g., synergistic or antagonistic). We suggest using this tool early in the exploratory data analysis process to help focus visualizations on specific variables to understand how they relate to the outcome and other predictors. 
+
+There is a version of the statistic that can compute how much a specific predictor is interacting with _any other_ predictor. It is also possible to compute a statistical test to understand if the H statistic is different than zero. In our opinion, it is more helpful to use these values as diagnostics rather than the significant/insignificant thinking that often accompanies formal statistical hypothesis testing results.  
+
+The H-statistic can be an incredibly valuable tool for learning about the data early on as well as suggesting new features that should be included in the model. However, it is computationally expensive.
 
 
 ## Basis Expansions and Splines {#sec-splines}
