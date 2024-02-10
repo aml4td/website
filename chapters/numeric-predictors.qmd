@@ -33,22 +33,32 @@ set_options()
 source("../R/setup_ames.R")
 ```
 
-As mentioned previously, feature engineering is the process of representing your predictor data so that the model has to do the least amount of work to explin the outcome effectively. There is also the need to properly encode/format the data based on the model's mathematical requirements (i.e., pre-processing). The next chapter described techniques for categorical data, and in this chapter, we do the same for quantitative predictors. 
+Data that are available for modeling are often collected passively without the specific purpose of being used for buildng a predictive model.  As an example, the Ames Housing data contains a wealth of information on houses in Ames, Iowa.  But this available data may not contain the most relevant measurements for predicting house price.  This may be due to the fact that important predictors were not measured.  Or, it may be because the predictors we have collected are not in the best form to allow models to uncover the relationship between the predictors and the response.
 
-We'll begin with operations that only involve one predictor at a time before moving on to group transformations. Later, in @sec-add-remove-features,  procedures on numeric predictors are described that create additional predictor columns from a single column, such as basis function expansions. However, this chapter focuses on transformations that leave the predictors "in place" but altered. 
+As mentioned previously, feature engineering is the process of representing your predictor data so that the model has to do the least amount of work to explain the outcome effectively.  A tool of feature engineering is predictor transformations.  Some models alos need predictors to be transformed to meet the model's mathematical requirements (i.e., pre-processing). In this chapter we will review transformations for quantitative predictors. 
+
+We will begin by describing transformations that are applied to one predictor at a time that yield a revised for of the predictor (one in, one out).  Then we will explore transformations that can be applied to a group of predictors and yield an informative summary of the group (many in, some out).  Later, in @sec-add-remove-features, we will examine techniques for expanding a single predictor to many predictors (one in, many out).  Let's begin by understanding some general data characteristics that need to be addressed via feature engineering and when transformations should be applied. 
 
 
-## When are transformations estimated and applied? 
+## What are Problematic Characteristics, and When Should Transformations be Applied?
 
-The next few chapters concern preprocessing and feature engineering tools that mostly affect the predictors. As previously noted, the training set data are used to estimate parameters; this is also true for preprocessing parameters. All of these computations use the training set. At no point do we re-estimate parameters when new data are encountered. 
+Common problematic characteristics that occur across individual predictors are:
 
-For example, a standardization tool that centers and scales the data is introduced in the next section. The mean and standard deviation are computed from the training set for each column being standardized. When the training set, test set, or any future data are standardized, it uses these statistics derived from the training set. Any model fit that uses these standardized predictors would want new samples being predicted to have the same reference distribution. 
+* skewed or unusually shaped distributions,
+* sample(s) that have extremely large or small values, and
+* vastly disparate scales.
+
+ Some models, like those that are tree-based, are able to tolerate these characteristics.  However, these characteristics can detrimentally affect most other models.  Techniques used to address these problems generally involve transformation parameters.  For example, to place the predictors on the same scale, we would subtract the mean of a predictor from a sample and then divide by the standard deviation.  This is know as standardizing and will be discussed in the next section.   
+
+What data should be used to estimate the mean and standard deviation?  Recall, the training data set was used to estimate model parameters.  Similarly, we will use the training data to estimate transformation parameters.  When the test set or any future data set are standardized, the process will use the estimates from the training data set.  Any model fit that uses these standardized predictors would want new samples being predicted to have the same reference distribution.
 
 Suppose that a predictor column had an underlying Gaussian distribution with a sample mean estimate of 5.0 and a sample standard deviation of 1.0. Suppose a new sample has a predictor value of 3.7. For the training set, this new value lands around the 10th percentile and would be standardized to a value of -1.3. The new value is relative to the training set distribution. Also note that, in this scenario,  it would be impossible to standardize using a recomputed standard deviation for the new sample (which means we try to divide with a zero standard deviation). 
 
+Now let's review transformations that leave the predictor "in-place", but altered.
+
 ## General Transformations
 
-Many transformations that involve a single predictor change the data distribution. What would a problematic distribution look like? Most predictive models do not place specific parametric assumptions on the predictor variables (e.g., require normality), but some distributions might facilitate better predictive performance than others. 
+Many transformations that involve a single predictor change the data distribution. Most predictive models do not place specific parametric assumptions on the predictor variables (e.g., require normality), but some distributions might facilitate better predictive performance than others. 
 
 TODO some based on convention or scientific knowledge. Others like the arc-sin (ref The arcsine is asinine: the analysis of proportions in ecology) or logit?
 
@@ -128,7 +138,7 @@ lot_area_pctl <-
 #| fig-width: 8
 #| fig-height: 5.5
 #| out-width: "80%"
-#| fig-cap: "Lot area for houses in Ames, IA. The raw data (a) are shown along with transformed versions using the Yeo-Johnson transformations (b), percentile (c), and ordered quantile normalization (d) transformations."
+#| fig-cap: "Lot area for houses in Ames, IA. The raw data (a) are shown along with transformed versions using the Yeo-Johnson (b), percentile (c), and ordered quantile normalization (d) transformations."
 (lot_area_raw  +  lot_area_yj) / (lot_area_pctl + lot_area_norm)
 ```
 
@@ -201,7 +211,7 @@ $$
 
 In either case, maximum likelihood is also used to estimate the $\lambda$ parameter. 
 
-In practice, these two transformations might be limited to predictors with acceptable density. For example, the transformation may only be appropriate for a predictor with a few unique values. A threshold of five or so unique values might be a proper rule of thumb (see the discussion in @sec-near-zero-var). On occasion the maximum likelihood estimates of $\lambda$ diverge to huge values; it is also sensible to use values within a suitable range. Also, the estimate will never be absolute zero. Implementations usually apply a log transformation when the $\hat{\lambda}$ is within some range of zero (say between $\pm 0.01$)^[If you've never seen it, the "hat" notation (e.g. $\hat{\lambda}$) indicates an estimate of some unknown parameter.]. 
+In practice, these two transformations might be limited to predictors with acceptable density. For example, the transformation may not be appropriate for a predictor with a few unique values. A threshold of five or so unique values might be a proper rule of thumb (see the discussion in @sec-near-zero-var). On occasion the maximum likelihood estimates of $\lambda$ diverge to huge values; it is also sensible to use values within a suitable range. Also, the estimate will never be absolute zero. Implementations usually apply a log transformation when the $\hat{\lambda}$ is within some range of zero (say between $\pm 0.01$)^[If you've never seen it, the "hat" notation (e.g. $\hat{\lambda}$) indicates an estimate of some unknown parameter.]. 
 
 For the lot area predictor, the Box-Cox and Yeo-Johnson techniques both produce an estimate of $\hat{\lambda} = `r round(yj_est, 3)`$. The results are shown in @fig-ames-lot-area (panel b). There is undoubtedly less right-skew, and the data are more symmetric with a new skewness value of `r signif(bc_skew, 3)` (much closer to zero). However, there are still outlying points.
 
@@ -241,7 +251,7 @@ Examples of other families of transformations for dense numeric predictors.
 
 :::: 
  
-Skewness can also be resolved using techniques related to distributional percentiles. A percentile is a value with a specific proportion of data below it. For example, for the original lot area data, the 0.1 percentile is `r format(quantile(ames_train$Lot_Area, prob = .1), big.mark = ",")` square feet, which means that 10{{< pct >}} of the training set has lot areas less than `r format(quantile(ames_train$Lot_Area, prob = .1), big.mark = ",")` square feet. The minimum, median, and maximum are the 0.0, 0.5, and 1.0 percentiles, respectively.
+Skewness can also be resolved using techniques related to distributional percentiles. A percentile is a value with a specific proportion of data below it. For example, for the original lot area data, the 0.1 percentile is `r format(quantile(ames_train$Lot_Area, prob = .1), big.mark = ",")` square feet, which means that 10{{< pct >}} of the training set has lot areas less than `r format(quantile(ames_train$Lot_Area, prob = .1), big.mark = ",")` square feet. The minimum, median, and maximum are the 0, 50th and 100th percentiles, respectively.
 
 Numeric predictors can be converted to their percentiles, and these data, inherently between zero and one, are used in their place. Probability theory tells us that the distribution of the percentiles should resemble a uniform distribution. This results from the transformed version of the lot area shown in @fig-ames-lot-area (panel c). For new data, values beyond the range of the original predictor data can be truncated to values of zero or one, as appropriate.
 
