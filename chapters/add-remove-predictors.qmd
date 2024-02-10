@@ -445,21 +445,21 @@ base_rec <-
 
 ###
 
-some_int_rec <- 
+item_int_rec <- 
   base_rec %>% 
   step_interact(
     ~ starts_with("hour"):starts_with("day") + 
-      item_01:item_10 + item_09:item_10
+      item_01:item_10
   )
 
-lin_reg_some_int_wflow <- 
+lin_reg_item_int_wflow <- 
   workflow() %>% 
   add_model(linear_reg()) %>% 
-  add_recipe(some_int_rec)
+  add_recipe(item_int_rec)
 
 set.seed(3838)
-lin_reg_some_int_res <-
-  fit_resamples(lin_reg_some_int_wflow,
+lin_reg_item_int_res <-
+  fit_resamples(lin_reg_item_int_wflow,
                 delivery_rs,
                 control = rs_ctrl,
                 metrics = reg_metrics)
@@ -489,10 +489,10 @@ val_stats <-
   bind_rows(
     collect_metrics(lin_reg_res) %>% 
       mutate(Interactions = "Hour x Day"),
-    collect_metrics(lin_reg_some_int_res) %>% 
-      mutate(Interactions = "Add Two Item Interactions"),
+    collect_metrics(lin_reg_item_int_res) %>% 
+      mutate(Interactions = "Add One Item Interaction"),
     collect_metrics(lin_reg_all_int_res) %>% 
-      mutate(Interactions = "Add 349 Item Interactions")
+      mutate(Interactions = "Add All Item Interactions")
   ) %>% 
   filter(.metric != "rsq") %>% 
   mutate(.metric = toupper(.metric)) %>% 
@@ -506,18 +506,18 @@ val_stats <-
 
 
 hour_day_fit <- fit_best(lin_reg_res)
-some_int_fit <- fit_best(lin_reg_some_int_res)
+item_int_fit <- fit_best(lin_reg_item_int_res)
 all_int_fit <- fit_best(lin_reg_all_int_res)
 
 anova_res <- 
   anova(
   hour_day_fit %>% extract_fit_engine(), 
-  some_int_fit %>% extract_fit_engine(),
+  item_int_fit %>% extract_fit_engine(),
   all_int_fit %>% extract_fit_engine()
 ) %>% 
   tidy() %>%
   mutate(
-    Interactions = c("Hour x Day", "Add Two Item Interactions", "Add 349 Item Interactions"),
+    Interactions = c("Hour x Day", "Add One Item Interaction", "Add All Item Interactions"),
     Decimal = sqrt(rss / df.residual),
     `p-Value` = paste0("10<sup>", round(log10(p.value), 1), "</sup>"),
     Time = map_chr(sqrt(rss / df.residual), dec_to_time),
@@ -540,7 +540,7 @@ impr_add_all <- sprintf("%3.2f", (anova_res$Decimal[2] - anova_res$Decimal[3]))
 ```
 
  
-What should we do if we already have candidate interaction sets?  If we use a more formal statistical model, such as linear or logistic regression, the traditional tool for evaluating whether additional model terms in a set of nested models are worth including is the conventional analysis of variance (ANOVA). This uses the statistical likelihood value as the objective function. This is equivalent to comparing the RMSE values between models for linear regression ^[It so happens that the Gaussian likelihood function is equivalent to the sums of squared errors (SSE). That, in turn, is equivalent to the RMSE. That simplification does not automatically occur for other probability distributions.]. The error reduction and how many additional terms are responsible for the improvement are computed. Using these results and some probability assumptions about the data, we can formally test the null hypothesis that the additional parameters all have coefficient values of zero. Looking at the delivery data, our model in @sec-model-development-whole-game included a single set of interactions (e.g., hour-by-day). What if we included two more interactions based on the item predictors: item 1 $\times$ item 10 and item 9 $\times$ item 10? @tbl-interaction-anova shows the ANOVA results ^[We’ll see why we include the second interaction term shortly.]. The RMSE _computed on the training set_ is listed in the first and second rows. The reduction by including these two additional model terms is `r impr_add_two` (decimal minutes). Assuming normality of the model residuals, the p-value for this test is exceedingly small. This indicates that there is no evidence that these two model parameters are truly zero. This statistical difference may not make much of a practical difference. However, machine learning models often behave like "a game of inches" where every small improvement adds up to an overall improvement that matters. 
+What should we do if we already have candidate interaction sets?  If we use a more formal statistical model, such as linear or logistic regression, the traditional tool for evaluating whether additional model terms in a set of nested models are worth including is the conventional analysis of variance (ANOVA). This uses the statistical likelihood value as the objective function. This is equivalent to comparing the RMSE values between models for linear regression ^[It so happens that the Gaussian likelihood function is equivalent to the sums of squared errors (SSE). That, in turn, is equivalent to the RMSE. That simplification does not automatically occur for other probability distributions.]. The error reduction and how many additional terms are responsible for the improvement are computed. Using these results and some probability assumptions about the data, we can formally test the null hypothesis that the additional parameters all have coefficient values of zero. Looking at the delivery data, our model in @sec-model-development-whole-game included a single set of interactions (e.g., hour-by-day). What if we included one more interaction: item 1 $\times$ item 10? @tbl-interaction-anova shows the ANOVA results. The RMSE _computed on the training set_ is listed in the first and second rows. The reduction by including this additional model term is `r impr_add_two` (decimal minutes). Assuming normality of the model residuals, the p-value for this test is exceedingly small. This indicates that there is no evidence that this parameters is truly zero. This statistical difference may not make much of a practical difference. However, machine learning models often behave like "a game of inches" where every small improvement adds up to an overall improvement that matters. 
 
 ```{r}
 #| label: tbl-interaction-anova
@@ -581,7 +581,7 @@ What if there are other two-way interactions between the other item predictors? 
 
 One problem with the ANOVA method is that it calculates the model error using the training set, which we know may not indicate what would occur with previously unseen data. In fact, it is well known that, for linear regression via ordinary least squares estimation, it is impossible for the training set error to ever increase when adding new model terms. You can see this in @tbl-interaction-anova where the validation set RMSE and MAE values are included. Note that, when the large set of interactions were added, these metrics both _increase_ in the validation set, a result contrary to what the ANOVA results tell us.  
 
-The observed and predicted visualizations for each model in @tbl-interaction-anova are shown in @fig-lin-reg-interactions. Adding the two additional interactions yielded a slight numerical improvement. However, the visualization in the middle panel shows fewer very large residuals. The figure also shows the model results that include the full set of  `r choose(27, 2)` two-way interactions; this panel shows no significant reduction in large residuals, further casting doubt on using the entire set. 
+The observed and predicted visualizations for each model in @tbl-interaction-anova are shown in @fig-lin-reg-interactions. Adding the additional interaction yielded a slight numerical improvement. However, the visualization in the middle panel shows fewer very large residuals. The figure also shows the model results that include the full set of  `r choose(27, 2)` two-way interactions; this panel shows no significant reduction in large residuals, further casting doubt on using the entire set. 
 
 ```{r}
 #| label: fig-lin-reg-interactions
@@ -593,20 +593,20 @@ The observed and predicted visualizations for each model in @tbl-interaction-ano
 #| fig-height: 3.5
 #| fig-cap: Validation set predicted vs. observed delivery times for linear regression models with and without additional interactions.
 
-lvls <- c("Previous Results", "Two Addtional Interactions", "349 Item Interactions")
+lvls <- c("Previous Results", "One Addtional Interactions", "All Item Interactions")
 
 lin_reg_res %>% 
   collect_predictions() %>% 
   mutate(Model = "Previous Results") %>% 
   bind_rows(
-    lin_reg_some_int_res %>% 
+    lin_reg_item_int_res %>% 
       collect_predictions() %>% 
-      mutate(Model = "Two Addtional Interactions")
+      mutate(Model = "One Addtional Interactions")
   ) %>% 
   bind_rows(
     lin_reg_all_int_res %>% 
       collect_predictions() %>% 
-      mutate(Model = "349 Item Interactions")
+      mutate(Model = "All Item Interactions")
   ) %>%
   mutate(
     Model = factor(Model, levels = lvls)
@@ -775,7 +775,7 @@ $$
 
 where the $\hat{f}(x_{ij})$ term represents the partial dependence profile for predictor $j$ for sample point $i$ along the grid for that predictor.  The denominator captures the total joint effect of predictors $j$ and $j'$ so that $H^2$ can be interpreted as the fraction of the joint effect explained by the potential interaction. 
 
-For a set of $p$ predictors, we could compute all $p(p-1)/2$ pairwise interactions and rank potential interactions by their statistic values. This can become computationally intractable at some point. One potential shortcut is to quantify the importance of the $p$ predictors and look at all pairwise combinations of the $p^*$ more important values.  For $p^* = 10$, @fig-hstats-interaction shows the top five interactions detected by this procedure. We’ve already visually identified the hour $\times$ day interaction, so seeing this in the rankings is comforting. However, the largest interaction effect corresponds to the variables for items #1 and #10. Discovering this led us to visually confirm the effect back in @fig-delivery-items. There was also a much smaller interaction between items #9 and #10; this is the second interaction included in the analysis summarized in @tbl-interaction-anova and @fig-lin-reg-interactions.
+For a set of $p$ predictors, we could compute all $p(p-1)/2$ pairwise interactions and rank potential interactions by their statistic values. This can become computationally intractable at some point. One potential shortcut is to quantify the importance of the $p$ predictors and look at all pairwise combinations of the $p^*$ more important values.  For $p^* = 10$, @fig-hstats-interaction shows the top five interactions detected by this procedure. We’ve already visually identified the hour $\times$ day interaction, so seeing this in the rankings is comforting. However, the largest interaction effect corresponds to the variables for items #1 and #10. Discovering this led us to visually confirm the effect back in @fig-delivery-items. 
 
 ```{r}
 #| label: bagging-hstats
