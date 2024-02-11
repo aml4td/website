@@ -1,13 +1,13 @@
 ---
 knitr:
   opts_chunk:
-    cache.path: "../_cache/add-remove-predictors/"
+    cache.path: "../_cache/interactions-nonlinear/"
 ---
 
-# Interactions and Nonlinear Features {#sec-add-remove-features}
+# Interactions and Nonlinear Features {#sec-interactions-nonlinear}
 
 ```{r}
-#| label: add-remove-setup
+#| label: interaction-basis-binning
 #| include: false
 
 source("../R/_common.R")
@@ -20,11 +20,11 @@ library(hstats)
 library(DALEXtra)
 library(tidymodels)
 library(embed)
-library(baguette)
+library(aorsf)
 library(patchwork)
 library(probably)
 library(doParallel)
-library(MASS)
+library(aspline)
 
 # ------------------------------------------------------------------------------
 # set options
@@ -36,7 +36,8 @@ registerDoParallel(cl)
 
 set_options()
 
-data(mcycle)
+data(fossil)
+load("../RData/bart_interaction_res.RData")
 ```
 
 ```{r}
@@ -642,48 +643,37 @@ This shows that, for this situation, we can isolate the effect of an interaction
 
 However, for any model, the joint and marginal effects can be quantified using _partial dependence profiles_ (PDP) (@molnar2020interpretable, [Section 8.1](https://christophm.github.io/interpretable-ml-book/pdp.html)). First, we determine a sequence of values covering the observed range of the predictor(s) of interest. Then we randomly sample a data point, perhaps from the training set, and over-ride the value of the predictor of interest with values from the grid. This produces a prediction profile over the grid. We can repeat this process many times to approximate $f(\cdot)$ by averaging the multiple prediction values for each grid point. 
 
-@fig-bagging-pdp visualizes^[The results are unsurprising; we can see a similarity between these results and the initial visualizations in @fig-delivery-predictors.] the PDP data derived from using the emsembles of regression trees for $f(hour)$, $f(day)$, and $f(hour, day)$. The first panel shows the random realizations of the relationship between delivery time and order hour from 1,000 randomly sampled rows of the training set. The single trend line in panel (b) is the average of these profiles for each value of the predictor (delivery hour). There appears to be, on average, a nonlinear effect of the delivery hour. The day of the week is an informative predictor and the _joint effect_ profile in panel (d) shows that its effect induces different patterns in the delivery hour. If this were not the case, the patterns in panels (b) and (c) would, when combined, approximate the pattern in panel (d).  
+@fig-ensemble-pdp visualizes^[The results are unsurprising; we can see a similarity between these results and the initial visualizations in @fig-delivery-predictors.] the PDP data derived from using the emsembles of regression trees for $f(hour)$, $f(day)$, and $f(hour, day)$. The first panel shows the random realizations of the relationship between delivery time and order hour from 1,000 randomly sampled rows of the training set. The single trend line in panel (b) is the average of these profiles for each value of the predictor (delivery hour). There appears to be, on average, a nonlinear effect of the delivery hour. The day of the week is an informative predictor and the _joint effect_ profile in panel (d) shows that its effect induces different patterns in the delivery hour. If this were not the case, the patterns in panels (b) and (c) would, when combined, approximate the pattern in panel (d).  
 
 ```{r}
 #| label: hstat-pdp-calcs
 #| warning: false
 #| echo: false
 #| cache: true
-bagging_spec <- 
-  bag_tree() %>% 
-  set_mode("regression") %>% 
-  set_engine("rpart", times = 50)
+p <- ncol(delivery_train) - 1
 
-set.seed(967)
-bagging_fit <- 
-  workflow() %>% 
-  add_model(bagging_spec) %>% 
-  add_formula(time_to_delivery ~ .) %>% 
-  fit(data = delivery_train)
+set.seed(1)
+orf_fit <-
+  orsf(time_to_delivery ~ .,
+       data = delivery_train,
+       mtry = p,
+       n_tree = 50)
 
-bagging_hstats <-
-  hstats(bagging_fit,
-         X = delivery_val %>% select(-time_to_delivery),
-         pairwise_m = 10,
-         approx = TRUE,
-         n_max = 1000,
-         verbose = FALSE)
-
-bagging_explainer <-
-  explain_tidymodels(
-    bagging_fit,
-    data = delivery_train %>% select(-time_to_delivery),
-    y = delivery_train$time_to_delivery,
-    label = "bagging",
-    verbose = FALSE
-  )
+orf_expl <- 
+  DALEX::explain(
+  orf_fit,
+  y = delivery_train$time_to_delivery,
+  data = delivery_train %>% dplyr::select(-time_to_delivery),
+  label = "ORF",
+  verbose = FALSE
+)
   
 set.seed(1805)
-pdp_hour <- model_profile(bagging_explainer, N = 1000, variables = "hour")
+pdp_hour <- model_profile(orf_expl, N = 1000, variables = "hour")
 set.seed(1805)
-pdp_day <- model_profile(bagging_explainer, N = 1000, variables = "day")
+pdp_day <- model_profile(orf_expl, N = 1000, variables = "day")
 set.seed(1805)
-pdp_int <- model_profile(bagging_explainer, N = 1000, variables = "hour",
+pdp_int <- model_profile(orf_expl, N = 1000, variables = "hour",
                          groups = "day")
 
 
@@ -711,13 +701,13 @@ format_ind_prof <- function(x) {
 ```
 
 ```{r}
-#| label: fig-bagging-pdp
+#| label: fig-ensemble-pdp
 #| echo: false
 #| warning: false
 #| out-width: 70%
 #| fig-width: 6
 #| fig-height: 6
-#| fig-cap: “Partial dependence profiles for the food delivery hour and day, derived for the tree-based ensemble. Panel (a) shows the individual grid predictions from 1,000 randomly sampled points in the training set. The other panels show the average trends.” 
+#| fig-cap: "Partial dependence profiles for the food delivery hour and day, derived for the tree-based ensemble. Panel (a) shows the individual grid predictions from 1,000 randomly sampled points in the training set. The other panels show the average trends." 
 #| eval: true
 
 day_cols <- c(
@@ -778,22 +768,54 @@ where the $\hat{f}(x_{ij})$ term represents the partial dependence profile for p
 For a set of $p$ predictors, we could compute all $p(p-1)/2$ pairwise interactions and rank potential interactions by their statistic values. This can become computationally intractable at some point. One potential shortcut is to quantify the importance of the $p$ predictors and look at all pairwise combinations of the $p^*$ more important values.  For $p^* = 10$, @fig-hstats-interaction shows the top five interactions detected by this procedure. We’ve already visually identified the hour $\times$ day interaction, so seeing this in the rankings is comforting. However, the largest interaction effect corresponds to the variables for items #1 and #10. Discovering this led us to visually confirm the effect back in @fig-delivery-items. 
 
 ```{r}
-#| label: bagging-hstats
+#| label: ensemble-pdp-calcs
 #| echo: false
 #| eval: true
+#| cache: true
 
-bagging_two_way_int_obj <- h2_pairwise(bagging_hstats, zero = TRUE)
+orf_hstats <-
+  hstats(orf_fit,
+         X = delivery_val %>% dplyr::select(-time_to_delivery),
+         pairwise_m = 10,
+         approx = TRUE,
+         n_max = 1000,
+         verbose = FALSE)
+orf_two_way_int_obj <- h2_pairwise(orf_hstats, zero = TRUE)
+
 int_vars <-
-  strsplit(rownames(bagging_two_way_int_obj), ":") %>%
+  strsplit(rownames(orf_two_way_int_obj), ":") %>%
   map(sort) %>%
   map(~gsub("_0", " ", .x)) %>%
   map(~gsub("_", " ", .x)) %>%
   map_chr( ~ paste(.x[1], "x", .x[2]))
-bagging_two_way_int <-
-  tibble(terms = int_vars, effect = bagging_two_way_int_obj$M[, 1]) %>%
-  mutate(terms = factor(terms),
-         terms = reorder(terms, effect)) %>% 
-  filter(effect > 0.005)
+
+orf_two_way_int <-
+  tibble(terms = int_vars, effect = orf_two_way_int_obj$M[, 1]) %>%
+  mutate(
+    terms = factor(terms),
+    terms = reorder(terms, effect)
+  ) %>%
+  slice_max(effect, n = 10)
+
+set.seed(158)
+orsf_int_imp <- 
+  orsf_vint(orf_fit, sep = "_x_") %>%
+  as_tibble() %>%
+  dplyr::select(interaction, score) %>%
+  mutate(
+    split_up = map(interaction, ~ strsplit(as.character(.x), "_x_")[[1]]),
+    split_up = map(split_up, ~ sort(.x)),
+    interaction = map_chr(split_up, ~ paste(.x[1], .x[2], sep = " x ")),
+    interaction = map_chr(interaction, ~ gsub("_", " ", .x)),
+    interaction = map_chr(interaction, ~ gsub("item 0", "item ", .x)),
+    interaction = reorder(interaction, score)
+  ) %>%
+  slice_max(score, n = 10)
+
+hstat_flat_common <- 
+  intersect(
+    as.character(orf_two_way_int$terms), 
+    as.character(orsf_int_imp$interaction))
 ```
 
 ```{r}
@@ -802,11 +824,11 @@ bagging_two_way_int <-
 #| out-width: 60%
 #| fig-width: 6
 #| fig-height: 4.25
-#| fig-cap: "$H^2$ statistics for the top five pairwise interaction terms."
+#| fig-cap: "$H^2$ statistics for the top ten pairwise interaction terms."
 #| eval: true
 
-bagging_two_way_int %>% 
-  ggplot(aes(x = effect, y = terms)) + 
+orf_two_way_int %>%
+  ggplot(aes(x = effect, y = terms)) +
   geom_bar(stat = "identity") +
   labs(y = NULL, x = "Proportion of Joint Effect Variability")
 ```
@@ -818,6 +840,46 @@ There is a version of the statistic that can compute how much a specific predict
 TODO correlated predictors, use logit for classification models. @inglis2022visualizing have a good summary of the potential issues with using $H^2$. Alternatives to the H statistic can be found in @hooker2004discovering, @greenwell2018simple, @herbinger2022repid, and @oh2022predictive
 
 The H-statistic, and its alternative, can be an incredibly valuable tool for learning about the data early on as well as suggesting new features that should be included in the model. However, it is computationally expensive. This technique, and similar approaches, are discussed in 
+
+Alternatively, @greenwell2018simple measures the potential for variables to interact by assessing the "flatness" over regions of the partial dependence profile. The importance of a predictor, or a pair of predictors, is determined by computing the standard deviation of the flatness scores over regions. For example, @fig-delivery-items shows a flat profile for the item 1 $\times$ item 9 interaction while the item 1 $\times$ item 10 interaction has different ranges of means across values of item 1. @fig-flat-interaction shows ten interactions with the largest flatness importance statistics. As with the $H^2$ results, the hour-by-day interaction. The two top ten lists have `r length(hstat_flat_common) - 1`  other interactions in common. 
+
+```{r}
+#| label: fig-flat-interaction
+#| echo: false
+#| out-width: 60%
+#| fig-width: 6
+#| fig-height: 4.25
+#| fig-cap: "Importance statistics for the top ten pairwise interaction terms."
+#| eval: true
+
+orsf_int_imp %>%
+  slice_max(score, n = 10) %>%
+  ggplot(aes(score, interaction)) +
+  geom_bar(stat = "identity") +
+  labs(y = NULL, x = "Flatness Importance Statistic")
+```
+
+The two PDP approaches we have described apply to any model capable of estimating interactions. There are also model-specific procedures for describing which joint effects are driving the model (if any). One method specific to tree-based models is understanding if two predictors are used in consecutive splits in the data. For example, @fig-reg-tree showed a shallow regression tree for the delivery time data. The terminal nodes had splits with orderings $\text{hour}\rightarrow\text{hour}$ and $\text{hour}\rightarrow\text{day} \rightarrow\text{distance}$ (twice). This implies that these three predictors have a higher potential to be involved in interactions with one another. 
+
+@kapelner2013bartmachine describe an algorithm that counts how many times pairs of variables are used in consecutive splits in a tree. They demonstrate this process with Bayesian Adaptive Regression Trees (BART) which created an ensemble of fairly shallow trees. @fig-bart-interaction shows the top ten pairwise interactions produced using this technique. Note that the implementation could only be split into single categories of a qualitative predictor. For the delivery data, this means that the tree would split on a specific day of the week (.i.e., Friday or not) instead of splitting all of the categories at once. This makes a comparison between the other two methods difficult. However, it can be seen that the hour $\times$ day interaction has shown to be very important in all three methods. 
+
+```{r}
+#| label: fig-bart-interaction
+#| echo: false
+#| out-width: 60%
+#| fig-width: 6
+#| fig-height: 4.25
+#| fig-cap: "BART model statistics identifying interactions by how often they occur in the tree rules."
+#| eval: true
+
+bart_interaction_res %>%
+  slice_max(mean, n = 10) %>%
+  ggplot(aes(mean, interaction)) +
+  geom_bar(stat = "identity") +
+  labs(y = NULL, x = "Average Count of Splits with Both Variables")
+```
+
+There is a note of caution in using this method. First, some tree ensembles randomly sample a subset of predictors for each split (commonly known as $m_{try}$). For example, if $m_{try} = 4$, a random set of four predictors are the only ones considered for that split point. This deliberately coerced potentially non-informative splits; we are not using the best possible predictors in a split. This can dilute the effectiveness of counting predictors in successive splits. Second, as discussed in @sec-classification-trees, many tree-based splitting procedures disadvantage predictors with fewer unique values. For example, in the delivery data, the distance and hour predictors are more likely to be chosen for splitting than the item predictors _even if they are equally informative_.  There are splitting procedures that correct for this bias, but users should be aware of the potential impartiality. 
 
 ## Basis Expansions and Splines {#sec-splines}
 
@@ -837,7 +899,7 @@ $$ {#eq-poly-linear-reg}
 
 This is a _linear model_ in the sense that it is linear in the statistical parameters (the $\beta$ values), so we can use standard parameter estimation procedures (e.g., least squares). 
 
-@fig-basis-expansions(a) shows data from @Silverman collected to measure the efficacy of motorcycle helmets. After a set amount of time since impact, device readings were taken to measure the acceleration of the head. The data set contains `r nrow(mcycle)` data points for these two variables. The relationship is highly nonlinear, with an initial period with no acceleration followed by periods of decreasing results and then significantly increasing acceleration. The final phase of the data is a relatively constant period of no acceleration (but with a fairly high scatter). 
+@fig-basis-expansions(a) shows data from @bralower1997mid collected to understand the relationship between the age of a fossil and the ratio of two radioactive isotopes. The data set contains `r nrow(fossil)` data points for these two variables. The relationship is highly nonlinear, with several regions where the data have significant convex or concave patterns. 
 
 The default 13-degree polynomial is used in the visualization. It fits well in the middle of the data where the pattern is most dynamic. At the edges of the distribution, where the pattern is flat, it is too wiggly. Decreasing the polynomial degree will result in less complex patterns that tend to underfit the data. Increasing the degree will result in the fitted line being closer to the data, but, as evidenced by the confidence interval in the shaded region, the uncertainty in the model explodes (especially on the far right side). This is due to severe overfitting. Eventually, you can increase the degree until the curve passes through every data point. However, the fit for any other values will be wildly inaccurate and unstable.
 
@@ -858,9 +920,9 @@ library(ggplot2)
 library(splines2)
 library(bslib)
 library(viridis)
-library(MASS)
+library(aspline)
 
-data(mcycle)
+data(fossil)
 
 ui <- fluidPage(
   theme = bs_theme(bg = "#fcfefe", fg = "#595959"),
@@ -878,7 +940,7 @@ ui <- fluidPage(
               "global_deg",
               label = "Polynomial Degree",
               min = 0L,
-              max = 20L,
+              max = 24L,
               step = 1L,
               value = 13L
             )
@@ -899,7 +961,7 @@ ui <- fluidPage(
               min = 0L,
               max = 6L,
               step = 1L,
-              value = 3L
+              value = 4L
             )
           ),
           column(
@@ -908,10 +970,10 @@ ui <- fluidPage(
             sliderInput(
               "cuts",
               label = "Cutpoints",
-              min = 5L,
-              max = 52L,
-              step = 1L,
-              value = c(20, 38)
+              min = 93L,
+              max = 122L,
+              step = 1,
+              value = c(101, 118)
             )
           )
         ),
@@ -930,7 +992,7 @@ ui <- fluidPage(
               min = 3L,
               max = 20L,
               step = 1L,
-              value = 9L
+              value = 8L
             )
           )
         ),
@@ -966,8 +1028,8 @@ server <- function(input, output, session) {
 
   # ------------------------------------------------------------------------------
 
-  spline_example <- tibble(x = mcycle$times, y = mcycle$accel)
-  grid <- seq(min(mcycle$times), max(mcycle$times), length.out = 1000)
+  spline_example <- tibble(x = fossil$age, y = fossil$strontium.ratio)
+  grid <- seq(min(fossil$age), max(fossil$age), length.out = 1000)
   alphas <- 1 / 4
   line_wd <- 1.0
 
@@ -975,8 +1037,7 @@ server <- function(input, output, session) {
     spline_example %>%
     ggplot(aes(x = x, y = y)) +
     geom_point(alpha = 3 / 4, pch = 1, cex = 3) +
-    # geom_line(data = truth, col = "black", lty = 2, linewidth = 1) +
-    labs(x = "Time", y = "Acceleration") +
+    labs(x = "Age", y = "Isotope Ratio") +
     theme_light_bl()
 
   output$global <- renderPlot({
@@ -1070,11 +1131,11 @@ app <- shinyApp(ui = ui, server = server)
 
 :::
 
-Several approaches to modeling data from @Silverman. The black dashed line is the true function and the shaded regions are 95% confidence intervals around the mean. 
+Several approaches to modeling data from @bralower1997mid. The black dashed line is the true function and the shaded regions are 95% confidence intervals around the mean. 
 
 :::
 
-The issue here is that a global polynomial pattern is often insufficient because of the nonlinear relationships is different in different data sections. There may be steep increases in one area, gradual increases in others, and potnetially flat regions. Rather than using a global polynomial, what if we used different basis expansions in regions with more manageable or simplistic trends rather than a global polynomial? 
+The issue here is that a global polynomial pattern is often insufficient because of the nonlinear relationships is different in different data sections. There may be steep increases in one area and gradual increases in others. Rather than using a global polynomial, what if we used different basis expansions in regions with more manageable or simplistic trends rather than a global polynomial? 
 
 Panel (b) shows a crude approach where three different regions have different polynomial fits with the same degree. This isn’t terribly effective. Achieving a good fit in the interior region produces poor fits in the two exterior regions where the pattern is nearly constant. Also, as it stands, the curves do not connect to one another, and this discontinuity is visually discordant, but it is most likely inconsistent with the true, underlying pattern that we are attempting to estimate. We can resolve the latter issue with a more complex modeling approach that guarantees that the curves touch (and even touch smoothly). However, let’s move on to a much better approach for basis expansions.
 
