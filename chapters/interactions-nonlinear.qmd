@@ -412,6 +412,7 @@ Prediction contours for a linear regression model with @eq-two-way-int with $\be
 
 :::
 
+Interaction effects between predictors are sometimes confused with correlation between predictors. They are not the same thing. Interactions are defined by their relationship to the outcome while between-predictors correlations are unrelated to it. An interaction could occur independent of the amount of correlation between predictors. 
 
 ### How Likely Are Interactions? 
 
@@ -904,7 +905,7 @@ This is a _linear model_ in the sense that it is linear in the statistical param
 
 @fig-basis-expansions(a) shows data from @bralower1997mid collected to understand the relationship between the age of a fossil and the ratio of two radioactive isotopes. The data set contains `r nrow(fossil)` data points for these two variables. The relationship is highly nonlinear, with several regions where the data have significant convex or concave patterns. 
 
-The default 13-degree polynomial is used in the visualization. It fits well in the middle of the data where the pattern is most dynamic. At the edges of the distribution, where the pattern is flat, it is too wiggly. Decreasing the polynomial degree will result in less complex patterns that tend to underfit the data. Increasing the degree will result in the fitted line being closer to the data, but, as evidenced by the confidence interval in the shaded region, the uncertainty in the model explodes (especially on the far right side). This is due to severe overfitting. Eventually, you can increase the degree until the curve passes through every data point. However, the fit for any other values will be wildly inaccurate and unstable.
+The default 8-degree polynomial is used in the visualization. It fits well in the middle of the data where the pattern is most dynamic. At the edges of the distribution, where the pattern is flat, it is too wiggly. Decreasing the polynomial degree will result in less complex patterns that tend to underfit the data. Increasing the degree will result in the fitted line being closer to the data, but, as evidenced by the confidence interval in the shaded region, the uncertainty in the model explodes (especially near or outside of the range range). This is due to severe overfitting. Eventually, you can increase the degree until the curve passes through every data point. However, the fit for any other values will be wildly inaccurate and unstable.
 
 ::: {#fig-basis-expansions}
 
@@ -942,10 +943,10 @@ ui <- fluidPage(
             sliderInput(
               "global_deg",
               label = "Polynomial Degree",
-              min = 0L,
-              max = 24L,
+              min = 1L,
+              max = 20L,
               step = 1L,
-              value = 13L
+              value = 8L
             )
           )
         ),
@@ -983,7 +984,7 @@ ui <- fluidPage(
         plotOutput('pieces')
       ),
       tabPanel(
-        "(c) Natural splines.",
+        "(c) Natural cubic splines.",
         fluidRow(
           column(width = 3),
           column(
@@ -1032,10 +1033,12 @@ server <- function(input, output, session) {
   # ------------------------------------------------------------------------------
 
   spline_example <- tibble(x = fossil$age, y = fossil$strontium.ratio)
-  grid <- seq(min(fossil$age), max(fossil$age), length.out = 1000)
+  rng <- extendrange(fossil$age, f = .025)
+  grid <- seq(rng[1], rng[2], length.out = 1000)
+  grid_df <- tibble(x = grid)
   alphas <- 1 / 4
   line_wd <- 1.0
-
+  
   base_p <-
     spline_example %>%
     ggplot(aes(x = x, y = y)) +
@@ -1044,20 +1047,26 @@ server <- function(input, output, session) {
     theme_light_bl()
 
   output$global <- renderPlot({
-
+    
+    poly_fit <- lm(y ~ poly(x, input$global_deg), data = spline_example)
+    poly_pred <- 
+      predict(poly_fit, grid_df, interval = "conf") %>% 
+      bind_cols(grid_df)
+    
     global_p <- base_p
 
     if (input$global_deg > 0) {
       global_p <-
-        global_p+
-        geom_smooth(
-          se = TRUE,
-          formula = y ~ poly(x, input$global_deg),
-          method = lm,
+        global_p +
+        geom_ribbon(
+          data = poly_pred,
+          aes(y = NULL, ymin = lwr, ymax = upr),
+          alpha = 1 / 15) +
+        geom_line(
+          data = poly_pred,
+          aes(y = fit),
           col = "#377EB8",
-          linewidth = line_wd,
-          alpha = 1 / 7)
-
+          linewidth = line_wd)
     }
     print(global_p)
 
@@ -1114,14 +1123,21 @@ server <- function(input, output, session) {
 
   output$spline <- renderPlot({
 
+    spline_fit <- lm(y ~ naturalSpline(x, df = input$spline_df), data = spline_example)
+    spline_pred <- 
+      predict(spline_fit, grid_df, interval = "conf") %>% 
+      bind_cols(grid_df)
+    
     spline_p <- base_p +
-      geom_smooth(
-        se = TRUE,
-        formula = y ~ naturalSpline(x, df = input$spline_df),
-        method = lm,
-        col = "#E6AB02",
-        linewidth = line_wd,
-        alpha = 1 / 7)
+        geom_ribbon(
+          data = spline_pred,
+          aes(y = NULL, ymin = lwr, ymax = upr),
+          alpha = 1 / 15) +
+        geom_line(
+          data = spline_pred,
+          aes(y = fit),
+          col = "#E6AB02",
+          linewidth = line_wd)
 
     print(spline_p)
 
