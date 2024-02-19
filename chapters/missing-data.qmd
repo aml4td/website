@@ -116,6 +116,8 @@ tolerance for missing results
 
 ## Imputation: Predicting Predictor Values
 
+@hasan2021missing
+
 For missing data, imputation is the process of using other existing information (i.e., the predictors) and using these to estimate what each missing value might have been. In other words, we will build an imputation model to fill in the missing column(s) so that we can run the primary machine-learning model.  A separate imputation model is required for each column that contains (or could contain) missing data. 
 
 Historically, most imputation methods have been developed to produce correct statistical inferences (e.g. p-values). The field of multiple imputations is mature and sophisticated. However, machine-learning models have very different goals and mostly rely on single imputation. 
@@ -126,7 +128,37 @@ While any machine-learning model can be used to impute values, we would like the
  - Easy/fast to estimate.
  - Easily encapsulated inside of a general preprocessing pipeline. 
 
-If possible, simple models are preferable. For example, if there is a strong correlation between two quantitative predictors, a basic linear regression would be ideal if it produces accurate predictions. A few specific models have been highlighted in the literature. 
+If possible, simple models are preferable. For example, if there is a strong correlation between two quantitative predictors, a basic linear regression would be ideal if it produces accurate predictions. A few specific models have been highlighted in the literature: 
+
+We'll highlight a few methods here and give a short summary of their utility and drawbacks. 
+
+#### Summary Statistics {.unnumbered}
+
+An unfortunate method that was popular when computing resources were very limited was to use a summary value for the column as the imputation value. For example, if the column were numeric, the training set mean (or median) would be computed and this value would be used to replace any missing data for that column. For categorical columns, a similar process would be used with the mode of the data (i.e., the most frequently occurring category). 
+
+This is not a great strategy, and we suggest only evaluating it as a worst-possible benchmark for imputation performance. 
+
+#### Tree-based Methods {.unnumbered}
+
+As mentioned above, decision trees can be attractive as imputation tools due to being “low maintenance.” They (in theory) can handle missing data, are insensitive to nonlinear relationships, and can be used for different types of outcome data (e.g., categorical or numeric). They are computationally efficient and have relatively compact prediction equations. However, single trees are not known for their prediction accuracy. This limits their utility for imputation^[Despite the example below.].
+
+Tree-based ensembles combine many individual trees into a single model. From an imputation perspective, ensembling trees can greatly improve the imputation accuracy while still being low maintenance. Random forest, in particular, has been cited in the literature for imputations. However, the nature of this model is that it requires thousands of individual trees to be stable, and that adds additional logistical overhead (since the saved model can be very large). Alternatively, the bagging procedure is very similar to random forests and may only require dozens of trees to produce stable imputed values. 
+
+#### Nearest Neighbors {.unnumbered}
+
+K-nearest neighbor models store the training set and then, for new data, find the K most similar values from the training set. For numeric outcomes, the average of the outcome data from the K neighbors would be used for imputation. For categorical outcomes, the most frequent category would be used as the imputation estimate. 
+
+The model is somewhat attractive since it is reasonably fast (if the training data is not huge) and requires very little preprocessing of its own. However, it would require embedding the training set (at the stage of its use) into the model pipeline. This can be infeasible for very large data sets. 
+
+#### Principal Component Analysis {.unnumbered}
+
+This approach can be very effective for numeric predictors that contain some between-predictor correlations. As previously mentioned in TODO, PCA can be computed using the covariance or (preferably) the correlation matrix of the predictors. If the training data contain missing values, these matrices can be calculated using all “pairwise complete” observations. This allows the model to get the most out of the complete data by avoiding a casewise deletion. We can retain the PCA components that are associated with non-zero eigenvalues and use these to approximate the original values (for the training set or new data). 
+
+The approach becomes less attractive based on the data characteristics. If there are complex nonlinear relationships between predictors or if the predictors are statistically independent of one another, the PCA is less effective at describing the data. 
+
+#### Smoothing {.unnumbered}
+
+For serial/time series data, one easy and potentially effective tool is using a smoothing method. For example, a regression spline or a moving average smoother can be used to fill in intermittent missing values in the series. 
 
 ```{r}
 #| label: mushroom-impute
@@ -145,6 +177,8 @@ impute_train <- training(impute_split)
 impute_test  <- testing(impute_split)
 impute_rs <- vfold_cv(impute_train, strata = `stalk root`)
 ```
+
+## Imputing Stalk Roots
 
 We would develop the imputation model(s) just as we would for any other machine-learning problem, so we start with an initial split using the cases where the stalk root was complete (n = `r format(nrow(shroom_impute), big.mark = ",")`). Another 75/25 split was used via stratified sampling on the outcome (i.e. the stalk root). 
 
