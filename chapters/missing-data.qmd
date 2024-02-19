@@ -1,0 +1,216 @@
+---
+knitr:
+  opts_chunk:
+    cache.path: "../_cache/missing-data/"
+---
+
+# Missing Data {#sec-missing-data}
+
+
+```{r}
+#| label: startup
+#| include: false
+
+library(tidymodels)
+library(mixdir)
+library(partykit)
+library(gt)
+
+tidymodels_prefer()
+theme_set(theme_bw())
+options(pillar.advice = FALSE, pillar.min_title_chars = Inf)
+```
+
+
+
+When collecting data for data analysis, it is not uncommon for some predictor values to be missing. There can be a multitude of reasons that this can happen. For example, when creating a laboratory test for a respiratory disease, there may be no result in the data. This could be for a few reasons. First, it might have been a data collection error; someone forgot to include the value. It could also be due to a database merge where a key field was unspecified and a subset of the data was not properly combined. It is also possible that the test itself failed to produce a result. For example, for diagnostics that use throat swabs to collect the sample, the test might fail because of an interfering substance, such as food coloring from a lozenge being on the swab. In any case, one or more predictors might not have values. 
+
+In this chapter, we’ll review why missing data can occur, whether you need to do anything about it, and, if so, how to impute the absent values. 
+
+## Why are Values Missing? 
+
+The most important question to ask when encountering missing data is: why are the values missing? It is a good idea to know and can substantially affect how we compensate for the problem. In the example of the laboratory test, it could be that a random defect in the test kit was to blame. In this instance, the value was missing completely at random (MCAR). If this is the case, we have significant latitude in terms of how to handle the situation. As a counter-example, suppose that patients with more severe illnesses were more likely to deal with their symptoms via lozenges. If the likelihood of a missing value is a function of some other variable (whether it is in the data or not), the missingness of the data is _informative_. Here, we have to worry about biases that can creep into our analysis, which might reduce the effectiveness of our model. 
+
+First, it is imperative to understand _why_ the data are missing. 
+
+examples: scat, closed station, database merge, completely random events/not so random events (assays and interfering substances). 
+
+
+```{r}
+#| label: mushroom-missing
+#| include: false
+
+data(mushroom)
+
+cln_mushroom <- 
+  mushroom %>% 
+  rename_with(~ gsub("[[:punct:]]", " ", .x)) %>% 
+  as_tibble() %>% 
+  select(-`veil type`, -edible) 
+
+shroom_miss <- 
+  cln_mushroom %>% 
+  mutate(
+    missing = factor(
+      ifelse(is.na(`stalk root`), "yes", "no"),
+      levels = c("no", "yes"))
+  ) %>% 
+  select(-`stalk root`)
+
+set.seed(285)
+miss_split <- initial_split(shroom_miss, strata = missing)
+miss_train <- training(miss_split)
+miss_test  <- testing(miss_split)
+miss_rs <- vfold_cv(miss_train, strata = missing)
+
+spore_tbl <- 
+  miss_train %>%
+  count(`spore print color`, missing) %>%
+  pivot_wider(
+    id_cols = c(`spore print color`),
+    names_from = missing,
+    values_from = n,
+    values_fill = 0
+  ) %>% 
+  mutate(`%` = yes / (no + yes))
+```
+
+Let’s look at an example data set. Unfortunately, this is an existing public data set, so we don’t have first-hand knowledge of the problem. Data are from an Audobon Society Field Guide where `r format(nrow(mixdir::mushroom), big.mark = ",")` data points on mushrooms regarding their physical characteristics such as dimensions, color, or odor of their stalks and veils. 
+
+There is one characteristic, the type of roots at the bottom of the stalk, that has missing values (`r round(mean(shroom_miss$missing == "yes") * 100, 1)`%). There are four different types of stalk roots: bulbous, club, equal, and rooted. 
+
+Since we don't have mushroom foraging experts on hand, let's investigate to see if we can connect the likelihood of missingness to any other columns in the data set^[For this data set, the primary outcome being predicted is whether the mushroom is edible or not. Since imputation does not involve the outcome, we excluded this column from all subsequent analyses in this chapter.]. This is another example of where exploratory data analysis^[Such as Section XXX.]. Since we are on a "fishing expedition" where we engage in a non-specific search for clues, it makes sense to protect ourselves from bias by first splitting the data into a training and test set. We used a 75/25 split into training and test sets by stratifying on whether the stalk root was missing or not. From here, we used visualizations of the other columns to see if they show a pattern of missingness. We also used some analysis techniques to accentuate the process. 
+
+Since all of the columns in this data set are categorical, we can compute the rate of missingness across the values of each predictor and use a statistical test (or confidence interval) to see if there are differences in missingness for the different levels of the predictors. In doing so, the "spore print color" seemed interesting. The spore print is the substance that falls from the mushroom to the ground. The values in the data set are: black, brown, chocolate, green, purple, and white. @tbl-spore-print shows missingness statistics for each color. Four colors have extremely large probabilities for missingness in the stalk root: white, orange, yellow, and  "buff" (yellow-ish). These colors might be missing because they are difficult to see in the wild or on a white paper background. In any case, we would investigate whether the missing value mechanism could contribute bias to our analysis. 
+
+```{r}
+#| label: tbl-spore-print
+#| echo: false
+#| tbl-cap: "The distribution of missingness in the stalk root predictor as a function of the spore print color."
+
+light_bg <- "#fcfefe"
+
+spore_tbl %>% 
+  rename(`Spore Print Color` = `spore print color`) %>% 
+  arrange(desc(`%`)) %>% 
+  gt() %>% 
+  tab_options(table.background.color = light_bg) %>% 
+  tab_spanner(label = "Stalk Root Missing", columns = c(no, yes, `%`)) %>% 
+  tab_style(
+    style = cell_borders(sides = c("bottom"),  weight = px(1.8)),
+    locations = cells_body(rows = nrow(spore_tbl))
+  ) %>% 
+  tab_style(
+    style = cell_borders(sides = c("top", "bottom"),  weight = px(1.8)),
+    locations = cells_column_labels()
+  ) %>% 
+  cols_width(c(starts_with(" ")) ~ px(100)) %>% 
+   fmt_percent(columns = c(`%`), decimals = 1)
+```
+
+## Removing Missing Cases or Columns
+
+tolerance for missing results
+
+## How Do Different Models Handle Missing Data?
+
+## Imputation: Predicting Predictor Values
+
+For missing data, imputation is the process of using other existing information (i.e., the predictors) and using these to estimate what each missing value might have been. In other words, we will build an imputation model to fill in the missing column(s) so that we can run the primary machine-learning model.  A separate imputation model is required for each column that contains (or could contain) missing data. 
+
+Historically, most imputation methods have been developed to produce correct statistical inferences (e.g. p-values). The field of multiple imputations is mature and sophisticated. However, machine-learning models have very different goals and mostly rely on single imputation. 
+
+While any machine-learning model can be used to impute values, we would like them to be: 
+
+ - Accurate.
+ - Easy/fast to estimate.
+ - Easily encapsulated inside of a general preprocessing pipeline. 
+
+If possible, simple models are preferable. For example, if there is a strong correlation between two quantitative predictors, a basic linear regression would be ideal if it produces accurate predictions. A few specific models have been highlighted in the literature. 
+
+```{r}
+#| label: mushroom-impute
+#| include: false
+
+shroom_impute <- 
+  cln_mushroom %>% 
+  filter(!is.na(`stalk root`)) %>% 
+  mutate(
+    across(where(is.character), ~ factor(.x))
+  )
+
+set.seed(128)
+impute_split <- initial_split(shroom_impute, strata = `stalk root`)
+impute_train <- training(impute_split)
+impute_test  <- testing(impute_split)
+impute_rs <- vfold_cv(impute_train, strata = `stalk root`)
+```
+
+We would develop the imputation model(s) just as we would for any other machine-learning problem, so we start with an initial split using the cases where the stalk root was complete (n = `r format(nrow(shroom_impute), big.mark = ",")`). Another 75/25 split was used via stratified sampling on the outcome (i.e. the stalk root). 
+
+```{r}
+#| label: mushroom-cart
+#| include: false
+
+cart_res <- 
+  decision_tree(tree_depth = tune()) %>% 
+  set_mode("classification") %>% 
+  tune_grid(
+    `stalk root` ~ .,
+    resamples = impute_rs,
+    grid = tibble(tree_depth = 1:5),
+    metrics = metric_set(accuracy)
+  )
+cart_acc <-
+  collect_metrics(cart_res) %>% 
+  mutate(
+    lower = mean - qnorm(.95) * std_err,
+    upper = mean + qnorm(.95) * std_err) 
+
+depth_two_acc <- cart_acc$mean[cart_acc$tree_depth == 2]
+depth_two_acc <- round(depth_two_acc * 100, 1)
+
+cart_mod <- rpart::rpart(`stalk root` ~ ., data = impute_train, maxdepth = 2)
+```
+
+Unfortunately, we cannot assume that anything that we learned from the previous missingness analysis will translate over to the imputation model. After investigating several models, it turns out that it is very easy to impute this particular predictor’s values. A simple decision tree (similar to the one described in @eq-tree-2d and @sec-model-development-whole-game) can be very effective. This model described more in TODO, creates a set of nested if/then statements that sequentially cut the predictor space into smaller (hyper)rectangles. The data within the partitions should have outcome values that are "pure," meaning that they try to isolate one particular category. This model requires tuning and, using overall accuracy as the performance metric, @fig-cart-impute shows the relationship between the complexity of the tree (measures using the number of splits) and accuracy. We can see that a fairly shallow tree (a depth of 5) is almost 100% accurate at imputing the stalk root values. 
+
+
+```{r}
+#| label: fig-cart-impute
+#| echo: false
+#| out-width: 70%
+#| fig-width: 6
+#| fig-height: 4
+#| fig-cap: "The relationship between tree complexity and imputation accuracy for the stalk root predictor."
+
+ggplot(cart_acc, aes(tree_depth)) + 
+    geom_point(aes(y = mean)) + 
+    geom_line(aes(y = mean)) + 
+    geom_ribbon(aes(ymin = lower, ymax = upper), alpha = 1 / 10) +
+    labs(x = "Maximum Tree Depth", y = "Accuracy") 
+```
+
+To better understand how the imputation model works, @fig-cart-impute-tree shows a slightly less complex tree (to fit on the page) with a depth of 2 created using the training set. The tree uses two of twenty possible predictors to achieve `r depth_two_acc`% accuracy. All but one of the terminal nodes (the bar plots on the bottom row) show the "purity" of the outcome: a single category is the most frequent value. Encoding this imputation equation is trivial, and it is a perfect example of what we would like to occur when developing imputation models. However, this case study is probably not predictive of what would occur with most data sets where the modeling problem is not as easy. 
+
+
+```{r}
+#| label: fig-cart-impute-tree
+#| echo: false
+#| out-width: 100%
+#| fig-width: 12
+#| fig-height: 6
+#| fig-cap: "A decision tree inputation model with a depth of two splits."
+
+cart_mod %>% 
+  as.party() %>% 
+  plot(ep_args = list(justmin = 20, abbreviate = TRUE), 
+       tp_args = list(rot = 90))
+```
+
+## Blending Imputation into a Preprocessing Strategy
+
+Generally speaking, the imputation model’s prediction should match the data type of the original value (e.g., integer, categorical, etc.). For this reason, we would probably impute data prior to any other preprocessing or feature engineering operations. 
+
+Imputation is an operation that can be easily misapplied. When developing the primary ML model, we should evaluate the imputation models inside of the primary resampling/validation loop (see fig @fig-within-model-process). That will ensure that the good or bad effects of imputation are appropriately measured and propagated into the primary performance metrics for the primary model. One produce that should _not be used_ is to develop and estimate an imputation model and fill in the missing data _prior to the initial split_. This can severely bias the metrics for the primary ML model to be overly optimistic. 
+
