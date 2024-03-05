@@ -1,13 +1,12 @@
 # Website sources for Applied Machine Learning for Tabular Data
 
-
-Welcome! This is a work in progress. We want to create a practical guide to creating quality predictive models from tabular data. We'll publish materials here as we create them and welcome community contributions in the form of discussions, suggestions, and edits. 
+Welcome! This is a work in progress. We want to create a practical guide to developing quality predictive models from tabular data. We'll publish materials here as we create them and welcome community contributions in the form of discussions, suggestions, and edits. 
 
 We also want these materials to be reusable and open. The sources are in the source [GitHub repository](https://github.com/aml4td/website) with a Creative Commons license attached (see below).
 
 Our intention is to write these materials and, when we feel we're done, pick a publishing partner to produce a print version.
 
-The book takes a holistic view of this process and focuses on a few areas that are usually left out of similar works. For example, the effectiveness of the model can be driven by how the predictors are represented. We tightly couple feature engineering methods with machine learning models. Also, quite a lot of work happens after we have determined our best model and created the final fit. Post-modeling activities are also described here. 
+The book takes a holistic view of the predictive modeling process and focuses on a few areas that are usually left out of similar works. For example, the effectiveness of the model can be driven by how the predictors are represented.  Because of this, we tightly couple feature engineering methods with machine learning models.  Also, quite a lot of work happens after we have determined our best model and created the final fit.  These post-modeling activities are an important part of the model development process and will be described in detail. 
 
 To cite this work, we suggest: 
 
@@ -29,19 +28,25 @@ This work is licensed under a [Creative Commons Attribution-NonCommercial-ShareA
 
 ## Intended Audience
 
-Our intended audience is data analysts of many types: statisticians, data scientists, laboratory scientists, and anyone else who needs to create a model for prediction. We don't expect readers to be experts in these methods or the math behind them. Our approach is applied. We want readers to have intuition about what are good and bad ideas for their data and what to look out for. 
+Our intended audience includes data analysts of many types: statisticians, data scientists, professors and instructors of machine learning courses, laboratory scientists, and anyone else who desires to understand how to create a model for prediction.  We don't expect readers to be experts in these methods or the math behind them. Instead, our approach throughout this work is applied.  That is, we want readers to use this material to build intuition about the predictive modeling process.  What are good and bad ideas for the modeling process?  What pitfalls should we look out for?  How can we be confident that the model will be predictive for new samples?  What are advantages and disadvantages of different types of models?  These are just some of the questions that this work will address.
 
-Some background in modeling and statistics is required. Having seen or used basic regression models is good, and understanding basic statistical concepts, such as variance, correlation, populations, samples, etc., is needed. There is some mathematical notation, so you'll need to be able to read those. There are a few more statistically sophisticated sections, but these are not pivotal topics. 
+Some background in modeling and statistics will be extremely useful. Having seen or used basic regression models is good, and an understanding of basic statistical concepts such as variance, correlation, populations, samples, etc., is needed.  There will also be some mathematical notation, so you'll need to be able to grasp these abstractions.  But we will keep this to those parts where it is absolutely necessary.  There are a few more statistically sophisticated sections for some of the more advanced topics. 
 
-If you want a more theoretical treatment of machine learning models, we recommend Hastie et al. (2017). Other books for learning more about machine learning are Bishop and Nasrabadi (2006), Arnold et al. (2019) and, for more of a deep learning focus, Goodfellow et al. (2016).
+If you would like a more theoretical treatment of machine learning models, then we recommend Hastie et al. (2017). Other books for gaining a more in-depth understanding of machine learning are Bishop and Nasrabadi (2006), Arnold et al. (2019) and, for more of a deep learning focus, Goodfellow et al. (2016).
 
 ## Is there code? 
 
-We definitely want to decouple the content from specific software. [One of our other books](http://appliedpredictivemodeling.com/) on modeling had computing sections. They are nice to peruse, and people enjoyed having them there. However, they can quickly become outdated and take up a lot of space. 
+We definitely want to decouple the content of this work from specific software. [One of our other books](http://appliedpredictivemodeling.com/) on modeling had computing sections. Many people found these sections to be a useful resource at the time of the book's publication. However, code can quickly become outdated in today's computational environment.  In addition, this information takes up a lot of page space that would be better used for other topics.
 
-The sources for the material use R, and early adopters can find them in the [GitHub repository](https://github.com/aml4td/website). 
+We will create _computing supplements_ to go along with the materials. Since we use R's tidymodels framework for calculations, the supplement currently in-progress is:  
 
-However, we will create other websites with computing supplements for R and Python (hopefully more in the future). Those will become finalized around the time we finish the first version of the materials. 
+- [`tidymodels.aml4td.org`](https://tidymodels.aml4td.org)
+
+If you are interested in working on a python/scikit-learn supplement, please [file an issue](https://github.com//aml4td/website/issues)  
+
+## Are there exercises?
+
+Many readers found the Exercise sections of _Applied Predictive Modeling_ to be helpful for solidifying the concepts presented in each chapter. The current set can be found at [`exercises.aml4td.org`](https://exercises.aml4td.org)
 
 ## How can I ask questions? 
 

@@ -8,7 +8,9 @@ library(gganimate)
 tidymodels_prefer()
 theme_set(theme_bw())
 options(pillar.advice = FALSE, pillar.min_title_chars = Inf)
-ia_roads <- st_read(dsn = "iowa_highway.shp") # also requires iowa_highway.SHX
+ia_roads <- st_read(dsn = "R/iowa_highway.shp") # also requires iowa_highway.SHX
+
+light_bg <- "#fcfefe"
 
 # ------------------------------------------------------------------------------
 
@@ -58,8 +60,8 @@ all_ames <-
   xlim(ames_x) +
   ylim(ames_y) +
   theme(
-    panel.background = element_rect(fill = "transparent", colour = NA),
-    plot.background = element_rect(fill = "transparent", colour = NA),
+    panel.background = element_rect(fill = light_bg, colour = NA),
+    plot.background = element_rect(fill = light_bg, colour = NA),
     panel.grid = element_blank(),
     panel.border = element_blank(),
     plot.margin = unit(c(0, 0, 0, 0), "null"),
@@ -123,5 +125,5 @@ animate(
   duration = 25
 )
 
-anim_save("anime_ames_selection.gif")
+anim_save("premade/anime_ames_selection.gif")
 
