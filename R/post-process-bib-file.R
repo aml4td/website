@@ -50,6 +50,12 @@ insert_link <- function(x, type) {
 # ------------------------------------------------------------------------------
 
 bib_items <- read.bib("includes/references_original.bib")
+bib_dups <- bib_items[duplicated(bib_items)]
+if (length(bib_dups) > 0) {
+  dup_id <- names(bib_dups)
+  cli::cli_abort("There are duplicate bib entries: {dup_id}")
+}
+
 bib_types <- map_chr(bib_items, ~ attr(.x, "bibtype"))
 bib_year <- map_chr(bib_items, ~ .x$year)
 bib_with_links <- map2(bib_items, bib_types, insert_link)
