@@ -1811,8 +1811,10 @@ This leads us to the mean squared error. We’ve seen the root mean squared erro
 $$MSE = E[(\theta - \hat{\theta})^2]$$
 It turns out that the MSE is a combination of variance and (squared) bias: 
 
-$$MSE = E[(\theta - \hat{\theta})^2] = Var[\hat{\theta}] + (\theta - \hat{\theta})^2$$
-Because of this, MSE (and RMSE) offer a statistic to minimize that accounts for both properties. In this, it can offer a compromise between the two.  
+$$MSE = E[(\theta - \hat{\theta})^2] = Var[\hat{\theta}] + (\theta - \hat{\theta})^2 + \sigma^2$$
+where $\sigma^2$ represents some unknown amount of "irreducible noise."
+
+Because of this, MSE offers a statistic to minimize that accounts for both properties. In this, it can offer a compromise between the two.  
 
 
 To illustrate the this, we simulated a simple nonlinear model: 
@@ -1901,7 +1903,7 @@ sim_stats <-
 
 A linear model was estimated using ordinary least squared and a polynomial expansion for each simulated data set. The test set values were predicted, and the bias, variance, and root mean squared error statistics were computed. This was repeated 50,000 times for polynomial degrees ranging from one to twenty.  
 
-@fig-sim-results shows the average statistic values across model complexity (i.e., polynomial degree). A linear model does very poorly for the bias due to underfitting (as expected). Adding more nonlinearlity results in a substantial decrease in bias because the model fit is closer to the true equation. This improvement plateaus at a fourth-degree polynomial and stays low (nearly zero). The variance begins low; even though the linear model is ineffective, it is stable. Once additional terms are added, the variance of the model increases and explodes around an 18<sup>th</sup> degree polynomial. This shows the tradeoff; as the model becomes more complex, it fits the data better but eventually becomes unstable. 
+@fig-sim-results shows the average statistic values across model complexity (i.e., polynomial degree). A linear model does very poorly for the bias due to underfitting (as expected). Adding more nonlinearlity results in a substantial decrease in bias because the model fit is closer to the true equation. This improvement plateaus at a fourth-degree polynomial and stays low (nearly zero). The variance begins low; even though the linear model is ineffective, it is stable. Once additional terms are added, the variance of the model increases and explodes around an 18<sup>th</sup> degree polynomial^[In this particualr case, the variance becomes very large since the number of parameters is nearly the same as the number of training set points (22). This makes the underlying mathematical operation (matrix inversion) numerically unstable. Even so, it is the result of excessive model complexity.]. This shows the tradeoff; as the model becomes more complex, it fits the data better but eventually becomes unstable. 
 
 ```{r}
 #| label: fig-sim-results
@@ -1936,12 +1938,12 @@ The mean squared error shows the combined effect of variance and bias. It shows 
 
 The variance-bias tradeoff is the idea that we can exploit one for the other. Let’s go back to the basic sample mean statistic. If the data being averaged are normally distributed, the simple average is an _unbiased estimator_: it is always “aiming” for the true theoretical value. That’s a great property to have. The issue is that many unbiased estimators can have very high variance. In some cases, a slight increase in bias might result in a drastic decrease in variability. The variance-bias tradeoff helps us when one of those two quantities is more important. 
 
-@fig-tradeoff shows a simple example. Suppose we have some alternative method for estimatimg the mean of a group that adds some bias while reducing variance. That tradeoff might be worthwhile dpending on how much bias will greatly reduce the variance. In our figure, suppose the true population mean is zero. The green curve represents the sample mean for a fixed sample size. It is centered at zero but has signficant uncertainty. The other curve might be an alternative estimator that produces a slightly pessimistic estimate (it’s mean is slightly smaller than zero) but has 3-fold smaller variation. This may be a good idea depending on how the estimate will be used ^[This specific example will the referenced again when discussing resampling in @sec-resampling.]. 
+@fig-tradeoff shows a simple example. Suppose we have some alternative method for estimatimg the mean of a group that adds some bias while reducing variance. That tradeoff might be worthwhile dpending on how much bias will greatly reduce the variance. In our figure, suppose the true population mean is zero. The green curve represents the sample mean for a fixed sample size. It is centered at zero but has signficant uncertainty. The other curve might be an alternative estimator that produces a slightly pessimistic estimate (its mean is slightly smaller than zero) but has 3-fold smaller variation. This may be a good idea depending on how the estimate will be used ^[This specific example will be referenced again when discussing resampling in @sec-resampling.]. 
 
 ```{r}
 #| label: fig-tradeoff
 #| echo: false
-#| out-width: 40%
+#| out-width: 50%
 #| fig-width: 5
 #| fig-height: 4
 #| fig-cap: "A simnple example of the variance-bias tradeoff."
@@ -2046,22 +2048,29 @@ If you noticed that this is basically the same approach suggested for choosing s
 A supervised approach would, given a specific number of new features to create, determine the breakpoints by optimizing a performance measure (e.g., RMSE, classification accuracy, etc.). A good example is a tree-based model (as mentioned above). After fitting a single tree or, better yet, an ensemble of trees, the split values in the trees can be used as the breakpoints.  
 
 ```{r}
-#| label: ames-bins
+#| label: fossil-bins
 #| cache: true
+data(fossil)
+fossil_df <- tibble(age = fossil$age, ratio = fossil$strontium.ratio)
+
+set.seed(82)
+fossil_rs <- vfold_cv(fossil_df, repeats = 5)
+
+
 rmse_only <- metric_set(rmse)
 ctrl <- control_grid(save_workflow = TRUE)
 
-rec <- recipe(Sale_Price ~ Latitude, data = ames_train)
+rec <- recipe(ratio ~ age, data = fossil_df)
 
 rec_unsup <- 
   rec %>% 
-  step_discretize(Latitude, num_breaks = tune())
+  step_discretize(age, num_breaks = tune())
 
 rec_tree_splits<- 
   rec %>%
   step_discretize_cart(
-    Latitude,
-    outcome = "Sale_Price",
+    age,
+    outcome = "ratio",
     cost_complexity = tune(),
     min_n = 5,
     tree_depth = 25
@@ -2071,8 +2080,8 @@ unsuper_wflow <- rec_unsup %>% workflow(linear_reg())
 unsuper_res <-
   unsuper_wflow %>%
   tune_grid(
-    resamples = ames_rs,
-    grid = tibble(num_breaks = 2:25),
+    resamples = fossil_rs,
+    grid = tibble(num_breaks = 2:10),
     metrics = rmse_only,
     control = ctrl
   )
@@ -2082,8 +2091,8 @@ set.seed(724)
 super_res <-
   super_wflow %>%
   tune_grid(
-    resamples = ames_rs,
-    grid = 25,
+    resamples = fossil_rs,
+    grid = tibble(cost_complexity = 10^seq(-3, -1, length.out = 20)),
     metrics = rmse_only,
     control = ctrl
   )
@@ -2114,12 +2123,12 @@ super_breaks <-
   mutate(
     method = "supervised",
     method = factor(method, levels = bin_lvls)
-    ) 
+  ) 
 num_super_breaks <- length(unique(super_breaks$value))
 
 super_pred <- 
   fit_best(super_res) %>% 
-  augment(ames_train) %>% 
+  augment(fossil_df) %>% 
   mutate(
     method = "supervised",
     method = factor(method, levels = bin_lvls)
@@ -2139,7 +2148,7 @@ num_unsuper_breaks <- length(unique(unsuper_breaks$value))
 
 unsuper_pred <- 
   fit_best(unsuper_res) %>% 
-  augment(ames_train) %>% 
+  augment(fossil_df) %>% 
   mutate(
     method = "unsupervised",
     method = factor(method, levels = bin_lvls)
@@ -2163,23 +2172,23 @@ In each case, the number of new features requires tuning. Using the basic grid s
 #| fig-height: 4.25
 #| fig-cap: The estimated relationship between sale price and latitude using discretization methods. The fitted line corresponds to an unsupervised set of features and the "rugs" at the top and bottom of the plots illustrate where the breakpoints were estimated.
 
-ames_train %>% 
+fossil_df %>% 
   ggplot() + 
-  geom_point(aes(Latitude, Sale_Price), pch = 1, alpha = 1 / 5) +
+  geom_point(aes(age, ratio), alpha = 3 / 4, pch = 1, cex = 3) +
   geom_rug(data = super_breaks, aes(x = value, col = method)) +
   geom_rug(data = unsuper_breaks, aes(x = value, col = method), sides = "t") +
   geom_step(data = super_pred,
-            aes(Latitude, .pred),
+            aes(age, .pred),
             col = bin_cols["supervised"],
             lwd = 1,
-            alpha = 2 / 3) +
+            alpha = 1 / 3) +
   geom_step(data = unsuper_pred,
-            aes(Latitude, .pred),
+            aes(age, .pred),
             col = bin_cols["unsupervised"],
             lwd = 1,
-            alpha = 2 / 3) +  
-  scale_color_manual(values = bin_cols) +
-  ylab("Sale Price (log10)")
+            alpha = 1 / 3)  +
+  labs(x = "Age", y = "Isotope Ratio") +  
+  scale_color_manual(values = bin_cols) 
 ```
 
 The blue and red marks on the top and bottom of the plot show the locations of the breakpoints for each procedure. They are remarkably similar to one another. The blocky nature of the fitted trend reflects that, within each bin, a simple mean is used to estimate the sale price. For this fit, `r best_unsuper$num_breaks[1]` means were estimated. This number is likely larger than the corresponding number of parameters required by a spline model to produce a smooth trend line. 
