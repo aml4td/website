@@ -1794,6 +1794,119 @@ The price of houses in Ames versus latitude with a 20 degree of freedom natural 
 
 Splines are extremely useful and are especially handy when we want to encourage a simple model (such as linear regression) to approximate the predictive performance of a much more complex black-box model (e.g., a neural network or tree ensemble). We’ll also see splines and spline-like features used within different modeling techniques, such as generalized additive models (Sections [-@sec-reg-gam] and [-@sec-cls-gam]), multivariate adaptive regression splines (@sec-mars), and a few others.  
 
+## The Variance-Bias Tradeoff {#sec-variance-bias}
+
+
+```{r}
+#| label: variance-bias-functions
+#| echo: false
+
+make_data <- function(num_points = 30, error_sd =  0.1) {
+  te_n <- ceiling(num_points * .25)
+  holdout <- floor(seq(2, num_points - 1, length.out = te_n))
+  tr_n <- num_points - te_n
+  dat <- 
+    tibble(x = seq(from = -1.2, to = 1.2, length.out = num_points)) %>% 
+    mutate(
+      x = x + rnorm(num_points, sd = 0.02),
+      truth = (x^3) + 2 * exp(-6 * (x - 0.3)^2),
+      y = truth + rnorm(num_points, sd = error_sd)
+    )
+  dat$data <- "train"
+  dat$data[holdout] <- "test"
+  dat
+}
+
+get_stats <- function(dat, deg) {
+  tr <- dat[dat$data == "train", ]
+  te <- dat[dat$data == "test", ]
+  mod <- lm(y ~ poly(x, deg), data = tr)
+  te$.pred <- predict(mod, newdata = te)
+  tibble(
+    rmse = rmse_vec(te$y, te$.pred),
+    bias = mean(te$truth - te$.pred),
+    var = var(te$.pred),
+    degree = deg
+  )
+}
+
+sim <- function(deg, n = 50) {
+  make_data(num_points = n) %>% 
+    get_stats(deg)
+}
+```
+
+
+```{r}
+#| label: fig-nonlinear-sim
+#| echo: false
+#| out-width: 70%
+#| fig-width: 6
+#| fig-height: 4.25
+#| fig-cap: "A simulated data set with a nonlinear function."
+
+sim_grid <- 
+  tibble(x = seq(from = -1.2, to = 1.2, length.out = 500)) %>% 
+    mutate(y = (x^3) + 2 * exp(-6 * (x - 0.3)^2))
+
+set.seed(12)
+make_data() %>% 
+  ggplot(aes(x, y)) + 
+  geom_line(data = sim_grid, lty = 3) +
+  geom_point(aes(col = data, pch = data), cex = 2, alpha = 3 / 4) +
+  labs(x = "predictor", y = "outcome")
+```
+
+
+
+```{r}
+#| label: variance-bias-stats
+#| echo: false
+#| cache: true
+
+set.seed(12)
+sim_stats <- 
+  map_dfr(rep(1:20, each = 1000), sim) %>% 
+  summarize(
+    rmse = mean(rmse),
+    bias = mean(bias),
+    var = mean(var),
+    .by = c(degree)
+  )
+```
+
+
+```{r}
+#| label: fig-sim-results
+#| echo: false
+#| out-width: 100%
+#| fig-width: 9
+#| fig-height: 3
+#| fig-cap: "Variance-bias tradeoff simulation results."
+
+p_bias <- 
+  sim_stats %>% 
+  ggplot(aes(degree, bias^2)) + 
+  geom_point() +
+  labs(x = "Polynomial Degree", title = "Squared Bias", y = NULL)
+
+p_var <- 
+  sim_stats %>% 
+  ggplot(aes(degree, var)) + 
+  geom_point() +
+  labs(x = "Polynomial Degree", title = "Variance", y = NULL)
+
+p_rmse <- 
+  sim_stats %>% 
+  ggplot(aes(degree, rmse)) + 
+  geom_point() +
+  labs(x = "Polynomial Degree", title = "RMSE", y = NULL)
+
+p_bias + p_var + p_rmse
+```
+
+
+
 ## Discretization
 
 ```{r}
