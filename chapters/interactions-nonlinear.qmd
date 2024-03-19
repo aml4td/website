@@ -1820,50 +1820,50 @@ Because of this, MSE offers a statistic to minimize that accounts for both prope
 
 To illustrate this, we simulated a simple nonlinear model: 
 
-$$y_i = x_i^3 + 2\exp[-6(x_i - 0.3)^2] + \epsilon_i$$
+$$y_i = x_i^3 + 2\exp\left[-6(x_i - 0.3)^2\right] + \epsilon_i$$
 
-where the error terms are $\epsilon_i \sim N(0, 0.1)$ and the predictor values were nearly uniform across [-1.2, 1.2]. Since we know the true values, we can compute the model bias. 
-
-To create a simulated data set, 50 samples were simulated. Of these, 22 were used for the training set and eight were reserved for the test set. The test set values were roughly equally spaced across the range of the predictor. One simulated data set is shown in @fig-nonlinear-sim, along with the true underlying pattern.  
+where the error terms are $\epsilon_i \sim N(0, 0.1)$ and the predictor values were uniformly spaced across [-1.2, 1.2]. Since we know the true values, we can compute the model bias. 
 
 ```{r}
 #| label: variance-bias-functions
 #| echo: false
 
-make_data <- function(num_points = 30, error_sd =  0.1) {
+make_data <- function(num_points = 30, error_sd =  0.2) {
   te_n <- ceiling(num_points * .25)
-  holdout <- floor(seq(2, num_points - 1, length.out = te_n))
-  tr_n <- num_points - te_n
+  holdout <- num_points - 4
+  tr_n <- num_points
   dat <- 
-    tibble(x = seq(from = -1.2, to = 1.2, length.out = num_points)) %>% 
+    tibble(x = seq(from = -1.2, to = 1.2, length.out = num_points + 1)) %>% 
     mutate(
-      x = x + rnorm(num_points, sd = 0.02),
       truth = (x^3) + 2 * exp(-6 * (x - 0.3)^2),
-      y = truth + rnorm(num_points, sd = error_sd)
+      y = truth + rnorm(num_points + 1, sd = error_sd)
     )
   dat$data <- "train"
   dat$data[holdout] <- "test"
   dat
 }
 
-get_stats <- function(dat, deg) {
+get_preds <- function(dat, deg) {
   tr <- dat[dat$data == "train", ]
   te <- dat[dat$data == "test", ]
-  mod <- lm(y ~ poly(x, deg), data = tr)
+  te$point <- seq_along(te$data)
+  if (deg == 0) {
+    mod <- lm(y ~ 1, data = tr)
+  } else {
+    mod <- lm(y ~ poly(x, deg), data = tr)
+  }
   te$.pred <- predict(mod, newdata = te)
-  tibble(
-    rmse = rmse_vec(te$y, te$.pred),
-    bias = mean(te$truth - te$.pred),
-    var = var(te$.pred),
-    degree = deg
-  )
+  te$degree <- deg
+  te
 }
 
-sim <- function(deg, n = 50) {
+sim <- function(deg, n = 30) {
   make_data(num_points = n) %>% 
-    get_stats(deg)
+    get_preds(deg)
 }
 ```
+
+To create a simulated data set, `r nrow(make_data())` samples were simulated. Of these, `r nrow(make_data()) - 1` were used for the training set and one were reserved for the demonstrating the variance and bias. The test set values were roughly equally spaced across the range of the predictor. One simulated data set is shown in @fig-nonlinear-sim, along with the true underlying pattern.  
 
 ```{r}
 #| label: fig-nonlinear-sim
@@ -1891,49 +1891,55 @@ make_data() %>%
 #| echo: false
 #| cache: true
 
-set.seed(12)
-sim_stats <- 
-  map_dfr(rep(1:20, each = 50000), sim) %>% 
+set.seed(614)
+sim_res <- 
+  map_dfr(rep(1:23, each = 50000), sim) %>% 
+  mutate(bias = truth - .pred) %>% 
   summarize(
-    rmse = mean(rmse),
+    rmse = rmse_vec(y, .pred),
     bias = mean(bias),
-    var = mean(var),
-    .by = c(degree)
+    var = var(.pred),
+    n  = length(.pred),
+    .by = c(degree, point)
+  ) %>% 
+  mutate(
+    double_check = var + bias^2, 
+    mse = rmse^2, 
+    point = format(point)
   )
 ```
+
 A linear model was estimated using ordinary least squared and a polynomial expansion for each simulated data set. The test set values were predicted, and the bias, variance, and root mean squared error statistics were computed. This was repeated 50,000 times for polynomial degrees ranging from one to twenty.  
 
-@fig-sim-results shows the average statistic values across model complexity (i.e., polynomial degree). A linear model performs poorly for the bias due to underfitting (as expected). Adding more nonlinearity results in a substantial decrease in bias because the model fit is closer to the true equation. This improvement plateaus at a fourth-degree polynomial and stays low (nearly zero). The variance begins low; even though the linear model is ineffective, it is stable. Once additional terms are added, the variance of the model increases and explodes around an 18<sup>th</sup> degree polynomial^[In this particular case, the variance becomes very large since the number of parameters is nearly the same as the number of training set points (22). This makes the underlying mathematical operation (matrix inversion) numerically unstable. Even so, it is the result of excessive model complexity.]. This shows the tradeoff; as the model becomes more complex, it fits the data better but eventually becomes unstable.
+@fig-sim-results shows the average statistic values across model complexity (i.e., polynomial degree). A linear model performs poorly for the bias due to underfitting (as expected). Adding more nonlinearity results in a substantial decrease in bias because the model fit is closer to the true equation. This improvement plateaus at a sixth-degree polynomial and stays low (nearly zero). The variance begins low; even though the linear model is ineffective, it is stable. Once additional terms are added, the variance of the model steadily increases then explodes around an 20<sup>th</sup> degree polynomial^[In this particular case, the variance becomes very large since the number of parameters is nearly the same as the number of training set points (`r nrow(make_data()) - 1`). This makes the underlying mathematical operation (matrix inversion) numerically unstable. Even so, it is the result of excessive model complexity.]. This shows the tradeoff; as the model becomes more complex, it fits the data better but eventually becomes unstable.
 
 ```{r}
 #| label: fig-sim-results
 #| echo: false
-#| out-width: 100%
-#| fig-width: 9
-#| fig-height: 3
-#| fig-cap: "Simulation results showing variance, bias, and mean squared error."
+#| out-width: 70%
+#| fig-width: 6
+#| fig-height: 4.25
+#| warning: false
+#| fig-cap: "Simulation results showing variance, squared bias, and mean squared error. The line is a spline-based smoother."
 
-p_bias <- 
-  sim_stats %>% 
-  ggplot(aes(degree, bias^2)) + 
-  geom_point(cex = 1) +
-  labs(x = "Polynomial Degree", title = "Squared Bias", y = NULL)
-
-p_var <- 
-  sim_stats %>% 
-  ggplot(aes(degree, var)) + 
-  geom_point(cex = 1) +
-  labs(x = "Polynomial Degree", title = "Variance", y = NULL)
-
-p_rmse <- 
-  sim_stats %>% 
-  ggplot(aes(degree, rmse^2)) + 
-  geom_point(cex = 1) +
-  labs(x = "Polynomial Degree", title = "MSE", y = NULL)
-
-p_bias + p_var + p_rmse
+sim_res %>%
+  mutate(`Squared Bias` = bias^2) %>% 
+  select(degree, point, MSE = mse, `Squared Bias`, Variance = var) %>%
+  filter(degree > 0) %>% 
+  pivot_longer(
+    cols = c(MSE, `Squared Bias`, Variance),
+    names_to = "statistic",
+    values_to = "value"
+  ) %>% 
+  ggplot(aes(degree, value, col = statistic, pch = statistic)) + 
+  stat_smooth(geom = "line", se = FALSE, span = .4) +
+  geom_point(cex = 2, alpha = 1 / 2) +
+  scale_shape_manual(values = c(16, 4, 1)) +
+  scale_color_brewer(palette = "Dark2") +
+  labs(x = "Polynomial Degree", y = NULL)
 ```
-The mean squared error shows the combined effect of variance and bias. It shows a steep decline as we add more terms, then plateaus between seven and thirteen-degree models. After that, the explosive variance dominates the MSE as it rapidly increases.  
+
+The mean squared error shows the combined effect of variance and bias. It shows a steep decline as we add more terms, then plateaus between seven and fifteenth-degree models. After that, the rapidly escalating variance dominates the MSE as it rapidly increases.  
 
 The variance-bias tradeoff is the idea that we can exploit one for the other. Let’s go back to the basic sample mean statistic. If the data being averaged are normally distributed, the simple average is an _unbiased estimator_: it is always “aiming” for the true theoretical value. That’s a great property to have. The issue is that many unbiased estimators can have very high variance. In some cases, a slight increase in bias might result in a drastic decrease in variability. The variance-bias tradeoff helps us when one of those two quantities is more important. 
 
@@ -1942,8 +1948,8 @@ The variance-bias tradeoff is the idea that we can exploit one for the other. Le
 ```{r}
 #| label: fig-tradeoff
 #| echo: false
-#| out-width: 50%
-#| fig-width: 5
+#| out-width: 70%
+#| fig-width: 6.25
 #| fig-height: 4
 #| fig-cap: "A simnple example of the variance-bias tradeoff."
 
