@@ -29,7 +29,7 @@ scholar_url <- function(title, year) {
 
 
 insert_link <- function(x, type) {
-  if (type != "Article") {
+  if ( !( type %in% c("InProceedings", "Article") ) ) {
     return(x)
   }
   yr <- x$year
