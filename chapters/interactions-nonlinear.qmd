@@ -1,0 +1,894 @@
+---
+knitr:
+  opts_chunk:
+    cache.path: "../_cache/interactions-nonlinear/"
+---
+
+# Interactions and Nonlinear Features {#sec-interactions-nonlinear}
+
+```{r}
+#| label: interaction-basis-binning
+#| include: false
+
+source("../R/_common.R")
+
+# ------------------------------------------------------------------------------
+library(gt)
+library(pamr)
+library(splines2)
+library(hstats)
+library(DALEXtra)
+library(tidymodels)
+library(embed)
+library(aorsf)
+library(patchwork)
+library(probably)
+library(doParallel)
+library(aspline)
+
+# ------------------------------------------------------------------------------
+# set options
+
+tidymodels_prefer()
+theme_set(theme_transparent())
+cl <- makePSOCKcluster(parallel::detectCores(logical = TRUE))
+registerDoParallel(cl)
+
+set_options()
+
+data(fossil)
+load("../RData/bart_interaction_res.RData")
+```
+
+```{r}
+#| label: data-setup
+#| include: false
+
+source("../R/setup_ames.R")
+source("../R/setup_hotel_rates.R")
+source("../R/setup_deliveries.R")
+```
+
+We saw in previous chapters that preprocessing is necessary because models can be sensitive to specific predictor characteristics.  For instance, some models:
+
+- are sensitive to highly correlated predictors.
+- cannot consume qualitative predictors as non-numeric data.
+- cannot be built when predictors have no or near-zero variability.
+
+Preprocessing methods address aspects of the predictors that place them in a form so that models can be built.  This is _what the model needs_ to function.
+
+While preprocessing techniques allow models to be built, they do not necessarily transform them in ways that help the model to identify predictive relationships with the outcome.  This is the fundamental concept of **feature engineering** which addresses the question:  what can we do to make it easier for the model to understand and predict the outcome.
+
+ In this chapter we will discuss techniques that address this question.   For example, if the relationship between a predictor is nonlinear, how can we represent that predictor so that the relationship can be modeled?  Or if two predictors work in conjunction with each other, then how can this information be engineered for a model?  While feature engineering is not necessary for models to be built, it contains a crucial set of tools for improving model performance.
+
+Let’s look at a simple example. Occasionally, predictor pairs work better in unison rather than as main effects. For example, consider the data in @fig-two-class-corr(a), where two predictors are: 
+
+- strictly positive,
+- significantly right-skewed, and
+- highly correlated. 
+
+In the predictors' original form, there is a significant overlap between the two classes of samples.  However, when the ratio of the predictors is used, the newly derived predictor better discriminates between classes (shown in @fig-two-class-corr(b)). While not a general rule, the three data characteristics above suggest that the modeler attempts to form ratios from two or more predictors ^[Alternatively, PCA after skewness-correcting transformations may be another good option.].
+
+```{r}
+#| label: fig-two-class-corr
+#| echo: false
+#| out-width: 80%
+#| fig-width: 7
+#| fig-height: 4
+#| fig-cap: "Panel (a): two highly correlated, right-skewed predictors with two classes. Panel (b): sepration of classes using $log(A/B)$."
+#| fig-alt: "Panel (a): two highly correlated, right-skewed predictors with two classes. Panel (b): sepration of classes using $log(A/B)$."
+
+data(bivariate)
+
+biv_cols <- c(One = "#4DAF4A", Two = "#984EA3")
+biv_scat <- 
+  bivariate_train %>% 
+  ggplot(aes(A, B, col = Class, pch = Class)) + 
+  geom_point(alpha = 1 / 2, cex = 2) +
+  coord_fixed(ratio = 20) + 
+  scale_color_manual(values = biv_cols) +
+  ggtitle("(a)") +
+  theme(legend.position = "top")
+
+ratio_features <-
+  bivariate_train %>% 
+  mutate(
+    `Log-Ratio` = log(A / B)
+  ) 
+
+biv_ratio <-
+  ratio_features %>% 
+  ggplot(aes(Class, `Log-Ratio`, fill = Class)) + 
+  geom_boxplot(alpha = 1 / 2, show.legend = FALSE)+ 
+  scale_fill_manual(values = biv_cols) +
+  ggtitle("(b)")
+
+biv_scat + biv_ratio
+```
+
+```{r}
+#| label: fig-two-class-features
+#| eval: false
+data(bivariate)
+
+trans_features <- 
+  bivariate_train %>% 
+  recipe(Class ~ ., data = bivariate_train) %>% 
+  step_YeoJohnson(A, B) %>% 
+  prep() %>% 
+  bake(new_data = NULL)
+
+raw_features <- 
+  trans_features %>% 
+  pivot_longer(c(A, B), names_to = "feature", values_to = "value") %>% 
+  mutate(feature = paste(feature, "(YJ)"))
+
+ratio_features <-
+  bivariate_train %>% 
+  mutate(
+    feature = "Log-Ratio",
+    value = log(A / B)
+  ) %>% 
+  select(feature, value, Class)
+
+pca_features <- 
+  recipe(Class ~ ., data = bivariate_train) %>% 
+  step_YeoJohnson(A, B) %>% 
+  step_normalize(A, B) %>% 
+  step_pca(A, B, num_comp = 2) %>% 
+  prep() %>% 
+  bake(new_data = NULL) %>% 
+  pivot_longer(c(PC1, PC2), names_to = "feature", values_to = "value")
+
+all_features <- 
+  bind_rows(ratio_features, pca_features) %>% 
+  mutate(
+    feature = factor(feature, levels = c("Log-Ratio", "PC1", "PC2"))
+  )
+
+all_features %>% 
+  ggplot(aes(Class, value, fill = Class)) + 
+  geom_boxplot(alpha = 1 / 2) +
+  facet_wrap(~ feature, scales = "free_y") + 
+  scale_fill_manual(values = biv_cols) +
+  labs(y = NULL)
+```
+
+It is essential to understand that these _data_ require transformation. We can put the original predictors into a model as-is. The model won’t produce an error but won’t have good predictive performance. We can induce a separation of the classes when a joint feature is used. 
+
+This aspect of feature engineering depends on the data set so it is difficult to enumerate all possible techniques. In this chapter, we’ll describe a few commonly used methods: splines, interactions, and discretization (a.k.a. binning). 
+
+## Interactions {#sec-interactions}
+
+When building models for prediction, the majority of variation in the outcome is generally explained by the cumulative effect of the important individual predictors.  For many problems, additional variation in the response can be explained by the effect of two or more predictors working in conjunction with each other.  
+
+The healthcare industry has long understood the concept of interactions among drugs for treating specific diseases [@singh2017suppressive, @mokhtari2017combination, and @altorki2021neoadjuvant].  As an example of an interaction, consider treatment for the disease non-small cell lung cancer (NSCLC).  In a recent study, patients with an advanced stage of NSCLC with an EGFR mutation were given either osimertinib alone or osimertinib in combination with traditional chemotherapy [@tragrisso2023].   Patients taking the combination treatment had a significantly longer progression-free survival time than patients taking osmertinib alone.  Hence, the interaction of the treatments is more effective than the single treatment.  To summarize, two (or more) predictors interact if their combined impact is different (less or greater) than what would be expected from the added impact of each predictor alone.
+
+We’ve already encountered an example of an interaction in @sec-eda-whole-game where the relationship between delivery time and the time of order differed across days of the week. This trend is reproduced in @fig-delivery-no-interact(a). The telltale sign of the interaction is that the trendlines are not parallel with one another; they have different rates of increase and cross. 
+
+How would this plot change if there was no interaction between the order time and day? To illustrate, we estimated trendlines in a way that coerced the nonlinear trend for order time to be the same.  @fig-delivery-no-interact(b) shows the results: parallel lines for each day of the week. 
+
+```{r}
+#| label: fig-delivery-no-interact
+#| fig-width: 8
+#| fig-height: 4
+#| out-width: "85%"
+#| warning: false
+#| fig-cap: "Delivery times versus the time of the order, colored by the day of the week. (a) A duplicate of a panel from @fig-delivery-predictors. (b) The same data with trendlines where the underlying model did _not_ allow an interaction between the delivery day and hour." 
+
+main_effects_mod <- lm(time_to_delivery ~ day + splines2::naturalSpline(hour, df = 10), delivery_train)
+main_effects_pred <- augment(main_effects_mod, delivery_train)
+
+day_cols <-  c("#000000FF", "#24FF24FF", "#009292FF",  "#B66DFFFF", 
+               "#6DB6FFFF",  "#920000FF",  "#FFB6DBFF")
+
+time_lims <- c(8, 34)
+
+with_interactions <- 
+  delivery_train %>% 
+  ggplot(aes(x = hour, time_to_delivery, col = day)) +
+  labs(y = "Time Until Delivery (min)", x = "Order Time (decimal hours)", title = "(a)") +
+  geom_smooth(se = FALSE) + 
+  scale_color_manual(values = day_cols) + 
+  ylim(time_lims) +
+  guides(color = guide_legend(nrow = 1, title = NULL))
+
+no_interactions <- 
+  main_effects_pred %>% 
+  arrange(day, hour) %>% 
+  ggplot(aes(x = hour)) +
+  labs(y = NULL, x = "Order Time (decimal hours)", title = "(b)") +
+  geom_path(aes(y = .fitted, col = day), linewidth = 1, show.legend = FALSE) + 
+  scale_color_manual(values = day_cols) + 
+  ylim(time_lims)
+
+((with_interactions + no_interactions) +
+  plot_layout(guides = 'collect')  ) &
+  theme(legend.position = "bottom")
+```
+
+This example demonstrates an interaction between a numeric predictor (hour of order) and a categorical predictor (day of the week). Interactions can also occur between two (or more) numeric or categorical predictors. Using the delivery data, let’s examine potential interactions solely between categorical predictor columns. 
+
+For regression problems, one visualization technique is to compute the means (or medians) of the outcome for all combinations of variables and then plot these means in a manner similar to the previous figure. Let’s look at the 27 predictors columns for whether a specific item was included in the order. The original data is a count, but the data are mostly zero or one. We’ll look at two variables at a time and plot the four combinations of whether the item was ordered at all (versus not at all). @fig-delivery-items shows two potential sets of interactions. The x-axis indicates whether Item 1 was in the order or not. The y-axis is the mean delivery time with 90% confidence intervals^[These were computed using the bootstrap, as in @sec-eda-whole-game.].
+
+The left panel shows the joint effect of items 1 and 9. The lines connecting the means are parallel. This indicates that each of these two predictors affects the outcome independently of one another. Specifically, the incremental change in delivery time is the same when item 9 is or is not included with item 1.  The right panel has means for items 1 and 10. The mean delivery times are very similar when neither is contained in the order. Also, when only one of the two items is in the order, the average time is similarly small. However, when both are included, the delivery time becomes much larger.  This means that you cannot consider the effect or either item 1 or 10 alone; their effect on the outcome occurs jointly. 
+
+```{r}
+#| label: compute-mean-int-times
+#| echo: false
+#| cache: true
+mean_time <- function(x) {
+  x %>% 
+    pivot_longer(
+      cols = c(-time_to_delivery, -item_01),
+      names_to = "predictor",
+      values_to = "count"
+    )%>% 
+    mutate(
+      ordered = ifelse(count > 0, "yes", "no"),
+      ordered = paste(ordered, gsub("item_", "", predictor)),
+      item_01 = ifelse(item_01 > 0, "yes", "no"),
+      term = paste(item_01, ordered)
+    )%>% 
+    summarize(
+      estimate = mean(time_to_delivery),
+      .by = c(term)
+    ) %>% 
+    select(term, estimate)
+}
+
+set.seed(78)
+resampled_ratios <-
+  delivery_train %>% 
+  select(time_to_delivery, item_01, item_09, item_10)%>% 
+  bootstraps(times = 5000) %>% 
+  mutate(stats = map(splits, ~ mean_time(analysis(.x)))) %>% 
+  int_pctl(stats, alpha = 0.1) %>% 
+  mutate(
+    split_up = strsplit(term, " "),
+    item_01 = map_chr(split_up, ~ .x[1]),
+    Ordered = map_chr(split_up, ~ .x[2]),
+    Item = map_chr(split_up, ~  gsub("^0", " ", .x[3]))
+  )
+```
+
+```{r}
+#| label: fig-delivery-items
+#| fig-width: 7
+#| fig-height: 4
+#| out-width: "70%"
+#| fig-cap: "Interaction examples with two categorical predictors. Items 1 and 9 (left panel) do not interaction, while items 1 and 10 appear to have a strong  interaction (right panel)."
+
+resampled_ratios %>% 
+  ggplot(aes(item_01, .estimate, col = Ordered, group = Ordered)) + 
+  geom_point() + 
+  geom_line() +
+  facet_wrap(~ Item, labeller = "label_both") +
+  geom_errorbar(aes(ymin = .lower, ymax = .upper),
+                width = 1 / 20,
+                alpha = 2 / 3) +
+  lims(y = c(25, 44)) +
+  labs(x = "Contains Item 1", y = "Mean Delivery Time") +
+  theme(legend.position = "top") + 
+  guides(col = guide_legend(title = "Contains Item 9 or 10"))
+```
+
+As a third example, interactions may occur between continuous predictors. It can be difficult to discover the interaction via visualization for two numeric predictors without converting one of the predictors to categorical bins. To illustrate the _concept_ of an interaction between two numeric predictors, $x_1$ and $x_2$, let’s use a simple linear equation:
+
+$$ 
+y = \beta_0 + \beta_{1}x_1 + \beta_{2}x_2 + \beta_{3}x_{1}x_{2} + \epsilon
+$$ {#eq-two-way-int}
+
+The $\beta$ coefficients represent the overall average response ($\beta_0$), the average rate of change for each individual predictor ($\beta_1$ and $\beta_2$), and the incremental rate of change due to the combined effect of $x_1$ and $x_2$ ($\beta_3$) that goes beyond what $x_1$ and $x_2$ can explain alone.  The parameters for this equation can be estimated using a technique such as ordinary least squares (REF).  The sign and magnitude of $\beta_3$ indicate how and the extent to which the two predictors interact:   
+
+ - When $\beta_3$ is positive, the interaction is _synergistic_ since the response increases beyond the effect of either predictor alone.  
+ - Alternatively, when $\beta_3$ is negative, the interaction is _antagonistic_ since the response decreases beyond the effect of either predictor alone.  
+ - A third scenario is when $\beta_3$ is essentially zero.  In this case, there is no interaction between the predictors and the relationship between the predictors is _additive_. 
+ - Finally, for some data sets, we may find that neither predictor is important individually (i.e., $\beta_1$ and $\beta_2$ are zero).  However, the coefficient on the interaction term is not zero.  Because this case occurs very infrequently, it is called _atypical_. 
+ 
+To understand this better, @fig-interaction-contours shows a contour plot of a predicted linear regression model with various combinations of the model slope parameters. The two predictors are centered at zero with values ranging within $x_j \pm 4.0$). The default setting shows a moderate synergistic interaction effect since all of the $\beta_j = 1.0$). In the plot, darker values indicate smaller predicted values.   
+
+::: {#fig-interaction-contours}
+
+::: {.figure-content}
+
+```{shinylive-r}
+#| label: fig-interaction-contours
+#| viewerHeight: 600
+#| standalone: true
+
+library(shiny)
+library(ggplot2)
+library(bslib)
+
+ui <- page_fillable(
+  theme = bs_theme(bg = "#fcfefe", fg = "#595959"),
+  padding = "1rem",
+  layout_columns(
+    fill = FALSE,
+    col_widths = breakpoints(xs = c(-2, 8, -2), sm = 4),
+    sliderInput(
+      "beta_1",
+      label = "Predictor 1 slope",
+      min = -4.0,
+      max = 4.0,
+      step = 0.5,
+      value = 1
+    ),
+    sliderInput(
+      "beta_2",
+      label = "Predictor 2 slope",
+      min = -4.0,
+      max = 4.0,
+      step = 0.5,
+      value = 1
+    ),
+    sliderInput(
+      "beta_int",
+      label = "Interaction slope",
+      min = -2.0,
+      max = 2.0,
+      step = 0.25,
+      value = 0.5
+    )
+  ),
+  as_fill_carrier(plotOutput("contours"))
+)
+
+
+
+server <- function(input, output) {
+
+  light_bg <- "#fcfefe" # from aml4td.scss
+  grid_theme <- bs_theme(
+    bg = "#fcfefe", fg = "#595959"
+  )
+
+  # ------------------------------------------------------------------------------
+
+theme_light_bl <- function(...) {
+
+  ret <- ggplot2::theme_bw(...)
+
+  col_rect <- ggplot2::element_rect(fill = light_bg, colour = light_bg)
+  ret$panel.background  <- col_rect
+  ret$plot.background   <- col_rect
+  ret$legend.background <- col_rect
+  ret$legend.key        <- col_rect
+
+  larger_x_text <- ggplot2::element_text(size = rel(1.25))
+  larger_y_text <- ggplot2::element_text(size = rel(1.25), angle = 90)
+  ret$axis.text.x <- larger_x_text
+  ret$axis.text.y <- larger_y_text
+  ret$axis.title.x <- larger_x_text
+  ret$axis.title.y <- larger_y_text  
+  
+  ret$legend.position <- "top"
+
+  ret
+}
+
+  # ------------------------------------------------------------------------------
+
+  n_grid <- 100
+  grid_1d <- seq(-1, 1, length.out = n_grid)
+  grid <- expand.grid(A = grid_1d, B = grid_1d)
+
+  output$contours <-
+    renderPlot({
+      # browser()
+      grid$outcome <-
+        input$beta_1 * grid$A + input$beta_2 * grid$B +
+        input$beta_int * grid$A * grid$B
+
+      p <-
+        ggplot(grid, aes(A, B)) +
+        coord_equal() +
+        labs(x = "Predictor 1", y = "Predictor 1") +
+        theme_light_bl()
+
+      if (length(unique(grid$outcome)) >= 15) {
+        p <- p +
+          geom_contour_filled(aes(z = scale(outcome)), bins = 15, show.legend = FALSE) +
+          scale_fill_viridis_d(option = "G")
+      }
+
+      print(p)
+
+    })
+}
+
+app <- shinyApp(ui, server)
+```
+
+:::
+
+Prediction contours for a linear regression model with @eq-two-way-int with $\beta_0 = 0$. Darker values indicate smaller predictions. 
+
+:::
+
+Interaction effects between predictors are sometimes confused with correlation between predictors. They are not the same thing. Interactions are defined by their relationship to the outcome while between-predictors correlations are unrelated to it. An interaction could occur independent of the amount of correlation between predictors. 
+
+### How Likely Are Interactions? {#sec-interactions-princples} 
+
+Within the context of statistical experimental design, @hamada1992analysis discuss some probabilistic aspects of predictor importance. The effect sparsity principle is that there are often few predictors that are relevant for predicting the outcome. Similarly, the effect hierarchy principle states that “main effects” (i.e. a feature involving only predictor) are more likely to occur than interactions. Also, as more predictors are involved in the interaction, the less likely they become. Finally, the heredity principle conjectures that if an interaction is important, it is very likely that the corresponding main effects are likely too. @chipman1996bayesian further expands this principle. 
+
+The original context of these principles was envisioned for screening large numbers of predictors in experimental designs; they are still very relevant for the analysis of tabular data. 
+
+### Detecting Interactions {#sec-interactions-detection} 
+
+An ideal scenario would be that we would know which predictors interact before modeling the data.  If this would be the case, then these terms could be included in a model.  This would be ideal because the model could more easily find the relationship with the response, thus leading to better predictive performance.  Unfortunately, knowledge of which predictors interact is usually not available prior to initiating the modeling process.  
+
+If meaningful interactions are unknown before modeling, can models still discover and utilize these potentially important features? Recent studies using various advanced modeling techniques have shown that some methods can inherently detect interactions. For example, tree-based models [@elith2008working], random forests [@garcia2009evaluating], boosted trees [@lampa2014identification], and support vector machines [@chen2008support] are effective at uncovering them. 
+
+If modern modeling techniques can naturally find and utilize interactions, then why is it necessary to spend any time uncovering these relationships?  The first reason is to improve interpretability.  Recall the trade-off between prediction and interpretation that was discussed in Section TODO.  More complex models are less interpretable and generally more predictive, while simpler models are more interpretable and less predictive.   Therefore, if we know which interaction(s) are important, we can include these in a simpler model to enable a better interpretation.  A second reason to spend time uncovering interactions is to help improve the predictive performance of models.  
+
+ 
+```{r}
+#| label: lm-more-interactions
+#| echo: false
+#| warning: false
+#| cache: true
+
+load("../RData/deliveries_lm.RData")
+
+reg_metrics <- metric_set(mae, rmse, rsq)
+rs_ctrl <- control_resamples(save_pred = TRUE, save_workflow = TRUE)
+
+base_rec <- 
+  recipe(time_to_delivery ~ ., data = delivery_train) %>% 
+  step_dummy(all_factor_predictors()) %>% 
+  step_zv(all_predictors()) %>% 
+  step_spline_natural(hour, distance, deg_free = 10)
+
+###
+
+item_int_rec <- 
+  base_rec %>% 
+  step_interact(
+    ~ starts_with("hour"):starts_with("day") + 
+      item_01:item_10
+  )
+
+lin_reg_item_int_wflow <- 
+  workflow() %>% 
+  add_model(linear_reg()) %>% 
+  add_recipe(item_int_rec)
+
+set.seed(3838)
+lin_reg_item_int_res <-
+  fit_resamples(lin_reg_item_int_wflow,
+                delivery_rs,
+                control = rs_ctrl,
+                metrics = reg_metrics)
+
+###
+
+all_int_rec <- 
+  base_rec  %>% 
+  step_interact(
+    ~ starts_with("hour"):starts_with("day") + 
+      starts_with("item"):starts_with("item")
+  ) 
+
+lin_reg_all_int_wflow <- 
+  workflow() %>% 
+  add_model(linear_reg()) %>% 
+  add_recipe(all_int_rec)
+
+set.seed(3838)
+lin_reg_all_int_res <-
+  fit_resamples(lin_reg_all_int_wflow,
+                delivery_rs,
+                control = rs_ctrl,
+                metrics = reg_metrics)
+
+val_stats <- 
+  bind_rows(
+    collect_metrics(lin_reg_res) %>% 
+      mutate(Interactions = "Hour x Day"),
+    collect_metrics(lin_reg_item_int_res) %>% 
+      mutate(Interactions = "Add One Item Interaction"),
+    collect_metrics(lin_reg_all_int_res) %>% 
+      mutate(Interactions = "Add All Item Interactions")
+  ) %>% 
+  filter(.metric != "rsq") %>% 
+  mutate(.metric = toupper(.metric)) %>% 
+  select(Interactions, .metric, mean) %>% 
+  pivot_wider(
+    id_cols = c(Interactions),
+    names_from = .metric,
+    values_from = mean
+  ) %>% 
+  mutate(.order = row_number())
+
+
+hour_day_fit <- fit_best(lin_reg_res)
+item_int_fit <- fit_best(lin_reg_item_int_res)
+all_int_fit <- fit_best(lin_reg_all_int_res)
+
+anova_res <- 
+  anova(
+  hour_day_fit %>% extract_fit_engine(), 
+  item_int_fit %>% extract_fit_engine(),
+  all_int_fit %>% extract_fit_engine()
+) %>% 
+  tidy() %>%
+  mutate(
+    Interactions = c("Hour x Day", "Add One Item Interaction", "Add All Item Interactions"),
+    Decimal = sqrt(rss / df.residual),
+    `p-Value` = paste0("10<sup>", round(log10(p.value), 1), "</sup>"),
+    Time = map_chr(sqrt(rss / df.residual), dec_to_time),
+    Time = gsub(" minutess and ", "m, ", Time),
+    Time = gsub(" seconds", "s", Time),
+    Time = paste0("(", Time, ")")
+  ) %>% 
+  rename(
+    `Deg. Free.` = df.residual,
+    `# Added` = df
+  ) %>% 
+  select(Interactions, Decimal, Time, `Deg. Free.`, `# Added`, `p-Value`) %>% 
+  full_join(val_stats,  by = "Interactions") %>% 
+  arrange(.order) %>% 
+  select(-.order)
+
+added_all_pairs <- anova_res$`# Added`[3]
+impr_add_two <- sprintf("%3.2f", (anova_res$Decimal[1] - anova_res$Decimal[2]))
+impr_add_all <- sprintf("%3.2f", (anova_res$Decimal[2] - anova_res$Decimal[3]))
+```
+
+ 
+What should we do if we have a candidate set of interactions?  If we are using a more formal statistical model, such as linear or logistic regression, the traditional tool for evaluating whether additional model terms in a set of nested models are worth including is the conventional analysis of variance (ANOVA). This uses the statistical likelihood value as the objective function, which is equivalent to comparing the RMSE values between models for linear regression ^[It so happens that the Gaussian likelihood function is equivalent to the sums of squared errors (SSE). That, in turn, is equivalent to the RMSE. That simplification does not automatically occur for other probability distributions.]. The error reduction and how many additional terms are responsible for the improvement are computed. Using these results and some probability assumptions about the data, we can formally test the null hypothesis that the additional parameters all have coefficient values of zero. 
+
+Looking at the delivery data, our model in @sec-model-development-whole-game included a single set of interactions (e.g., hour-by-day). What if we included one more interaction: item 1 $\times$ item 10? @tbl-interaction-anova shows the ANOVA results. The RMSE _computed on the training set_ is listed in the first and second columns. The reduction by including this additional model term is `r impr_add_two` (decimal minutes). Assuming normality of the model residuals, the p-value for this test is exceedingly small. This indicates that there is no evidence that this parameter is truly zero. In other words, there is strong evidence that the inclusion of the interaction helps explain the response.  This statistical difference may not make much of a practical difference. However, machine learning models often behave like "a game of inches" where every small improvement adds up to an overall improvement that matters. 
+
+```{r}
+#| label: tbl-interaction-anova
+#| tbl-cap: "ANOVA table and validation set statistics for three models with different interaction sets."
+#| echo: false
+
+blank_na <- function(x) {
+  x[grepl("NA", x)] <- ""
+  x
+}
+
+anova_res <- 
+  anova_res %>% 
+  as.data.frame() %>% 
+  format(digits = 3, big.mark = ",") %>% 
+  apply(2, blank_na) %>% 
+  as_tibble()
+
+anova_res %>% 
+  select(-`# Added`) %>% 
+  gt() %>%
+  tab_style(
+    style = cell_borders(sides = c("bottom"),  weight = px(1.8)),
+    locations = cells_body(rows = nrow(anova_res))
+  ) %>% 
+  tab_style(
+    style = cell_borders(sides = c("top", "bottom"),  weight = px(1.8)),
+    locations = cells_column_labels()
+  ) %>% 
+  fmt_markdown(columns = c(`p-Value`)) %>%
+  tab_spanner(label = "Training Set RMSE", columns = c(Decimal, Time)) %>% 
+  tab_spanner(label = "Validation Set", columns = c(RMSE, MAE)) %>% 
+  cols_width(c(Interactions) ~ px(100)) %>% 
+  cols_width(c(`p-Value`) ~ px(80))
+```
+
+What about the other two-way interactions between the other item predictors? Since the training set is fairly large (compared to the current number of model parameters), it is feasible to include the remaining `r added_all_pairs` pairwise interactions and use the ANOVA method to validate this choice. These results are contained in the third row of @tbl-interaction-anova where the RMSE dropped further by `r impr_add_all` minutes. The p-value is also very small, indicating that there is no evidence that _all_ of the  `r added_all_pairs` parameter estimates are zero. More extensive testing would be required to determine which actually are zero. This can be tedious and a potentially dangerous "fishing expedition" that could result in serious bias creeping into the modeling process. 
+
+One problem with the ANOVA method is that it calculates the model error using the training set, which we know may not indicate what would occur with previously unseen data. In fact, it is well known that, for linear regression via ordinary least squares estimation, it is impossible for the training set error to ever increase when adding new model terms. Therefore, was the drop in RMSE when all interactions were included due to this fact?  Or was it due to other important interactions that were included?  To understand this we can turn to the validation set to provide confirmation.  You can see this in @tbl-interaction-anova where the validation set RMSE and MAE values are included. Note that, when the large set of interactions were added, these metrics both _increase_ in the validation set, a result contrary to what the ANOVA results tell us.  
+
+The observed and predicted visualizations for each model in @tbl-interaction-anova are shown in @fig-lin-reg-interactions. Adding the additional interaction yielded a slight numerical improvement. However, the visualization in the middle panel shows fewer very large residuals. The figure also shows the model results that include the full set of  `r choose(27, 2)` two-way interactions; this panel shows no significant reduction in large residuals, further casting doubt on using the entire set. 
+
+```{r}
+#| label: fig-lin-reg-interactions
+#| echo: false
+#| warning: false
+#| message: false
+#| out-width: 90%
+#| fig-width: 9
+#| fig-height: 3.5
+#| fig-cap: Validation set predicted vs. observed delivery times for linear regression models with and without additional interactions.
+
+lvls <- c("Previous Results", "One Addtional Interaction", "All Item Interactions")
+
+lin_reg_res %>% 
+  collect_predictions() %>% 
+  mutate(Model = "Previous Results") %>% 
+  bind_rows(
+    lin_reg_item_int_res %>% 
+      collect_predictions() %>% 
+      mutate(Model = "One Addtional Interaction")
+  ) %>% 
+  bind_rows(
+    lin_reg_all_int_res %>% 
+      collect_predictions() %>% 
+      mutate(Model = "All Item Interactions")
+  ) %>%
+  mutate(
+    Model = factor(Model, levels = lvls)
+  ) %>%
+  ggplot(aes(time_to_delivery, .pred)) +
+  geom_abline(col = "green", lty = 2) +
+  geom_point(alpha = 0.4, cex = 1) +
+  geom_smooth(se = FALSE, col = "red") +
+  coord_obs_pred() +
+  facet_wrap( ~ Model, ncol = 3) +
+  labs(x = "Observed Delivery Time", y = "Predicted Delivery Time")
+```
+
+So far, we have used visualizations to unearth potential interactions. This can be an effective strategy when the number of potential interactions is large, but the visual nature of this process is subjective. There are some specialized quantitative tools for identifying interactions. For example, @lim2015learning used regularized generalized linear models (sections TODO) to estimate all possible two-way interactions and use a penalization method to determine which should be retained. @miller1984selection and @fes ([Section 7.4.3](https://bookdown.org/max/FES/approaches-when-complete-enumeration-is-practically-impossible.html#the-feasible-solution-algorithm)) describe the feasible solution algorithm, an iterative search method for interaction discovery. Another, which we will now describe in more detail, is Friedman's H-statistic [@friedman2008predictive]. 
+
+We can estimate the joint effect of a set of predictors on the outcome as well as the effect of individual predictors. If we thought that only main effects and two-factor interactions were possible, we could factor out the individual effects from the joint effect. The leftover predictive ability would then be due to interactions. Consider the linear model in @eq-two-way-int. The joint effect would include all possible model terms associated with a predictor. We can also create main effects too: 
+
+\begin{align}
+f(x_1, x_2) &= \beta_{1}x_1 + \beta_{2}x_2 + \beta_{3}x_{1}x_{2} \notag \\
+f(x_1) &= \beta_{1}x_1  \notag \\
+f(x_2) &= \beta_{2}x_2 \notag 
+\end{align}
+
+To isolate the potential interaction effect: 
+
+$$
+f(x_1\times x_2) = f(x_1, x_2) - f(x_1) - f(x_2) = \beta_{3}x_{1}x_{2}
+$$ {#eq-int-isolate}
+
+This shows that, for this situation, we can isolate the effect of an interaction by removing any other systematic effects in the data^[This approach works because the model in @eq-two-way-int is _capable_ of estimating the interaction. There are many models that do not have the ability to measure interaction effects, and, for this case, it would be impossible to isolate the interaction term(s). However, tree-based ensembles are good at estimating interactions, as are other complex black-box models such as neural networks and support vector machines. The tools described below only work with "interaction capable" models.]. @eq-int-isolate is based on a simple parametric linear model. For models with more complex prediction equations, we can’t analytically pick out which model parameters should be used to investigate potential interactions. 
+
+However, for any model, the joint and marginal effects can be quantified using _partial dependence profiles_ (PDP) (@molnar2020interpretable, [Section 8.1](https://christophm.github.io/interpretable-ml-book/pdp.html)). First, we determine a sequence of values covering the observed range of the predictor(s) of interest. Then we randomly sample a data point, perhaps from the training set, and over-ride the value of the predictor of interest with values from the grid. This produces a prediction profile over the grid. We can repeat this process many times to approximate $f(\cdot)$ by averaging the multiple prediction values for each grid point. 
+
+@fig-ensemble-pdp visualizes the PDP data derived from using the emsembles of regression trees for $f(hour)$, $f(day)$, and $f(hour, day)$. The first panel shows the random realizations of the relationship between delivery time and order hour from 1,000 randomly sampled rows of the training set. The results are unsurprising; we can see a similarity between these results and the initial visualizations in @fig-delivery-predictors. The single trend line in panel (b) is the average of these profiles for each value of the predictor (delivery hour). There appears to be, on average, a nonlinear effect of the delivery hour. The day of the week is an informative predictor and the _joint effect_ profile in panel (d) shows that its effect induces different patterns in the delivery hour. If this were not the case, the patterns in panels (b) and (c) would, when combined, approximate the pattern in panel (d).  
+
+```{r}
+#| label: hstat-pdp-calcs
+#| warning: false
+#| echo: false
+#| cache: true
+p <- ncol(delivery_train) - 1
+
+set.seed(1)
+orf_fit <-
+  orsf(time_to_delivery ~ .,
+       data = delivery_train,
+       mtry = p,
+       n_tree = 50)
+
+orf_expl <- 
+  DALEX::explain(
+  orf_fit,
+  y = delivery_train$time_to_delivery,
+  data = delivery_train %>% dplyr::select(-time_to_delivery),
+  label = "ORF",
+  verbose = FALSE
+)
+  
+set.seed(1805)
+pdp_hour <- model_profile(orf_expl, N = 1000, variables = "hour")
+set.seed(1805)
+pdp_day <- model_profile(orf_expl, N = 1000, variables = "day")
+set.seed(1805)
+pdp_int <- model_profile(orf_expl, N = 1000, variables = "hour",
+                         groups = "day")
+
+
+# The PDP data to plot.
+format_mean_prof <- function(x) {
+  dat <-
+    dplyr::as_tibble(x$agr_profiles) %>%
+    dplyr::select(predictor = `_vname_`, value = `_x_`, dplyr::any_of("_groups_"),
+                  prediction = `_yhat_`)
+  # If the 'groups' argument to `model_profile()` is used:
+  if (any(grepl("_groups_", names(dat)))) {
+    dat <- dplyr::rename(dat, group = `_groups_`)
+  }
+  dat
+}
+
+# The individual profiles (with all of the data)
+format_ind_prof <- function(x) {
+  dat <- dplyr::as_tibble(x$cp_profiles)
+  col <- x$agr_profiles$`_vname_`[1]
+  dat$value <- dat[[col]]
+  dat %>%
+    dplyr::select(predictor = `_vname_`, value, prediction = `_yhat_`, id = `_ids_`)
+}                         
+```
+
+```{r}
+#| label: fig-ensemble-pdp
+#| echo: false
+#| warning: false
+#| out-width: 70%
+#| fig-width: 6
+#| fig-height: 6
+#| fig-cap: "Partial dependence profiles for the food delivery hour and day, derived for the tree-based ensemble. Panel (a) shows the individual grid predictions from 1,000 randomly sampled points in the training set. The other panels show the average trends." 
+#| eval: true
+
+day_cols <- c(
+  "#000000FF", "#24FF24FF", "#009292FF", "#B66DFFFF",
+  "#6DB6FFFF", "#920000FF", "#FFB6DBFF"
+)
+
+p_hour_ind <-
+  pdp_hour %>%
+  format_ind_prof() %>%
+  ggplot(aes(value, prediction, group = id)) +
+  geom_line(alpha = 1 / 50) +
+  labs(x = "Order Hour", y = "Delivery Time", title = "(a)")
+
+pred_rng <- range(p_hour_ind$data$prediction)
+
+p_hour <-
+  pdp_hour %>%
+  format_mean_prof() %>%
+  ggplot(aes(value, prediction)) +
+  geom_line(linewidth = 1) +
+  labs(x = "Order Hour", y = NULL, title = "(b)") +
+  ylim(pred_rng)
+
+p_day <-
+  pdp_day %>%
+  format_mean_prof() %>%
+  dplyr::rename(Day = value) %>%
+  ggplot(aes(Day, prediction, col = Day)) +
+  geom_point(cex = 2) +
+  labs(x = "Order Day", y = "Delivery Time", title = "(c)") +
+  ylim(pred_rng) +
+  scale_color_manual(values = day_cols)
+
+p_hour_day <-
+  pdp_int %>%
+  format_mean_prof() %>%
+  dplyr::rename(Day = group) %>%
+  ggplot(aes(value, prediction)) +
+  geom_line(aes(col = Day), linewidth = 1, show_legend = FALSE) +
+  labs(x = "Order Hour", y = NULL, title = "(d)") +
+  ylim(pred_rng) +
+  scale_color_manual(values = day_cols)
+
+(((p_hour_ind + p_hour) / (p_day + p_hour_day)) +
+  plot_layout(guides = "collect")) &
+  theme(legend.position = "bottom")
+```
+
+Friedman’s H-statistic can quantify the effect of interaction terms using partial dependence profiles. When investigating two-factor interactions between predictors $j$ and $j'$, the statistic is 
+
+$$
+H^2_{jj'}=\frac{\sum_\limits{i=1}^B\left[\hat{f}(x_{ij},x_{ij'})-\hat{f}(x_{ij})-\hat{f}(x_{ij'})\right]}{ \sum_\limits{i=1}^B\hat{f}^2(x_{ij}, x_{ij'})}
+$$
+
+where the $\hat{f}(x_{ij})$ term represents the partial dependence profile for predictor $j$ for sample point $i$ along the grid for that predictor and $B$ is the number of traning set samples.  The denominator captures the total joint effect of predictors $j$ and $j'$ so that $H^2$ can be interpreted as the fraction of the joint effect explained by the potential interaction. 
+
+For a set of $p$ predictors, we could compute all $p(p-1)/2$ pairwise interactions and rank potential interactions by their statistic values. This can become computationally intractable at some point. One potential shortcut suggested by the heredity principle is to quantify the importance of the $p$ predictors and look at all pairwise combinations of the $p^*$ most important values.  For $p^* = 10$, @fig-hstats-interaction shows the top five interactions detected by this procedure. We’ve already visually identified the hour $\times$ day interaction, so seeing this in the rankings is comforting. However, another large interaction effect corresponds to the variables for items #1 and #10. Discovering this led us to visually confirm the effect back in @fig-delivery-items. 
+
+```{r}
+#| label: ensemble-pdp-calcs
+#| echo: false
+#| eval: true
+#| cache: true
+
+orf_hstats <-
+  hstats(orf_fit,
+         X = delivery_val %>% dplyr::select(-time_to_delivery),
+         pairwise_m = 10,
+         approx = TRUE,
+         n_max = 1000,
+         verbose = FALSE)
+orf_two_way_int_obj <- h2_pairwise(orf_hstats, zero = TRUE)
+
+int_vars <-
+  strsplit(rownames(orf_two_way_int_obj), ":") %>%
+  map(sort) %>%
+  map(~gsub("_0", " ", .x)) %>%
+  map(~gsub("_", " ", .x)) %>%
+  map_chr( ~ paste(.x[1], "x", .x[2]))
+
+orf_two_way_int <-
+  tibble(terms = int_vars, effect = orf_two_way_int_obj$M[, 1]) %>%
+  mutate(
+    terms = factor(terms),
+    terms = reorder(terms, effect)
+  ) %>%
+  slice_max(effect, n = 10)
+
+set.seed(158)
+orsf_int_imp <- 
+  orsf_vint(orf_fit, sep = "_x_") %>%
+  as_tibble() %>%
+  dplyr::select(interaction, score) %>%
+  mutate(
+    split_up = map(interaction, ~ strsplit(as.character(.x), "_x_")[[1]]),
+    split_up = map(split_up, ~ sort(.x)),
+    interaction = map_chr(split_up, ~ paste(.x[1], .x[2], sep = " x ")),
+    interaction = map_chr(interaction, ~ gsub("_", " ", .x)),
+    interaction = map_chr(interaction, ~ gsub("item 0", "item ", .x)),
+    interaction = reorder(interaction, score)
+  ) %>%
+  slice_max(score, n = 10)
+
+hstat_flat_common <- 
+  intersect(
+    as.character(orf_two_way_int$terms), 
+    as.character(orsf_int_imp$interaction))
+```
+
+```{r}
+#| label: fig-hstats-interaction
+#| echo: false
+#| out-width: 60%
+#| fig-width: 6
+#| fig-height: 4.25
+#| fig-cap: "$H^2$ statistics for the top ten pairwise interaction terms."
+#| eval: true
+
+orf_two_way_int %>%
+  ggplot(aes(x = effect, y = terms)) +
+  geom_bar(stat = "identity") +
+  labs(y = NULL, x = "Proportion of Joint Effect Variability")
+```
+
+Note that the _overall_ importance of the features are being quantified. From this analysis alone, we are not informed that the relationships between the hour and distance predictors and the outcome are nonlinear. It also doesn’t give any sense of the direction of the interaction (e.g., synergistic or antagonistic). We suggest using this tool early in the exploratory data analysis process to help focus visualizations on specific variables to understand how they relate to the outcome and other predictors. 
+
+There is a version of the statistic that can compute how much a specific predictor is interacting with _any other_ predictor. It is also possible to compute a statistical test to understand if the H statistic is different than zero. In our opinion, it is more helpful to use these values as diagnostics rather than the significant/insignificant thinking that often accompanies formal statistical hypothesis testing results.  
+
+@inglis2022visualizing discuss weak spots in the usage of the H-statistic, notably that correlated predictors can cause abnormally large values. This is an issue inherited from the use of partial dependence profiles [@apley2020]. 
+
+Alternatively, @greenwell2018simple measures the potential for variables to interact by assessing the "flatness" over regions of the partial dependence profile. The importance of a predictor, or a pair of predictors, is determined by computing the standard deviation of the flatness scores over regions. For example, @fig-delivery-items shows a flat profile for the item 1 $\times$ item 9 interaction while the item 1 $\times$ item 10 interaction has different ranges of means across values of item 1. @fig-flat-interaction shows ten interactions with the largest flatness importance statistics. As with the $H^2$ results, the hour-by-day interaction. The two top ten lists have `r length(hstat_flat_common) - 1`  other interactions in common. 
+
+```{r}
+#| label: fig-flat-interaction
+#| echo: false
+#| out-width: 60%
+#| fig-width: 6
+#| fig-height: 4.25
+#| fig-cap: "Importance statistics for the top ten pairwise interaction terms."
+#| eval: true
+
+orsf_int_imp %>%
+  slice_max(score, n = 10) %>%
+  ggplot(aes(score, interaction)) +
+  geom_bar(stat = "identity") +
+  labs(y = NULL, x = "Flatness Importance Statistic")
+```
+
+Other alternatives can be found in @hooker2004discovering, @herbinger2022repid, and @oh2022predictive.
+
+The two PDP approaches we have described apply to any model capable of estimating interactions. There are also model-specific procedures for describing which joint effects are driving the model (if any). One method useful for tree-based models is understanding if two predictors are used in consecutive splits in the data. For example, @fig-reg-tree showed a shallow regression tree for the delivery time data. The terminal nodes had splits with orderings $\text{hour}\rightarrow\text{hour}$ and $\text{hour}\rightarrow\text{day} \rightarrow\text{distance}$ (twice). This implies that these three predictors have a higher potential to be involved in interactions with one another. 
+
+@kapelner2013bartmachine describe an algorithm that counts how many times pairs of variables are used in consecutive splits in a tree. They demonstrate this process with Bayesian Adaptive Regression Trees (BART, Section TODO) which creates an ensemble of fairly shallow trees. @fig-bart-interaction shows the top ten pairwise interactions produced using this technique. Note that the BART implementation split categorical predictors via single categories. For the delivery data, this means that the tree would split on a specific day of the week (.i.e., Friday or not) instead of splitting all of the categories at once. This makes a comparison between the other two methods difficult. However, it can be seen that the hour $\times$ day interaction has shown to be very important in all three methods. 
+
+```{r}
+#| label: fig-bart-interaction
+#| echo: false
+#| out-width: 60%
+#| fig-width: 6
+#| fig-height: 4.25
+#| fig-cap: "BART model statistics identifying interactions by how often they occur in the tree rules."
+#| eval: true
+
+bart_interaction_res %>%
+  slice_max(mean, n = 10) %>%
+  ggplot(aes(mean, interaction)) +
+  geom_bar(stat = "identity") +
+  labs(y = NULL, x = "Average Count of Splits with Both Variables")
+```
+
+Caution should be exercised with this method. First, some tree ensembles randomly sample a subset of predictors for each split (commonly known as $m_{try}$). For example, if $m_{try} = 4$, a random set of four predictors are the only ones considered for that split point. This deliberately coerces non-informative splits; we are not using the best possible predictors in a split. This can dilute the effectiveness of counting predictors in successive splits. Second, as discussed in @sec-classification-trees, many tree-based splitting procedures disadvantage predictors with fewer unique values. For example, in the delivery data, the distance and hour predictors are more likely to be chosen for splitting than the item predictors _even if they are equally informative_.  There are splitting procedures that correct for this bias, but users should be aware of the potential impartiality. 
+
+The H-statistic and its alternatives can be an incredibly valuable tool for learning about the data early on as well as suggesting new features that should be included in the model. They are, however, computationally expensive. 
+
+## Basis Expansions and Splines {#sec-splines}
+
+## Discretization
+
+## Chapter References {.unnumbered}
+
+```{r}
+#| label: teardown-cluster
+#| include: false
+
+stopCluster(cl)
+```
