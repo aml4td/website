@@ -1,637 +1,393 @@
 ---
 knitr:
   opts_chunk:
-    cache.path: "../_cache/embeddings/"
+    cache.path: "../_cache/transformations/"
 ---
 
-# Embeddings {#sec-embeddings}
+# Transforming Numeric Predictors {#sec-numeric-predictors}
 
 ```{r}
-#| label: embeddings-setup
+#| label: transformations-setup
 #| include: false
 
 source("../R/_common.R")
 
 # ------------------------------------------------------------------------------
-library(MASS)
+
 library(tidymodels)
 library(embed)
 library(bestNormalize)
 library(patchwork)
-library(scales)
-library(modeldatatoo) # remove this later with setup file
-library(ggforce)
-library(viridis)
 
 # ------------------------------------------------------------------------------
 # set options
+
 tidymodels_prefer()
 theme_set(theme_transparent())
 set_options()
 ```
 
 ```{r}
-#| label: data-import
+#| label: ames-split
 #| include: false
 source("../R/setup_ames.R")
-source("../R/setup_chemometrics.R")
 ```
 
-When there are a multitude of predictors, it might make sense to condense them into a smaller number of artificial features. To be useful, this smaller set should represent what is essential in the original data. This process is often called _feature extraction_ or _manifold learning_. We’ll use a more general term currently en vogue: **embeddings**. While this chapter focuses on feature extraction, embeddings  can be used for other purposes, such as converting non-numeric data (e.g., text) into a more usable numeric format. 
+Data that are available for modeling are often collected passively without the specific purpose of being used for building a predictive model.  As an example, the Ames Housing data contains a wealth of information on houses in Ames, Iowa.  But this available data may not contain the most relevant measurements for predicting house price.  This may be due to the fact that important predictors were not measured.  Or, it may be because the predictors we have collected are not in the best form to allow models to uncover the relationship between the predictors and the response.
 
-This section will examine two primary classes of embedding methods that can achieve multiple purposes. First, we’ll consider linear methods that take a numeric input matrix $X$ that is $n \times p$ and create a different, probably smaller set of features $X^*$ ($n \times m$)^[With $m <<< p$.] using the transformation $X^* = XA$. 
+As mentioned previously, feature engineering is the process of representing your predictor data so that the model has to do the least amount of work to explain the outcome effectively.  A tool of feature engineering is predictor transformations.  Some models also need predictors to be transformed to meet the model's mathematical requirements (i.e., pre-processing). In this chapter we will review transformations for quantitative predictors. 
 
-After describing linear methods, consider a different class of transformations focusing on the distances between data points called _multidimensional scaling_ (MDS). MDS creates a new set of $m$ features that are not necessarily linear combinations of the original features but often use some of the same math as the linear techniques. 
+We will begin by describing transformations that are applied to one predictor at a time that yield a revised for of the predictor (one in, one out).  After these, an example of a _group_ transformation is described called the _spatial sign_. Later, @sec-embeddings will describe different types of many-to-many transformations such as principal component analysis (PCA) and multidimensional scaling (MDS). Additionally, in @sec-interactions-nonlinear, we will examine techniques for expanding a single numeric predictor to many predictors (one in, many out).  
 
-Before beginning, we’ll introduce another data set that will be used here and in forthcoming chapters.
+Let's begin by understanding some general data characteristics that need to be addressed via feature engineering and when transformations should be applied. 
 
-## Example: Predicting Barley Amounts
 
-@larsen2019deep and @pierna2020applicability describe a data set where laboratory measurements are used to predict what percentage of a liquid was lucerne, soy oil, or barley oil^[Retreived from [`https://chemom2019.sciencesconf.org/resource/page/id/13.html`](https://chemom2019.sciencesconf.org/resource/page/id/13.html)]. An instrument is used to measure how much of particular wavelengths of light are absorbed by the mixture to help determine chemical composition. We will focus on using the lab measurements to predict the percentage of barley oil in the mixture. The distribution of these values is shown in @fig-barley-data(a). 
+## What are Problematic Characteristics, and When Should Transformations be Applied?
+
+Common problematic characteristics that occur across individual predictors are:
+
+* skewed or unusually shaped distributions,
+* sample(s) that have extremely large or small values, and
+* vastly disparate scales.
+
+ Some models, like those that are tree-based, are able to tolerate these characteristics.  However, these characteristics can detrimentally affect most other models.  Techniques used to address these problems generally involve transformation parameters.  For example, to place the predictors on the same scale, we would subtract the mean of a predictor from a sample and then divide by the standard deviation.  This is know as standardizing and will be discussed in the next section.   
+
+What data should be used to estimate the mean and standard deviation?  Recall, the training data set was used to estimate model parameters.  Similarly, we will use the training data to estimate transformation parameters.  When the test set or any future data set are standardized, the process will use the estimates from the training data set.  Any model fit that uses these standardized predictors would want new samples being predicted to have the same reference distribution.
+
+Suppose that a predictor column had an underlying Gaussian distribution with a sample mean estimate of 5.0 and a sample standard deviation of 1.0. Suppose a new sample has a predictor value of 3.7. For the training set, this new value lands around the 10th percentile and would be standardized to a value of -1.3. The new value is relative to the training set distribution. Also note that, in this scenario,  it would be impossible to standardize using a recomputed standard deviation for the new sample (which means we try to divide with a zero standard deviation). 
+
+Many transformations that involve a single predictor change the data distribution. Most predictive models do not place specific parametric assumptions on the predictor variables (e.g., require normality), but some distributions might facilitate better predictive performance than others. 
+
+TODO some based on convention or scientific knowledge. Others like the arc-sin (ref The arcsine is asinine: the analysis of proportions in ecology) or logit? See [issue #10](https://github.com/aml4td/website/issues/10).
+
+The next two sections will consider two classes of transformations for individual predictors: those that resolve distributional skewness and those that convert each predictor to a common distribution (or scale). 
+
+## Resolving asymmetry and skewness {#sec-skewness}
+
+An asymmetric statistical distribution is one in which the probability of a sample occurring is not symmetric around the center of the distribution (e.g., the mean). For example, @fig-ames-lot-area (panel a) shows the training set distribution of the lot area of houses in Ames. There is a much higher likelihood of the lot area being lower than the mean (or median) lot size. There are fewer large lots than there are proportionally smaller lots. And, in a few cases, the lot sizes can be extremely large. 
+
+The skew of a distribution indicates the direction and magnitude of the asymmetry. It can be quantified using the skewness statistic: 
+
+$$\begin{align}
+  skewness &= \frac{1}{(n-1)v^{3/2}} \sum_{i=1}^n (x_i-\overline{x})^3 \notag \\
+  \text{where}\quad  v &= \frac{1}{(n-1)}\sum_{i=1}^n (x_i-\overline{x})^2 \notag
+\end{align}
+$$
+
+where values near zero indicate a symmetric distribution, positive values correspond a right skew, and negative values left skew.  The lot size data are significantly right-skewed (with a skewness value of `r signif(e1071::skewness(ames_train$Lot_Area), 3)`). As previously mentioned, there are `r sum(ames_train$Lot_Area > 100000)` samples in the training set that sit far beyond the mainstream of the data. 
 
 ```{r}
-#| label: base-rec
-#| echo: false
-#| cache: true
-
-barley_base <-
-  recipe(barley ~ ., data = barley_train) %>%
-  step_zv(all_predictors()) %>%
-  step_orderNorm(all_numeric_predictors()) %>%
-  prep()
-```
-
-```{r}
-#| label: fig-barley-data 
-#| echo: false
+#| label: ames-lot-area-calcs
 #| warning: false
-#| out-width: 60%
-#| fig-width: 5
-#| fig-height: 6
-#| fig-cap: "(a) The distribution of the outcome for the entire data set. The bar colors reflect the percent barley distribution and are used in subsequent sections. (b) Selected training set spectra for four barley samples. Each line represents the set of 550 predictors in the data."
+lot_area_raw <- 
+  ames_train %>% 
+  ggplot(aes(Lot_Area)) + 
+  geom_histogram(bins = 30, col = "white", fill = "#8E195C", alpha = 1 / 2) +
+  geom_rug(alpha = 1 / 2, length = unit(0.04, "npc"), linewidth = 1.2) +
+  labs(x = "Lot Area", title = "(a) original")
 
-key <- tibble(
-  barley_bin = levels(chimiometrie_2019$barley_bin),
-  midpoint = barley_breaks[-length(barley_breaks)] + diff(barley_breaks)/2
-)
-
-barley_p <- 
-  chimiometrie_2019 %>% 
-  summarize(
-    count = n(),
-    median = median(barley),
-    .by = barley_bin
-    ) %>% 
-  full_join(key, by = "barley_bin") %>% 
-  ggplot(aes(midpoint / 100, count, fill = median)) +
-  geom_bar(stat = "identity", show.legend = FALSE) +
-  scale_fill_viridis(option = "viridis") +
-  labs(x = "Barley", title = "(a)") + 
-  scale_x_continuous(labels = scales::label_percent())
-
-set.seed(41) 
-spect_p <- 
-    chimiometrie_2019 %>% 
-    filter(barley_bin %in% c("[0,2]", "(18,20]", "(38,40]", "(52,54]")) %>% 
-    slice_sample(n = 1, by = "barley_bin") %>% 
-    add_rowindex() %>% 
-    pivot_longer(c(starts_with("wv"))) %>% 
-    mutate(index = as.numeric(gsub("wvlgth_", "", name))) %>% 
-    full_join(wave, by = "index") %>%
-    ggplot(aes(wavelength, value, col = barley, group = .row)) + 
-    geom_line(show.legend = FALSE, linewidth = 1, alpha = 1) +
-    scale_color_viridis(option = "viridis") +
-    labs(y = "Measurement", x = "Wavelength (nm)", title = "(b)") 
-
-barley_p / spect_p
-```
-
-Note that most of the data have very little barley oil. About `r round(mean(chimiometrie_2019$barley <= 1) * 100, 0)`% of the data are less than 1%, and the median barley oil percentage is `r round(median(chimiometrie_2019$barley), 2)`%.
-
-The `r nrow(wave)` predictors are the light absorbance for sequential values in the light region of interest (believed to be from wavelengths between `r min(wave$wavelength)` and `r max(wave$wavelength)` nm). @fig-barley-data(b) shows a selection of four samples from the data. The darker lines represent samples with lower barley content. 
-
-These predictor values, called _spectra_, have a very high serial correlation between predictors; median correlation between the predictors was `r round(median(wave_corr), 2)`. This can be a major complication for the analysis of these data and we use it here; a high degree of between-predictor correlation can easily undermine some types of models. However, some embedding methods are especially suited for decorrelating predictors. 
-
-Analyses of similar data sets can be found in [Section 9.1](https://bookdown.org/max/FES/illustrative-data-pharmaceutical-manufacturing-monitoring.html) of @fes and @wtf2024.
-
-In the following computations, each predictor was standardized using the orderNorm transformation mentioned earlier (unless otherwise noted). 
-
-The data originated from a modeling competition to find the most accurate model and specific samples were allocated to training and test sets. However, there were no public outcome values for the test set; our analysis will treat the `r format(nrow(chimiometrie_2019), big.mark = ",")` samples in their training set as the overall pool of samples. This is enough data to split into separate training ($n_{tr} =$ `r format(nrow(barley_train), big.mark = ",")`), validation ($n_{val} =$ `r format(nrow(barley_val), big.mark = ",")`), and test sets ($n_{te} =$ `r format(nrow(barley_test), big.mark = ",")`). Stratified sampling, using the outcome data, was used to allocate the samples to each of these three data sets. 
-
-
-## Linear Transformations
-
-pca, pls, ica, etc. Small section on the math of svd. Kernel methods as well as regularized/sparse techniques
-
-## Multidimensional Scaling
-
-Multidimensional scaling [@torgerson1952multidimensional] is a feature extraction tool that creates embeddings that try to preserve the geometric distances between training set points. In other words, the distances between points in the smaller dimensions should be comparable to those in the original dimensions. Since the methods in this section use distances, the predictors should be standardized to equivalent units before the embedding is trained. We also recommend transformations to resolve skewness. 
-
-Take @fig-mds-example(a) as an example. There are ten points in two dimensions (colored by three outcome classes). If we were to project these points down to a single dimension, we'd like points that are close in the original two dimensions to remain close when projected down to a single dimension. Panel (c) shows two such solutions. Each does reasonably well with some exceptions (i.e., points five and six are not very close for non-Metric MDS). 
-
-```{r}
-#| label: mds-example-computations
-#| include: false
-
-pens <- penguins[complete.cases(penguins),]
-
-n <- 10
-set.seed(119)
-pen_subset <-
-  pens %>%
-  sample_n(n) %>%
-  select(length = bill_length_mm, depth = bill_depth_mm, species) %>%
-  arrange(length, depth) %>%
-  mutate(
-    sample = row_number(),
-    length = as.vector(scale(length)),
-    depth = as.vector(scale(depth)))
-
-pen_subset %>%
-  ggplot(aes(x = length, y = depth, color = species)) +
-  geom_point()
-
-ar <- diff(range(pen_subset$length)) / diff(range(pen_subset$depth))
-
-### Compute distances and KNN
-
-pen_dist <-
-  dist(pen_subset[, 1:2]) %>%
-  as.matrix()
-
-dist_alt <- pen_dist
-diag(dist_alt) <- 10^38
-
-nearest <- vector(mode = "list", length = n)
-k <- 2
-
-for (i in 1:n) {
-  nearest[[i]] <- order(dist_alt[i,])[1:k]
-}
-
-### 
-
-mds_1D <- sammon(pen_dist, k = 1, tol = 0.000001, niter = 1000)$points[, 1]
-mds_1D_df <-
-  tibble(
-    MDS_1 = as.vector(scale(mds_1D)),
-    species = pen_subset$species,
-    sample = pen_subset$sample,
-    method = "Non-Metric MDS"
-  )
-
-### 
-
-iso_data <- 
-  recipe(species ~ length + depth, data = pen_subset) %>% 
-  step_isomap(all_numeric_predictors(), neighbors = 2, num_terms = 1) %>% 
+lot_area_yj_rec  <- 
+  recipe(~ Lot_Area, data = ames_train) %>% 
+  step_YeoJohnson(Lot_Area) %>% 
   prep()
 
-isomap_1D_df <-
-  tibble(
-    MDS_1 = as.vector(scale(iso_data$steps[[1]]$res@data@data[,1])),
-    species = pen_subset$species,
-    sample = pen_subset$sample,
-    method = "Isomap"
-  )
+lot_area_bc_rec  <- 
+  recipe(~ Lot_Area, data = ames_train) %>% 
+  step_BoxCox(Lot_Area) %>% 
+  prep()
+    
+yj_est <- lot_area_yj_rec %>% tidy(number = 1) %>% pluck("value")
+bc_est <- lot_area_bc_rec %>% tidy(number = 1) %>% pluck("value")
+bc_skew <- lot_area_bc_rec %>% bake(new_data = NULL) %>% pluck("Lot_Area") %>% e1071::skewness()
 
-one_d_df <- bind_rows(mds_1D_df, isomap_1D_df)
+lot_area_yj <- 
+  lot_area_yj_rec %>% 
+  bake(new_data = NULL) %>% 
+  ggplot(aes(Lot_Area)) +
+  geom_rug(alpha = 1 / 2, length = unit(0.04, "npc"), linewidth = 1.2) + 
+  geom_histogram(bins = 20, col = "white", fill = "#8E195C", alpha = 1 / 2) +
+  labs(x = "Lot Area", title = "(b) Box-Cox/Yeo-Johnson")
+
+lot_area_norm <- 
+  recipe(~ Lot_Area, data = ames_train) %>% 
+  step_orderNorm(Lot_Area) %>% 
+  prep() %>% 
+  bake(new_data = NULL) %>% 
+  ggplot(aes(Lot_Area)) +
+  geom_rug(alpha = 1 / 2, length = unit(0.04, "npc"), linewidth = 1.2) + 
+  geom_histogram(bins = 20, col = "white", fill = "#8E195C", alpha = 1 / 2) +
+  labs(x = "Lot Area", title = "(d) ordered quantile normalization")
+
+lot_area_pctl <- 
+  recipe(~ Lot_Area, data = ames_train) %>% 
+  step_percentile(Lot_Area) %>% 
+  prep() %>% 
+  bake(new_data = NULL) %>% 
+  ggplot(aes(Lot_Area)) +
+  geom_rug(alpha = 1 / 2, length = unit(0.04, "npc"), linewidth = 1.2) + 
+  geom_histogram(binwidth = 0.05, col = "white", fill = "#8E195C", alpha = 1 / 2) +
+  labs(x = "Lot Area", title = "(c) percentile")
 ```
+
 ```{r}
-#| label: fig-mds-example
-#| echo: false
-#| dev: "ragg_png"
-#| out-width: 70%
+#| label: fig-ames-lot-area
 #| fig-width: 8
-#| fig-height: 8
-#| fig-cap: "(a) A collection of samples associated with three outcome classes. (b) A diagram of the two nearest neighbors for each data point. (c) A one-dimensional projection using two different methods: non-metric MDS and Isomap."
-
-base_p <- 
-  pen_subset %>%
-  ggplot(aes(x = length, y = depth)) +
-  coord_fixed(ratio = ar) +
-  scale_color_brewer(palette = "Dark2")
-
-orig_p <-
-  base_p +
-  geom_point(
-    pch = 16,
-    cex = 8,
-    fill = "white",
-    col = "white",
-    show.legend = FALSE
-  ) +
-  geom_point(
-    pch = 1,
-    cex = 8,
-    aes(col = species),
-    fill = "white",
-    show.legend = FALSE
-  ) +
-  geom_text(aes(label = sample, col = species), show.legend = FALSE) +
-  labs(title = "(a) Original Data", x = "Predictor A", y = "Predictor B")
-
-### 
-
-knn_p <- base_p
-
-for(i in 1:n) {
-  tmp <- pen_subset[nearest[[i]], 1:2] %>% rename_with(~paste0(., "_end"))
-  dat <- pen_subset %>% slice(rep(i, 2)) %>% bind_cols(tmp)
-
-  knn_p <-
-    knn_p +
-    geom_segment(data = dat, aes(xend = length_end, yend = depth_end),
-                 col = "grey")
-}
-knn_p <-
-  knn_p +
-  geom_point(
-    pch = 16,
-    cex = 8,
-    fill = "white",
-    col = "white",
-    show.legend = FALSE
-  ) +
-  geom_point(
-    pch = 1,
-    cex = 8,
-    aes(col = species),
-    fill = "white",
-    show.legend = FALSE
-  ) +
-  geom_text(aes(label = sample, col = species), show.legend = FALSE) +
-  labs(title = "(b) 2-Nearest Neighbors", x = "Predictor A", y = "Predictor B") 
-
-### 
-
-  one_d_p <-
-    one_d_df %>%
-    ggplot(aes(x = MDS_1, y = method)) +
-    geom_point(
-      pch = 16,
-      cex = 8,
-      fill = "white",
-      col = "white",
-      show.legend = FALSE
-    ) +
-    geom_point(
-      pch = 1,
-      cex = 8,
-      aes(col = species),
-      fill = "white",
-      show.legend = FALSE
-    ) +
-    geom_text(aes(label = sample, col = species), show.legend = FALSE) +
-    labs(title = "(c) 1 Dimensional MDS (two ways)", y = NULL, 
-         x = "Embedded Value") +
-    scale_color_brewer(palette = "Dark2")
-  
-### 
-
-layout <- "
-AAAAAAAA
-AAAAAAAA
-AAAAAAAA
-AAAAAAAA
-AAAAAAAA
-AAAAAAAA
-#BBBBBB#
-#BBBBBB#
-"
-
-((orig_p + knn_p) / one_d_p) +
-  plot_layout(design = layout)
+#| fig-height: 5.5
+#| out-width: "80%"
+#| fig-cap: "Lot area for houses in Ames, IA. The raw data (a) are shown along with transformed versions using the Yeo-Johnson (b), percentile (c), and ordered quantile normalization (d) transformations."
+(lot_area_raw  +  lot_area_yj) / (lot_area_pctl + lot_area_norm)
 ```
 
-There are many different MDS methods. @Ghojogh2023 has an excellent review of them and their nuances. 
 
-Some MDS methods compute all pairwise distances between points and use this as the input to the embedding algorithm. This is similar to how PCA can be estimated using the covariance or correlation matrices. One technique, _Non-Metric MDS_ [@kruskal1964multidimensional;@kruskal1964nonmetric;@sammon1969nonlinear], finds embeddings that minimize an objective function called "stress":
+One might infer that "samples far beyond the mainstream of the data" is synonymous with the term "outlier"; The Cambridge dictionary defines an outlier as
 
-$$
-\text{Stress} = \sqrt{\frac{\sum\limits^{n_{tr}}_{i = 1}\;\sum\limits^{n_{tr}}_{j = i+1}\left(d(x_i, x_j) - d(x^*_i, x^*_j)\right)^2}{\sum\limits^{n_{tr}}_{i = 1}\;\sum\limits^{n_{tr}}_{j = i+1}d(x_i, x_j)^2}}
-$$
+> a person, thing, or fact that is very different from other people, things, or facts [...]
 
-The denominator uses the squared difference between the pairwise distances in the original values ($x$) and the smaller embedded dimension ($x^*$). The summations only move along one diagonal of the distance matrices to reduce redundant computations. @fig-mds-example(c, top row) has the resulting one dimensional projection of our two-dimensional data.
+or 
 
-This can be an effective dimension reduction procedure, although there are a few issues. First, the entire matrix of distances is required (with $n_{tr}(n_{tr}-1)/2$ entries). For large training sets, this can be unwieldy and time-consuming.  Second, like PCA, it is a global method. We might be able to achieve more nuanced embeddings by focusing on local structures. Finally, metric MDS is not easily made to be projective; how can we apply the same process to new data? 
+> a place that is far from the main part of something
 
-To start, we'll focus on _Isomap_ [@tenenbaum2000global]. This nonlinear MDS method uses a specialized distance function to find the embedded features. First, the _K_ nearest neighbors are determined for each training set point using standard functions, such as Euclidean distance. @fig-mds-example(b) shows the _K_ = 2 nearest neighbors for our example data. Many nearest-neighbor algorithms can be very computationally efficient and their use eliminates the need to compute all of the pairwise distances. 
+These statements imply that outliers belong to a different distribution than the bulk of the data. For example, a typographical error or an incorrect merging of data sources could be the cause.
 
-The connections between neighbors form a _graph structure_ that defines which data points are closely related to one another. From this, a new metric called _geodesic distance_ can be approximated. For a graph, we can compute the approximate geodesic distance using the shortest path between two points on the graph. With our example data, the Euclidean distance between points four and five is not large. However, its approximate geodesic distance is greater because the shortest path is through points nine, eight, and seven. @Ghojogh2023 use a wonderful analogy: 
+The @nist describes them as 
 
-> A real-world example is the distance between Toronto and Athens. The Euclidean distance is to dig the Earth from Toronto to reach Athens directly. The geodesic distance is to move from Toronto to Athens on the curvy Earth by the shortest path between two cities. The approximated geodesic distance is to dig the Earth from Toronto to London in the UK, then dig from London to Frankfurt in Germany, then dig from Frankfurt to Rome in Italy, then dig from Rome to Athens.
+> an observation that lies an abnormal distance from other values in a random sample from a population
 
-The Isomap embeddings are a function of the eigenvalues computed on the geodesic distance matrix. The $m$ embedded features are functions of the first $m$ eigenvectors. Although eigenvalues are associated with linear embeddings (e.g., PCA), nonlinear geodesic distance results in a global nonlinear embedding. @fig-mds-example(c, bottom row) shows the 1D results for the example data set. For a new data point, its nearest-neighbors in the training set are determined so that the approximate geodesic distance can be computed. The estimated eigenvectors and eigenvalues are used to project the new point into the embedding space. 
+In our experience, researchers are quick to label (and discard) extreme data points as outliers. Often, especially when the sample size is not large, these data points are not abnormal but belong to a highly skewed distribution. They are ordinary in a distributional sense. That is the most likely case here; some houses in Ames have very large lot areas, but they certainly fall under the definition of "houses in Ames, Iowa." These values are genuine, just extreme.
 
-For Isomap, the number of nearest neighbors and the number of embeddings are commonly optimized. @fig-barley-isomap shows a two-dimensional Isomap embedding for the barley data with varying numbers of neighbors. In each configuration, the higher barley values are differentiated from the small (mostly zero) barley samples. There does seem to be two or three clusters of data associated with small outcome values. The new features become more densely packed as the number of neighbors increases.
+This, by itself, is okay. However, suppose that this column is used in a calculation that involves squaring values, such as Euclidean distance or the sample variance. Extreme values in a skewed distribution can influence some predictive models and cause them to place more emphasis on these predictors^[The field of robust techniques is predicated on making statistical calculations insensitive to these types of data points.]. When the predictor is left in its original form, the extreme samples can end up degrading a model's predictive performance.
 
-```{r}
-#| label: barley-isomap-computations
-#| include: false
-#| cache: true
+One way to resolve skewness is to apply a transformation that makes the data more symmetric. There are several methods to do this. The first is to use a standard transformation, such as logarithmic or the square root, the latter being a better choice when the skewness is not drastic, and the data contains zeros. A simple visualization of the data can be enough to make this choice. The problem is when there are many numeric predictors; it may be inefficient to visually inspect each predictor to make a subjective judgment on what if any, transformation function to apply. 
 
+@Box1964p3648 defined a power family of transformations that use a single parameter, $\lambda$, for different methods: 
 
-neighbor_grid <- c(5, 20, 50)
+:::: {.columns}
 
-isomap_grid <- NULL
-for (i in neighbor_grid) {
-  set.seed(1)
-  tmp_rec <- 
-    barley_base %>% 
-    step_isomap(all_numeric_predictors(), neighbors = i, num_terms = 2) %>% 
-    prep()
-
-  tmp_iso <- 
-    bake(tmp_rec, new_data = barley_val) %>% 
-    mutate(Neighbors = i)
-  
-  isomap_grid <- bind_rows(isomap_grid, tmp_iso)
-}
-```
-
-```{r}
-#| label: fig-barley-isomap
-#| echo: false
-#| dev: png
-#| out-width: 80%
-#| fig-width: 8
-#| fig-height: 3.4
-#| fig-cap: "Isomap for the barley data for different numbers of nearest neighbors. The training set was used to fit the model and these results show the projections on the validation set. Lighter colors indicate larger values of the outcome."
-
-isomap_grid %>%
-  ggplot(aes(Isomap1, Isomap2, col = barley)) +
-  geom_point(alpha = 1 / 3, cex = 2)  +
-  facet_wrap(~ Neighbors, nrow = 1, labeller = "label_both") +
-  scale_color_viridis(option = "viridis") +
-  labs(x = "Isomap Embedding #1", y = "Isomap Embedding #2") +
-  guides(col = guide_colourbar(barheight = 0.5))
-```
-
-There are many other approaches to preserve local distances. One is _Laplacian eigenmaps_ [@belkin2001laplacian]. Like Isomap, it uses nearest neighbors to define a graph of connected training set points. For each connected point, a weight between graph nodes is computed that becomes smaller as the distance between points in the input space increases. The radial basis kernel (also referred to as the "heat kernel") is a good choice for the weighting function^[A note about some notation... We commonly think of the _norm_ notation as $\|\boldsymbol{x}\|_p = \left(|x_1|^p + |x_2|^p + \ldots + |x_n|^p\right)^{1/p}$. So what does the lack of a subscript in $||\boldsymbol{x}||^2$ mean? The convention is the sum of squares:  $||\boldsymbol{x}||^2 = x_1^2 + x_2^2 + \ldots + x_n^2$.]: 
-
-$$
-w_{ij} = \exp\left(\frac{-||\boldsymbol{x}_i - \boldsymbol{x}_j||^2}{\sigma}\right)
-$$
-
-where $\sigma$ is a scaling parameter that can be tuned. If two points are not neighbors, or if $i = j$, then $w_{ij} = 0$. Note that the equation above uses Euclidean distance. For the 2-nearest neighbor graph shown in @fig-mds-example(b) and $\sigma = 1 / 2$, the weight matrix is roughly
-
-```{r}
-#| label: wt-matrix
-#| echo: false
-#| results: asis
-
-sigma <- 1 / 2
-wt_mat <- exp(-pen_dist/sigma)
-
-adj_mat <- pen_dist * 0
-
-for (i in 1:n) {
-  nn <-  nearest[[i]]
-  for (j in seq_along(nn)) {
-    adj_mat[i, nn[j]] <- 1
-    adj_mat[nn[j], i] <- 1
-  }
-}
-
-wt_mat <- adj_mat * wt_mat
-
-rounded_mat <- round(wt_mat, 1)
-
-chr_wt_mat <- format(rounded_mat)
-chr_wt_mat[lower.tri(chr_wt_mat)] <- ""
-chr_wt_mat[chr_wt_mat == "0.0"] <- "\\0"
-chr_wt_mat[6, 3] <- "sym"
-
-tex_1 <- apply(chr_wt_mat, 1, function(x) paste(x, collapse = " & "))
-tex_2 <- paste0(tex_1, collapse = "\\\\\n")
-cat("$$\n")
-cat("\\newcommand{\\0}{{\\color{lightgray} 0.0}}\n")
-cat("W = \\begin{bmatrix}\n")
-cat(tex_2, "\n")
-cat("\\end{bmatrix}\n$$\n")
-```
-
-The use of nearest neighbors means that the matrix can be very sparse and the zero values help define locality for each data point. Recall that samples 2 and 3 are fairly close to one another, while samples 1 and 2 are farther away. The weighting scheme gives the former pair a `r rounded_mat[2,3] / rounded_mat[1,2]`-fold larger weight in the graph than the latter pair. 
-
-Laplacian eigenmaps rely heavily on graph theory. This method computes a _graph Laplacian_ matrix, defined as $L = D - W$ where the matrix $D$ has zero non-diagonal entries and diagonals equal to the sum of the weights for each row. For our example data, the matrix is: 
-
-```{r}
-#| label: Laplacian-matrix
-#| echo: false
-#| results: asis
-
-laplacian <- diag(apply(rounded_mat, 1, sum)) - rounded_mat
-
-rounded_L <- round(laplacian, 1)
-
-chr_L <- format(rounded_L)
-chr_L[lower.tri(chr_L)] <- ""
-chr_L[chr_L == "0.0" | chr_L == " 0.0"] <- "\\0"
-chr_L[6, 3] <- "sym"
-
-tex_1 <- apply(chr_L, 1, function(x) paste(x, collapse = " & "))
-tex_2 <- paste0(tex_1, collapse = "\\\\\n")
-cat("$$\n")
-cat("\\newcommand{\\0}{{\\color{lightgray} 0.0}}\n")
-cat("L = \\begin{bmatrix}\n")
-cat(tex_2, "\n")
-cat("\\end{bmatrix}\n$$\n")
-```
-
-The eigenvalues and eigenvectors of this matrix are used as the main ingredients for the embeddings. @Bengio2003advances shows that, since these methods eventually use eigenvalues in the embeddings, they can be easily used to project new data. 
-
-The Uniform Manifold Approximation and Projection (UMAP) [@sainburg2020parametric] technique is one of the most popular distance-based methods. Its precursors, stochastic neighbor embedding (SNE) [@hinton2002stochastic] and  Student’s t-distributed stochastic neighbor embedding (t-SNE) [@van2008visualizing], redefined feature extraction, particularly for visualizations. UMAP borrows significantly from Laplacian eigenmaps and t-SNE but has a more theoretically sound motivation. 
- 
-As with Laplacian eigenmaps, UMAP converts the training data points to a sparse graph structure. Given a set of nearest neighbors, it computes values similar to the previously shown weights, which we will think of as the probability that point $j$ is a neighbor of point $i$:  
-
-$$
-p_{j|i} = \exp\frac{-\left(||\boldsymbol{x}_i - \boldsymbol{x}_j||^2 - \rho_i\right)}{\sigma_i}
-$$
-
-where $\rho_i$ is the distance from $\boldsymbol{x}_i$ to its closest neighbor, and $\sigma_i$ is a scale parameter that now varies with each sample ($i$). To compute $\sigma_i$, we can solve the equation   
- 
-$$
-\sum_{i=1}^K  \exp\frac{-\left(||\boldsymbol{x}_i - \boldsymbol{x}_j||^2 - \rho_i\right)}{\sigma_i} = \log_2(K)
-$$
-
-Unlike the previous weighting system, the resulting $n \times n$ matrix may not be symmetric, so the final weights are computed using $p_{ij} = p_{j|i} + p_{i|j} - p_{j|i}p_{i|j}$. 
-
-UMAP performs a similar calculation for the embedded values $x^*$. We'll denote the probability that embedded points $\boldsymbol{x}_i^*$ and $\boldsymbol{x}_j^*$ are connected as $q_{ij}$. 
-
-Numerical optimization methods^[Specifically gradient descent with a user-defined learning rate.] used to estimate the $n \times m$ values $x^*_{ij}$. The process is initialized using a very sparse Laplacian eigenmap, the first few PCA components, or random uniform numbers. The objective function is based on cross-entropy and attempts to make the graphs in the input and embedded dimensions as similar as possible by minimizing:   
-
-$$
-CE = \sum_{i=1}^{n_{tr}}\sum_{j=i+1}^{n_{tr}} \left[p_{ij}\, \log\frac{p_{ij}}{q_{ij}} + (1 - p_{ij})\log\frac{1-p_{ij}}{1-q_{ij}}\right]
-$$
-
-Unlike the other embedding methods shown in this section, UMAP can also create supervised embeddings so that the resulting features are more predictive of a qualitative or quantitative outcome value. See @sainburg2020parametric.
-
-Besides the number of neighbors and embedding dimensions, several more tuning parameters exist.  The optimization process's number of optimization iterations (i.e., epochs) and the learning rate can significantly affect the final results. A distance-based tuning parameter, often called _min-dist_, specifies how "packed" points should be in the reduced dimensions. Values typically range from zero to one. However, the original authors state:
-
-> We view min-dist as an essentially aesthetic parameter governing the appearance of the embedding, and thus is more important when using UMAP for visualization.
-
-As will be seen below, the initialization scheme is an important tuning parameter. 
-
-For supervised UMAP, there is an additional weighting parameter (between zero and one) that is used to balance the importance of the supervised and unsupervised aspects of the results. 
-
-@fig-umap shows an interactive visualization of how UMAP can change with different tuning parameters. Each combination was trained for 1,000 epochs and used a learning rate of 1.0. For illustrative purposes, the resulting embeddings were scaled to a common range. 
-
-::: {#fig-umap}
-
-::: {.figure-content}
-
-```{shinylive-r}
-#| label: fig-umap
-#| viewerHeight: 550
-#| standalone: true
-
-library(shiny)
-library(ggplot2)
-library(bslib)
-library(viridis)
-
-# ------------------------------------------------------------------------------
-
-light_bg <- "#fcfefe" # from aml4td.scss
-grid_theme <- bs_theme(
-  bg = light_bg, fg = "#595959"
-)
-
-# ------------------------------------------------------------------------------
-
-theme_light_bl<- function(...) {
-
-  ret <- ggplot2::theme_bw(...)
-
-  col_rect <- ggplot2::element_rect(fill = light_bg, colour = light_bg)
-  ret$panel.background  <- col_rect
-  ret$plot.background   <- col_rect
-  ret$legend.background <- col_rect
-  ret$legend.key        <- col_rect
-
-  ret$legend.position <- "top"
-
-  ret
-}
-
-# ------------------------------------------------------------------------------
-
-ui <- fluidPage(
-  theme = grid_theme,
-  fluidRow(
-
-    column(
-      width = 4,
-      sliderInput(
-        inputId = "min_dist",
-        label = "Min Distance",
-        min = 0.0,
-        max = 1.0,
-        value = 0.2,
-        width = "100%",
-        step = 0.2
-      )
-    ), # min distance
-    column(
-      width = 4,
-      sliderInput(
-        inputId = "neighbors",
-        label = "Neighbors",
-        min = 5,
-        max = 45,
-        value = 5,
-        width = "100%",
-        step = 10
-      )
-    ), # nearest neighbors
-
-    column(
-      width = 4,
-      sliderInput(
-        inputId = "supervised",
-        label = "Amount of Supervision",
-        min = 0.0,
-        max = 0.7,
-        value = 0,
-        width = "100%",
-        step = 0.1
-      )
-    ),
-    fluidRow(
-      column(
-        width = 4,
-        radioButtons(
-          inputId = "initial",
-          label = "Initialization",
-          choices = list("Laplacian Eigenmap" = "spectral", "PCA" = "pca", 
-                         "Random" = "random")
-        )
-      ),
-      column(
-        width = 6,
-        align = "center",
-        plotOutput('umap')
-      )
-    )
-  ) # top fluid row
-)
-
-server <- function(input, output) {
-  load(url("https://raw.githubusercontent.com/aml4td/website/mds-start/RData/umap_results.RData"))
-
-  output$umap <-
-    renderPlot({
-      
-      dat <-
-        umap_results[
-          umap_results$neighbors == input$neighbors &
-            umap_results$min_dist == input$min_dist &
-            umap_results$initial == input$initial &
-            # log10(umap_results$learn_rate) == input$learn_rate &
-            umap_results$supervised == input$supervised,
-        ]
-
-      p <-
-        ggplot(dat, aes(UMAP1, UMAP2, col = barley)) +
-        geom_point(alpha = 1 / 3, cex = 3) +
-        scale_color_viridis(option = "viridis") +
-        theme_light_bl() +
-        coord_fixed() +
-        labs(x = "UMAP Embedding #1", y = "UMAP Embedding #2") +
-        guides(col = guide_colourbar(barheight = 0.5))
-
-      print(p)
-
-    })
-}
-
-app <- shinyApp(ui = ui, server = server)
-```
+::: {.column width="10%"}
 :::
 
-A visualization of UMAP results for the barley data using different values for several tuning parameters. The points are the validation set values. 
-
+::: {.column width="40%"}
+- no transformation via $\lambda = 1.0$
+- square ($x^2$) via $\lambda = 2.0$
+- square root ($\sqrt{x}$) via $\lambda = 0.5$
 :::
 
-There are a few notable patterns in these results: 
+::: {.column width="40%"}
+- logarithmic ($\log{x}$) via $\lambda = 0.0$
+- inverse square root ($1/\sqrt{x}$) via $\lambda = -0.5$
+- inverse ($1/x$) via $\lambda = -1.0$
+:::
 
- - The initialization method can heavily impact the patterns in the embeddings. 
- - As with Isomap, there are two or three clusters of data points with small barley values. 
- - When the amount of supervision increases, one or more circular structures form that are associated with small outcome values. 
- - The minimum distance parameter can drastically change the results. 
+::: {.column width="10%"}
+:::
 
-t-SNE and UMAP have become very popular tools for visualizing complex data. Visually, they often show interesting patterns that linear methods such as PCA cannot. However, they are computationally slow and unstable over different tuning parameter values. Also, it is easy to believe that the UMAP distances between embedding points are important or quantitatively predictive. That is not the case; the distances can be easily manipulated using the tuning parameters (especially the minimum distance). 
+::::
+
+and others in between. The transformed version of the variable is:
+
+$$
+x^* =
+\begin{cases} \lambda^{-1}(x^\lambda-1) & \text{if $\lambda \ne 0$,}
+\\[3pt]
+log(x) &\text{if $\lambda = 0$.}
+\end{cases}
+$$
+
+Their paper defines this as a supervised transformation of a non-negative outcome ($y$) in a linear regression model. They find a value of $\lambda$ that minimizes the residual sums of squared errors. In our case, we can co-opt this method to use for unsupervised transformations of non-negative predictors (in a similar manner as @asar2017estimating). @yeojohnson extend this method by allowing the data to be negative via a slightly different transformation: 
+
+$$
+x^* =
+\begin{cases}
+\lambda^{-1}\left[(x + 1)^\lambda-1\right] & \text{if $\lambda \ne 0$ and $x \ge 0$,} \\[3pt]
+log(x + 1) &\text{if $\lambda = 0$ and $x \ge 0$.} \\[3pt]
+-(2 - \lambda)^{-1}\left[(-x + 1)^{2 - \lambda}-1\right] & \text{if $\lambda \ne 2$ and $x < 0$,} \\[3pt]
+-log(-x + 1) &\text{if $\lambda = 2$ and $x < 0$.} 
+\end{cases}
+$$
+
+In either case, maximum likelihood is also used to estimate the $\lambda$ parameter. 
+
+In practice, these two transformations might be limited to predictors with acceptable density. For example, the transformation may not be appropriate for a predictor with a few unique values. A threshold of five or so unique values might be a proper rule of thumb (see the discussion in @sec-near-zero-var). On occasion the maximum likelihood estimates of $\lambda$ diverge to huge values; it is also sensible to use values within a suitable range. Also, the estimate will never be absolute zero. Implementations usually apply a log transformation when the $\hat{\lambda}$ is within some range of zero (say between $\pm 0.01$)^[If you've never seen it, the "hat" notation (e.g. $\hat{\lambda}$) indicates an estimate of some unknown parameter.]. 
+
+For the lot area predictor, the Box-Cox and Yeo-Johnson techniques both produce an estimate of $\hat{\lambda} = `r round(yj_est, 3)`$. The results are shown in @fig-ames-lot-area (panel b). There is undoubtedly less right-skew, and the data are more symmetric with a new skewness value of `r signif(bc_skew, 3)` (much closer to zero). However, there are still outlying points.
+
+
+There are numerous other transformations that attempt to make the distribution of a variable more Gaussian. @tbl-transforms shows several more, most of which are indexed by a transformation parameter $\lambda$. 
+
+
+:::: {.columns}
+
+::: {.column width="15%"}
+:::
+
+::: {.column width="70%"}
+
+::: {#tbl-transforms}
+
+|  Name            |  Equation                                                      | Source                 |
+|------------------|:--------------------------------------------------------------:|:----------------------:|
+| Modulus          | $$x^* = \begin{cases} sign(x)\lambda^{-1}\left[(|x|+1)^\lambda-1\right] & \text{if $\lambda \neq 0$,}\\[3pt]
+sign(x) \log{(|x|+1)} &\text{if $\lambda = 0$}
+\end{cases}$$  | @john1980alternative    |
+| Bickel-Docksum   | $$x^* = \lambda^{-1}\left[sign(x)|x| - 1\right]\quad\text{if $\lambda \neq 0$}$$ | @bickel1981analysis  |
+| Glog / Gpower    | $$x^* = \begin{cases} \lambda^{-1}\left[({x+ \sqrt{x^2+1}})^\lambda-1\right]  & \text{if $\lambda \neq 0$,}\\[3pt]
+\log({x+ \sqrt{x^2+1}}) &\text{if $\lambda = 0$}
+\end{cases}$$  | @durbin2002variance, @kelmansky2013new  |
+| Neglog           | $$x^* = sign(x) \log{(|x|+1)}$$                                | @whittaker2005neglog  |
+| Dual             | $$x^* = (2\lambda)^{-1}\left[x^\lambda - x^{-\lambda}\right]\quad\text{if $\lambda \neq 0$}$$ | @yang2006modified    |
+
+Examples of other families of transformations for dense numeric predictors. 
+
+:::
  
+:::
 
-## Centroid-Based Methods
+::: {.column width="15%"}
+:::
 
-prototype-based methods
+:::: 
+ 
+Skewness can also be resolved using techniques related to distributional percentiles. A percentile is a value with a specific proportion of data below it. For example, for the original lot area data, the 0.1 percentile is `r format(quantile(ames_train$Lot_Area, prob = .1), big.mark = ",")` square feet, which means that 10{{< pct >}} of the training set has lot areas less than `r format(quantile(ames_train$Lot_Area, prob = .1), big.mark = ",")` square feet. The minimum, median, and maximum are the 0, 50th and 100th percentiles, respectively.
 
-## Other Methods
+Numeric predictors can be converted to their percentiles, and these data, inherently between zero and one, are used in their place. Probability theory tells us that the distribution of the percentiles should resemble a uniform distribution. This results from the transformed version of the lot area shown in @fig-ames-lot-area (panel c). For new data, values beyond the range of the original predictor data can be truncated to values of zero or one, as appropriate.
 
-autoencoders? 
+Additionally, the original predictor data can be coerced to a specific probability distribution. @ORQ define the Ordered Quantile (ORQ) normalization procedure. It estimates a transformation of the data to emulate the true normalizing function where "normalization" literally maps the data to a standard normal distribution. In other words, we can coerce the original distribution to a near exact replica of a standard normal. @fig-ames-lot-area (panel d) illustrates the result for the lot area. In this instance, the resulting distribution is precisely what would be seen if the true distribution was Gaussian with zero mean and a standard deviation of one.
+ 
+In @sec-spatial-sign below, another tool for attenuating outliers in _groups_ of predictors is discussed.  
+ 
+## Standardizing to a common scale {#sec-common-scale}
 
+Another goal for transforming individual predictors is to convert them to a common scale. This is a pre-processing requirement for some models. For example, a _K_-nearest neighbors model computes the distances between data points. Suppose Euclidean distance is used with the Ames data. One predictor, the year a house was built, has training set values ranging between `r min(ames_train$Year_Built)` and `r max(ames_train$Year_Built)`. Another, the number of bathrooms, ranges from `r min(ames_train$Baths)` to `r max(ames_train$Baths)`. If these raw data were used to compute the distance, the value would be inappropriately dominated by the year variable simply because its values were large. See TODO appendix for a summary of which models require a common scale.
+
+The previous section discussed two transformations that automatically convert predictors to a common distribution. The percentile transformation generates values roughly uniformly distributed on the `[0, 1]` scale, and the ORQ transformation results in predictors with standard normal distributions. However, two other standardization methods are commonly used. 
+
+First is centering and scaling (as previously mentioned). To convert to a common scale, the mean ($\bar{x}$) and standard deviation ($\hat{s}$) are computed from the training data and the standardized version of the data is $x^* = (x - \bar{x}) / \hat{s}$. The shape of the original distribution is preserved; only the location and scale are modified to be zero and one, respectively.  
+
+In @sec-indicators, methods are discussed to convert categorical predictors to a numeric format. The standard tool is to create a set of columns consisting of zeros and ones called _indicator_ or _dummy variables_. When centering and scaling, what should we do with these binary features?  These should be treated the same as the dense numeric predictors. The result is that a binary column will still have two unique values, one positive and one negative. The values will depend on the prevalence of the zeros and ones in the training data. While this seems awkward, it is required to ensure each predictor has the same mean and standard deviation. Note that if the predictor set is _only_ scaled, @twosd suggests that the indicator variables be divided by two standard deviations instead of one. 
+
+@fig-standardization(b) shows the results of centering and scaling the gross living area predictor from the Ames data. Note that the shape of the distribution does not change; only the magnitude of the values is different. 
+
+```{r}
+#| label: fig-standardization
+#| fig-cap: "The original gross living area data and two standardized versions."
+#| fig-width: 9
+#| fig-height: 3
+#| out-width: "92%"
+gross_area_raw <- 
+  ames_train %>% 
+  ggplot(aes(Gr_Liv_Area)) + 
+  geom_histogram(bins = 20, col = "white", fill = "#8E195C", alpha = 1 / 2) +
+  labs(x = "Gross Living Area", title = "(a) original") +
+  geom_rug(alpha = 1 / 2, length = unit(0.02, "npc"))
+
+gross_area_norm <- 
+  recipe(~ Gr_Liv_Area, data = ames_train) %>% 
+  step_normalize(Gr_Liv_Area) %>% 
+  prep() %>% 
+  bake(new_data = NULL) %>% 
+  ggplot(aes(Gr_Liv_Area)) + 
+  geom_histogram(bins = 20, col = "white", fill = "#8E195C", alpha = 1 / 2) +
+  labs(x = "Gross Living Area", y = "", title = "(b) centered and scaled") +
+  geom_rug(alpha = 1 / 2, length = unit(0.02, "npc"))
+
+
+gross_area_range <- 
+  recipe(~ Gr_Liv_Area, data = ames_train) %>% 
+  step_range(Gr_Liv_Area) %>% 
+  prep() %>% 
+  bake(new_data = NULL) %>% 
+  ggplot(aes(Gr_Liv_Area)) + 
+  geom_histogram(bins = 20, col = "white", fill = "#8E195C", alpha = 1 / 2) +
+  labs(x = "Gross Living Area", y = "", title = "(c) range scaled") +
+  geom_rug(alpha = 1 / 2, length = unit(0.02, "npc"))
+
+gross_area_raw + gross_area_norm + gross_area_range
+```
+
+Another common approach is range standardization. Based on the training set, a predictor's minimum and maximum values are computed, and the data are transformed to a `[0, 1]` scale via
+
+$$
+x^* = \frac{x - \min(x)}{\max(x) - \min(x)}
+$$
+
+When new data are outside the training set range, they can either be clipped to zero/one or allowed to go slightly beyond the intended range. The nice feature of this approach is that the range of the raw numeric predictors matches the range of any indicator variables created from previously categorical predictors. However, this does not imply that the distributional properties are the same (e.g., mean and variance) across predictors. Whether this is an issue depends on the model being used downstream. @fig-standardization(c) shows the result when the gross living predictor is range transformed.  Notice that the shape of the distributions across panels (a), (b), and (c) are the same — only the scale of the x-axis changes.
+
+## Spatial Sign {#sec-spatial-sign}
+
+Some transformations involve multiple predictors. An upcoming chapter describes a specific class of simultaneous _feature extraction_ transformations. Here, we will focus on the spatial sign transformation [@Serneels]. This method, which requires $p$ standardized predictors as inputs, projects the data points onto a $p$ dimensional unit hypersphere. This makes all of the data points equally distant from the center of the hypersphere, thereby eliminating all potential outliers. The equation is: 
+
+$$
+x^*_{ij}=\frac{x_{ij}}{\sum\limits^{p}_{j=1} x_{ij}^2}
+$$
+
+Notice that all of the predictors are simultaneously modified and that the calculations occur in a row-wise pattern. Because of this, the individual predictor columns become combinations of the other columns and now reflect more than the individual contribution of the original predictors. In other words, after this transformation is applied, if any individual predictor is considered important, its significance should be attributed to all of the predictors used in the transformation. 
+
+```{r}
+#| label: ames-lot-living-area-calc
+two_areas_rec <- 
+  recipe(~ Lot_Area + Gr_Liv_Area, data = ames_train) %>% 
+  step_mutate(
+    location = ifelse(Lot_Area > 30000 | Gr_Liv_Area > 3500, "'outlying'", "mainstream")
+  ) %>% 
+  prep()
+
+data_cols <- c(rgb(0.27, 0.59, 0.15), rgb(0, 0, 0, 1/5))
+
+two_areas_raw <- 
+  two_areas_rec %>% 
+  bake(new_data = NULL) %>% 
+  ggplot(aes(Lot_Area/1000, Gr_Liv_Area)) +
+  geom_point(aes(col = location, pch = location, size = location), alpha = 1 / 2) +
+  labs(x = "Lot Area (thousands)", y = "Gross Living Area") +
+  scale_color_manual(values = data_cols) + 
+  scale_size_manual(values = c(3, 1 / 2)) +
+  coord_fixed(ratio = 1/25)
+
+two_areas_norm <- 
+  two_areas_rec %>%
+  step_orderNorm(Lot_Area, Gr_Liv_Area) %>%
+  prep() %>%
+  bake(new_data = NULL) %>%
+  ggplot(aes(Lot_Area, Gr_Liv_Area)) +
+  geom_point(aes(col = location, pch = location, size = location), alpha = 1 / 2) +
+  labs(x = "Lot Area", y = "Gross Living Area") +
+  scale_color_manual(values = data_cols) + 
+  scale_size_manual(values = c(3, 1 / 2)) +
+  coord_equal() +
+  theme(axis.title.y = element_blank())
+
+two_areas_ss <- 
+  two_areas_rec %>% 
+  step_normalize(Lot_Area, Gr_Liv_Area) %>% 
+  step_spatialsign(Lot_Area, Gr_Liv_Area) %>% 
+  prep() %>% 
+  bake(new_data = NULL) %>% 
+  ggplot(aes(Lot_Area, Gr_Liv_Area)) + 
+  geom_point(aes(col = location, pch = location, size = location), alpha = 1 / 2) + 
+  labs(x = "Lot Area", y = "Gross Living Area") +
+  scale_color_manual(values = data_cols) + 
+  scale_size_manual(values = c(3, 1 / 2)) +
+  coord_equal()  +
+  theme(axis.title.y = element_blank())
+```
+
+@fig-ames-lot-living-area shows predictors from the Ames data. In these data, we somewhat arbitrarily labeled `r sum(bake(two_areas_rec, new_data = NULL)$location == "'outlying'")` samples as being "far away" from most of the data in either lot area and/or gross living area. Each of these predictors may follow a right-skewed distribution, or there is some other characteristic that is associated with these samples. Regardless, we would like to transform these predictors simultaneously. 
+
+The second panel of the data shows the same predictors _after_ an orderNorm transformation. Note that, after this operation, the outlying values appear less extreme.  
+
+
+```{r}
+#| label: fig-ames-lot-living-area
+#| fig-cap: "Lot area (x) versus gross living area (y) in raw format as well as with order-norm and spatial sign transformations."
+#| fig-width: 8
+#| fig-height: 3
+#| out-width: "100%"
+
+((two_areas_raw + two_areas_norm + two_areas_ss) +
+   plot_layout(guides = "collect"))
+```
+
+The panel on the right shows the data after applying the spatial sign. The data now form a circle centered at (0, 0) where the previously flagged instances are no longer distributionally abnormal. The resulting bivariate distribution is quite jarring when compared to the original. However, these new versions of the predictors can still be important components in a machine-learning model. 
 
 ## Chapter References {.unnumbered}
 
