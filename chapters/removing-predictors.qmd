@@ -1,0 +1,137 @@
+---
+knitr:
+  opts_chunk:
+    cache.path: "../_cache/removals/"
+---
+
+# Removing Predictors {#sec-removing-predictors}
+
+```{r}
+#| label: removals-setup
+#| include: false
+
+source("../R/_common.R")
+
+# ------------------------------------------------------------------------------
+
+library(tidymodels)
+
+# ------------------------------------------------------------------------------
+# set options
+tidymodels_prefer()
+theme_set(theme_transparent())
+set_options()
+```
+
+```{r}
+#| label: data-import
+#| include: false
+load("../RData/noise_simulation_results.RData")
+source("../R/setup_deliveries.R")
+num_train <- nrow(delivery_train)
+chr_train <- format(num_train, big.mark = ",")
+```
+
+When starting with a new data set, you may not know which columns have predictive power. You may also add features, such as splines, and you need to evaluate if they or others are relevant. 
+
+**Feature selection** is the process of determining how many (and which) predictors should be retained in the model so that it performs satisfactorily. _Supervised_ feature selection, discussed below, is very complex. Unfortunately, it is often conducted inappropriately, partly because it can be computationally onerous to do the right thing.
+
+This chapter _does not_ provide a comprehensive discussion of this topic. Due to the issue’s complexity, we suggest @fes for more detailed discussions of specific feature selection tools and algorithms. 
+
+## Do Extra Predictor Matter? {#sec-effect-of-extra-features}
+
+As with most questions, “It depends on the model.” Some models have specific limitations on the number of predictors. For example, ordinary linear regression cannot estimate more parameters than data points in the training set. As will be seen in later chapters, some models can naturally eliminate predictors with no effect relationship to the outcome. In general, it is better to have fewer predictors than an overabundance. 
+
+To demonstrate the potential issue, a regression problem was simulated using equations used in @hooker2004discovering and Ref
+
+$$ 
+y_i = \pi^{x_{i1}  x_{i2}}  \sqrt{2 x_{i3}} - \arcsin(x_{i4}) + \log(x_{i3} + x_{i5}) - (x_{i9}/x_{i10})  \sqrt{x_{i7}/x_{i8}} - (x_{i2} x_{i7}) + \epsilon_i
+$$
+
+where the predictors have independent random uniform distributions and the error term is $N(0.00, 0.25)$. Training sets were simulated with 1,000 samples as well as a test set of 10,000 data points. In addition to the original 10 predictors, extra sets of $p^*$ random normal variables were added with $p^* = 10, 20, \ldots, 100$. These columns were created to have no relationship to the outcome or the other predictors. A collection of models where optimized for these data and trained, including: 
+
+* Generalized additive models (GAMs, section TODO) with nonlinear terms for all predictors. 
+* Support vector machines (SVMs, section TODO) using a radial basis function kernel. 
+* K-nearest neighbors (section TODO).
+* Single-layer neural networks (section TODO).
+* Penalized linear regression (section TODO). For this model, five interaction pairs were added from the model equation (e.g., $x_2\times x_7$), assuming that we would have discovered these during data analysis. 
+* Multivariate adaptive regression splines (MARS) (section TODO) with second-order interaction effects. 
+* Bagged regression trees (section TODO).
+* Boosted regression trees (section TODO).
+* Bayesian adaptive regression trees (BART, section TODO).
+* Random forests (section TODO).
+* Cubist rule ensembles (section TODO).
+* RuleFit rule ensembles (section TODO).
+
+The first four models do not intrinsically eliminate non-informative predictors. In actuality, this is a bit more complicated; many ensemble methods will over-select predictors so that, _in theory_, they can eliminate predictors. This is discussed in more detail for each model in their individual sections. 
+
+After tuning these models on the training set (using 10-fold cross-validation), they were evaluated on the test set and the RMSE statistic was computed^[The details and code for this simulation can be found at [`https://github.com/topepo/noise_features_sim`](https://github.com/topepo/noise_features_sim).]. 
+
+```{r}
+#| label: feature-selection-notes
+#| include: false
+
+knn_res <- noise_simulation_results_pct %>% filter(class == "train.kknn") %>% slice_max(increase)
+mlp_res <- noise_simulation_results_pct %>% filter(class == "brulee_mlp") %>% slice_max(increase)
+bag_res <- noise_simulation_results_pct %>% filter(class == "bagger") %>% slice_max(increase)
+svm_res <- noise_simulation_results_pct %>% filter(class == "ksvm") %>% slice_max(increase)
+rf_res <- noise_simulation_results_pct %>% filter(class == "ranger") %>% slice_max(increase)
+mars_res <- noise_simulation_results_pct %>% filter(class == "earch") %>% slice_max(increase)
+```
+
+Each simulation was repeated 20 times. The averaged test set RMSE results are shown in @fig-feature-selection, where the model curves are colored by whether they can automatically remove useless predictors. First, note that a few models did a relatively poor job predicting these data: K-nearest neighbors, generalized additive models, bagged trees, and random forests. 
+
+Since the models have different performance levels at baseline (i.e., $p^*=0$), we’ll measure the effect of the extra variables via a percent difference from baseline. K-nearest neighbors, support vector machines, and neural networks performed particularly poorly when additional predictors were added. The percent increases in RMSE for these models were `r round(knn_res$increase * 100, 1)`%, `r round(svm_res$increase * 100, 1)`%, and `r round(mlp_res$increase * 100, 1)`%, respectively. Bagged trees (change of `r round(bag_res$increase * 100, 1)`%) and random forest (`r round(rf_res$increase * 100, 1)`%) showed moderate erosions in RMSE. 
+
+```{r}
+#| label: fig-feature-selection 
+#| echo: false
+#| warning: false
+#| out-width: 70%
+#| fig-width: 7
+#| fig-height: 7
+#| fig-cap: "Results of the feature selection simulation. The different curves show the erosion of performance (measured by RMSE) as more non-informative predictors are added. The dotted horizontal line indicates the theoretical best RMSE value that could be achieved and the colored regions around the curves are 95% confidence intervals."
+
+noise_simulation_results %>%
+  mutate(
+    .lower = RMSE - qt(0.975, n) * std_err,
+    .upper = RMSE + qt(0.975, n) * std_err
+  ) %>%
+  ggplot(aes(num_extra, RMSE)) +
+  geom_hline(lty = 3, yintercept = 0.25) +
+  geom_line(aes(col = `Intrinsic Feature Selection`)) +
+  geom_ribbon(aes(ymin = .lower, ymax = .upper, fill = `Intrinsic Feature Selection`), 
+              alpha = 1 / 5) +
+  facet_wrap(~ label) +
+  labs(x = "# Noise Features", y = "RMSE (Testing)")
+```
+
+The other models showed almost no real change in RMSE as new predictors were added. This reinforces the unfortunate truth that it is difficult to make generalizations regarding what types of preprocessing should be done prior to top modeling; it very much depends on the model. Appendix TODO shows a table of recommended preprocessing techniques for many models described in this work. 
+
+## Unsupervised {#sec-unsupervised-filters}
+
+The most uncontroversial filter is one that removes if predictors have a single unique value. Given that there is no information in these data, it is better to remove them so that errors do not occur when training models. However, some models are tolerant of this data characteristic.  
+
+We can view columns with a single unique value to have zero variance. However, what should we do if a predictor has an odd sample or two that are different? For example, suppose in the food delivery data, the training set has an item that was rarely ordered and had five orders out of the `r chr_train` training set points had a single item ordered, and one additional order had a count of two.  That predictor is unlikely to be important but would not be caught in a zero-variance filter. 
+
+@apm describes a _near_ zero-variance filter that attempts to find predictors with very granular values (i.e., few unique values) and very unbalanced frequency distributions. It computes two characteristics: 
+
+- The percentage of unique values. In the example above, this would be (3 / `r num_train` = `r signif(3 / num_train * 100, 3)`%). 
+- The count ratio of the two most frequent values (`r num_train` / 5 $\approx$ `r round(num_train / 5, 0)`). 
+
+There are suggested cutoffs for each of these criteria (10% and 19, respectively), with the rule that if the unique value percentage is less than 10% and the frequency value is greater than 19, the predictor is removed. 
+
+Correlation
+
+others
+
+## Supervised {#sec-unsupervised-feature-selection}
+
+### Types
+
+## What Could Go Wrong?
+
+## Proper Data Usage
+
+
+## Chapter References {.unnumbered}
