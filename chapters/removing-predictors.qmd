@@ -15,12 +15,16 @@ source("../R/_common.R")
 # ------------------------------------------------------------------------------
 
 library(tidymodels)
+library(colino)
+library(doParallel)
 
 # ------------------------------------------------------------------------------
 # set options
 tidymodels_prefer()
 theme_set(theme_transparent())
 set_options()
+cl <- makePSOCKcluster(parallel::detectCores(logical = FALSE))
+registerDoParallel(cl)
 ```
 
 ```{r}
@@ -162,9 +166,63 @@ others
 
 There are three main classes of supervised methods for filtering predictors. The first is model-based. As previously mentioned, some models can remove irrelevant predictors during training. For example, a decision tree effectively ignores predictors that were not involved in any of the model’s splits. This approach is generally called _embedded feature selection_^[Not to be confused with embeddings discussed in @sec-embeddings.]. For many of these models, no further filtering is required. However, this is not always the case. Tree-based ensembles tend to over-split on irrelevant predictors (often by design) and, for this reason, the _can_ exclude irrelevant predictors but do not in practice. Random forests is a prime example. 
 
+### Filter Methods
+
 Second, _simple filters_ can be applied to remove predictors before serving them to the model. For example, for a regression model, we might screen out numeric predictors whose correlation with the outcome is less than some threshold. This can be quick and effective but also has many limitations. For example, the correlation filter is univariate, and if the predictors are highly correlated with one another, this filter will either under- or over-filter the predictors. Another issue is related to data usage. If we use the same data to filter the predictors as will be used to train the model, there is the distinct possibility of overfitting the filter to the training data. Otherwise, we will need to either reserve a separate pool of data for filtering or use a nested resampling scheme (described in @sec-resampling). 
 
+simple cut; no "where do we stop" but what should the threshold be? optimization via tuning? 
+
+
+### Search Methods 
+
 The third general approach uses a search procedure to iteratively provide subsets of the predictor set to the model. For each iteration, model performance is used to guide the next step of the optimization. As an example, recursive feature elimination (RFE) initially ranks the predictors in terms of their importance to the outcome. The search then successively reduces the number of predictors by prioritizing less relevant predictors for removal. 
+
+two approaches to determine stopping point; nested resampling; re=running variable scoring
+
+
+:::: {.columns}
+
+::: {.column width="15%"}
+
+:::
+
+::: {.column width="70%"}
+
+
+```pseudocode
+#| label: alg-rfe
+#| html-indent-size: "1.2em"
+#| html-comment-delimiter: "//"
+#| html-line-number: true
+#| html-line-number-punc: ":"
+#| html-no-end: false
+\begin{algorithm}
+\caption{Recursive feature elimination (no parameter tuning)}
+\begin{algorithmic}
+\State $D^{model}$: data used for modeling: $p$ predictors $X$ and outcome $y$
+\State $D^{pred}$: data used for performance estimation (same column dimensions)
+\State $f()$: modeling function including preprocessing
+\Procedure{RFE}{$D^{model}, D^{pred}, f()$}
+  \For{$j =p$ \To $1$}
+    \State Rank each predictor. 
+    \State Select the top $j$ predictors and subset $D^{model}$ and $D_{j}^{pred}$.
+    \State Train model $f$ on the analysis set to produce $\hat{f}_{j}(D^{model})$.
+    \State Generate assessment set predictions $\hat{y}$ by applying model $\hat{f}_{j}$ to $D_{j}^{pred}$.
+    \State Estimate performance statistic $\hat{Q}_{j}$.
+  \EndFor    
+\Return $\hat{Q}_s$.
+\Endprocedure
+\end{algorithmic}
+\end{algorithm}
+```
+
+:::
+
+::: {.column width="15%"}
+
+:::
+
+::::
 
 
 
@@ -172,5 +230,79 @@ The third general approach uses a search procedure to iteratively provide subset
 
 ## Proper Data Usage
 
+```{r}
+#| label: proper-rfe
+#| include: false
+#| cache: true
+
+n_train <- 10^3
+n_test <- 10^5
+num_extra <- 100
+seed_val <- 187
+
+search_sizes <- c(1:9, (1:11) * 10)
+
+# ------------------------------------------------------------------------------
+
+set.seed(seed_val)
+sim_tr <- sim_regression(n_train, method = "hooker_2004")
+sim_te <- sim_regression(n_test, method = "hooker_2004")
+
+set.seed(seed_val + 1)
+sim_tr <- sim_tr %>% bind_cols(sim_noise(n_train, num_extra))
+sim_te <- sim_te %>% bind_cols(sim_noise(n_test,  num_extra))
+
+sim_rs <- vfold_cv(sim_tr)
+
+# ------------------------------------------------------------------------------
+
+base_model <- rand_forest(mode = "regression", trees = 1000) %>%
+  set_engine("ranger", importance = "permutation")
+
+rf_rec <- recipe(outcome ~ ., data = sim_tr) %>% 
+  step_select_vip(
+    all_predictors(),
+    outcome = "outcome",
+    model = base_model,
+    top_p = tune()
+  )
+
+rf_filter_spec <- 
+  rand_forest(mode = "regression", trees = 1000) %>%
+  set_engine("randomForest")
+
+rf_filter_wflow <- 
+  workflow() %>% 
+  add_model(rf_filter_spec) %>% 
+  add_recipe(rf_rec)
+
+rf_filter_res <- 
+  rf_filter_wflow %>% 
+  tune_grid(
+    resamples = sim_rs,
+    grid = tibble(top_p = search_sizes)
+  )
+
+met_avg <- collect_metrics(rf_filter_res) %>% filter(.metric == "rmse")
+met_rs <- collect_metrics(rf_filter_res, summarize = FALSE) %>% filter(.metric == "rmse")
+```
+
+
+```{r}
+#| label: fig-rfe 
+#| echo: false
+#| warning: false
+#| out-width: 70%
+#| fig-width: 6
+#| fig-height: 4.25
+#| fig-cap: "Recursive feature elimination results for one of the simulated sets."
+
+met_rs %>% 
+  ggplot(aes(top_p)) + 
+  geom_line(aes(y = .estimate, group = id, col = id), show.legend = FALSE, alpha = 1 / 2) +
+  geom_line(data = met_avg, aes(y = mean), linewidth = 1) +
+  geom_point(data = met_avg, aes(y = mean)) +
+  labs(y = "RMSE", x = "# Predictors")
+```
 
 ## Chapter References {.unnumbered}
