@@ -42,7 +42,7 @@ This chapter _does not_ provide a comprehensive discussion of this topic. Due to
 
 As with most questions, “It depends on the model.” Some models have specific limitations on the number of predictors. For example, ordinary linear regression cannot estimate more parameters than data points in the training set. As will be seen in later chapters, some models can naturally eliminate predictors with no effect relationship to the outcome. In general, it is better to have fewer predictors than an overabundance. 
 
-To demonstrate the potential issue, a regression problem was simulated using equations used in @hooker2004discovering and Ref
+To demonstrate the potential issue, a regression problem was simulated^[A similar analysis with a different simulation system can be found in @fes.] using equations used in @hooker2004discovering and @Sorokina2008
 
 $$ 
 y_i = \pi^{x_{i1}  x_{i2}}  \sqrt{2 x_{i3}} - \arcsin(x_{i4}) + \log(x_{i3} + x_{i5}) - (x_{i9}/x_{i10})  \sqrt{x_{i7}/x_{i8}} - (x_{i2} x_{i7}) + \epsilon_i
@@ -121,13 +121,52 @@ We can view columns with a single unique value to have zero variance. However, w
 
 There are suggested cutoffs for each of these criteria (10% and 19, respectively), with the rule that if the unique value percentage is less than 10% and the frequency value is greater than 19, the predictor is removed. 
 
-Correlation
+```{r}
+#| label: nzv-text
+#| include: false
+
+nzv_res <- 
+  recipe(time_to_delivery ~ ., data = delivery_train) %>% 
+  step_nzv(starts_with("item")) %>% 
+  prep() %>% 
+  tidy(number = 1) %>% 
+  pluck("terms")
+
+item_rm_list <- knitr::combine_words(gsub("item_", "", nzv_res))
+
+counts <- 
+  delivery_train %>% 
+  count(!!sym(nzv_res[1])) %>% 
+  setNames(c("item", "n"))
+
+pct_un <- nrow(counts) / nrow(delivery_train) * 100
+fr_ratio <- round(counts$n[1] / counts$n[2], 1)
+
+counts_txt <- 
+  counts %>% 
+  mutate(
+    orders = ifelse(n != 1, "orders", "order"),
+    txt = paste0(item,  " (", format(n, big.mark = ","), " ", orders, ")")
+  ) %>% 
+  pluck("txt") %>% 
+  knitr::combine_words()
+```
+
+Recall that there are 27 predictors in the food delivery data that represent the counts of specific items in an order. These values are mostly zero and less than three. When the near-zero variance filter is applied to those predictors, `r length(nzv_res)` were slated for removal: items `r item_rm_list`. Of these, `r gsub("_", " ", nzv_res[1])` had the following frequency distribution: `r counts_txt`. The percentage of unique values was `r round(pct_un, 3)`% and the ratio of frequencies was `r fr_ratio`. 
+
+Another potential filter reduces between-pair correlations (a.k.a. multicollinearity). For some threshold for the absolute value of the pairwise correlations, the filter removes the minimal subset of predictors to meet this standard. This can be a crude but effective method of reducing colinearity. Other tools, such as PCA, might be more advantageous for the model but do not reduce the dimensions of the predictors. This filter is considered in more detail in @sec-colinearity and compared to other approaches. 
 
 others
 
 ## Supervised {#sec-unsupervised-feature-selection}
 
-### Types
+There are three main classes of supervised methods for filtering predictors. The first is model-based. As previously mentioned, some models can remove irrelevant predictors during training. For example, a decision tree effectively ignores predictors that were not involved in any of the model’s splits. This approach is generally called _embedded feature selection_^[Not to be confused with embeddings discussed in @sec-embeddings.]. For many of these models, no further filtering is required. However, this is not always the case. Tree-based ensembles tend to over-split on irrelevant predictors (often by design) and, for this reason, the _can_ exclude irrelevant predictors but do not in practice. Random forests is a prime example. 
+
+Second, _simple filters_ can be applied to remove predictors before serving them to the model. For example, for a regression model, we might screen out numeric predictors whose correlation with the outcome is less than some threshold. This can be quick and effective but also has many limitations. For example, the correlation filter is univariate, and if the predictors are highly correlated with one another, this filter will either under- or over-filter the predictors. Another issue is related to data usage. If we use the same data to filter the predictors as will be used to train the model, there is the distinct possibility of overfitting the filter to the training data. Otherwise, we will need to either reserve a separate pool of data for filtering or use a nested resampling scheme (described in @sec-resampling). 
+
+The third general approach uses a search procedure to iteratively provide subsets of the predictor set to the model. For each iteration, model performance is used to guide the next step of the optimization. As an example, recursive feature elimination (RFE) initially ranks the predictors in terms of their importance to the outcome. The search then successively reduces the number of predictors by prioritizing less relevant predictors for removal. 
+
+
 
 ## What Could Go Wrong?
 
