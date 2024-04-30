@@ -38,7 +38,7 @@ source("../R/setup_ames.R")
 source("../R/setup_chemometrics.R")
 ```
 
-When there are a multitude of predictors, it might make sense to condense them into a smaller number of artificial features. To be useful, this smaller set should represent what is essential in the original data. This process is often called _feature extraction_ or _manifold learning_. We’ll use a more general term currently en vogue: **embeddings**. While this chapter focuses on feature extraction, embeddings  can be used for other purposes, such as converting non-numeric data (e.g., text) into a more usable numeric format. 
+When there are a multitude of predictors, it might make sense to condense them into a smaller number of artificial features. To be useful, this smaller set should represent what is essential in the original data. This process is often called _feature extraction_, _dimension redunction_, or _manifold learning_. We’ll use a more general term currently en vogue: **embeddings**. While this chapter focuses on feature extraction, embeddings  can be used for other purposes, such as converting non-numeric data (e.g., text) into a more usable numeric format. 
 
 This section will examine two primary classes of embedding methods that can achieve multiple purposes. First, we’ll consider linear methods that take a numeric input matrix $X$ that is $n \times p$ and create a different, probably smaller set of features $X^*$ ($n \times m$)^[With $m <<< p$.] using the transformation $X^* = XA$. 
 
@@ -122,23 +122,34 @@ The data originated from a modeling competition to find the most accurate model 
 
 ## Linear Transformations  {#sec-linear-embed}
 
-The barley data set presents a common challenge for many machine learning techniques:  the features are highly correlated.  Techniques that require inverting the covariance matrix of the features, such as linear regression, will become numerically unstable or may not be able to be fit when features are highly correlated.  If we desire to use a modeling technique that is adversely affected by highly correlated features, then what can we do?  One option would be to use a filtering method that removes highly correlated features (@fes), leaving a subset of features that has sufficiently low among-feature correlation to allow the use of the desired models.  A second approach would be to use an embedding technique that extracts new features based on the original features such that the new features optimally summarize information from the original data while also minimizing the correlation among the new features making them well suited for the machine learning models we desire to use.
+The barley data set presents two common challenges for many machine learning techniques:
 
-In this section we will review principal components analysis (PCA), independent component analysis (ICA), and partial least squares (PLS), which are fundamental linear embedding techniques that are effective at identifying meaningful embeddings.  Both PCA and ICA extract embedded features using only information in the original features.  Alternatively, PLS extracts embedded features using information from both the original features and the outcome.  For this reason PLS is called a supervised technique since it utilizes the outcome to guide the extraction of the embedded features.  Alternatively, PCA and ICA are called unsupervised techniques because the process of extracting the embedded features does not utilize the outcome.
+1. The dimensionality of the data is fairly large (`r ncol(barley_train) - 1` orginal columns). 
+2. The features are highly correlated. Techniques that require inverting the covariance matrix of the features, such as linear regression, will become numerically unstable or may not be able to be fit when features are highly correlated. 
 
-Each of these three embedding methods are _linear_ in a mathematical sense because they transform a matrix of numeric features ($X$) into new features that are linear combinations of the original features.  The new linear combinations are often called _scores_.  The original feature matrix $X$ can be transformed into a set of scores using the equation
+What can we do if we desire to use a modeling technique that is adversely affected by either (or both) of these characteristics?  
+
+Dimensionality reduction is one technique that can help with the first issue (an abundance of columns). As we’ll see below, we might be able to extract new features ($X^*$) such that the new features optimally summarize information from the original data ($X$). 
+
+For the problem of highly correlated predictors, some embedding methods can additionally _decorrelated_ the predictors by deriving the embedded features with minimal correlation.  
+
+The three embedding methods we’ll discuss first are linear in a mathematical sense because they transform a table of numeric features into new features that are linear combinations of the original features. These new linear combinations are often called _scores_. This transformation uses the equation.
 
 $$ X^* = X A $$
 
-where $A$ is a matrix that translates or embeds the original features into a lower dimensional space that summarizes the information contained in the original space.  It is easy to see why this matrix operation is linear when the elements of the $X$ and $A$ matrices are expanded.  For example, the first score for the $i^{th}$ sample would be:
+where $A$ is a matrix that translates or embeds the original features into a potentially lower dimensional space without losing much information. It is easy to see why this matrix operation is linear when the elements of the $X$ and $A$ matrices are expanded.  For example, the first score for the $i^{th}$ sample would be:
 
 $$ 
 x^*_{i1} = a_{11} x_{i1} + a_{21}x_{i2} + \ldots +  a_{p1}x_{ip} 
 $$ {#eq-pca-linear-combo}
 
-Both PCA and ICA have distinct objectives for how each embeds the original features into a lower dimensional subspace, thus leading to a different $A$ matrix.  By embedding the features, the correlation among the original features can be reduced and the relationship with the outcome can be better identified within the subspace. However utilizing an unsupervised embedding technique does not guarantee that the predictive performance of a model will improve.  The main assumption when using an unsupervised embedding method is that the condensed information will be effective at predicting the response.  While unsupervised techniques in practice can create embedded features that are predictive of the response, the assumption that they _will_ create new features that are predictive of the response is a logical leap because the objective of unsupervised techniques is completely disconnected with the response.  In fact, we often find that while unsupervised techniques create embedded features that have good characteristics for modeling, they do not create new features that most effectively improve a model's predictive performance.
+The $a_{ij}$ values are often referred to as the _loadings_ for each predictor. 
 
-Alternatively, PLS is a technique that utilizes the response to identify an embedding that is optimally related to the response.  When compared to PCA, PLS will find a a smaller and more efficient embedding of the original predictors that is as or more predictive of the response.
+In this section, we will review principal components analysis (PCA), independent component analysis (ICA), and partial least squares (PLS), which are fundamental linear embedding techniques that are effective at identifying meaningful embeddings but estimate $A$ in different ways.  PCA and ICA extract embedded features using only information from the original features; they are unsupervised.  Alternatively, PLS adds in information from the original features and the outcome during training; PLS is a supervised technique. 
+
+There are many other linear embedding methods that can be used. For example, non-negative matrix factorization is an embedding method that is useful when the data in $X$ are integer counts or other values that cannot be negative. 
+
+To start, we’ll focus on the most often used embedding method: PCA.
 
 ### Principal Component Analysis
 
@@ -173,6 +184,97 @@ barley_cumulative_variance <-
   mutate(previous_cum_var = ifelse(component == 1, 0, previous_cum_var)) %>%
   mutate(pct_total_var = value - previous_cum_var)
 ```
+
+Karl Pearson introduced PCA over a century ago, yet it remains a fundamental dimension reduction method [@jolliffe2016principal].  Its relevance stems from the underlying objective of the technique: to find linear combinations of the original predictors that maximize amount of variation in the new features^[As is, this is far too general. We could maximize the variance by making every value of $A$ equal to $\infty$. PCA, and other methods, impose an implicit constraint to limit the elements of $A$. In this case, PCA constrains the loading vectors to have unit length.]. From a statistical perspective, variation is synonymous with information.  
+
+Simultaneously, the scores produced by PCA (i.e., $X^*$) are required to be orthogonal to each other. The important side benefit of this technique is that _PCA scores are uncorrelated_. This is very useful for modeling techniques that need the predictors to be relatively uncorrelated: multiple linear regression, neural networks, support vector machines, and others.
+
+In a way, PCA components have an order or hierarchy. The first principal component has a higher variance than any other component. The second component has a higher variance than subsequent components, and so on. We can think of this process as one of deflation; the first component extracts the largest sources of information/variation in the predictors set. The second component extracts as much as possible for whatever is left behind by the first, and so on. For this reason, we can track how much variation in the original data each component accounts for. We often use the phrase that "PCA chases variation."
+
+Suppose we start with $p$ columns^[Assuming that the $p$ columns are linearly independent.] in our data. In that case, we can produce up to $p$ PCA components, and their accumulated variation will eventually add up to the total variation in the original $X$.
+
+While PCA can deliver new features with the desirable characteristics, the technique must be used with care.  Specifically, we must understand that PCA seeks to find embeddings without regard to any further understanding of the original features (such as the response).  Hence, PCA may generate embeddings that are ignorant of the modeling objective.
+
+#### What to know before PCA {.unnumbered}
+
+Because PCA seeks linear combinations of predictors that maximize variability, it will naturally first be drawn to summarizing predictors with more variation.  If the original predictors are on measurement scales that differ in order of magnitude, then the first components will focus on summarizing the higher magnitude predictors.  This means that the PCA scores will focus on the scales of the measurements (rather than their intrinsic value).  If, by chance, the most relevant feature for predicting the response also has the largest numerical values, the new features created by PCA will retain the essential information for predicting the response.  However, if the most important features are in the smallest units, then the top features created by PCA will be much less effective. 
+
+In most practical machine learning applications, features are on vastly different scales. We suggest using the tools from @sec-common-scale to transform the data so that they have the same units. This prevents PCA from focusing dimension reduction simply on the measurement scale.
+
+Additionally, the distributions of each feature may show considerable skewness or outliers. While there are no specific distributional requirements to use PCA, it is focused on variance and variance calculations often involve squared terms (e.g., $(x_i - \bar{x})^2$). This type of computation can be very sensitive to outliers and skewness; resolving these issues prior to PCA is recommended. See the methods previously described in @sec-skewness.  
+
+
+#### How does it do it? {.unnumbered}
+
+deflation description; only works with correlation
+
+#### A simple example {.unnumbered}
+
+```{r}
+#| label: barley-2d-data
+#| include: false
+
+load("../RData/barley_2d_pca_.RData")
+angles <- min(opt_variances$angle2)
+angles <- c(angles, angles + 180)
+angles_txt <- paste0(round(angles, 0), "$^{\\circ}$")
+angles_txt <- knitr::combine_words(angles_txt)
+
+a_11 <- 
+  barley_pca_coefs %>% filter(terms == "wvlgth_001" & component == "PC1") %>%
+  pluck("value") %>% round(2)
+a_12 <- 
+  barley_pca_coefs %>% filter(terms == "wvlgth_050" & component == "PC1") %>%
+  pluck("value") %>% round(2)
+a_21 <- 
+  barley_pca_coefs %>% filter(terms == "wvlgth_001" & component == "PC2") %>%
+  pluck("value") %>% round(2)
+a_22 <- 
+  barley_pca_coefs %>% filter(terms == "wvlgth_050" & component == "PC2") %>%
+  pluck("value") %>% round(2)
+```
+
+To demonstrate, we chose two predictors in the barley data. They correspond to wavelengths 1,300 and 1,398 shown^[Thse wavelengths correspond to the 1<sup>st</sup> and 50<sup>th</sup> predictors.] in @fig-barley-data(b).  In the data, these two predictors were preprocessed using the ORQ procedure (@sec-skewness), and the values have a correlation of `r barley_val_cor`. 
+
+PCA was performed on these data, and the results are animated in @fig-pca-rotation. This visualization shows the original data (colored by their outcome data) and then rotates it around the center position. The PCA transformation corresponds to the rotation where the x-axis has the largest spread. The variance is largest at _two_ angles (`r angles_txt`) since the solution for PCA is _unique up to sign_. Both possible solutions are correct, and we usually pick one. For one solution, the PCA loading coefficients are: 
+
+\begin{align}
+x^*_{i1} &= `r a_11` x_{i1} `r a_21` x_{i2} \notag \\
+x^*_{i2} &= `r a_21` x_{i1} + `r a_22` x_{i2} \notag
+\end{align}
+
+Because of this illustrative example’s low-dimensional aspect, this solution is excessively simple. Ordinarily, the loading values take a great many values.  
+
+```{r}
+#| label: fig-pca-rotation 
+#| echo: false
+#| warning: false
+#| out-width: 40%
+#| fig-cap: "A demonstration that the PCA transformation is just of rotation of the data. This animation shows the rotation of two of the predictors (those at the first and fiftieth wavelength). The original data and the two optimal rotations that correspond to the principal components."
+
+knitr::include_graphics("../premade/anime_barley_pca.gif")
+```
+
+#### PCA on the barley data  {.unnumbered}
+
+
+
+#### Non-standard PCA {.unnumbered}
+
+sparse PCA and PLS
+
+#### How to incorporate it {.unnumbered}
+
+tuning; interpretability, re-standardize/decending size of components; useful for EDA
+
+scaling plots of components and their general scale (re-normalize)? 
+
+num comp/scree; onl works with correlation in predictors
+
+<br>
+
+
+
 
 ```{r}  
 #| label: ica-rec
@@ -309,62 +411,6 @@ comp1_wavelength_comparison <-
          Method = factor(Method, levels=c("PCA", "ICA", "PLS")))
 ```
 
-
-Karl Pearson introduced Principal Component Analysis (PCA) over a century ago, yet it remains a fundamental dimension reduction method [@jolliffe2016principal].  Its relevance stems from the underlying objective of the technique: to find linear combinations of the original predictors such that the combinations summarize the maximal amount of variation in the original feature space.  From a statistical perspective, variation is synonymous with information.  So, by finding combinations of the original features that capture variation, we find the embedded subspace of the data that optimally summarizes the information relevant to the features.  Simultaneously, the new dimensions  are required to be orthogonal to each other.  The property of orthogonality enables the feature space variability to be neatly partitioned in a way that does not overlap.  It turns out that the variability summarized across all of the principal components is exactly equal to the variability across the original features.  In practice, enough new score features are computed to account for a sufficient amount of the variability in the original features.
-
-An important side benefit of this technique is that the resulting PCA scores are uncorrelated.  This property is very useful for modeling techniques (e.g., multiple linear regression, neural networks, support vector machines, and others) that need the predictors to be relatively uncorrelated.
-
-While PCA delivers new features with the desirable characteristics of uncorrelated scores and optimally summarizing variability, the technique must be used with care.  Specifically, we must understand that PCA seeks to find embeddings without regard to any further understanding of the original features such as their measurement scales or of the response.  Hence, PCA may generate embeddings that are focused on irrelevant features in the data and that are ignorant of the modeling objective.
-
-Because PCA seeks linear combinations of predictors that maximize variability, it will naturally first be drawn to summarizing predictors that have more variation.  If the original predictors are on measurement scales that differ in order of magnitude, then the first components will focus on summarizing the higher magnitude predictors.  This means that the information contained in the features generated by PCA will focus on the scales of the measurements.  If, by chance, the most relevant feature for predicting the response also has the greatest variability, then the new features created by PCA will retain the important information for predicting the response.  However, if the most important features are on the smallest scales, then the top features created by PCA will be much less effective at predicting the response.
-
-```{r}
-#| label: barley-2d-data
-#| include: false
-
-load("../RData/barley_2d_pca_.RData")
-angles <- min(opt_variances$angle2)
-angles <- c(angles, angles + 180)
-angles_txt <- paste0(round(angles, 0), "$^{\\circ}$")
-angles_txt <- knitr::combine_words(angles_txt)
-
-a_11 <- 
-  barley_pca_coefs %>% filter(terms == "wvlgth_001" & component == "PC1") %>%
-  pluck("value") %>% round(2)
-a_12 <- 
-  barley_pca_coefs %>% filter(terms == "wvlgth_050" & component == "PC1") %>%
-  pluck("value") %>% round(2)
-a_21 <- 
-  barley_pca_coefs %>% filter(terms == "wvlgth_001" & component == "PC2") %>%
-  pluck("value") %>% round(2)
-a_22 <- 
-  barley_pca_coefs %>% filter(terms == "wvlgth_050" & component == "PC2") %>%
-  pluck("value") %>% round(2)
-```
-
-To demonstrate, we chose two predictors in the barley data. They correspond to wavelengths 1,300 and 1,398 shown^[Thse wavelengths correspond to the 1<sup>st</sup> and 50<sup>th</sup> predictors.] in @fig-barley-data(b).  In the data, these two predictors were preprocessed using the ORQ procedure [@sec-skewness], and the values have a correlation of `r barley_val_cor`. PCA was performed on these data, and the results are animated in @fig-pca-rotation. This visualization shows the original data (colored by their outcome data) and then rotates it around the center position. The PCA transformation corresponds to the rotation where the x-axis has the largest spread. The variance is largest at _two_ angles (`r angles_txt`) since the solution for PCA is _unique up to sign_. Both possible solutions are correct, and we usually pick one. For one solution, the PCA coefficients (called the "loadings") are: 
-
-\begin{align}
-x^*_{i1} &= `r a_11` x_{i1} `r a_21` x_{i2} \notag \\
-x^*_{i2} &= `r a_21` x_{i1} + `r a_22` x_{i2} \notag
-\end{align}
-
-Because of this illustrative example’s low-dimensional aspect, there is a single unique loading. Ordinarily, the loading values take a great many values.  
-
-```{r}
-#| label: fig-pca-rotation 
-#| echo: false
-#| warning: false
-#| out-width: 40%
-#| fig-cap: "A demonstration that the PCA transformation is just of rotation of the data. This animation shows the rotation of two of the predictors (those at the first and fiftieth wavelength). The original data and the two optimal rotations that correspond to the principal components."
-
-knitr::include_graphics("../premade/anime_barley_pca.gif")
-```
-
-
-
-
-
 ```{r}
 #| label: fig-barley-component-scatter 
 #| echo: false
@@ -382,7 +428,6 @@ ggplot(two_component_comparison, aes(x=Comp1, y=Comp2, color=barley)) +
 
 
 
-In most practical machine learning applications, features are on vastly different scales.  Additionally, the distributions of each feature are not bell-shaped or symmetric.  To enable PCA to perform well as an embedding technique, we recommend first transforming each feature's distribution to become more symmetric and bell-shaped using the technique described in @sec-skewness.  Then the transformed features should be mean centered and scaled so that all features have a mean of zero and standard deviation of one.  Placing all features on the same scale prevents PCA from focusing dimension reduction simply on measurement scale.
 
 ```{r}
 #| label: fig-barley-pca-scree
