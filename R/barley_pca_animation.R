@@ -111,6 +111,10 @@ angles <- c(rep(0, 10), rep(opt_angles[1], 9), rep(opt_angles[2], 9), orig_angle
             rep(360, 10))
 angles <- sort(angles)
 
+angles_lab <- round(min(opt_variances$angle2), 0)
+angles_lab <- c(angles_lab, angles_lab + 180)
+angles_txt <- paste0("maximum variance (", angles_lab, " degree rotation)")
+
 # redo with pauses
 rotations <-
   map_dfr(angles, ~ rotate(barley_val_normed, .x), .id = "state") %>%
@@ -123,9 +127,9 @@ ranges <-
   rotations %>%
   distinct(angle, state2) %>%  
   mutate(
-    note = ifelse(angle == 0 | angle == 360, "original data", ""),
-    note = ifelse(angle == opt_angles[1], "maximum variance (flipped)", note),
-    note = ifelse(angle == opt_angles[2], "maximum variance", note),
+    note = ifelse(angle == 0 | angle == 360, "original data (zero degree rotation) ", ""),
+    note = ifelse(angle == opt_angles[1], angles_txt[2], note),
+    note = ifelse(angle == opt_angles[2], angles_txt[1], note),
     note_x = -.5, note_y = 4
   )
 
