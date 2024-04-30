@@ -135,15 +135,15 @@ For the problem of highly correlated predictors, some embedding methods can addi
 
 The three embedding methods we’ll discuss first are linear in a mathematical sense because they transform a table of numeric features into new features that are linear combinations of the original features. These new linear combinations are often called _scores_. This transformation uses the equation.
 
-$$ X^* = X A $$
+$$ \underset{n\times m}{X^*} = \underset{n\times p}{X}\ \underset{p\times m}{Q} $$
 
-where $A$ is a matrix that translates or embeds the original features into a potentially lower dimensional space without losing much information. It is easy to see why this matrix operation is linear when the elements of the $X$ and $A$ matrices are expanded.  For example, the first score for the $i^{th}$ sample would be:
+where $Q$ is a matrix that translates or embeds the original features into a potentially lower dimensional space ($m < p$) without losing much information. It is easy to see why this matrix operation is linear when the elements of the $X$ and $Q$ matrices are expanded.  For example, the first score for the $i^{th}$ sample would be:
 
 $$ 
-x^*_{i1} = a_{11} x_{i1} + a_{21}x_{i2} + \ldots +  a_{p1}x_{ip} 
+x^*_{i1} = q_{11} x_{i1} + q_{21}x_{i2} + \ldots +  q_{p1}x_{ip} 
 $$ {#eq-pca-linear-combo}
 
-The $a_{ij}$ values are often referred to as the _loadings_ for each predictor. 
+The $q_{ij}$ values are often referred to as the _loadings_ for each predictor in the linear combination. 
 
 In this section, we will review principal components analysis (PCA), independent component analysis (ICA), and partial least squares (PLS), which are fundamental linear embedding techniques that are effective at identifying meaningful embeddings but estimate $A$ in different ways.  PCA and ICA extract embedded features using only information from the original features; they are unsupervised.  Alternatively, PLS adds in information from the original features and the outcome during training; PLS is a supervised technique. 
 
@@ -185,7 +185,105 @@ barley_cumulative_variance <-
   mutate(pct_total_var = value - previous_cum_var)
 ```
 
-Karl Pearson introduced PCA over a century ago, yet it remains a fundamental dimension reduction method [@jolliffe2016principal].  Its relevance stems from the underlying objective of the technique: to find linear combinations of the original predictors that maximize amount of variation in the new features^[As is, this is far too general. We could maximize the variance by making every value of $A$ equal to $\infty$. PCA, and other methods, impose an implicit constraint to limit the elements of $A$. In this case, PCA constrains the loading vectors to have unit length.]. From a statistical perspective, variation is synonymous with information.  
+
+```{r}  
+#| label: pca-rec2
+#| echo: false
+#| cache: true
+#| warning: false
+
+barley_norm_rec <-
+  recipe(barley ~ ., data = barley_train) %>%
+  step_zv(all_predictors()) %>%
+  step_orderNorm(all_numeric_predictors()) %>%
+  prep()
+
+barley_norm_train <- bake(barley_norm_rec, barley_val)
+
+barley_pca <-
+  barley_norm_rec %>%
+  step_pca(all_numeric_predictors(), num_comp = 4, id = "pca") %>% 
+  prep()
+
+barley_pca_val <- bake(barley_pca, barley_val)
+
+barley_cumulative_variance <-
+  tidy(barley_pca, id = "pca", type = "variance") %>% 
+  dplyr::filter(terms == "cumulative percent variance" & component <= 10) %>%
+  mutate(
+    previous_cum_var = dplyr::lag(value, n = 1), 
+    previous_cum_var = ifelse(component == 1, 0, previous_cum_var), 
+    pct_total_var = value - previous_cum_var
+  )
+```
+
+
+```{r}  
+#| label: ica-rec2
+#| echo: false
+#| cache: true
+#| warning: false
+
+barley_ica <-
+  barley_norm_rec %>%
+  step_ica(all_numeric_predictors(), num_comp = 4, id = "ica") %>% 
+  prep()
+
+barley_ica_val <- bake(barley_ica, barley_val)
+```
+
+```{r}  
+#| label: pls-rec2
+#| echo: false
+#| cache: true
+#| warning: false
+
+barley_pls <-
+  barley_norm_rec %>%
+  step_pls(all_numeric_predictors(), outcome = "barley", num_comp = 4, id = "pls") %>% 
+  prep()
+
+barley_pls_val <- bake(barley_pls, barley_val)
+```
+
+
+```{r}
+#| label: all-linear-results
+#| echo: false
+#| warning: false
+pivot_me <- function(x, method) {
+  x %>% 
+    add_rowindex() %>% 
+    pivot_longer(cols = c(-barley, -.row), names_to = "label", values_to = "value") %>% 
+    mutate(
+      component_num = gsub("[a-zA-Z]", "", label),
+      component_num = as.numeric(component_num),
+      Method = method)
+}
+
+all_scores_val <- 
+  bind_rows(
+    pivot_me(barley_pca_val, "PCA"),
+    pivot_me(barley_ica_val, "ICA"),
+    pivot_me(barley_pls_val, "PLS")
+  ) %>%
+  mutate(
+    value = ifelse(label == "PLS2", -value, value)
+  )
+
+all_loadings <- 
+  bind_rows(
+    tidy(barley_pca, id = "pca"), 
+    tidy(barley_ica, id = "ica"),
+    tidy(barley_pls, id = "pls")
+  )
+
+if ( !file.exists("../RData/barley_linear_embeddings.RData") ) {
+  save(all_scores_val, all_loadings, file = "../RData/barley_linear_embeddings.RData")
+}
+```
+
+Karl Pearson introduced PCA over a century ago, yet it remains a fundamental dimension reduction method [@jolliffe2016principal].  Its relevance stems from the underlying objective of the technique: to find linear combinations of the original predictors that maximize amount of variation in the new features^[As is, this is far too general. We could maximize the variance by making every value of $Q$ equal to $\infty$. PCA, and other methods, impose an implicit constraint to limit the elements of $Q$. In this case, PCA constrains the loading vectors to have unit length.]. From a statistical perspective, variation is synonymous with information.  
 
 Simultaneously, the scores produced by PCA (i.e., $X^*$) are required to be orthogonal to each other. The important side benefit of this technique is that _PCA scores are uncorrelated_. This is very useful for modeling techniques that need the predictors to be relatively uncorrelated: multiple linear regression, neural networks, support vector machines, and others.
 
@@ -195,7 +293,7 @@ Suppose we start with $p$ columns^[Assuming that the $p$ columns are linearly in
 
 While PCA can deliver new features with the desirable characteristics, the technique must be used with care.  Specifically, we must understand that PCA seeks to find embeddings without regard to any further understanding of the original features (such as the response).  Hence, PCA may generate embeddings that are ignorant of the modeling objective.
 
-#### What to know before PCA {.unnumbered}
+#### Preparing for PCA {.unnumbered}
 
 Because PCA seeks linear combinations of predictors that maximize variability, it will naturally first be drawn to summarizing predictors with more variation.  If the original predictors are on measurement scales that differ in order of magnitude, then the first components will focus on summarizing the higher magnitude predictors.  This means that the PCA scores will focus on the scales of the measurements (rather than their intrinsic value).  If, by chance, the most relevant feature for predicting the response also has the largest numerical values, the new features created by PCA will retain the essential information for predicting the response.  However, if the most important features are in the smallest units, then the top features created by PCA will be much less effective. 
 
@@ -204,11 +302,37 @@ In most practical machine learning applications, features are on vastly differen
 Additionally, the distributions of each feature may show considerable skewness or outliers. While there are no specific distributional requirements to use PCA, it is focused on variance and variance calculations often involve squared terms (e.g., $(x_i - \bar{x})^2$). This type of computation can be very sensitive to outliers and skewness; resolving these issues prior to PCA is recommended. See the methods previously described in @sec-skewness.  
 
 
-#### How does it do it? {.unnumbered}
+#### How does PCA work? {.unnumbered}
 
-deflation description; only works with correlation
+Principal component analysis is focused on understanding the relationships between the predictor columns. PCA is only effective when there are correlations between predictors. Otherwise, each new PCA feature would only highlight a single predictor, and you would need the full set of PCA features to approximate the original columns. Conversely, data sets with many between-predictor relationships require very few predictors to represent the source columns. 
 
-#### A simple example {.unnumbered}
+The barley data set has abnormally high correlations between each predictor. These tend to be autoregressive; the correlations between predictors at adjacent wavelengths are very high, and the correlation between a pair of predictors diminishes as you move away from their locations on the spectrum. For example, the correlation between the first and second predictor (in their raw form) is essentially `r signif(cor(barley_train[, 2:3])[1,2], 8)` while the corresponding correlation between the first and fiftieth columns is `r round(cor(barley_train[, c(2, 51)])[1,2], 2)`. We'll explore the latter pair of columns below. 
+
+Before proceeding, let's gp on a small "side-quest" to talk about the mathematics of PCA. 
+
+::: {.mathy-box}
+The remainder of this subsection discussed a mathematical operation called the singular value decomposition (SVD), otherwise known as the spectral decomposition. PCA and many other computations rely on on the SVD. It is a fundamental linear algebra calculation. 
+
+We'll describe it loosely with a focus on how it is used. The concept of eigenvalues will come up again in the next section and in subsequent chapters. 
+:::
+
+
+The SVD process is intended to find a way to _rotate_ the original data in a way that the resulting columns are orthogonal to one another. It takes a matrix as an input and can decompose it into several pieces: 
+
+$$\underset{p\times p}{A} = \underset{p\times p}{Q}\quad\underset{p\times p}{\Lambda}\quad \underset{p\times p}{Q'}$$
+
+The results of this computation are the $p$ eigenvectors $\mathbf{q}_j$ and eigenvalues $\lambda_j$. The eignevectors tell you about the directions in which values of $A$ are moving and the eigenvalues describe the corresponding magnitudes. 
+
+The transformation works with PCA by using the covariance matrix as the input $A$. We are trying to find trends in the relationships between variables and the SVD is designed to translate the original matrix to one that is orthogonal (that is,). This aspect of the SVD is how it connects to PCA. If we want to approximate our original data with new features that are uncorrelated, we need a transformation to orthogonality.
+
+The matrix $Q$ houses the $p$ possible eigenvectors. These are the values by which you multiply the original matrix $A$ to achieve an orthogonal version. For PCA, they are the loading values. The matrix $\Lambda$ is a diagonal matrix whose $p$ values are the eigenvalues. It turns out that the eigenvalues represent the amount of variation (i.e., information) captured by each component. 
+
+If we conduct the SVD (and PCA) on the covariance matrix of the data, we are again subject to issues around potentially different units and scales of the predictors. Previously, we suggested to center and scale the data prior to PCA. The equivalent approach here is to conduct the SVD on the correlation matrix of the data. Similar to our recommendations on standardization, we recommend using the correlation as the input to PCA. 
+
+One interesting side-effect of using the covariance or correlation matrix as the input to PCA is related to missing data (discussed in more detail in @sec-missing-data). The conventional sample covariance (or correlation) matrices can be computed for each matrix element (i.e., without using matrix multiplication). Each covariance or correlation can be computed with whatever rows of the two predictors have pairwise-complete results. This means that we do not have to globally drop specific rows of the data when a small number of columns contain missing data. 
+
+
+#### A two dimensional example {.unnumbered}
 
 ```{r}
 #| label: barley-2d-data
@@ -220,27 +344,27 @@ angles <- c(angles, angles + 180)
 angles_txt <- paste0(round(angles, 0), "$^{\\circ}$")
 angles_txt <- knitr::combine_words(angles_txt)
 
-a_11 <- 
+q_11 <- 
   barley_pca_coefs %>% filter(terms == "wvlgth_001" & component == "PC1") %>%
   pluck("value") %>% round(2)
-a_12 <- 
+q_12 <- 
   barley_pca_coefs %>% filter(terms == "wvlgth_050" & component == "PC1") %>%
   pluck("value") %>% round(2)
-a_21 <- 
+q_21 <- 
   barley_pca_coefs %>% filter(terms == "wvlgth_001" & component == "PC2") %>%
   pluck("value") %>% round(2)
-a_22 <- 
+q_22 <- 
   barley_pca_coefs %>% filter(terms == "wvlgth_050" & component == "PC2") %>%
   pluck("value") %>% round(2)
 ```
 
-To demonstrate, we chose two predictors in the barley data. They correspond to wavelengths 1,300 and 1,398 shown^[Thse wavelengths correspond to the 1<sup>st</sup> and 50<sup>th</sup> predictors.] in @fig-barley-data(b).  In the data, these two predictors were preprocessed using the ORQ procedure (@sec-skewness), and the values have a correlation of `r barley_val_cor`. 
+To demonstrate, we chose two predictors in the barley data. They correspond to wavelengths 1,300 and 1,398 shown^[Thse wavelengths correspond to the 1<sup>st</sup> and 50<sup>th</sup> predictors.] in @fig-barley-data(b).  In the data, these two predictors were preprocessed using the ORQ procedure (@sec-skewness), and these processed values have a correlation of `r barley_val_cor`. 
 
 PCA was performed on these data, and the results are animated in @fig-pca-rotation. This visualization shows the original data (colored by their outcome data) and then rotates it around the center position. The PCA transformation corresponds to the rotation where the x-axis has the largest spread. The variance is largest at _two_ angles (`r angles_txt`) since the solution for PCA is _unique up to sign_. Both possible solutions are correct, and we usually pick one. For one solution, the PCA loading coefficients are: 
 
 \begin{align}
-x^*_{i1} &= `r a_11` x_{i1} `r a_21` x_{i2} \notag \\
-x^*_{i2} &= `r a_21` x_{i1} + `r a_22` x_{i2} \notag
+x^*_{i1} &= `r q_11` x_{i1} `r q_21` x_{i2} \notag \\
+x^*_{i2} &= `r q_21` x_{i1} + `r q_22` x_{i2} \notag
 \end{align}
 
 Because of this illustrative example’s low-dimensional aspect, this solution is excessively simple. Ordinarily, the loading values take a great many values.  
@@ -255,8 +379,31 @@ Because of this illustrative example’s low-dimensional aspect, this solution i
 knitr::include_graphics("../premade/anime_barley_pca.gif")
 ```
 
+Now that we've seen PCA on a small scale, let's look at an analysis of the full set of predictors 
+
 #### PCA on the barley data  {.unnumbered}
 
+Similar to the previous section, the ORQ procedure was used to standardize the predictors for all of the embedding methods used with the barley data in this chapter. From these, PCA was calculated on the training set. There are `r ncol(barley_train) - 1` feature columns and the same number of possible principal components. The number of new features to retain is a parameter that must be determined.  In practice, the number of new features is often selected based on the percentage of variability that the new features summarize relative to the original features.  @fig-barley-pca-scree displays the new PCA feature number (x-axis) versus the percent of total variability across the original features (commonly called a “scree plot”).  In this graph, three components summarize `r round(barley_cumulative_variance$value[3],1)` percent of the total variability.  We often select the smallest number of new features that summarize the greatest variability.  Instead of specifying the number of new features based on the amount of variability summarized, the number of features can be, and _should_ be, a tuning parameter in the model tuning process. 
+
+Note that the first component alone captured `r round(barley_cumulative_variance$value[1],1)`% of the variation in the `r ncol(barley_train) - 1` training data columns. This reflects the extreme correlation seen in the predictors. 
+
+
+```{r}
+#| label: fig-barley-pca-scree
+#| echo: false
+#| warning: false
+#| out-width: 60%
+#| fig-width: 6
+#| fig-height: 4
+#| fig-cap: "A plot of the PCA component number versus the percent of variance explained for each component for the barley data."
+
+ggplot(barley_cumulative_variance,
+       aes(x = component, y = cumsum(pct_total_var))) +
+  geom_line() +
+  geom_point() +
+  scale_x_continuous(breaks = c(1:10)) +
+  labs(x = "PCA Component", y = "% Total Variance")
+```
 
 
 #### Non-standard PCA {.unnumbered}
@@ -429,30 +576,14 @@ ggplot(two_component_comparison, aes(x=Comp1, y=Comp2, color=barley)) +
 
 
 
-```{r}
-#| label: fig-barley-pca-scree
-#| echo: false
-#| warning: false
-#| out-width: 60%
-#| fig-width: 6
-#| fig-height: 4
-#| fig-cap: "A plot of the PCA component number versus the percent of variance explained for each component for the barley data."
-
-ggplot(barley_cumulative_variance, aes(x=component, y=pct_total_var)) +
-  geom_line(linewidth=1.2, color="blue") +
-  scale_x_continuous(breaks=c(1:10)) +
-  labs(x="PCA Component", y="% Total Variance")
-```
-
-After the features have been individually transformed, PCA can then be used to extract new features.  The number of new features to retain is a parameter that must be determined.  In practice, the number of new features is often selected based on percentage of variability that the new features summarize relative to the original features.  @fig-barley-pca-scree displays the new PCA feature number (x-axis) versus the percent of total variability across the original features.  In this graph, 3 components summarize `r round(barley_cumulative_variance$value[3],1)` percent of the total variability.  Often, we select the smallest number of new features that summarize the greatest amount of variability.  Instead of specifying the number of new features based on amount of variability summarized, the number of features can be, and _should_ be, a tuning parameter in the model tuning process.  The approach for tuning of this parameter will be addressed in Section [TODO:  Add reference to this section].  Since PCA is ignorant of the response, the new features that optimally summarize variability may not be the most predictive of the response.  It may be that there are new features that summarize less variability which are actually predictive of the response.  By making the number of PCA components to retain a tuning parameter, we enable the modeling process to better identify the predictive information from the original data.
-
 
 @fig-barley-component-scatter (left facet) is a scatterplot of the first two principal components colored by the percentage of barley oil.  The figure reveals that the first component delineates the higher barley oil samples on the left with the lower barley oil samples on the right.  Likewise, there is a similar vertical gradient.  For this data, the unsupervised dimension reduction via PCA provides embeddings that are visually related to the response.  While the first two components are visually related the outcome, the correlation between these two components is `r round(two_component_correlations %>% dplyr::filter(Method=="PCA") %>% dplyr::select(r) %>% pull(), 2)`.
 
 
 ### Independent Component Analysis
 
-ICA has roots in signal processing, where the observed signal that is measured is a combination of several different input signals.  A common example used to conceptualize the objective of ICA is the microphone problem.  Suppose that a voice recording is taken during a meeting where there is one primary presenter.  During the meeting, someone close to the microphone continues to shuffle papers which is also captured on the recording.  The final recording contains both the primary presenter's voice and the noise of the shuffled papers, which are two independent sources of audio information.  
+ICA has roots in signal processing, where the observed signal that is measured is a combination of several different input signals.  A common example used to conceptualize the objective of ICA is the microphone problem.  Suppose that a voice recording is taken during a meeting where there is one primary presenter.  During the meeting, someone close to the microphone continues to shuffle papers which is also captured on the recording.  The final recording contains both the primary presenter's voice and the noise of the shuffled papers, which are two independent sources of audio information. 
+
 The objective of independent component analysis (ICA) is to identify linear combinations of the original features that are statistically independent of each other [@nordhausen2018independent].  For the microphone problem, the goal would be to separate the two unique sources of sound in the recording.  The noise source would then be isolated and could be removed.  Because ICA's objective requires statistical independence among components, it will generate a different set of features than PCA.  This enables ICA to be able to model a different set of trends than PCA, which focuses on orthogonality and linear relationships.  Depending on the problem, ICA may generate new features that may be more predictive of the response than PCA.  Unlike PCA, which orders new components based on summarized variance, ICA's components have no natural ordering.  Thhis means that ICA may require more components than PCA in order to find the ones that are related to the outcome.
 
 To compare PCA and ICA, let's return to Figure @fig-barley-component-scatter.  First, both techniques are similar in that the first and second components are uncorrelated.  However, while there are visual patterns between the first two components for PCA, there are no patterns for ICA.  This demonstrates the ICA creates independent components.  Third, while the outcome is related to the first two PCA components, it is not related to the first two ICA components.  For ICA to be used in this problem, more ICA components will need to be extracted to locate those components that are related to the outcome.
