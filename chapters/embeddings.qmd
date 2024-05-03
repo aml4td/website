@@ -20,14 +20,15 @@ library(bestNormalize)
 library(patchwork)
 library(scales)
 library(modeldatatoo) # remove this later with setup file
-library(ggforce)
 library(viridis)
-library(GGally)
+library(doParallel)
 
 # ------------------------------------------------------------------------------
 # set options
 tidymodels_prefer()
 theme_set(theme_transparent())
+cl <- makePSOCKcluster(parallel::detectCores(logical = FALSE))
+registerDoParallel(cl)
 set_options()
 ```
 
@@ -38,7 +39,7 @@ source("../R/setup_ames.R")
 source("../R/setup_chemometrics.R")
 ```
 
-When there are a multitude of predictors, it might make sense to condense them into a smaller number of artificial features. To be useful, this smaller set should represent what is essential in the original data. This process is often called _feature extraction_, _dimension redunction_, or _manifold learning_. We’ll use a more general term currently en vogue: **embeddings**. While this chapter focuses on feature extraction, embeddings  can be used for other purposes, such as converting non-numeric data (e.g., text) into a more usable numeric format. 
+When there are a multitude of predictors, it might make sense to condense them into a smaller number of artificial features. To be useful, this smaller set should represent what is essential in the original data. This process is often called _feature extraction_, _dimension reduction_, or _manifold learning_. We’ll use a more general term currently en vogue: **embeddings**. While this chapter focuses on feature extraction, embeddings  can be used for other purposes, such as converting non-numeric data (e.g., text) into a more usable numeric format. 
 
 This section will examine two primary classes of embedding methods that can achieve multiple purposes. First, we’ll consider linear methods that take a numeric input matrix $X$ that is $n \times p$ and create a different, probably smaller set of features $X^*$ ($n \times m$)^[With $m < p$.] using the transformation $X^* = XQ$. 
 
@@ -111,7 +112,7 @@ Note that most of the data have very little barley oil. About `r round(mean(chim
 
 The `r nrow(wave)` predictors are the light absorbance for sequential values in the light region of interest (believed to be from wavelengths between `r min(wave$wavelength)` and `r max(wave$wavelength)` nm). @fig-barley-data(b) shows a selection of four samples from the data. The darker lines represent samples with lower barley content. 
 
-These predictor values, called _spectra_, have a very high serial correlation between predictors; median correlation between the predictors was `r round(median(wave_corr), 2)`. The high degree of between-predictor correlation can be a major complication for some models and can degrade predictive performance.  Therefore, we need methods that will simultaneously decorrelate predictors while extracting useful predictive information for the outcome. 
+These predictor values, called _spectra_, have a very high serial correlation between predictors; median correlation between the predictors was `r round(median(wave_corr), 2)`. The high degree of between-predictor correlation can be a major complication for some models and can degrade predictive performance. Therefore, we need methods that will simultaneously decorrelate predictors while extracting useful predictive information for the outcome. 
 
 Analyses of similar data sets can be found in [Section 9.1](https://bookdown.org/max/FES/illustrative-data-pharmaceutical-manufacturing-monitoring.html) of @fes and @wtf2024.
 
@@ -131,13 +132,13 @@ What can we do if we desire to use a modeling technique that is adversely affect
 
 Dimensionality reduction is one technique that can help with the first issue (an abundance of columns). As we’ll see below, we might be able to extract new features ($X^*$) such that the new features optimally summarize information from the original data ($X$). 
 
-For the problem of highly correlated predictors, some embedding methods can additionally _decorrelated_ the predictors by deriving the embedded features with minimal correlation.  
+For the problem of highly correlated predictors, some embedding methods can additionally _decorrelated_ the predictors by deriving the embedded features with minimal correlation. 
 
 The three embedding methods we’ll discuss first are linear in a mathematical sense because they transform a table of numeric features into new features that are linear combinations of the original features. These new linear combinations are often called _scores_. This transformation uses the equation.
 
 $$ \underset{n\times m}{X^*} = \underset{n\times p}{X}\ \underset{p\times m}{Q} $$
 
-where $Q$ is a matrix that translates or embeds the original features into a potentially lower dimensional space ($m < p$) without losing much information. It is easy to see why this matrix operation is linear when the elements of the $X$ and $Q$ matrices are expanded.  For example, the first score for the $i^{th}$ sample would be:
+where $Q$ is a matrix that translates or embeds the original features into a potentially lower dimensional space ($m < p$) without losing much information. It is easy to see why this matrix operation is linear when the elements of the $X$ and $Q$ matrices are expanded. For example, the first score for the $i^{th}$ sample would be:
 
 $$ 
 x^*_{i1} = q_{11} x_{i1} + q_{21}x_{i2} + \ldots +  q_{p1}x_{ip} 
@@ -145,7 +146,7 @@ $$ {#eq-pca-linear-combo}
 
 The $q_{ij}$ values are often referred to as the _loadings_ for each predictor in the linear combination. 
 
-In this section, we will review principal components analysis (PCA), independent component analysis (ICA), and partial least squares (PLS), which are fundamental linear embedding techniques that are effective at identifying meaningful embeddings but estimate $A$ in different ways.  PCA and ICA extract embedded features using only information from the original features; they are unsupervised.  Alternatively, PLS adds in information from the original features and the outcome during training; PLS is a supervised technique. 
+In this section, we will review principal components analysis (PCA), independent component analysis (ICA), and partial least squares (PLS), which are fundamental linear embedding techniques that are effective at identifying meaningful embeddings but estimate $A$ in different ways. PCA and ICA extract embedded features using only information from the original features; they are unsupervised. Alternatively, PLS adds in information from the original features and the outcome during training; PLS is a supervised technique. 
 
 There are many other linear embedding methods that can be used. For example, non-negative matrix factorization is an embedding method that is useful when the data in $X$ are integer counts or other values that cannot be negative. 
 
@@ -232,6 +233,7 @@ initial_loadings <- matrix(rnorm(4^2), ncol = 4)
 barley_ica <-
   recipe(barley ~ ., data = barley_train) %>%
   step_zv(all_predictors()) %>%
+  step_normalize(all_numeric_predictors()) %>%
   step_ica(
     all_numeric_predictors(),
     num_comp = 4,
@@ -291,7 +293,9 @@ all_loadings <-
   bind_rows(
     tidy(barley_pca, id = "pca"), 
     tidy(barley_ica, id = "ica"),
-    tidy(barley_pls, id = "pls")
+    tidy(barley_pls, id = "pls") %>% 
+      # standardize signs
+      mutate(value = ifelse(component == "PLS2", -value, value))
   ) %>% 
   mutate(
     index = gsub("wvlgth_", "", terms),
@@ -810,84 +814,193 @@ comp1_wavelength_comparison <-
 
 ### Independent Component Analysis
 
-did not ord data for ica; show a few histograms
-
 ICA has roots in signal processing, where the observed signal that is measured is a combination of several different input signals.  
 
-For example, electroencephalography (EEG) uses a set of electrodes on a patient’s scalp to noninvasively measure the brain’s electrical activity over time. The electrodes are placed on specific parts of the scalp and measure different brain regions (e.g., cerebral cortex, etc.). However, since the electrodes are near others, they can often measure mixtures of multiple underlying signals.
+For example, electroencephalography (EEG) uses a set of electrodes on a patient’s scalp to noninvasively measure the brain’s electrical activity over time. The electrodes are placed on specific parts of the scalp and measure different brain regions (e.g., prefrontal cortex etc.). However, since the electrodes are near others, they can often measure mixtures of multiple underlying signals.
 
 The objective of independent component analysis is to identify linear combinations of the original features that are _statistically independent_ of each other [@nordhausen2018independent;@hyvarinen2000independent]. 
 
 ::: {.note-box}
 
-Two variables can be uncorrelated but still have a relationship (most likely nonlinear). For example, suppose we have a variable $z$ that is a sequence of evenly spaced values between -2 and 2.  The correlation between $z$ and $z^2$ is very close to zero but there is a clear and precise relationship between them. Independent data would have no discernible relationship.
+Two variables can be uncorrelated but still have a relationship (most likely nonlinear). For example, suppose we have a variable $z$ that is a sequence of evenly spaced values between -2 and 2.  The correlation between $z$ and $z^2$ is very close to zero but there is a clear and precise relationship between them, therefore the variables are not independent.
 
 :::
 
 For the EEG example, the goal is to quantify different brain signals at different frequencies. For example, electrodes near TODO primarily measure the TODO. This area is helpful when measuring TODO waves (around TODO Hz), which often reflects TODO.  remove artifacts
 
-In practice, satisfying the statistically independence requirement of ICA can be done several ways.  One approach maximizes the "non-Gaussianity" of the resulting components. As shown by @@hyvarinen2000independent, 
+In practice, satisfying the statistically independence requirement of ICA can be done several ways.  One approach maximizes the "non-Gaussianity" of the resulting components. As shown by @hyvarinen2000independent, 
 
 > The fundamental restriction in ICA is that the independent components must be nongaussian for ICA to be possible.
 
 There are different ways to measure non-Gaussianity and the _fastICA_ algorithm uses an information theory statistic called _negentropy_ [@hyvarinen2000independent]. Another approach called InfoMax uses neural networks to estimate a different information theory statistic. 
 
-Because ICA's objective requires statistical independence among components, it will generate features different from those of PCA.  This enables ICA to model a different set of trends than PCA, which focuses on orthogonality and linear relationships. Unlike PCA, which orders new components based on summarized variance, ICA's components have no natural ordering.  This means that ICA may require more components than PCA to find the ones related to the outcome. Finally, the ICA loadings are often initialized before training using random values. If this randomness is not controlled, different results will likely occur from training run to training run.
+Because ICA's objective requires statistical independence among components, it will generate features different from those of PCA.  This enables ICA to model a different set of trends than PCA, which focuses on orthogonality and linear relationships. Unlike PCA, which orders new components based on summarized variance, ICA's components have no natural ordering.  This means that ICA may require more components than PCA to find the ones related to the outcome. 
 
-@fig-linear-scores contains a scatterplot matrix of the first 4 ICA components colored by the outcome.  In this figure, the first three ICA components do not distinguish separation in the outcome.  However, the fourth component begins to separate the lower barley oil percentage samples from the higher barley oil samples.  Therefore, at least 4 ICA components would be needed to predict barley oil percentage.  Like PCA, the number of ICA components should be a tuning parameter in the model building process.
+The predictors should be centered (and perhaps scaled) before estimating the ICA loadings. Additionally, some ICA algorithms internally add a PCA step to “whiten” the data before computing the ICA loadings (using all possible PCA components). Since independent component analysis thrives on non-Gaussian data, we should avoid transformations that induce a more symmetric distribution. For this reason, we will not use the ORD transformation to preprocess the predictors. Finally, the ICA loadings are often initialized before training using random values. If this randomness is not controlled, different results will likely occur from training run to training run.
 
+```{r}
+#| label: ica-text
+#| include: false
 
+# Due to the variability of ICA to input changes and random noise, 
+# automate the discussion points (to some degree)
 
-lack of 3 zero clusters; more overlap in the distirbutions of high/low barley oils. 
+ica_marginals <-
+  all_scores_val %>%
+  filter(Method == "ICA") %>%
+  mutate(binned = factor(ifelse(barley > .1, "some", "none"))) %>%
+  summarize(
+    low = mean(value[binned == "none"]),
+    high = mean(value[binned == "some"]),
+    .by = c(component_num)
+  ) %>%
+  mutate(
+    difference = abs(high - low),
+    num_txt = xfun::numbers_to_words(component_num))
 
-compare loadings
+comp_marginals <- ica_marginals$num_txt[ica_marginals$difference > 1 / 4]
+num_marginals <- length(comp_marginals)
+num_marginals <- xfun::numbers_to_words(num_marginals)
+num_marginals <- tools::toTitleCase(num_marginals)
 
+marginal_txt <- cli::pluralize("{num_marginals} components that appear to differentiate levels of barley by themselves (components {comp_marginals})")
+```
+
+@fig-linear-scores contains a scatterplot matrix of the first 4 ICA components colored by the outcome. In this figure, `r marginal_txt`. Unsurprisingly, their interaction appears to be the one that visually differentiates the different amounts of barley oil in the validation set. 
+
+The loadings are shown in @fig-linear-loadings and tell an interesting story. The pattern of loadings one and three have similar patterns over the wavelengths. The same situation is the case for components two and four. These two pairs of trends in the loadings are somewhat oppositional to one another. Also, the patterns have little in common with the PCA loadings. For example, the first PCA loading was relatively constant across wavelengths. None of the ICA components show a constant pattern. 
 
 ### Partial Least Squares {#numeric-pls}
 
-Both PCA and ICA focus strictly on summarizing information based on the features exclusively.  When the outcome is related to the way that the unsupervised techniques extract the embedded features, then PCA and/or ICA can be effective dimension reduction tools.  However, when the qualities of variance summarization or statistical independence are not related to the outcome, then these techniques may struggle to identify appropriate embedded features that are useful for predicting the outcome.
+Both PCA and ICA focus strictly on summarizing information based on the features exclusively. When the outcome is related to the way that the unsupervised techniques extract the embedded features, then PCA and/or ICA can be effective dimension reduction tools. However, when the qualities of variance summarization or statistical independence are not related to the outcome, then these techniques may struggle to identify appropriate embedded features that are useful for predicting the outcome.
 
-Partial least squares (PLS) is a dimension reduction technique that identifies embedded features that are optimally linearly related to the outcome [@stone1990continuum].  While the objective of PCA finds linear combinations of the original features that best summarize variability, the objective of PLS is to do the same _and_ to find the linear combinations that are correlated with the outcome.  This process can be thought of as a constrained optimization problem in which PLS is forced to compromise between optimal variability summary of the predictors and optimal prediction of the outcome.  This means that the outcome is used to focus the dimension reduction process such that the new features have the greatest correlation with the outcome.  Because one of the objectives of PLS is to summarize variance among the original features, the features should be pre-processed in the same way as PCA.  
+Partial least squares (PLS) [@Wold1983] is a dimension reduction technique that identifies embedded features that are optimally linearly related to the outcome. While the objective of PCA finds linear combinations of the original features that best summarize variability, the objective of PLS is to do the same _and_ to find the linear combinations that are correlated with the outcome [@stone1990continuum]. This process can be thought of as a constrained optimization problem in which PLS is forced to compromise between optimal variability summary of the predictors and optimal prediction of the outcome. This means that the outcome is used to focus the dimension reduction process such that the new features have the greatest correlation with the outcome. For more detailed information, we suggest @Geladi1986 and @esposito2013partial.
 
-The most common implementation of PLS produces new features that are uncorrelated, which is similar to PCA and is beneficial for many machine learning techniques.  This characteristic can be seen in the right facet of @fig-barley-component-scatter.  Similar to PCA, the first two components are visually related the outcome, but the correlation is `r round(two_component_correlations %>% dplyr::filter(Method=="PLS") %>% dplyr::select(r) %>% pull(), 2)`.  Because PLS utilizes the response to find the embedded features, it generally requires the same number components as PCA or, usually, fewer components to generate a model with similar predictive performance.  This implies that fewer features are necessary when using PLS, thus leading to a smaller input data set to the machine learning models.  As compared to PCA, PLS utilizes the percentage of barley oil to reorient the dimension reduction with higher barley oil samples in the upper right and lower barley oil samples in the lower left.  This reorientation is not surprising since PLS is simultaneously optimizing correlation with the response.  
+Because one of the objectives of PLS is to summarize variance among the original features, the features should be pre-processed in the same way as PCA. 
+
+For the barley data, the first few sets of PLS loads are fairly similar to those generated by PCA. The first four components have almost identical values to their PCA analogs. The fourth component has different loading, and the correlation between the PCA and PLS scores is `r round(cor(barley_pls_val$PLS4, barley_pca_val$PC4), 2)`. The similarities in the first three scores and loadings between the methods can be seen in @fig-linear-scores and @fig-linear-loadings, respectively. 
+
+Because PLS utilizes the response to find the embedded features, it generally requires the same number of components as PCA or, usually, fewer components to generate a model with similar predictive performance. This implies that fewer features are necessary when using PLS, thus leading to a smaller input data set for the machine learning models. 
+
+Like principal component analysis, there are many modified versions of partial least squares. For example, @le2008sparse and @le2008sparse describe a sparse estimation routine that can set some loadings equal to absolute zero. Also, @barker2003partial and @Liu2007b adapt the algorithm for classification problems (i.e., qualitative outcomes). 
 
 ### Overall Comparisons
 
 ```{r}
-#| label: fig-barley-method-correlation-comparison
-#| echo: false
-#| warning: false
-#| out-width: 60%
-#| fig-width: 5
-#| fig-height: 4
-#| fig-cap: "A scatterplot matrix of the first component of each method versus percentage of barley oil."
+#| label: pca-bakeoff
+#| include: false
+#| cache: true
 
-ggplot(for_comparison_figure %>% dplyr::filter(Component == "Comp1"), aes(x=score, y=barley, color=barley)) +
-  facet_grid(cols=vars(Method), scales="free") +
-  geom_point() +
-  scale_color_viridis(option = "viridis")
+ctrl <- control_grid(save_pred = TRUE)
+
+barley_pca_tune <-
+  recipe(barley ~ ., data = barley_train) %>%
+  step_zv(all_predictors()) %>%
+  step_orderNorm(all_numeric_predictors()) %>% 
+  step_pca(all_numeric_predictors(), num_comp = tune()) %>% 
+  step_normalize(all_predictors())
+
+pca_wflow <- workflow(barley_pca_tune, linear_reg())
+
+pca_res <- 
+  pca_wflow %>% 
+  tune_grid(
+    resamples = barley_rs,
+    grid = tibble(num_comp = 1:25),
+    metrics = metric_set(rmse),
+    control = ctrl
+  )
+
+set.seed(38)
+pca_int <- 
+  pca_res %>% 
+  int_pctl(times = 2000, alpha = 0.1) %>% 
+  mutate(method = "PCA")
 ```
-
-Because PLS utilizes the outcome as part of the dimension reduction, its components will have as great or greater correlation with the outcome.  @fig-barley-method-correlation-comparison illustrates the relationship between the first component of each method with the outcome.  The correlation between the first score of PCA, ICA, and PLS with the percentage of barley oil is `r paste0(round(component1_correlations$R,2)[1], ", ", round(component1_correlations$R,2)[2], ", and ", round(component1_correlations$R,2)[3])`.  Notice that PLS has the largest absolute correlation, which means that it has found a linear combination of the original features that is better than PCA or ICA.
 
 ```{r}
-#| label: fig-barley-method-wavelength-comparison
-#| echo: false
-#| warning: false
-#| out-width: 60%
-#| fig-width: 5
-#| fig-height: 4
-#| fig-cap: "A scatterplot matrix of the first component of each method compared to wavelengths 1300, 1900, and 2398, colored by the percentage of barley oil."
+#| label: ica-bakeoff
+#| include: false
+#| cache: true
 
-ggplot(comp1_wavelength_comparison, aes(x=Comp1, y=Measurement, color=barley)) + 
-  facet_grid(rows=vars(Wavelength), cols=vars(Method), scales="free") +
-  geom_point() + 
-  scale_color_viridis(option = "viridis")
+barley_ica_tune <-
+  recipe(barley ~ ., data = barley_train) %>%
+  step_zv(all_predictors()) %>%
+  step_normalize(all_numeric_predictors()) %>% 
+  step_ica(all_numeric_predictors(), num_comp = tune()) %>% 
+  step_normalize(all_predictors())
+
+ica_wflow <- workflow(barley_ica_tune, linear_reg())
+
+ica_res <- 
+  ica_wflow %>% 
+  tune_grid(
+    resamples = barley_rs,
+    grid = tibble(num_comp = 1:25),
+    metrics = metric_set(rmse),
+    control = ctrl
+  )
+
+set.seed(38)
+ica_int <- 
+  ica_res %>% 
+  int_pctl(times = 2000, alpha = 0.1) %>% 
+  mutate(method = "ICA")
 ```
 
-As a final comparison of the three linear embedding methods, let's examine how the first components of each method are related to three selected wavelengths at the beginning, middle, and end of the spectrum (@fig-barley-pca-pls-comparison).  The first characteristic that stands out is that PCA and PLS are nearly mirror images for each of the three selected wavelengths.  This is not surprising given the similarities we have seen between these methods for this data set.  The first ICA component does not provide separation for percentage of barley oil, regardless of the selected wavelength.  However, the first PCA and PLS components have a near linear relationship with wavelength 1900 which are also related to the outcome.  For PCA, smaller scores are associated with larger barley oil percentages.  While for PLS the opposite is true.  For PCA and PLS, the correlation between an original feature and a component is called a loading.  Features that load onto the same component are often related in some meaningful way. This information can be used to aid in interpreting the new components and why these are related to the outcome.  In this example, the chemical information contained in wavelength 1900 may be unique to barley oil.
+```{r}
+#| label: pls-bakeoff
+#| include: false
+#| cache: true
 
-PCA and PLS will be discussed in more detail in Chapter [TODO:  Add reference to this chapter], where these methods are directly used as modeling techniques.
+barley_pls_tune <-
+  recipe(barley ~ ., data = barley_train) %>%
+  step_zv(all_predictors()) %>%
+  step_orderNorm(all_numeric_predictors()) %>% 
+  step_pls(all_numeric_predictors(), outcome = "barley", num_comp = tune()) %>% 
+  step_normalize(all_predictors())
+
+pls_wflow <- workflow(barley_pls_tune, linear_reg())
+
+pls_res <- 
+  pls_wflow %>% 
+  tune_grid(
+    resamples = barley_rs,
+    grid = tibble(num_comp = 1:25),
+    metrics = metric_set(rmse),
+    control = ctrl
+  )
+
+set.seed(38)
+pls_int <- 
+  pls_res %>% 
+  int_pctl(times = 2000, alpha = 0.1) %>% 
+  mutate(method = "PLS")
+```
+
+How do these three approaches differ in terms of predictive performance? To evaluate this, these embeddings were computed with up to 25 new features and used as the inputs for a linear regression model. After the embeddings and regression parameters were estimated, the validation set RMSE was computed. @fig-barley-linear-bakeoff has the results. The bands around each curve are 90% confidence intervals for the RMSE.
+
+```{r}
+#| label: fig-barley-linear-bakeoff
+#| echo: false
+#| warning: false
+#| out-width: 70%
+#| fig-width: 6
+#| fig-height: 4
+#| fig-cap: "Results for linear regressions using three different linear embeddings."
+
+bind_rows(pca_int, ica_int, pls_int) %>% 
+  mutate(Method = factor(method, levels = c("PCA", "ICA", "PLS"))) %>% 
+  ggplot(aes(num_comp, .estimate,)) + 
+  geom_line(aes(col = Method)) +
+  geom_point(aes(col = Method, pch = Method)) +
+  geom_ribbon(aes(ymin = .lower, ymax = .upper, fill = Method), alpha = 1 / 7) +
+  labs(y = "RMSE (validation)", x = "Number of Components")
+```
+
+Overall, the patterns are similar. By the time 25 components are added, there is parity between the methods. However, PLS appears to be more efficient at finding predictive features. This isn’t surprising since it is the only supervised embedding of the three. 
+
+PCA and PLS will be discussed in more detail in @sec-colinearity.
 
 ## Multidimensional Scaling {#sec-mds}
 
@@ -1080,7 +1193,7 @@ $$
 
 The numerator uses the squared difference between the pairwise distances in the original values ($x$) and the smaller embedded dimension ($x^*$). The summations only move along the upper triangle of the distance matrices to reduce redundant computations. @fig-mds-example(c, top row) has the resulting one dimensional projection of our two-dimensional data.
 
-This can be an effective dimension reduction procedure, although there are a few issues. First, the entire matrix of distances is required (with $n_{tr}(n_{tr}-1)/2$ entries). For large training sets, this can be unwieldy and time-consuming.  Second, like PCA, it is a global method that uses all data in the computations.  We might be able to achieve more nuanced embeddings by focusing on local structures.  Finally, it is challenging to apply metric MDS to project new data onto the space in which the original data was projected.
+This can be an effective dimension reduction procedure, although there are a few issues. First, the entire matrix of distances is required (with $n_{tr}(n_{tr}-1)/2$ entries). For large training sets, this can be unwieldy and time-consuming. Second, like PCA, it is a global method that uses all data in the computations. We might be able to achieve more nuanced embeddings by focusing on local structures. Finally, it is challenging to apply metric MDS to project new data onto the space in which the original data was projected.
 
 ### Isomap  {#sec-isomap}
 
@@ -1239,7 +1352,7 @@ $$
 
 Unlike the other embedding methods shown in this section, UMAP can also create supervised embeddings so that the resulting features are more predictive of a qualitative or quantitative outcome value. See @sainburg2020parametric.
 
-Besides the number of neighbors and embedding dimensions, several more tuning parameters exist.  The optimization process's number of optimization iterations (i.e., epochs) and the learning rate can significantly affect the final results. A distance-based tuning parameter, often called _min-dist_, specifies how "packed" points should be in the reduced dimensions. Values typically range from zero to one. However, the original authors state:
+Besides the number of neighbors and embedding dimensions, several more tuning parameters exist. The optimization process's number of optimization iterations (i.e., epochs) and the learning rate can significantly affect the final results. A distance-based tuning parameter, often called _min-dist_, specifies how "packed" points should be in the reduced dimensions. Values typically range from zero to one. However, the original authors state:
 
 > We view min-dist as an essentially aesthetic parameter governing the appearance of the embedding, and thus is more important when using UMAP for visualization.
 
@@ -1395,18 +1508,12 @@ There are a few notable patterns in these results:
 
 t-SNE and UMAP have become very popular tools for visualizing complex data. Visually, they often show interesting patterns that linear methods such as PCA cannot. However, they are computationally slow and unstable over different tuning parameter values. Also, it is easy to believe that the UMAP distances between embedding points are important or quantitatively predictive. That is not the case; the distances can be easily manipulated using the tuning parameters (especially the minimum distance). 
  
-
 ## Centroid-Based Methods  {#sec-centroids}
 
 prototype-based methods
-
-## Embedding Qualitative Predictors  {#sec-qual-embedding}
 
 ## Other Methods
 
 autoencoders? 
 
-
 ## Chapter References {.unnumbered}
-
-
