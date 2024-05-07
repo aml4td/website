@@ -141,8 +141,7 @@ pca_animation <-
   geom_text(data = ranges, aes(x = note_x, y = note_y, label = note)) +
   geom_point(aes(col = barley), alpha = 1 / 3) +
   transition_states(state2) +
-  xlab("Wavelength 1300") +
-  ylab("Wavelength 1398") +
+  labs(x = "Dimension 1", y = "Dimension 2", title = "(b)") +
   enter_fade() +
   exit_shrink() +
   ease_aes('sine-in-out') +
@@ -157,6 +156,7 @@ anim <-
     height = 750,
     res = 200
   )
+
 anim
 
 anim_save("premade/anime_barley_pca.gif")
