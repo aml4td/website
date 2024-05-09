@@ -53,7 +53,7 @@ ui <- page_fillable(
 )
 
 server <- function(input, output) {
-  load(url("https://raw.githubusercontent.com/aml4td/website/embeddings_kj/RData/barley_linear_embeddings.RData"))
+  load(url("https://raw.githubusercontent.com/aml4td/website/main/RData/barley_linear_embeddings.RData"))
   
   
   output$scores <-
