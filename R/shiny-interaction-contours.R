@@ -32,6 +32,8 @@ ui <- page_fillable(
   as_fill_carrier(plotOutput("contours"))
 )
 
+server <- function(input, output) {
+
   # ------------------------------------------------------------------------------
 
   n_grid <- 100
@@ -40,7 +42,7 @@ ui <- page_fillable(
 
   output$contours <-
     renderPlot({
-      # browser()
+
       grid$outcome <-
         input$beta_1 * grid$A + input$beta_2 * grid$B +
         input$beta_int * grid$A * grid$B
