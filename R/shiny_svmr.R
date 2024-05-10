@@ -5,7 +5,7 @@ library(viridis)
 
 
 # ------------------------------------------------------------------------------
-load("/Users/max/content/website/RData/grid_svmr.RData")
+# load("/Users/max/content/website/RData/grid_svmr.RData")
 
 # ------------------------------------------------------------------------------
 
@@ -87,7 +87,7 @@ server <- function(input, output) {
   
   output$contours <-
     renderPlot({
-      
+
       grd <- 
         grid_svmr[
           grid_svmr$cost == input$cost & 

@@ -109,6 +109,11 @@ server <- function(input, output) {
         ggplot(plot_data, aes(predictor_1, predictor_2)) +
         geom_point(aes(col = class, pch = class), cex = 2, 
                    alpha = 1 / 2) +
+        geom_raster(
+          data = grd, 
+          aes(fill = .pred_class),
+          alpha = 1 / 20
+        ) +        
         geom_contour(
           data = grd, 
           aes(z = .pred_event),

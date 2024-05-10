@@ -9,6 +9,8 @@ options(pillar.advice = FALSE, pillar.min_title_chars = Inf)
 
 # ------------------------------------------------------------------------------
 
+load("RData/example_class.RData")
+
 x <- seq(-1, 1, length.out = 100)
 demo_grid <- crossing(predictor_1 = x, predictor_2 = x)
 
@@ -33,9 +35,7 @@ for (i in 1:nrow(combinations)) {
     set_mode("classification")
   mod_fit <- fit(mod_spec, class ~ ., data = example_train)
   mod_grid <- 
-    predict(mod_fit, demo_grid, type = "prob") %>% 
-    select(.pred_event) %>% 
-    bind_cols(demo_grid) %>% 
+    augment(mod_fit, demo_grid) %>% 
     mutate(
       prod_degree = combinations$prod_degree[i],
       num_terms = combinations$num_terms[i]
