@@ -107,24 +107,26 @@ server <- function(input, output) {
       
       p <- 
         ggplot(plot_data, aes(predictor_1, predictor_2)) +
-        geom_point(aes(col = class, pch = class), cex = 2, 
-                   alpha = 1 / 2) +
         geom_raster(
           data = grd, 
           aes(fill = .pred_class),
-          alpha = 1 / 20
-        ) +        
+          alpha = 1 / 20, 
+          show_legend = FALSE
+        ) +
+        geom_point(aes(col = class, pch = class), cex = 2, 
+                   alpha = 3 / 4) +        
         geom_contour(
           data = grd, 
           aes(z = .pred_event),
           breaks = c(-Inf, 1 / 2, Inf),
           col = "black",
-          linewidth = 1
+          linewidth = 1, 
+          show_legend = FALSE
         ) +
         
-        # coord_equal() +
+        coord_equal() +
         theme(legend.position = "top") +
-        lims(x = c(-1, 1), y = c(-1, 1)) +
+        # lims(x = c(-1, 1), y = c(-1, 1)) +
         labs(x = "Predictor 1", y = "Predictor 2")
       
       p
