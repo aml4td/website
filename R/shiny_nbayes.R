@@ -6,17 +6,6 @@ library(viridis)
 
 # ------------------------------------------------------------------------------
 
-load("/Users/max/content/website/RData/demo_data.RData")
-load("/Users/max/content/website/RData/demo_grid.RData")
-load("/Users/max/content/website/RData/grid_nbayes.RData")
-
-set.seed(986)
-split <- initial_split(demo_data, prop = 2 / 3, strata = class)
-demo_tr <- training(split)
-demo_te <- testing(split)
-rngs <- list(x = range(demo_data$predictor_1), y = range(demo_data$predictor_2))
-
-
 
 # ------------------------------------------------------------------------------
 
@@ -66,8 +55,8 @@ ui <- fluidPage(
         radioButtons(
           inputId = "data_set",
           label = "Show Data",
-          choices = list("Training" = "training", "Testing" = "testing"),
-          selected = "testing"
+          choices = list("Training" = "training", "Validation" = "validation"),
+          selected = "validation"
         )
       ),
       column(
@@ -88,10 +77,10 @@ server <- function(input, output) {
       
       grd <- grid_nbayes[grid_nbayes$smoothness == input$smoothness ,]
       
-      if (input$data_set == "testing") {
-        plot_data <- demo_te
+      if (input$data_set == "validation") {
+        plot_data <- example_val
       } else {
-        plot_data <- demo_tr
+        plot_data <- example_train
       }
       
       p <- 
@@ -100,13 +89,13 @@ server <- function(input, output) {
                    alpha = 1 / 2) +
         geom_contour(
           data = grd, 
-          aes(z = .pred_A),
+          aes(z = .pred_event),
           breaks = c(-Inf, 1 / 2, Inf),
           col = "black",
           linewidth = 1
         ) +
         theme(legend.position = "top") +
-        lims(x = rngs$x, y = rngs$y) +
+        lims(x = c(-1, 1), y = c(-1, 1)) +
         labs(x = "Predictor 1", y = "Predictor 2")
       
       p

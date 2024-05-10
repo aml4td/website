@@ -10,26 +10,19 @@ options(pillar.advice = FALSE, pillar.min_title_chars = Inf)
 
 # ------------------------------------------------------------------------------
 
-load("/Users/max/content/website/RData/demo_data.RData")
-load("/Users/max/content/website/RData/demo_grid.RData")
+x <- seq(-1, 1, length.out = 100)
+demo_grid <- crossing(predictor_1 = x, predictor_2 = x)
 
-# ------------------------------------------------------------------------------
-
-set.seed(986)
-split <- initial_split(demo_data, prop = 2 / 3, strata = class)
-demo_tr <- training(split)
-demo_te <- testing(split)
-
-x <- as.matrix(demo_tr[, -3])
+x <- as.matrix(example_train[, -3])
+# log10(kernlab::sigest(x, frac = 1))
 
 # ------------------------------------------------------------------------------
 
 combinations <- 
   crossing(
     cost = 2^seq(-1, 15, by = 0.5),
-    rbf_sigma = 10^seq(-3, 1, by = 0.25)) # from kernlab::sigest
+    rbf_sigma = 10^seq(-1, 0.5, by = 0.25)) # from kernlab::sigest
 
-# ------------------------------------------------------------------------------
 
 grid_svmr <- NULL
 
@@ -38,7 +31,7 @@ mat_grid <- as.matrix(demo_grid)
 for (i in 1:nrow(combinations)) {
 
   kern <- rbfdot(sigma = combinations$rbf_sigma[i])
-  mod_fit <- ksvm(x, y = demo_tr$class, scaled = FALSE, 
+  mod_fit <- ksvm(x, y = example_train$class, scaled = FALSE, 
                   C = combinations$cost[i],
                   kernel = kern)
   

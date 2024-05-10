@@ -10,15 +10,8 @@ options(pillar.advice = FALSE, pillar.min_title_chars = Inf)
 
 # ------------------------------------------------------------------------------
 
-load("/Users/max/content/website/RData/demo_data.RData")
-load("/Users/max/content/website/RData/demo_grid.RData")
-
-# ------------------------------------------------------------------------------
-
-set.seed(986)
-split <- initial_split(demo_data, prop = 2 / 3, strata = class)
-demo_tr <- training(split)
-demo_te <- testing(split)
+x <- seq(-1, 1, length.out = 100)
+demo_grid <- crossing(predictor_1 = x, predictor_2 = x)
 
 # ------------------------------------------------------------------------------
 
@@ -34,10 +27,10 @@ for (i in 1:nrow(combinations)) {
       smoothness = combinations$smoothness[i]
     ) %>% 
     set_mode("classification")
-  mod_fit <- fit(mod_spec, class ~ ., data = demo_tr)
+  mod_fit <- fit(mod_spec, class ~ ., data = example_train)
   mod_grid <- 
     predict(mod_fit, demo_grid, type = "prob") %>% 
-    select(.pred_A) %>% 
+    select(.pred_event) %>% 
     bind_cols(demo_grid) %>% 
     mutate(
       smoothness = combinations$smoothness[i]

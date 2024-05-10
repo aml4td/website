@@ -10,17 +10,10 @@ options(pillar.advice = FALSE, pillar.min_title_chars = Inf)
 
 # ------------------------------------------------------------------------------
 
-load("/Users/max/content/website/RData/demo_data.RData")
-load("/Users/max/content/website/RData/demo_grid.RData")
+x <- seq(-1, 1, length.out = 100)
+demo_grid <- crossing(predictor_1 = x, predictor_2 = x)
 
-# ------------------------------------------------------------------------------
-
-set.seed(986)
-split <- initial_split(demo_data, prop = 2 / 3, strata = class)
-demo_tr <- training(split)
-demo_te <- testing(split)
-
-x <- as.matrix(demo_tr[, -3])
+x <- as.matrix(example_train[, -3])
 
 # ------------------------------------------------------------------------------
 
@@ -40,7 +33,7 @@ for (i in 1:nrow(combinations)) {
   
   kern <- polydot(degree = combinations$degree[i], 
                   scale = combinations$scale_factor[i])
-  mod_fit <- ksvm(x, y = demo_tr$class, scaled = FALSE, 
+  mod_fit <- ksvm(x, y = example_train$class, scaled = FALSE, 
                   C = combinations$cost[i],
                   kernel = kern)
   

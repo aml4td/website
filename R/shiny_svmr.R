@@ -5,18 +5,7 @@ library(viridis)
 
 
 # ------------------------------------------------------------------------------
-
-load("/Users/max/content/website/RData/demo_data.RData")
-load("/Users/max/content/website/RData/demo_grid.RData")
 load("/Users/max/content/website/RData/grid_svmr.RData")
-
-set.seed(986)
-split <- initial_split(demo_data, prop = 2 / 3, strata = class)
-demo_tr <- training(split)
-demo_te <- testing(split)
-rngs <- list(x = range(demo_data$predictor_1), y = range(demo_data$predictor_2))
-
-
 
 # ------------------------------------------------------------------------------
 
@@ -66,9 +55,9 @@ ui <- fluidPage(
       sliderInput(
         inputId = "rbf_sigma",
         label = "RBF (log10)",
-        min = -3,
-        max = 1,
-        value = -2,
+        min = -1,
+        max = 0.5,
+        value = 0,
         width = "100%",
         step = 0.25
       )
@@ -79,8 +68,8 @@ ui <- fluidPage(
         radioButtons(
           inputId = "data_set",
           label = "Show Data",
-          choices = list("Training" = "training", "Testing" = "testing"),
-          selected = "testing"
+          choices = list("Training" = "training", "Validation" = "validation"),
+          selected = "validation"
         )
       ),
       column(
@@ -104,10 +93,10 @@ server <- function(input, output) {
           grid_svmr$cost == input$cost & 
             grid_svmr$rbf_sigma == input$rbf_sigma,]
       
-      if (input$data_set == "testing") {
-        plot_data <- demo_te
+      if (input$data_set == "validation") {
+        plot_data <- example_val
       } else {
-        plot_data <- demo_tr
+        plot_data <- example_train
       }
       
       
@@ -125,7 +114,7 @@ server <- function(input, output) {
         
         # coord_equal() +
         theme(legend.position = "top") +
-        lims(x = rngs$x, y = rngs$y) +
+        lims(x = c(-1, 1), y = c(-1, 1)) +
         labs(x = "Predictor 1", y = "Predictor 2")
       
       p
