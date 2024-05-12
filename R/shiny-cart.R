@@ -3,9 +3,12 @@ library(ggplot2)
 library(bslib)
 library(viridis)
 
+
 # ------------------------------------------------------------------------------
 
-# load("RData/example_class.RData")
+# load("/Users/max/content/website/RData/grid_cart.RData")
+
+# ------------------------------------------------------------------------------
 
 light_bg <- "#fcfefe" # from aml4td.scss
 grid_theme <- bs_theme(
@@ -21,36 +24,39 @@ ui <- fluidPage(
     column(
       width = 6,
       sliderInput(
-        inputId = "neighbors",
-        label = "Neighbors",
-        min = 1,
-        max = 21,
-        value = 5,
+        inputId = "cost_complexity",
+        label = HTML("Cost-Complexity (log<sub>10</sub>)"),
+        min = -4,
+        max = -1,
+        value = -4,
         width = "100%",
-        step = 2
+        step = 0.5
       )
-    ), # nearest neighbors
+    ), 
     
     column(
       width = 6,
       sliderInput(
-        inputId = "dist_power",
-        label = "Power",
-        min = 0.5,
-        max = 2,
-        value = 1,
+        inputId = "min_n",
+        label = HTML("Min n"),
+        min = 4L,
+        max = 20L,
+        value = -2,
         width = "100%",
-        step = 0.25
+        step = 4L
       )
     ),
     fluidRow(
       column(
         width = 4,
-        radioButtons(
-          inputId = "weight_func",
-          label = "Weighting",
-          choices = list("Rectangular" = "rectangular", "Triangular" = "triangular", 
-                         "Inverse" = "inv")
+        sliderInput(
+          inputId = "tree_depth",
+          label = "(Max) Tree Depth",
+          min = 1L,
+          max = 10L,
+          value = 10L,
+          width = "100%",
+          step = 1
         ),
         radioButtons(
           inputId = "data_set",
@@ -70,15 +76,16 @@ ui <- fluidPage(
 
 
 server <- function(input, output) {
-
+  
+  
   output$contours <-
     renderPlot({
-
+      
       grd <- 
-        grid_knn[
-          grid_knn$weight_func == input$weight_func & 
-            grid_knn$dist_power == input$dist_power & 
-            grid_knn$neighbors == input$neighbors,]
+        grid_cart[
+          grid_cart$cost_complexity == input$cost_complexity & 
+            grid_cart$min_n == input$min_n &
+            grid_cart$tree_depth == input$tree_depth,]
       
       if (input$data_set == "validation") {
         plot_data <- example_val

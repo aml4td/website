@@ -3,44 +3,9 @@ library(ggplot2)
 library(bslib)
 library(viridis)
 
-
-# ------------------------------------------------------------------------------
-# 
-# load("/Users/max/content/website/RData/demo_data.RData")
-# load("/Users/max/content/website/RData/demo_grid.RData")
-# load("/Users/max/content/website/RData/grid_mars.RData")
-
-# set.seed(986)
-# split <- initial_split(demo_data, prop = 2 / 3, strata = class)
-# example_train <- training(split)
-# example_val <- testing(split)
-# rngs <- list(x = range(demo_data$predictor_1), y = range(demo_data$predictor_2))
-# 
-
-
 # ------------------------------------------------------------------------------
 
-light_bg <- "#fcfefe" # from aml4td.scss
-grid_theme <- bs_theme(
-  bg = light_bg, fg = "#595959"
-)
-
-# ------------------------------------------------------------------------------
-
-theme_light_bl<- function(...) {
-  
-  ret <- ggplot2::theme_bw(...)
-  
-  col_rect <- ggplot2::element_rect(fill = light_bg, colour = light_bg)
-  ret$panel.background  <- col_rect
-  ret$plot.background   <- col_rect
-  ret$legend.background <- col_rect
-  ret$legend.key        <- col_rect
-  
-  ret$legend.position <- "top"
-  
-  ret
-}
+load("RData/example_class.RData")
 
 # ------------------------------------------------------------------------------
 
@@ -104,14 +69,14 @@ server <- function(input, output) {
         plot_data <- example_train
       }
       
-      
+      # TODO modularize this
       p <- 
         ggplot(plot_data, aes(predictor_1, predictor_2)) +
         geom_raster(
           data = grd, 
           aes(fill = .pred_class),
           alpha = 1 / 20, 
-          show_legend = FALSE
+          show.legend = FALSE
         ) +
         geom_point(aes(col = class, pch = class), cex = 2, 
                    alpha = 3 / 4) +        
@@ -121,12 +86,11 @@ server <- function(input, output) {
           breaks = c(-Inf, 1 / 2, Inf),
           col = "black",
           linewidth = 1, 
-          show_legend = FALSE
+          show.legend = FALSE
         ) +
-        
         coord_equal() +
+        # theme_light_bl() +
         theme(legend.position = "top") +
-        # lims(x = c(-1, 1), y = c(-1, 1)) +
         labs(x = "Predictor 1", y = "Predictor 2")
       
       p

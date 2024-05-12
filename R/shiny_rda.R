@@ -3,9 +3,12 @@ library(ggplot2)
 library(bslib)
 library(viridis)
 
+
 # ------------------------------------------------------------------------------
 
-# load("RData/example_class.RData")
+# load("/Users/max/content/website/RData/grid_rda.RData")
+
+# ------------------------------------------------------------------------------
 
 light_bg <- "#fcfefe" # from aml4td.scss
 grid_theme <- bs_theme(
@@ -21,37 +24,31 @@ ui <- fluidPage(
     column(
       width = 6,
       sliderInput(
-        inputId = "neighbors",
-        label = "Neighbors",
-        min = 1,
-        max = 21,
-        value = 5,
+        inputId = "frac_common_cov",
+        label = "Common Covariance",
+        min = 0,
+        max = 1,
+        value = 1,
         width = "100%",
-        step = 2
+        step = 0.2
       )
-    ), # nearest neighbors
+    ), # frac_common_cov
     
     column(
       width = 6,
       sliderInput(
-        inputId = "dist_power",
-        label = "Power",
-        min = 0.5,
-        max = 2,
+        inputId = "frac_identity",
+        label = "Shrinkage Towards Identity",
+        min = 0,
+        max = 1,
         value = 1,
         width = "100%",
-        step = 0.25
+        step = 0.2
       )
     ),
     fluidRow(
       column(
         width = 4,
-        radioButtons(
-          inputId = "weight_func",
-          label = "Weighting",
-          choices = list("Rectangular" = "rectangular", "Triangular" = "triangular", 
-                         "Inverse" = "inv")
-        ),
         radioButtons(
           inputId = "data_set",
           label = "Show Data",
@@ -68,17 +65,15 @@ ui <- fluidPage(
   ) # top fluid row
 )
 
-
 server <- function(input, output) {
-
+  
   output$contours <-
     renderPlot({
-
+      
       grd <- 
-        grid_knn[
-          grid_knn$weight_func == input$weight_func & 
-            grid_knn$dist_power == input$dist_power & 
-            grid_knn$neighbors == input$neighbors,]
+        grid_rda[
+          grid_rda$frac_common_cov == input$frac_common_cov & 
+            grid_rda$frac_identity == input$frac_identity,]
       
       if (input$data_set == "validation") {
         plot_data <- example_val
@@ -111,7 +106,6 @@ server <- function(input, output) {
         labs(x = "Predictor 1", y = "Predictor 2")
       
       p
-      
     },
     height = 400, width = 400)
 }

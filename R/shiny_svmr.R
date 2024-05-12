@@ -5,6 +5,7 @@ library(viridis)
 
 
 # ------------------------------------------------------------------------------
+
 # load("/Users/max/content/website/RData/grid_svmr.RData")
 
 # ------------------------------------------------------------------------------
@@ -16,23 +17,6 @@ grid_theme <- bs_theme(
 
 # ------------------------------------------------------------------------------
 
-theme_light_bl<- function(...) {
-  
-  ret <- ggplot2::theme_bw(...)
-  
-  col_rect <- ggplot2::element_rect(fill = light_bg, colour = light_bg)
-  ret$panel.background  <- col_rect
-  ret$plot.background   <- col_rect
-  ret$legend.background <- col_rect
-  ret$legend.key        <- col_rect
-  
-  ret$legend.position <- "top"
-  
-  ret
-}
-
-# ------------------------------------------------------------------------------
-
 ui <- fluidPage(
   theme = grid_theme,
   fluidRow(
@@ -41,12 +25,12 @@ ui <- fluidPage(
       width = 6,
       sliderInput(
         inputId = "cost",
-        label = "Cost (log2)",
-        min = -1,
-        max = 15,
+        label = HTML("Cost (log<sub>2</sub>)"),
+        min = 5,
+        max = 25,
         value = 5,
         width = "100%",
-        step = 0.5
+        step = 1
       )
     ), # cost
     
@@ -54,12 +38,12 @@ ui <- fluidPage(
       width = 6,
       sliderInput(
         inputId = "rbf_sigma",
-        label = "RBF (log10)",
-        min = -1,
-        max = 0.5,
+        label = HTML("RBF (log<sub>10</sub>)"),
+        min = -5,
+        max = 2,
         value = 0,
         width = "100%",
-        step = 0.25
+        step = 1
       )
     ),
     fluidRow(
@@ -81,9 +65,7 @@ ui <- fluidPage(
   ) # top fluid row
 )
 
-
 server <- function(input, output) {
-  
   
   output$contours <-
     renderPlot({
@@ -99,26 +81,30 @@ server <- function(input, output) {
         plot_data <- example_train
       }
       
-      
       p <- 
         ggplot(plot_data, aes(predictor_1, predictor_2)) +
+        geom_raster(
+          data = grd, 
+          aes(fill = .pred_class),
+          alpha = 1 / 20, 
+          show.legend = FALSE
+        ) +
         geom_point(aes(col = class, pch = class), cex = 2, 
-                   alpha = 1 / 2) +
+                   alpha = 3 / 4) +        
         geom_contour(
           data = grd, 
           aes(z = pred),
           breaks = c(-Inf, 0, Inf),
           col = "black",
-          linewidth = 1
+          linewidth = 1, 
+          show.legend = FALSE
         ) +
-        
-        # coord_equal() +
+        coord_equal() +
+        # theme_light_bl() +
         theme(legend.position = "top") +
-        lims(x = c(-1, 1), y = c(-1, 1)) +
         labs(x = "Predictor 1", y = "Predictor 2")
       
       p
-      
     },
     height = 400, width = 400)
 }

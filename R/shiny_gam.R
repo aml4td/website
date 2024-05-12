@@ -3,9 +3,12 @@ library(ggplot2)
 library(bslib)
 library(viridis)
 
+
 # ------------------------------------------------------------------------------
 
-# load("RData/example_class.RData")
+# load data
+
+# ------------------------------------------------------------------------------
 
 light_bg <- "#fcfefe" # from aml4td.scss
 grid_theme <- bs_theme(
@@ -21,37 +24,18 @@ ui <- fluidPage(
     column(
       width = 6,
       sliderInput(
-        inputId = "neighbors",
-        label = "Neighbors",
+        inputId = "adjust_deg_free",
+        label = "Adjsuted DF",
         min = 1,
-        max = 21,
-        value = 5,
-        width = "100%",
-        step = 2
-      )
-    ), # nearest neighbors
-    
-    column(
-      width = 6,
-      sliderInput(
-        inputId = "dist_power",
-        label = "Power",
-        min = 0.5,
-        max = 2,
+        max = 2.5,
         value = 1,
         width = "100%",
         step = 0.25
       )
-    ),
+    ), 
     fluidRow(
       column(
         width = 4,
-        radioButtons(
-          inputId = "weight_func",
-          label = "Weighting",
-          choices = list("Rectangular" = "rectangular", "Triangular" = "triangular", 
-                         "Inverse" = "inv")
-        ),
         radioButtons(
           inputId = "data_set",
           label = "Show Data",
@@ -70,15 +54,12 @@ ui <- fluidPage(
 
 
 server <- function(input, output) {
-
+  
+  
   output$contours <-
     renderPlot({
-
-      grd <- 
-        grid_knn[
-          grid_knn$weight_func == input$weight_func & 
-            grid_knn$dist_power == input$dist_power & 
-            grid_knn$neighbors == input$neighbors,]
+      
+      grd <- grid_gam[grid_gam$adjust_deg_free == input$adjust_deg_free ,]
       
       if (input$data_set == "validation") {
         plot_data <- example_val

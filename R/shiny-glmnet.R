@@ -3,9 +3,12 @@ library(ggplot2)
 library(bslib)
 library(viridis)
 
+
 # ------------------------------------------------------------------------------
 
-# load("RData/example_class.RData")
+# load("/Users/max/content/website/RData/grid_glmnet.RData")
+
+# ------------------------------------------------------------------------------
 
 light_bg <- "#fcfefe" # from aml4td.scss
 grid_theme <- bs_theme(
@@ -21,36 +24,48 @@ ui <- fluidPage(
     column(
       width = 6,
       sliderInput(
-        inputId = "neighbors",
-        label = "Neighbors",
-        min = 1,
-        max = 21,
-        value = 5,
+        inputId = "penalty",
+        label = HTML("Penalty (log<sub>10</sub>)"),
+        min = -5,
+        max = -1,
+        value = -1,
         width = "100%",
-        step = 2
+        step = 1
       )
-    ), # nearest neighbors
+    ), 
     
     column(
       width = 6,
       sliderInput(
-        inputId = "dist_power",
-        label = "Power",
-        min = 0.5,
-        max = 2,
-        value = 1,
+        inputId = "mixture",
+        label = "L1 Proportion",
+        min = 0,
+        max = 1,
+        value = .25,
         width = "100%",
-        step = 0.25
+        step = 0.5
       )
     ),
     fluidRow(
       column(
         width = 4,
-        radioButtons(
-          inputId = "weight_func",
-          label = "Weighting",
-          choices = list("Rectangular" = "rectangular", "Triangular" = "triangular", 
-                         "Inverse" = "inv")
+        sliderInput(
+          inputId = "x1",
+          label = "Spline Degree (x1)",
+          min = 0,
+          max = 25,
+          value = 0,
+          width = "100%",
+          step = 5
+        ),
+        sliderInput(
+          inputId = "x2",
+          label = "Spline Degree (x2)",
+          min = 0,
+          max = 25,
+          value = 0,
+          width = "100%",
+          step = 5
         ),
         radioButtons(
           inputId = "data_set",
@@ -70,15 +85,17 @@ ui <- fluidPage(
 
 
 server <- function(input, output) {
-
+  
+  
   output$contours <-
     renderPlot({
-
+      
       grd <- 
-        grid_knn[
-          grid_knn$weight_func == input$weight_func & 
-            grid_knn$dist_power == input$dist_power & 
-            grid_knn$neighbors == input$neighbors,]
+        grid_glmnet[
+          grid_glmnet$penalty == input$penalty & 
+            grid_glmnet$mixture == input$mixture &
+            grid_glmnet$x1 == input$x1 &
+            grid_glmnet$x2 == input$x2,]
       
       if (input$data_set == "validation") {
         plot_data <- example_val
@@ -110,6 +127,7 @@ server <- function(input, output) {
         theme(legend.position = "top") +
         labs(x = "Predictor 1", y = "Predictor 2")
       
+      p
       p
       
     },
