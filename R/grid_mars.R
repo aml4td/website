@@ -1,4 +1,3 @@
-
 library(tidymodels)
 
 # ------------------------------------------------------------------------------
@@ -43,4 +42,5 @@ for (i in 1:nrow(combinations)) {
   grid_mars <- bind_rows(grid_mars, mod_grid)
 }
 
-# save(grid_mars, file = "/Users/max/content/website/RData/grid_mars.RData", compress = TRUE)
+save(grid_mars, file = "RData/grid_mars.RData", compress = TRUE)
+
