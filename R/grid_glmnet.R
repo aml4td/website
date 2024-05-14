@@ -1,6 +1,4 @@
-
 library(tidymodels)
-library(discrim)
 
 # ------------------------------------------------------------------------------
 
@@ -18,9 +16,9 @@ demo_grid <- crossing(predictor_1 = x, predictor_2 = x)
 combinations <- 
   crossing(
     penalty = seq(-3, 0, by = 0.5),
-    mixture = seq(0, 1, by = .25),
-    x1 = (0:5) * 5,
-    x2 = (0:5) * 5
+    mixture = c(0, 1/4, 1/2, 3/4, 1),
+    x1 = c(0, 5, 10, 20),
+    x2 = c(0, 5, 10, 20)
   )
 
 # ------------------------------------------------------------------------------
@@ -32,7 +30,8 @@ for (i in 1:nrow(combinations)) {
     logistic_reg(
       penalty = 10^combinations$penalty[i], mixture = combinations$mixture[i]
     ) %>% 
-    set_mode("classification")
+    set_mode("classification") %>% 
+    set_engine("glmnet")
   rec <- recipe(class ~ ., data = example_train)
   if (combinations$x1[i] > 1) {
     rec <- 
@@ -44,7 +43,7 @@ for (i in 1:nrow(combinations)) {
       rec %>% 
       step_spline_natural(predictor_2, deg_free = combinations$x2[i])
   }
-  rec <- rec %>% step_normalize(all_predictors())
+  # rec <- rec %>% step_normalize(all_predictors())
   mod_wflow <- 
     workflow() %>% 
     add_model(mod_spec) %>% 
@@ -62,4 +61,4 @@ for (i in 1:nrow(combinations)) {
   grid_glmnet <- bind_rows(grid_glmnet, mod_grid)
 }
 
-# save(grid_glmnet, file = "/Users/max/content/website/RData/grid_glmnet.RData", compress = TRUE)
+save(grid_glmnet, file = "RData/grid_glmnet.RData", compress = TRUE)
