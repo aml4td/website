@@ -61,5 +61,4 @@ for (i in 1:nrow(combinations)) {
   
 }
 
-
-# save(grid_xrf, file = "/Users/max/content/website/xrfta/grid_xrf.xrfta", compress = TRUE)
+save(grid_xrf, file = "/Users/max/content/website/RData/grid_xrf.RData", compress = TRUE)
