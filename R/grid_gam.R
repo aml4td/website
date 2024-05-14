@@ -1,6 +1,4 @@
-
 library(tidymodels)
-library(discrim)
 
 # ------------------------------------------------------------------------------
 
@@ -37,4 +35,4 @@ for (i in 1:nrow(combinations)) {
   grid_gam <- bind_rows(grid_gam, mod_grid)
 }
 
-save(grid_gam, file = "/Users/max/content/website/RData/grid_gam.RData", compress = TRUE)
+save(grid_gam, file = "RData/grid_gam.RData", compress = TRUE)
