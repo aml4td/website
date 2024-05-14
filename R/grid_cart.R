@@ -8,7 +8,7 @@ options(pillar.advice = FALSE, pillar.min_title_chars = Inf)
 
 # ------------------------------------------------------------------------------
 
-# load("RData/example_class.RData")
+load("RData/example_class.RData")
 
 x <- seq(-1, 1, length.out = 100)
 demo_grid <- crossing(predictor_1 = x, predictor_2 = x)
@@ -44,4 +44,4 @@ for (i in 1:nrow(combinations)) {
   grid_cart <- bind_rows(grid_cart, mod_grid)
 }
 
-# save(grid_cart, file = "/Users/max/content/website/RData/grid_cart.RData", compress = TRUE)
+save(grid_cart, file = "RData/grid_cart.RData", compress = TRUE)

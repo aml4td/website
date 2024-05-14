@@ -2,11 +2,12 @@ library(shiny)
 library(ggplot2)
 library(bslib)
 library(viridis)
-
+library(tune)
 
 # ------------------------------------------------------------------------------
 
-# load("/Users/max/content/website/RData/grid_cart.RData")
+load("../RData/grid_cart.RData")
+source("shiny_cls_boundary_plot.R")
 
 # ------------------------------------------------------------------------------
 
@@ -74,9 +75,7 @@ ui <- fluidPage(
   ) # top fluid row
 )
 
-
 server <- function(input, output) {
-  
   
   output$contours <-
     renderPlot({
@@ -93,31 +92,7 @@ server <- function(input, output) {
         plot_data <- example_train
       }
       
-      # TODO modularize this
-      p <- 
-        ggplot(plot_data, aes(predictor_1, predictor_2)) +
-        geom_raster(
-          data = grd, 
-          aes(fill = .pred_class),
-          alpha = 1 / 20, 
-          show.legend = FALSE
-        ) +
-        geom_point(aes(col = class, pch = class), cex = 2, 
-                   alpha = 3 / 4) +        
-        geom_contour(
-          data = grd, 
-          aes(z = .pred_event),
-          breaks = c(-Inf, 1 / 2, Inf),
-          col = "black",
-          linewidth = 1, 
-          show.legend = FALSE
-        ) +
-        coord_equal() +
-        # theme_light_bl() +
-        theme(legend.position = "top") +
-        labs(x = "Predictor 1", y = "Predictor 2")
-      
-      p
+      plot_boundary(plot_data, grd)
       
     },
     height = 400, width = 400)

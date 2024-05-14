@@ -6,7 +6,6 @@ library(tune)
 
 # ------------------------------------------------------------------------------
 
-
 load("../RData/grid_nbayes.RData")
 source("shiny_cls_boundary_plot.R")
 
