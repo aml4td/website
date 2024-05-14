@@ -44,4 +44,5 @@ for (i in 1:nrow(combinations)) {
   grid_knn <- bind_rows(grid_knn, mod_grid)
 }
 
-# save(grid_knn, file = "/Users/max/content/website/RData/grid_knn.RData", compress = TRUE)
+save(grid_knn, file = "RData/grid_knn.RData", compress = TRUE)
+
