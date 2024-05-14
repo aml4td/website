@@ -2,10 +2,13 @@ library(shiny)
 library(ggplot2)
 library(bslib)
 library(viridis)
-
+library(tune)
 
 # ------------------------------------------------------------------------------
 
+
+load("../RData/grid_nbayes.RData")
+source("shiny_cls_boundary_plot.R")
 
 # ------------------------------------------------------------------------------
 
@@ -13,8 +16,6 @@ light_bg <- "#fcfefe" # from aml4td.scss
 grid_theme <- bs_theme(
   bg = light_bg, fg = "#595959"
 )
-
-# ------------------------------------------------------------------------------
 
 theme_light_bl<- function(...) {
   
@@ -68,9 +69,7 @@ ui <- fluidPage(
   ) # top fluid row
 )
 
-
 server <- function(input, output) {
-  
   
   output$contours <-
     renderPlot({
@@ -83,22 +82,7 @@ server <- function(input, output) {
         plot_data <- example_train
       }
       
-      p <- 
-        ggplot(plot_data, aes(predictor_1, predictor_2)) +
-        geom_point(aes(col = class, pch = class), cex = 2, 
-                   alpha = 1 / 2) +
-        geom_contour(
-          data = grd, 
-          aes(z = .pred_event),
-          breaks = c(-Inf, 1 / 2, Inf),
-          col = "black",
-          linewidth = 1
-        ) +
-        theme(legend.position = "top") +
-        lims(x = c(-1, 1), y = c(-1, 1)) +
-        labs(x = "Predictor 1", y = "Predictor 2")
-      
-      p
+      plot_boundary(plot_data, grd)
       
     },
     height = 400, width = 400)

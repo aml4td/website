@@ -29,13 +29,11 @@ for (i in 1:nrow(combinations)) {
     set_mode("classification")
   mod_fit <- fit(mod_spec, class ~ ., data = example_train)
   mod_grid <- 
-    predict(mod_fit, demo_grid, type = "prob") %>% 
-    select(.pred_event) %>% 
-    bind_cols(demo_grid) %>% 
+    augment(mod_fit, demo_grid) %>% 
     mutate(
       smoothness = combinations$smoothness[i]
     )
   grid_nbayes <- bind_rows(grid_nbayes, mod_grid)
 }
 
-save(grid_nbayes, file = "/Users/max/content/website/RData/grid_nbayes.RData", compress = TRUE)
+save(grid_nbayes, file = "RData/grid_nbayes.RData", compress = TRUE)
