@@ -39,12 +39,11 @@ for (i in 1:nrow(combinations)) {
       trees = !!combinations$trees[i],
       tree_depth = !!combinations$tree_depth[i]
     ) %>% 
-    set_mode("classification")
+    set_mode("classification") %>% 
+    set_engine("xrf", nthread = 10)
   
   set.seed(1)
   mod_fit <- try(fit(mod_spec, class ~ ., data = example_train))
-  
-  # print(mod_fit)
   
   if (!inherits(mod_fit, "try-error")) {
     mod_grid <- 
@@ -61,4 +60,4 @@ for (i in 1:nrow(combinations)) {
   
 }
 
-save(grid_xrf, file = "/Users/max/content/website/RData/grid_xrf.RData", compress = TRUE)
+save(grid_xrf, file = "RData/grid_xrf.RData", compress = TRUE)
