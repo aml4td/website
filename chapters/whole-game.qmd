@@ -72,7 +72,7 @@ mode_ish <- round(dens_t$x[which.max(dens_t$y)], 0)
 The next section describes the process of _splitting_ the overall data pool into different subsets and signifies the start of the modeling process. However, _how_ we make that split depends on some aspects of the data. Specifically, it is a good idea to examine the distribution of our outcome data (i.e., delivery time) to determine how to randomly split the data^[Overall, we advise looking at the other columns in the data _after_ the splitting.]. 
 
 
-@fig-delivery-hist (panel (a)) uses a histogram to examine the distribution of the outcome data. It is right-skewed and there is a subset of long delivery times that stand out from the mainstream of the data. The most likely delivery time is about `r mode_ish` minutes, but there is also a hint of a second mode a few minutes earlier. 
+@fig-delivery-hist (panel (a)) uses a histogram to examine the distribution of the outcome data. It is right-skewed and there is a subset of long delivery times that stand out from the mainstream of the data. The most likely delivery time is about `r mode_ish` minutes, but there is also a hint of a second distributional mode a few minutes earlier. 
 
 ```{r}
 #| label: fig-delivery-hist
@@ -106,14 +106,6 @@ This skewness might affect how we split the data and is discussed in the next se
 
 
 ## Data Spending  {#sec-data-spending-whole-game}
-
-
-```{r}
-#| label: delivery-split
-#| echo: false
-
-source("../R/setup_deliveries.R")
-```
 
 An important aspect of machine learning is to use the right data at the right time. We don't start modeling with the entire pool of data.  As will be seen in @sec-resampling, we need to reserve some data to evaluate the model and make sure that those data do not overlap with those used to fit the model.
 
@@ -260,7 +252,7 @@ Which model to use? There is a multitude of tools that can be used to represent 
 Before proceeding, we need to pick a performance metric. This is used to quantify how well the model fits the data. For any model fit, the _residual_ (usually denoted as  $\epsilon$, also called the error) is the difference between the model prediction and the observed outcome. We'd like our model to produce residuals near zero. One metric^[Discussed in @sec-reg-metrics] is the mean absolute error (MAE). For a data set with $n$ data points, the equation is 
 
 $$
-MAE = \frac{1}{n}\sum_{i=1}^n |y_i - \hat{y}_i| = \frac{1}{n}\sum_{i=1}^n |\epsilon_i| 
+MAE  = \frac{1}{n}\sum_{i=1}^n |\epsilon_i| = \frac{1}{n}\sum_{i=1}^n |y_i - \hat{y}_i|
 $$ {#eq-mae}
 
 where $\hat{y}$ is the predicted numeric outcome value and $\epsilon$ is the model error. The MAE units are the same as the outcome which, in this case, is minutes. We desire to minimize this statistic.
@@ -546,7 +538,7 @@ norm_rec <-
 nnet_spec <- 
   mlp(
     hidden_units = tune(),
-    penalty = 0.01,
+    penalty = 0.05,
     learn_rate = 0.1,
     epochs = 5000
   ) %>%
@@ -619,7 +611,7 @@ nnet_cap <-
 ```
 
 
-One question about this model: how many hidden units should we use^[This model description is deliberately vague (so as not to confuse readers who are new to this model). Other details: each model could be trained for up to `r nnet_args$epochs` epochs. However, a small amount of the training set was randomly set aside to monitor the sums of squared errors at each epoch. Early stopping was triggered when this out-of-sample loss degraded for `r nnet_args$stop_iter` consecutive epochs. A rectified linear unit activation function was used between the predictor and hidden layers. A `r nnet_args$rate_schedule` learning rate scheduler was used with a maximum rate of `r nnet_args$learn_rate` and a weight decay value of `r nnet_args$penalty` was applied. In a more complete analysis, all of these values would also be tuned.]? This decision will determine the complexity of the model. As models become model complex, they have more capacity to find complicated relationships between the predictors and response. However, added complexity adds to the risk of overfitting. This situation, discussed in @sec-model-complexity-and-overfitting, occurs when a model fits exceptionally well to the training data but fails for new data when it finds patterns in the training data that are artifacts (i.e., do not generalize for other data sets). How should we choose the number of hidden units?
+One question about this model: how many hidden units should we use^[This model description is deliberately vague (so as not to confuse readers who are new to this model). Other details: each model could be trained for up to `r nnet_args$epochs` epochs. However, a small amount of the training set was randomly set aside to monitor the sums of squared errors at each epoch. Early stopping was triggered when this out-of-sample loss degraded for `r nnet_args$stop_iter` consecutive epochs. A rectified linear unit activation function was used between the predictor and hidden layers. A `r nnet_args$rate_schedule` learning rate scheduler was used with a maximum rate of `r nnet_args$learn_rate` and a weight decay value of `r nnet_args$penalty` was applied. In a more complete analysis, all of these values would also be tuned.]? This decision will decide the complexity of the model. As models become model complex, they have more capacity to find complicated relationships between the predictors and response. However, added complexity adds to the risk of overfitting. This situation, discussed in @sec-model-complexity-and-overfitting, occurs when a model fits exceptionally well to the training data but fails for new data when it finds patterns in the training data that are artifacts (i.e., do not generalize for other data sets). How should we choose the number of hidden units?
 
 Unfortunately, no equation can directly compute an estimate the number of units from the data. Values such as these are referred to as tuning parameters or hyperparameters. However, one solution is to extend the validation process previously shown for the linear regression and Cubist models. We will consider a candidate set of tuning parameter values ranging from `r min(nnet_grid$hidden_units)` to `r max(nnet_grid$hidden_units)` hidden units. We'll fit a model to the training set for each of these `r nrow(nnet_grid)` values and use the validation set MAE values to select an appropriate value. The results of this process is shown in @fig-delivery-nnet-tune. 
 
@@ -667,7 +659,16 @@ There are a variety of criteria used to rank and compare model fits. Obviously, 
 
 While prediction is the focus for ML models, we often have to explain the model and/or predicted values to consumers. While we can develop _explainers_ for any model, some types are easier to explain than others. 
 
-For this chapter, we have three models whose MAE values are within about _12 seconds_ of one another. Each has the same deficiency: they all significantly underpredict long delivery times. In fact, a few poor predictions may be a limiting factor for any regression metric; it might be impossible for one model's MAE to really stand out from the others. 
+```{r}
+#| label: mae-range
+#| include: false
+
+mae_vals <- c(lin_reg_mae, cb_mae, nnet_mae)
+mae_rng <- max(mae_vals) - min(mae_vals)
+mae_sec <- round(mae_rng * 60, 0)
+```
+
+For this chapter, we have three models whose MAE values are within about _`r mae_sec` seconds_ of one another. Each has the same deficiency: they all significantly underpredict long delivery times. In fact, a few poor predictions may be a limiting factor for any regression metric; it might be impossible for one model's MAE to really stand out from the others. 
 
 We'll select the linear regression model as our final model due to its relative simplicity and linear structure.  
 
@@ -805,7 +806,13 @@ For novel data sets, it is a challenge to know _a priori_ what good choices are 
 
 This example revolves around a small set of predictors. In most situations, there will be numerous predictors of different types (e.g., quantitative, qualitative, etc.). It is unclear which predictors should be included in the model for new modeling projects and how they should be represented. 
 
-When considering how to approach a modeling project, the stereotype is that the user focuses on which new, fancy model to apply to the data. The reality is that many of the most effective decisions that users must confront are which predictors to use and in what format.  Thoughtfully adding the right feature representations often obviates the need (and overhead and risks) for complex models. That is one of the lessons from this particular data set.
+When considering how to approach a modeling project, the stereotype is that the user focuses on which new, fancy model to apply to the data. 
+
+::: {.important-box}
+The reality is that many of the most effective decisions that users must confront are which predictors to use and in what format.  Thoughtfully adding the right feature representations often obviates the need (and overhead and risks) for complex models. 
+:::
+
+That is one of the lessons from this particular data set.
 
 We'll put the feature engineering process on equal footing with model training For this reason, @fig-within-model-process shows that the choice of model features and parameters are both important.
 
