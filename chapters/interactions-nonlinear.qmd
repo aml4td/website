@@ -49,34 +49,29 @@ source("../R/setup_hotel_rates.R")
 source("../R/setup_deliveries.R")
 ```
 
-We saw in previous chapters that preprocessing is necessary because models can be sensitive to specific predictor characteristics.  For instance, some models:
+Previously, we described **feature engineering** as techniques that make it easier for the model to understand and predict the outcome for a given data set. Unlike preprocessing methods (e.g., standardization via centering and scaling) that are _required by the model_, feature engineering is focused on the needs of the data set. 
 
-- are sensitive to highly correlated predictors.
-- cannot consume qualitative predictors as non-numeric data.
-- cannot be built when predictors have no or near-zero variability.
+This chapter will discuss feature engineering techniques to help with nonlinear relationships between the predictors and the outcome. Nonlinearity can be encoded into the features for a single predictor or as a combination of predictors. For single predictors, we will describe ways to enable nonlinearity smoothly (via splines) and via step functions (via discretization). 
 
-Preprocessing methods address aspects of the predictors that place them in a form so that models can be built.  This is _what the model needs_ to function.
+The next section will focus on finding and encoding interaction terms for combinations of predictors. These combine two or more features. Before looking into interactions, let's take a look at a simple example that uses two predictors. 
 
-While preprocessing techniques allow models to be built, they do not necessarily transform them in ways that help the model to identify predictive relationships with the outcome.  This is the fundamental concept of **feature engineering** which addresses the question:  what can we do to make it easier for the model to understand and predict the outcome.
-
- In this chapter we will discuss techniques that address this question.   For example, if the relationship between a predictor is nonlinear, how can we represent that predictor so that the relationship can be modeled?  Or if two predictors work in conjunction with each other, then how can this information be engineered for a model?  While feature engineering is not necessary for models to be built, it contains a crucial set of tools for improving model performance.
-
-Let’s look at a simple example. Occasionally, predictor pairs work better in unison rather than as main effects. For example, consider the data in @fig-two-class-corr(a), where two predictors are: 
+Occasionally, predictor pairs work better in unison rather than as main effects. For example, consider the data in @fig-two-class-corr(a), where two predictors are: 
 
 - strictly positive,
 - significantly right-skewed, and
 - highly correlated. 
 
-In the predictors' original form, there is a significant overlap between the two classes of samples.  However, when the ratio of the predictors is used, the newly derived predictor better discriminates between classes (shown in @fig-two-class-corr(b)). While not a general rule, the three data characteristics above suggest that the modeler attempts to form ratios from two or more predictors ^[Alternatively, PCA after skewness-correcting transformations may be another good option.].
+In the predictors' original form (panels (b) and (c)), there is a significant overlap between the two classes of samples; neither is predictive on their own. 
+
+However, when the ratio of the predictors is used, the newly derived predictor better discriminates between classes (shown in @fig-two-class-corr(d)). While not a general rule, the three data characteristics above suggest that the modeler might attempts to form ratios from such predictors ^[Alternatively, PCA after skewness-correcting transformations may be another good option.].
 
 ```{r}
 #| label: fig-two-class-corr
 #| echo: false
-#| out-width: 80%
+#| out-width: 90%
 #| fig-width: 7
-#| fig-height: 4
-#| fig-cap: "Panel (a): two highly correlated, right-skewed predictors with two classes. Panel (b): sepration of classes using $log(A/B)$."
-#| fig-alt: "Panel (a): two highly correlated, right-skewed predictors with two classes. Panel (b): sepration of classes using $log(A/B)$."
+#| fig-height: 6
+#| fig-cap: "Panel (a): two highly correlated, right-skewed predictors with two classes. Panel (b) and (c) show boxplots for each predictors, Panel (d): sepration of classes using $log(A/B)$."
 
 data(bivariate)
 
@@ -85,10 +80,23 @@ biv_scat <-
   bivariate_train %>% 
   ggplot(aes(A, B, col = Class, pch = Class)) + 
   geom_point(alpha = 1 / 2, cex = 2) +
-  coord_fixed(ratio = 20) + 
   scale_color_manual(values = biv_cols) +
-  ggtitle("(a)") +
+  labs(title = "(a)", x = "Predictor A", y = "Predictor B") +
   theme(legend.position = "top")
+
+biv_a <-
+  bivariate_train %>% 
+  ggplot(aes(Class, A, fill = Class)) + 
+  geom_boxplot(alpha = 1 / 2, show.legend = FALSE)+ 
+  scale_fill_manual(values = biv_cols) +
+  labs(title = "(b)", y = "Predictor A")
+
+biv_b <-
+  bivariate_train %>% 
+  ggplot(aes(Class, B, fill = Class)) + 
+  geom_boxplot(alpha = 1 / 2, show.legend = FALSE)+ 
+  scale_fill_manual(values = biv_cols) +
+  labs(title = "(c)", y = "Predictor B")
 
 ratio_features <-
   bivariate_train %>% 
@@ -101,68 +109,20 @@ biv_ratio <-
   ggplot(aes(Class, `Log-Ratio`, fill = Class)) + 
   geom_boxplot(alpha = 1 / 2, show.legend = FALSE)+ 
   scale_fill_manual(values = biv_cols) +
-  ggtitle("(b)")
+  ggtitle("(d)")
 
-biv_scat + biv_ratio
+(plot_spacer() + biv_scat +  plot_spacer()) / (biv_a +  biv_b + biv_ratio) 
 ```
 
-```{r}
-#| label: fig-two-class-features
-#| eval: false
-data(bivariate)
+It is essential to understand that these _data_ require transformation. We can put the original predictors into a model as-is but we won’t have good predictive performance. We can induce a separation of the classes when a joint feature is used. In this case, the ratio is a nonlinear function of predictor B.
 
-trans_features <- 
-  bivariate_train %>% 
-  recipe(Class ~ ., data = bivariate_train) %>% 
-  step_YeoJohnson(A, B) %>% 
-  prep() %>% 
-  bake(new_data = NULL)
-
-raw_features <- 
-  trans_features %>% 
-  pivot_longer(c(A, B), names_to = "feature", values_to = "value") %>% 
-  mutate(feature = paste(feature, "(YJ)"))
-
-ratio_features <-
-  bivariate_train %>% 
-  mutate(
-    feature = "Log-Ratio",
-    value = log(A / B)
-  ) %>% 
-  select(feature, value, Class)
-
-pca_features <- 
-  recipe(Class ~ ., data = bivariate_train) %>% 
-  step_YeoJohnson(A, B) %>% 
-  step_normalize(A, B) %>% 
-  step_pca(A, B, num_comp = 2) %>% 
-  prep() %>% 
-  bake(new_data = NULL) %>% 
-  pivot_longer(c(PC1, PC2), names_to = "feature", values_to = "value")
-
-all_features <- 
-  bind_rows(ratio_features, pca_features) %>% 
-  mutate(
-    feature = factor(feature, levels = c("Log-Ratio", "PC1", "PC2"))
-  )
-
-all_features %>% 
-  ggplot(aes(Class, value, fill = Class)) + 
-  geom_boxplot(alpha = 1 / 2) +
-  facet_wrap(~ feature, scales = "free_y") + 
-  scale_fill_manual(values = biv_cols) +
-  labs(y = NULL)
-```
-
-It is essential to understand that these _data_ require transformation. We can put the original predictors into a model as-is. The model won’t produce an error but won’t have good predictive performance. We can induce a separation of the classes when a joint feature is used. 
-
-This aspect of feature engineering depends on the data set so it is difficult to enumerate all possible techniques. In this chapter, we’ll describe a few commonly used methods: splines, interactions, and discretization (a.k.a. binning). 
+Let's focus on interaction terms first. 
 
 ## Interactions {#sec-interactions}
 
 When building models for prediction, the majority of variation in the outcome is generally explained by the cumulative effect of the important individual predictors.  For many problems, additional variation in the response can be explained by the effect of two or more predictors working in conjunction with each other.  
 
-The healthcare industry has long understood the concept of interactions among drugs for treating specific diseases [@singh2017suppressive, @mokhtari2017combination, and @altorki2021neoadjuvant].  As an example of an interaction, consider treatment for the disease non-small cell lung cancer (NSCLC).  In a recent study, patients with an advanced stage of NSCLC with an EGFR mutation were given either osimertinib alone or osimertinib in combination with traditional chemotherapy [@NEJMoa2306434].   Patients taking the combination treatment had a significantly longer progression-free survival time than patients taking osmertinib alone.  Hence, the interaction of the treatments is more effective than the single treatment.  To summarize, two (or more) predictors interact if their combined impact is different (less or greater) than what would be expected from the added impact of each predictor alone.
+The healthcare industry has long understood the concept of interactions among drugs for treating specific diseases [@singh2017suppressive;@mokhtari2017combination;@altorki2021neoadjuvant].  As an example of an interaction, consider treatment for the disease non-small cell lung cancer (NSCLC).  In a recent study, patients with an advanced stage of NSCLC with an EGFR mutation were given either osimertinib alone or osimertinib in combination with traditional chemotherapy [@NEJMoa2306434].   Patients taking the combination treatment had a significantly longer progression-free survival time than patients taking osmertinib alone.  Hence, the interaction of the treatments is more effective than the single treatment.  To summarize, two (or more) predictors interact if their combined impact is different (less or greater) than what would be expected from the additive impact of each predictor alone.
 
 We’ve already encountered an example of an interaction in @sec-eda-whole-game where the relationship between delivery time and the time of order differed across days of the week. This trend is reproduced in @fig-delivery-no-interact(a). The telltale sign of the interaction is that the trendlines are not parallel with one another; they have different rates of increase and cross. 
 
@@ -209,7 +169,7 @@ no_interactions <-
 
 This example demonstrates an interaction between a numeric predictor (hour of order) and a categorical predictor (day of the week). Interactions can also occur between two (or more) numeric or categorical predictors. Using the delivery data, let’s examine potential interactions solely between categorical predictor columns. 
 
-For regression problems, one visualization technique is to compute the means (or medians) of the outcome for all combinations of variables and then plot these means in a manner similar to the previous figure. Let’s look at the 27 predictors columns for whether a specific item was included in the order. The original data is a count, but the data are mostly zero or one. We’ll look at two variables at a time and plot the four combinations of whether the item was ordered at all (versus not at all). @fig-delivery-items shows two potential sets of interactions. The x-axis indicates whether Item 1 was in the order or not. The y-axis is the mean delivery time with 90% confidence intervals^[These were computed using the bootstrap, as in @sec-eda-whole-game.].
+For regression problems, one visualization technique is to compute the means (or medians) of the outcome for all combinations of variables and then plot these means in a manner similar to the previous figure. Let’s look at the 27 predictors columns specific item included in the order. The original data is a count, but the data are mostly zero or one. We’ll look at two variables at a time and plot the four combinations of whether the item was ordered at all (versus not at all). @fig-delivery-items shows two potential sets of interactions. The x-axis indicates whether Item 1 was in the order or not. The y-axis is the mean delivery time with 90% confidence intervals^[These were computed using the bootstrap, as in @sec-eda-whole-game.].
 
 The left panel shows the joint effect of items 1 and 9. The lines connecting the means are parallel. This indicates that each of these two predictors affects the outcome independently of one another. Specifically, the incremental change in delivery time is the same when item 9 is or is not included with item 1.  The right panel has means for items 1 and 10. The mean delivery times are very similar when neither is contained in the order. Also, when only one of the two items is in the order, the average time is similarly small. However, when both are included, the delivery time becomes much larger.  This means that you cannot consider the effect or either item 1 or 10 alone; their effect on the outcome occurs jointly. 
 
@@ -282,7 +242,7 @@ $$ {#eq-two-way-int}
 The $\beta$ coefficients represent the overall average response ($\beta_0$), the average rate of change for each individual predictor ($\beta_1$ and $\beta_2$), and the incremental rate of change due to the combined effect of $x_1$ and $x_2$ ($\beta_3$) that goes beyond what $x_1$ and $x_2$ can explain alone.  The parameters for this equation can be estimated using a technique such as ordinary least squares (REF).  The sign and magnitude of $\beta_3$ indicate how and the extent to which the two predictors interact:   
 
  - When $\beta_3$ is positive, the interaction is _synergistic_ since the response increases beyond the effect of either predictor alone.  
- - Alternatively, when $\beta_3$ is negative, the interaction is _antagonistic_ since the response decreases beyond the effect of either predictor alone.  
+ - Alternatively, when $\beta_3$ is negative, the interaction is _antagonistic_ since the response decreases as each increases.  
  - A third scenario is when $\beta_3$ is essentially zero.  In this case, there is no interaction between the predictors and the relationship between the predictors is _additive_. 
  - Finally, for some data sets, we may find that neither predictor is important individually (i.e., $\beta_1$ and $\beta_2$ are zero).  However, the coefficient on the interaction term is not zero.  Because this case occurs very infrequently, it is called _atypical_. 
  
@@ -313,11 +273,13 @@ Prediction contours for a linear regression model with @eq-two-way-int with $\be
 
 :::
 
-Interaction effects between predictors are sometimes confused with correlation between predictors. They are not the same thing. Interactions are defined by their relationship to the outcome while between-predictors correlations are unrelated to it. An interaction could occur independent of the amount of correlation between predictors. 
+Notice that, when $\beta_0 \ne 0$, the contours have curvature. Even with linear models, interactions between continuous variables induce nonlinearity. 
+
+Interaction effects between predictors are sometimes confused with correlation between predictors. They are not the same thing. Interactions are defined by their relationship to the outcome while between-predictors correlations are unrelated to the outcome. An interaction could occur independent of the amount of correlation between predictors. 
 
 ### How Likely Are Interactions? {#sec-interactions-princples} 
 
-Within the context of statistical experimental design, @hamada1992analysis discuss some probabilistic aspects of predictor importance. The effect sparsity principle is that there are often few predictors that are relevant for predicting the outcome. Similarly, the effect hierarchy principle states that “main effects” (i.e. a feature involving only predictor) are more likely to occur than interactions. Also, as more predictors are involved in the interaction, the less likely they become. Finally, the heredity principle conjectures that if an interaction is important, it is very likely that the corresponding main effects are likely too. @chipman1996bayesian further expands this principle. 
+Within the context of statistical experimental design, @hamada1992analysis discuss some probabilistic aspects of predictor importance. The **effect sparsity** principle is that there are often few predictors that are relevant for predicting the outcome. Similarly, the **effect hierarchy** principle states that “main effects” (i.e. a feature involving only predictor) are more likely to occur than interactions. Also, as more predictors are involved in the interaction, the less likely they become. Finally, the heredity principle conjectures that if an interaction is important, it is very likely that the corresponding main effects are likely too. @chipman1996bayesian further expands this principle (TODO add hastie ref). 
 
 The original context of these principles was envisioned for screening large numbers of predictors in experimental designs; they are still very relevant for the analysis of tabular data. 
 
