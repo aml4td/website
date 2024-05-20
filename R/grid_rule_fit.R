@@ -11,7 +11,7 @@ options(pillar.advice = FALSE, pillar.min_title_chars = Inf)
 
 load("RData/example_class.RData")
 
-x <- seq(-1, 1, length.out = 100)
+x <- seq(-1, 1, length.out = 60)
 demo_grid <- crossing(predictor_1 = x, predictor_2 = x)
 
 # ------------------------------------------------------------------------------
@@ -22,7 +22,7 @@ combinations <-
     min_n = c(2, 10, 25),
     penalty = -4:-1,
     learn_rate = -4:-1,
-    tree_depth = 1:5
+    tree_depth = 1:4
   )
 
 # ------------------------------------------------------------------------------
@@ -31,6 +31,9 @@ combinations <-
 grid_xrf <- NULL
 
 for (i in 1:nrow(combinations)) {
+  if (i %% 100 == 0) {
+    cli::cli_inform("iteration {i}\n")
+  }
   mod_spec <- 
     rule_fit(
       penalty = !!10^combinations$penalty[i],

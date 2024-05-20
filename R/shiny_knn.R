@@ -7,14 +7,9 @@ library(tune)
 # ------------------------------------------------------------------------------
 
 load("../RData/grid_knn.RData")
+load("../RData/example_class.RData")
+source("shiny_themes.R")
 source("shiny_cls_boundary_plot.R")
-
-# ------------------------------------------------------------------------------
-
-light_bg <- "#fcfefe" # from aml4td.scss
-grid_theme <- bs_theme(
-  bg = light_bg, fg = "#595959"
-)
 
 # ------------------------------------------------------------------------------
 
@@ -54,7 +49,7 @@ ui <- fluidPage(
           inputId = "weight_func",
           label = "Weighting",
           choices = list("Rectangular" = "rectangular", "Triangular" = "triangular", 
-                         "Inverse" = "inv")
+                         "Gaussian" = "gaussian")
         ),
         radioButtons(
           inputId = "data_set",

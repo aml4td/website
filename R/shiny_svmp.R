@@ -6,14 +6,13 @@ library(viridis)
 
 # ------------------------------------------------------------------------------
 
-load("/Users/max/content/website/RData/grid_svmp.RData")
+load("../RData/grid_svmp.RData")
+load("../RData/example_class.RData")
+source("shiny_themes.R")
 
 # ------------------------------------------------------------------------------
 
-light_bg <- "#fcfefe" # from aml4td.scss
-grid_theme <- bs_theme(
-  bg = light_bg, fg = "#595959"
-)
+shiny_cls_cols <- c("#4151B0FF",  "#D0641EFF")
 
 # ------------------------------------------------------------------------------
 
@@ -30,7 +29,7 @@ ui <- fluidPage(
         max = 15,
         value = 5,
         width = "100%",
-        step = 0.5
+        step = 1
       )
     ), 
     
@@ -39,8 +38,8 @@ ui <- fluidPage(
       sliderInput(
         inputId = "scale_factor",
         label = HTML("Scale (log<sub>10</sub>)"),
-        min = -5,
-        max = -1,
+        min = -3,
+        max =  1,
         value = -2,
         width = "100%",
         step = 0.5
@@ -87,29 +86,40 @@ server <- function(input, output) {
             grid_svmp$scale_factor == input$scale_factor &
             grid_svmp$degree == input$degree,]
       
+      grd$`decision value` <- grd$pred
+      
       if (input$data_set == "validation") {
         plot_data <- example_val
       } else {
         plot_data <- example_train
       }
       
-      
       p <- 
         ggplot(plot_data, aes(predictor_1, predictor_2)) +
-        geom_point(aes(col = class, pch = class), cex = 2, 
-                   alpha = 1 / 2) +
+        geom_raster(
+          data = grd, 
+          aes(fill = `decision value`),
+          alpha = 1 / 2
+        ) +
+        geom_point(aes(col = class, pch = class), cex = 2, alpha = 3 / 4, show.legend = FALSE) +        
         geom_contour(
           data = grd, 
           aes(z = pred),
           breaks = c(-Inf, 0, Inf),
           col = "black",
-          linewidth = 1
+          linewidth = 1, 
+          show.legend = FALSE
         ) +
-        
-        # coord_equal() +
+        coord_equal() +
         theme(legend.position = "top") +
-        lims(x = c(-1, 1), y = c(-1, 1)) +
-        labs(x = "Predictor 1", y = "Predictor 2")
+        scale_fill_gradient2(
+          midpoint = 0,
+          low = shiny_cls_cols[1],
+          high = shiny_cls_cols[2]
+        ) +
+        scale_color_manual(values = shiny_cls_cols) + 
+        labs(x = "Predictor 1", y = "Predictor 2") +
+        theme_light_bl() 
       
       p
       

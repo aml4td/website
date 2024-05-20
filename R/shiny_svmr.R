@@ -6,14 +6,13 @@ library(viridis)
 
 # ------------------------------------------------------------------------------
 
-# load("/Users/max/content/website/RData/grid_svmr.RData")
+load("../RData/grid_svmr.RData")
+load("../RData/example_class.RData")
+source("shiny_themes.R")
 
 # ------------------------------------------------------------------------------
 
-light_bg <- "#fcfefe" # from aml4td.scss
-grid_theme <- bs_theme(
-  bg = light_bg, fg = "#595959"
-)
+shiny_cls_cols <- c("#4151B0FF",  "#D0641EFF")
 
 # ------------------------------------------------------------------------------
 
@@ -81,16 +80,16 @@ server <- function(input, output) {
         plot_data <- example_train
       }
       
+      grd$`decision value` <- grd$pred
+      
       p <- 
         ggplot(plot_data, aes(predictor_1, predictor_2)) +
         geom_raster(
           data = grd, 
-          aes(fill = .pred_class),
-          alpha = 1 / 20, 
-          show.legend = FALSE
+          aes(fill = `decision value`),
+          alpha = 1 / 2
         ) +
-        geom_point(aes(col = class, pch = class), cex = 2, 
-                   alpha = 3 / 4) +        
+        geom_point(aes(col = class, pch = class), cex = 2, alpha = 3 / 4, show.legend = FALSE) +        
         geom_contour(
           data = grd, 
           aes(z = pred),
@@ -100,9 +99,14 @@ server <- function(input, output) {
           show.legend = FALSE
         ) +
         coord_equal() +
-        # theme_light_bl() +
         theme(legend.position = "top") +
-        labs(x = "Predictor 1", y = "Predictor 2")
+        scale_fill_gradient2(
+          midpoint = 0,
+          low = shiny_cls_cols[1],
+          high = shiny_cls_cols[2]
+        ) +
+        scale_color_manual(values = shiny_cls_cols) + 
+        labs(x = "Predictor 1", y = "Predictor 2") 
       
       p
     },

@@ -1,4 +1,3 @@
-
 library(tidymodels)
 library(kernlab)
 
@@ -10,7 +9,7 @@ options(pillar.advice = FALSE, pillar.min_title_chars = Inf)
 
 # ------------------------------------------------------------------------------
 
-x <- seq(-1, 1, length.out = 100)
+x <- seq(-1, 1, length.out = 60)
 demo_grid <- crossing(predictor_1 = x, predictor_2 = x)
 
 x <- as.matrix(example_train[, -3])
@@ -19,9 +18,9 @@ x <- as.matrix(example_train[, -3])
 
 combinations <- 
   crossing(
-    cost = 2^seq(-1, 15, by = 0.5),
+    cost = 2^seq(-2, 15, by = 1),
     degree = 1:4,
-    scale_factor = 10^seq(-5, -1, by = 0.5))
+    scale_factor = 10^seq(-3, 1, by = 0.5))
 
 # ------------------------------------------------------------------------------
 
@@ -44,9 +43,10 @@ for (i in 1:nrow(combinations)) {
     mutate(
       cost = log2(combinations$cost[i]),
       degree = combinations$degree[i], 
-      scale_factor = log10(combinations$scale_factor[i])
+      scale_factor = log10(combinations$scale_factor[i]),
+      .pred_class = predict(mod_fit, mat_grid, type = "response")
     )
   grid_svmp <- bind_rows(grid_svmp, mod_grid)
 }
 
-save(grid_svmp, file = "/Users/max/content/website/RData/grid_svmp.RData", compress = TRUE)
+save(grid_svmp, file = "RData/grid_svmp.RData", compress = TRUE)

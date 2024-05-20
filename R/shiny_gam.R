@@ -6,14 +6,9 @@ library(tune)
 # ------------------------------------------------------------------------------
 
 load("../RData/grid_nbayes.RData")
+load("../RData/example_class.RData")
+source("shiny_themes.R")
 source("shiny_cls_boundary_plot.R")
-
-# ------------------------------------------------------------------------------
-
-light_bg <- "#fcfefe" # from aml4td.scss
-grid_theme <- bs_theme(
-  bg = light_bg, fg = "#595959"
-)
 
 # ------------------------------------------------------------------------------
 

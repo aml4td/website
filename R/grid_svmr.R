@@ -1,4 +1,3 @@
-
 library(tidymodels)
 library(kernlab)
 
@@ -10,7 +9,7 @@ options(pillar.advice = FALSE, pillar.min_title_chars = Inf)
 
 # ------------------------------------------------------------------------------
 
-x <- seq(-1, 1, length.out = 100)
+x <- seq(-1, 1, length.out = 75)
 demo_grid <- crossing(predictor_1 = x, predictor_2 = x)
 
 x <- as.matrix(example_train[, -3])
@@ -31,6 +30,9 @@ mat_grid <- as.matrix(demo_grid)
 for (i in 1:nrow(combinations)) {
 
   kern <- rbfdot(sigma = 10^combinations$rbf_sigma[i])
+  # We avoid the class probabilities so that we can get reliable values. 
+  # The translation from decision boundaries to class probabilities uses
+  # random numbers that R cannot control and can sometimes result in failures. 
   mod_fit <- ksvm(x, y = example_train$class, scaled = FALSE, 
                   C = 2^combinations$cost[i],
                   kernel = kern)
@@ -47,4 +49,4 @@ for (i in 1:nrow(combinations)) {
   grid_svmr <- bind_rows(grid_svmr, mod_grid)
 }
 
-# save(grid_svmr, file = "/Users/max/content/website/RData/grid_svmr.RData", compress = TRUE)
+save(grid_svmr, file = "RData/grid_svmr.RData", compress = TRUE)

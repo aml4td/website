@@ -8,7 +8,8 @@ options(pillar.advice = FALSE, pillar.min_title_chars = Inf)
 
 # ------------------------------------------------------------------------------
 
-x <- seq(-1, 1, length.out = 100)
+load("RData/example_class.RData")
+x <- seq(-1, 1, length.out = 60)
 demo_grid <- crossing(predictor_1 = x, predictor_2 = x)
 
 # ------------------------------------------------------------------------------
@@ -32,7 +33,9 @@ for (i in 1:nrow(combinations)) {
     ) %>% 
     set_mode("classification") %>% 
     set_engine("glmnet")
-  rec <- recipe(class ~ ., data = example_train)
+  rec <- 
+    recipe(class ~ ., data = example_train) %>% 
+    step_interact(~ predictor_1:predictor_1)
   if (combinations$x1[i] > 1) {
     rec <- 
       rec %>% 
@@ -53,12 +56,13 @@ for (i in 1:nrow(combinations)) {
   mod_grid <- 
     augment(mod_fit, demo_grid) %>% 
     mutate(
-      penalty = combinations$penalty[i],
-      mixture = combinations$mixture[i],
+      penalty = round(combinations$penalty[i], 1),
+      mixture = round(combinations$mixture[i], 2),
       x1 = combinations$x1[i],
       x2 = combinations$x2[i]
     )
   grid_glmnet <- bind_rows(grid_glmnet, mod_grid)
 }
+
 
 save(grid_glmnet, file = "RData/grid_glmnet.RData", compress = TRUE)

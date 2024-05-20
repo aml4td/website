@@ -8,7 +8,7 @@ options(pillar.advice = FALSE, pillar.min_title_chars = Inf)
 
 # ------------------------------------------------------------------------------
 
-x <- seq(-1, 1, length.out = 100)
+x <- seq(-1, 1, length.out = 60)
 demo_grid <- crossing(predictor_1 = x, predictor_2 = x)
 
 # ------------------------------------------------------------------------------
@@ -30,7 +30,7 @@ for (i in 1:nrow(combinations)) {
   mod_grid <- 
     augment(mod_fit, demo_grid) %>% 
     mutate(
-      adjust_deg_free = combinations$adjust_deg_free[i]
+      adjust_deg_free = round(combinations$adjust_deg_free[i], 2)
     )
   grid_gam <- bind_rows(grid_gam, mod_grid)
 }

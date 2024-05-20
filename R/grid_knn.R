@@ -18,7 +18,7 @@ demo_grid <- crossing(predictor_1 = x, predictor_2 = x)
 combinations <- 
   crossing(
     neighbors = seq(1, 21, by = 2),
-    weight_func = c("rectangular", "triangular", "inv"),
+    weight_func = c("rectangular", "triangular", "gaussian"),
     dist_power = seq(0.5, 2, by = 0.25))
 
 # ------------------------------------------------------------------------------
