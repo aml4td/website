@@ -39,7 +39,7 @@ ui <- fluidPage(
         inputId = "scale_factor",
         label = HTML("Scale (log<sub>10</sub>)"),
         min = -3,
-        max =  1,
+        max =  -1,
         value = -2,
         width = "100%",
         step = 0.5

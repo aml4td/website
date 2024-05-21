@@ -1,7 +1,7 @@
 
 plot_boundary <- function(pred, grid) {
   shiny_cls_cols <- c("#4151B0FF",  "#D0641EFF")
-  
+
   grid$probability <- grid$.pred_event
   p <- 
     ggplot(pred, aes(predictor_1, predictor_2)) +
@@ -31,12 +31,13 @@ plot_boundary <- function(pred, grid) {
       midpoint = 1 / 2,
       low = shiny_cls_cols[2],
       high = shiny_cls_cols[1],
-      breaks = seq(0, 1, by = 0.25)
+      breaks = seq(0, 1, by = 0.25),
+      limits = 0:1
     ) +
     scale_color_manual(values = shiny_cls_cols) +
-    theme(legend.position = "top") +
     labs(x = "Predictor 1", y = "Predictor 2") +
-    theme_light_bl()
+    theme_light_bl() +
+    theme(legend.position = "right")
   
   p
 }

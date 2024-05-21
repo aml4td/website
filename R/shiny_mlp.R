@@ -2,6 +2,7 @@ library(shiny)
 library(ggplot2)
 library(bslib)
 library(viridis)
+library(shinyWidgets)
 
 # ------------------------------------------------------------------------------
 
@@ -9,23 +10,6 @@ load("../RData/grid_mlp.RData")
 load("../RData/example_class.RData")
 source("shiny_themes.R")
 source("shiny_cls_boundary_plot.R")
-
-# ------------------------------------------------------------------------------
-
-theme_light_bl<- function(...) {
-  
-  ret <- ggplot2::theme_bw(...)
-  
-  col_rect <- ggplot2::element_rect(fill = light_bg, colour = light_bg)
-  ret$panel.background  <- col_rect
-  ret$plot.background   <- col_rect
-  ret$legend.background <- col_rect
-  ret$legend.key        <- col_rect
-  
-  ret$legend.position <- "top"
-  
-  ret
-}
 
 # ------------------------------------------------------------------------------
 
@@ -39,24 +23,23 @@ ui <- fluidPage(
         inputId = "hidden_units",
         label = "Hidden units",
         min = 2,
-        max = 10,
+        max = 47,
         value = 2,
         width = "100%",
-        step = 1
+        step = 5
       )
     ), # hidden_units
     
     column(
       width = 6,
-      sliderInput(
+      sliderTextInput(
         inputId = "penalty",
         label = HTML("Weight Decay (log<sub>10</sub>)"),
-        min = -4,
-        max = -1,
-        value = -4,
-        width = "100%",
-        step = 1
+        choices = c(0, 10^(-5:-1)),
+        selected = 0,
+        grid = TRUE
       )
+      
     ),
     fluidRow(
       column(
@@ -64,7 +47,7 @@ ui <- fluidPage(
         sliderInput(
           inputId = "learn_rate",
           label = HTML("Learning Rate (log<sub>10</sub>)"),
-          min = -4,
+          min = -3,
           max = -1,
           value = -1,
           width = "100%",
@@ -73,12 +56,7 @@ ui <- fluidPage(
         radioButtons(
           inputId = "activation",
           label = "Activation",
-          choices = list("celu", "tanh", "relu", "sigmoid")
-        ),
-        radioButtons(
-          inputId = "stop_iter",
-          label = "Early Stopping",
-          choices = list("yes", "no")
+          choices = list("tanh", "relu", "gelu")
         ),
         radioButtons(
           inputId = "data_set",
@@ -102,15 +80,14 @@ server <- function(input, output) {
   output$contours <-
     renderPlot({
 
-      stop_iter <- ifelse(input$stop_iter == "yes", 5, Inf)
-
+      penaly <- ifelse(input$penalty > 0, log10(input$penalty), 0)
+      
       grd <- 
         grid_mlp[
-          grid_mlp$penalty == input$penalty & 
+          grid_mlp$penalty == penaly & 
             grid_mlp$activation == input$activation & 
             grid_mlp$hidden_units == input$hidden_units & 
-            grid_mlp$learn_rate == input$learn_rate &
-            grid_mlp$stop_iter == stop_iter,]
+            grid_mlp$learn_rate == input$learn_rate,]
       
       if (input$data_set == "validation") {
         plot_data <- example_val

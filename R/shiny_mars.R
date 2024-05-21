@@ -21,7 +21,7 @@ ui <- fluidPage(
       width = 6,
       sliderInput(
         inputId = "num_terms",
-        label = "Number of Terms",
+        label = "Maximum # Retained Terms",
         min = 2,
         max = 20,
         value = 10,
@@ -34,7 +34,7 @@ ui <- fluidPage(
         width = 4,
         radioButtons(
           inputId = "prod_degree",
-          label = "Initialization",
+          label = "Product Degree",
           choices = list("Additive" = "additive", "Interactions" = "interactions")
         ),
         radioButtons(
