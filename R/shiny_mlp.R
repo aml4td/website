@@ -22,11 +22,11 @@ ui <- fluidPage(
       sliderInput(
         inputId = "hidden_units",
         label = "Hidden units",
-        min = 2,
-        max = 47,
-        value = 2,
+        min = 5,
+        max = 95,
+        value = 5,
         width = "100%",
-        step = 5
+        step = 10
       )
     ), # hidden_units
     
@@ -35,7 +35,7 @@ ui <- fluidPage(
       sliderTextInput(
         inputId = "penalty",
         label = HTML("Weight Decay (log<sub>10</sub>)"),
-        choices = c(0, 10^(-5:-1)),
+        choices = c(0, 10^(-5:-2)),
         selected = 0,
         grid = TRUE
       )

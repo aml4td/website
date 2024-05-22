@@ -1,5 +1,5 @@
 library(tidymodels)
-library(discrim)
+library(lubridate)
 
 # ------------------------------------------------------------------------------
 
@@ -20,8 +20,8 @@ combinations <-
   crossing(
     activation = c("tanh", "relu", "gelu"),
     learn_rate = -3:-1,
-    penalty = c(0, -5:-1),
-    hidden_units = seq(2, 50, by = 5)
+    penalty = c(0, -5:-2),
+    hidden_units = c(5, 15, 25, 35, 45, 55, 65, 75, 85, 95)
   )
 
 # ------------------------------------------------------------------------------
@@ -30,9 +30,15 @@ grid_mlp <- NULL
 
 actual_epochs <- rep(NA_integer_, nrow(combinations))
 
+start_time <- iter_start <- now()
+
 for (i in 1:nrow(combinations)) {
   if (i %% 50 == 0) {
-    cli::cli_inform("iteration {i} of {nrow(combinations)}\n")
+    iter_time <- now()
+    so_far <- round(difftime(iter_time, iter_start, units = "mins"), 1)
+    iter_start <- iter_time
+    
+    cli::cli_inform("iteration {i} of {nrow(combinations)} @{so_far} minutes \n")
   }
   
   penalty <- ifelse(combinations$penalty[i] == 0, 0, 10^combinations$penalty[i])
@@ -45,7 +51,7 @@ for (i in 1:nrow(combinations)) {
       epochs = 500
     ) %>% 
     set_mode("classification") %>% 
-    set_engine("brulee", stop_iter = 5)
+    set_engine("brulee", stop_iter = Inf)
   
   set.seed(1)
   mod_fit <- try(fit(mod_spec, class ~ ., data = example_train))
@@ -68,6 +74,10 @@ for (i in 1:nrow(combinations)) {
   }
   
 }
+
+stop_time <- now()
+difftime(stop_time, start_time, units = "mins")
+
 
 # ------------------------------------------------------------------------------
 # Failed models
