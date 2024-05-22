@@ -17,8 +17,8 @@ source("../R/_common.R")
 # ------------------------------------------------------------------------------
 # Required packages
 
-library(furrr)
 library(tidymodels)
+library(bonsai)
 library(patchwork)
 library(rlang)
 library(kernlab)
@@ -29,24 +29,24 @@ library(doParallel)
 # Set options
 
 cl <- makePSOCKcluster(parallel::detectCores(logical = TRUE))
-plan(future::cluster, workers = cl)
 registerDoParallel(cl)
 tidymodels_prefer()
 theme_set(theme_transparent())
 set_options()
 
 # ------------------------------------------------------------------------------
-# Load previous data sets
+# Load other data
 
-source("../R/setup_ames.R")
 load("../RData/bayes_opt_calcs.RData")
 ```
 
-This chapter describes the most crucial concept in predictive modeling: overfitting. When a model fails, it is almost always due to overfitting of some sort. The problem is that you may only realize that there is an issue once you finish the development phase of modeling and are exposed to new data.
+This chapter describes the most crucial concept in predictive modeling: overfitting. When a model fails, it is almost always due to overfitting of some sort. The problem is that you may only realize that there is an issue once you finish the development phase of modeling and are exposed to completely new data.
 
 To get started, we'll discuss model complexity and how it can be both good and bad. 
 
 ## Model Complexity and Overfitting {#sec-complexity}
+
+TOD mention @sec-variance-bias
 
 Many predictive models have parameters. For example, the linear regression model initially shown in @eq-poly-linear-reg contains slopes and intercepts (the $\beta$ values) estimated during model training using the predictor and outcome data. In other words, it is possible to write the equations to solve to estimate these values. 
 
@@ -54,19 +54,19 @@ However, in that same section, a series of polynomial terms were added to the li
 
 Two other models were discussed in @sec-whole-game. First, the tree-based model shown in @fig-reg-tree had four splits of the data. This led to a model fit that resulted in four regions of the predictor space, each with its specific predicted value. We could have continued to split the training set into finer and finer partitions so that the fitted curve more effectively modeled the observed data. As such, the depth of the tree was a parameter that needed to be set before the model fit could be estimated. 
 
-Similarly, the neural network required the number of hidden units to be defined. We weren't sure what that should be, so a set of candidate values were assessed, and the one with the best results was used for the final model fit (see @fig-neural-network).
+Similarly, the neural network required the number of hidden units to be defined. We weren't sure what that should be, so a set of candidate values were assessed, and the one with the best results was used for the final model fit (see @fig-neural-network). We've also seen specific tuning parameters in @sec-feature-hashing, @sec-combining-categories, and also for the embedding methods in @sec-embeddings. 
 
-In each of these cases, there was a _tuning_ or _hyperparameter_ that defined the structure of the model and could not be directly estimated from the data. In each case, increasing the parameter's value made the model's potential structure more elaborate. The effect of this increase in the model's _complexity_ is that it is more capable of adapting to any pattern seen in the data. The straight line fit associated with a linear regression model without polynomial terms would have done an abysmal job on such a nonlinear data set. Adding additional complexity allowed it to better conform to the training set data. 
+In each of these cases, there was a _tuning_ or _hyperparameter_ that defined the structure of the model and could not be directly estimated from the data. In each case, increasing the parameter's value made the model's potential structure more elaborate. The effect of this increase in the model's _complexity_ is additional capability to adapt to any pattern seen in the training data. The straight line fit associated with a linear regression model without polynomial terms would have done an abysmal job on such a nonlinear data set. Adding additional complexity allowed it to better conform to the training set data. 
 
-The problem is that added complexity can also add risk. Being more capable of adapting to subtle trends in the data is only a good thing when such trends _generalize_ to other data. Recall in @sec-effect-encodings where we were estimating the effect of a hockey player at producing a shot that was on goal. One player had three shots that were all on goal. The naive estimate of 100% wouldn't generalize well. As they took more and more shots, their percentage would undoubtedly change to a more realistic value. Using the raw value would "overfit to the training set data."
+The problem is that added complexity can also add risk. Being more capable of adapting to subtle trends in the training data is only a good thing when such trends _generalize_ to other data. Recall in @sec-effect-encodings where we were estimating the effect of an agent on the price of a hotel room. One agent had a sinlge booking. The naive estimate of the ADR wouldn't generalize well. As they accrue more and more bookings, their mean would undoubtedly change to a more realistic value. Using the raw ADR value would "overfit to the training set data."
 
-For many sophisticated models, the complexity can be modulated via one or more tuning parameters that detect very minute patterns in the training data. The problem is that they may go too far and over-optimize the model fit. 
+For many sophisticated models, the complexity can be modulated via one or more tuning parameters that detect inconsequential patterns in the training data. The problem is that they may go too far and over-optimize the model fit. 
 
 As an example, @fig-two-class-overfit shows a scenario where there are two predictors (A and B) and each point belongs to one of two classes (red circles or green triangles). These data were simulated and panel (a) shows a thick grey line representing the true class boundary where there is a 50% chance that a data point belongs to either class. Points to the left of the grey curve are more likely to be circles than points to the right. The curve itself has a smooth, parabolic shape. 
 
 We can fit a model to these data and estimate the class boundary. The model we used^[A support vector machine. See @sec-cls-svm.] has a tuning parameter call the _cost value_. For now, you can think of this parameter as one that discourages the model from making an incorrect prediction (i.e., placing it on the wrong side of the estimated boundary). In other words, as the cost parameter increases, the model is more and more incentivized to be accurate on the training data. 
 
-When the cost is low, the results are often boundaries with low complexity. @fig-two-class-overfit(b) shows the result where the fitted boundary is in black. There is some curvature and, while correctly classifying the points in the middle of the training set, it could do a better job of emulating the true boundary. This model is slightly _underfit_ since more complexity would make it better. 
+When the cost is low, the results are often boundaries with low complexity. @fig-two-class-overfit(b) shows the result where the fitted boundary is in black; points on the left of the boundary would be classified as circles. There is some curvature and, while correctly classifying the points in the middle of the training set, it could do a better job of emulating the true boundary. This model is slightly _underfit_ since more complexity would make it better. 
 
 
 
@@ -84,12 +84,13 @@ x_seq <- seq(-4, 4, length.out = 100)
 grid <-
   crossing(A = seq(-3, 3, length.out = 100), B = x_seq) %>%
   mutate(
-    lp = eval_tidy(f, data = .)
+    lp = rlang::eval_tidy(f, data = .)
   )
 
 set.seed(943)
 sim_tr <- sim_logistic(200, f)
 sim_new <- sim_logistic(1000, f)
+sim_rs <- vfold_cv(sim_tr)
 
 # A function directly using ksvm() for the decision values instead of the 
 # probabilities; the latter are not reproducible with ksvm()
@@ -126,7 +127,7 @@ base_plot <-
     breaks = 0,
     col = "black",
     linewidth = 2,
-    alpha = 1 / 12
+    alpha = 1 / 10
   ) +
   lims(x = c(-3, 3), y = c(-4, 4)) +
   ggtitle("(a) True boundary") +
@@ -189,13 +190,13 @@ low_plot <-
 base_plot + low_plot + mid_plot + high_plot + plot_layout(nrow = 1, byrow = FALSE)
 ```
 
-When the cost is slightly increased, @fig-two-class-overfit(c) shows an increase in complexity. The boundary is more parabolic, and a few more training set points are on the correct side of the estimated line. 
+When the cost is increased, @fig-two-class-overfit(c) shows an increase in complexity. The boundary is more parabolic, and a few more training set points are on the correct side of the estimated line. 
 
-@fig-two-class-overfit(d) shows what occurs when the model is instructed that there is a significant price for incorrectly predicting a data point. Its boundary contorts in a manner that attempts to gain a few more points of accuracy. Two specific points, identified by black arrows, appear to drive much of the additional structure in the black curve. Since we know the actual boundary, it's easy to see that these contortions will not reproduce with new data. For example, it is implausible that a small island of red circles exists in the mainstream of blue triangles. 
+@fig-two-class-overfit(d) shows what occurs when the model is instructed that it is incredibly bad when incorrectly predicting a data point in the training set. Its boundary contorts in a manner that attempts to gain a few more points of accuracy. Two specific points, identified by black arrows, appear to drive much of the additional structure in the black curve. Since we know the actual boundary, it's easy to see that these contortions will not reproduce with new data. For example, it is implausible that a small island of red circles exists in the mainstream of blue triangles. 
 
 Another sign that a model probably has too much complexity is the additional component of the decision boundary at the bottom of @fig-two-class-overfit(d) (red arrow). Points inside this part of the boundary would be classified as triangles even though no triangles are near it. This is a sort of "blowback" of an overly complex model where choices the model makes in one part of the predictor space add complexity in a completely different part of the space. This blowback is often seen in areas where there are no data. It’s unnecessary and points to the idea that the model is trying to do too much. 
 
-This boundary demonstrates how added complexity can be a bad thing. A new set of data was simulated and is shown in @fig-two-class-new. The performance for this overly complex model is poor since the extra areas induced by the high cost value do not contain the right class of points. 
+This boundary demonstrates how added complexity can be a bad thing. A test set of data was simulated and is shown in @fig-two-class-new. The performance for this overly complex model is poor since the extra areas induced by the high cost value do not contain the right class of points. 
 
 ```{r}
 #| label: fig-two-class-new
@@ -204,7 +205,7 @@ This boundary demonstrates how added complexity can be a bad thing. A new set of
 #| out-width: 35%
 #| fig-width: 4
 #| fig-height: 6
-#| fig-cap: The high complexity fit from @fig-two-class-overfit(d) superimposed over a new set of data.
+#| fig-cap: The high complexity fit from @fig-two-class-overfit(d) superimposed over a test set of data.
 
 sim_new %>%
     ggplot(aes(A, B)) +
@@ -246,115 +247,112 @@ This leads us to a formal definition of overfitting:
 
 Overfitting is the situation where a model over-interprets trends and patterns in the training set that do not generalize to new data. 
 
-These irreproducible characteristics result in models that only do well on the training set. 
+These irreproducible data trends result in models that **only do well on the training set**. 
 
 :::
 
-We can overinterpret the training set data in a few different ways. For example, @sec-imbalances will discuss class imbalance problems that occur when one or more of the outcome classes have a very low probability of occurrence. As models are allowed more complexity, they will often maximize accuracy (or some proxy for it) by simply declaring that all data points belong to the majority class. If there is a 1% event rate, 99% accuracy is easily achievable by overfitting the majority class. 
+We can overinterpret the training set data in a few different ways. For example, @sec-imbalances will discuss class imbalance problems that occur when one or more outcome classes have a very low probability of occurrence. As models are allowed more complexity, they will often maximize accuracy (or some proxy for it) by simply declaring that all data points belong to the majority class. If there is a 1% event rate, 99% accuracy is easily achievable by overfitting to the majority class. 
 
-Another example is overfitting the predictors. The "low $N$, high $P$" problem is where data points are expensive to obtain, but each comes with abundant information. For example, in high-dimensional biology data, it is common to have dozens of data points and hundreds of thousands of predictors. Many models cannot be estimated with this imbalance of dimensions and often the first step is to filter out uninformative predictors. 
+Another example is overfitting the predictors. The "low $N$, high $P$" problem occurs when data points are expensive to obtain, but each comes with abundant information. For example, in high-dimensional biology data, it is common to have dozens of data points and hundreds of thousands of predictors. Many models cannot be estimated with this imbalance of dimensions, and often, the first step is to filter out uninformative predictors. 
 
-Suppose some statistical inferential method, such as a t-test, is used to determine if a predictor can differentiate between two classes. With small sample sizes, the chances of uninformative predictors falsely passing the filter becomes large. If the same data are then used to build and evaluate the model, there is a significant probability that an ineffective model will appear to be very predictive [@Ambroise2002p1493;@fes]. Again, using a data set that is external to the model training and development process show you when this occurs. 
+Suppose some statistical inferential method, such as a t-test, is used to determine if a predictor can differentiate between two classes. Small sample sizes make the chance of uninformative predictors falsely passing the filter large. If the same data are then used to build and evaluate the model, there is a significant probability that an ineffective model will appear to be very predictive [@Ambroise2002p1493;@fes]. Again, using a data set external to the model training and development process shows you when this occurs. 
 
-Finally, it is possible to overfit a model via sample filtering. For example, in some machine learning competitions, participants might sub-sample the training set to be as similar to the unlabelled test set as possible. This will most likely have the effect of improving their test set performance but it generally handicaps a model for other new data sets. 
+Finally, it is possible to overfit a model via sample filtering. For example, in some machine learning competitions, participants might sub-sample the training set to be as similar to the unlabelled test set as possible. This will most likely improve their test set performance, but it generally handicaps a model for other data sets. 
 
 ## External Data to Measure Effectiveness {#sec-external-validation}
 
 By now, it should seem clear that the best way of avoiding overfitting is to quantify the model using a separate data set. How do we do that? We've said that most modeling projects create an initial partition of the data into training and testing sets. Can the testing set detect overfitting? 
 
-Recall @fig-ames-latitude, where the sale prices of houses in Ames were predicted using their latitude. Nonlinear spline terms were used to allow a simple linear regression model to emulate the nonlinear pattern between latitude and price effectively. The model becomes more complex if we increase the number of spline features. What does the trade off between complexity and performance look like for these data?
+We’ll again use the classification data from @fig-two-class-overfit to demonstrate, this time with a different model. A boosted tree, described in more detail later, is a collection of individual decision trees created sequentially. Each depends on the previous trees. For a new sample, each tree is predicted, and a weighted average is used to create the predicted class probabilities. We’ll use 100 trees to create our ensemble. However, we don’t know how deep they should be. One method of controlling the number of splits in a tree is to control how much data should be in a partition to continue splitting. For example, in @fig-reg-tree, the left-most terminal node in the tree contained $n_{tr}$ = 971 data points after all splits are applied At some point, the amount of data in the node is too small to continue. 
 
+This tuning parameter, we'll call it $n_{min}$, is used to moderate the tree-growing process. Small values increase the risk of overfitting; it’s possible to have a single data point left in the terminal node. Large values prevent the tree from accurately modeling the data, and underfitting occurs. What does the trade-off between complexity and performance look like for these data? 
 
 ```{r}
-#| label: ames-overfitting-example
+#| label: min-n-overfitting-example
 #| cache: true
 #| message: false
 #| warning: false
 
+lgb_spec <- 
+  boost_tree(trees = 100, learn_rate = 0.1, min_n = tune()) %>% 
+  set_mode("classification") %>% 
+  set_engine("lightgbm")
 
-# Function to get raw training and testing RMSE values
-ames_spline_lat <- function(x = 2) {
-  rec <- recipe(Sale_Price ~ Latitude, data = ames_train) %>%
-    step_spline_natural(Latitude, deg_free = x)
-  mod <- rec %>% workflow(linear_reg()) %>% fit(data = ames_train)
+min_vals <- tibble(min_n = 3:80)
 
-  if(length(coef(mod$fit$fit$fit)) < x) {
-    # For some large df, it cannot make a good knot sequence
-    res <-
-      tibble(
-        Training = NA_real_,
-        Testing = NA_real_,
-        deg_free = x
-      )
-  } else {
-    pred_tr <- predict(mod, ames_train)
-    pred_te <- predict(mod, ames_test)
-    res <-    
-      tibble(
-        Training = rmse_vec(ames_train$Sale_Price, pred_tr$.pred),
-        Testing = rmse_vec(ames_test$Sale_Price, pred_te$.pred),
-        deg_free = x
-      )
-  }
-  res
-}
+brier <- metric_set(brier_class)
 
-df_seq <- c(2:49, seq(50, 300, by = 2))
-
-spline_res <-
-  future_map_dfr(df_seq, ames_spline_lat) %>%
-  filter(vctrs::vec_detect_complete(.)) %>%
-  pivot_longer(c(Training, Testing), names_to = "Data", values_to = "RMSE")
+set.seed(888)
+lgb_cv_res <- 
+  lgb_spec %>% 
+  tune_grid(
+    class ~ ., 
+    resamples = sim_rs,
+    grid = min_vals,
+    metrics = brier
+  )
 
 # ------------------------------------------------------------------------------
-# Now via resampling
 
-rec <- recipe(Sale_Price ~ Latitude, data = ames_train) %>%
-  step_spline_natural(Latitude, deg_free = tune())
-spline_wflow <- rec %>% workflow(linear_reg())
+indices <- list(
+  list(analysis = 1:nrow(sim_tr), assessment = (nrow(sim_tr) + 1):(nrow(sim_tr) + nrow(sim_new)))
+)
+test_split <- lapply(indices, make_splits, data = bind_rows(sim_tr, sim_new))
+test_rs <- manual_rset(test_split, c("Split 1"))
 
-rs_res <-
-  spline_wflow %>%
+get_resub <- function(x) {
+  x
+}
+
+ctrl <- control_grid(extract = get_resub)
+
+set.seed(888)
+lgb_test_res <- 
+  lgb_spec %>% 
   tune_grid(
-    resamples = ames_rs,
-    grid = tibble(deg_free = df_seq),
-    control = control_grid(save_pred = TRUE, parallel_over = "everything")
+    class ~ ., 
+    resamples = test_rs,
+    grid = min_vals,
+    control = ctrl,
+    metrics = brier
   )
 
-spline_resamp_res <-
-  spline_res %>%
-  bind_rows(
-    rs_res %>%
-      collect_metrics() %>%
-      filter(.metric == "rmse") %>%
-      mutate(Data = "Resampling") %>%
-      select(deg_free, Data, RMSE = mean)
-  )
+# ------------------------------------------------------------------------------
 
-max_df <- max(df_seq)
+brier_cv <- 
+  collect_metrics(lgb_cv_res) %>% 
+  select(min_n, brier = mean) %>% 
+  mutate(Method = "Resampling")
 
-# We'll smooth the results and use that for plotting and analysis
-spline_knots <- c(10, 20, 30, 80, 100, 250)
-spline_seq <- seq(2, 300, length.out = 1000)
-plot_grid <- data.frame(deg_free = sort(unique(c(2:max_df, spline_seq))))
-smoothed_results <- 
-  spline_resamp_res %>% 
-  group_by(Data) %>% 
-  nest(.key = "series") %>% 
+brier_test <- 
+  collect_metrics(lgb_test_res) %>% 
+  select(min_n, brier = mean) %>% 
+  mutate(Method = "Test Set")
+
+brier_resub <- 
+  collect_extracts(lgb_test_res) %>% 
   mutate(
-    model = map(series, ~ lm(RMSE ~ bSpline(deg_free, knots = spline_knots), data = .x)),
-    pred = map(model, ~ plot_grid %>% mutate(.pred = predict(.x, plot_grid)))
+    train_pred = map(.extracts, ~ augment(.x, new_data = sim_tr)),
+    brier = map_dbl(train_pred, ~ brier_class(.x, class, .pred_one)$.estimate)
   ) %>% 
-  select(Data, pred) %>% 
-  unnest(pred)
+  select(min_n, brier) %>% 
+  mutate(Method = "Resubstituion")
 
-min_df <- 
-  smoothed_results %>% 
-  group_by(Data) %>% 
-  slice_min(.pred, n = 1) %>% 
-  mutate(deg_free = floor(deg_free)) %>% 
-  rename(RMSE = .pred)
+brier_all <- 
+  bind_rows(brier_resub, brier_cv, brier_test) %>% 
+  mutate(Method = factor(Method, levels = c("Resubstituion", "Test Set", "Resampling")))
+
+method_cols <- c(Resubstituion = "#f6c85f", "Test Set" = "#6f4e7c", Resampling = "#0b84a5")
+
+min_n_df <- 
+  brier_all %>% 
+  slice_min(brier, n = 1, by = Method)
 ```
+
+We took the training data and fit models using values $n_{min}$ = 3, 4, ..., 80. To understand performance, the Brier score [@Steyerberg2009] is used. It is an error metric for classification models (similar to RMSE) and measures how close the predicted probabilities are to their binary (i.e., 0/1) values. A Brier score of zero is a perfect model, and ineffectual models tend to have values near 0.25. 
+
+@fig-complexity-error shows the results. The yellow curve illustrates the Brier score when the training set is re-predicted. There is a sharp increase in error as the tuning parameter values increase. This line suggests that we use very small values. The smallest Brier score is associated with $n_{min}$ = `r min_n_df$min_n[min_n_df$Method == "Resubstituion"]` (producing an effectively zero Brier score).
+
 
 ```{r}
 #| label: fig-complexity-error
@@ -364,22 +362,18 @@ min_df <-
 #| fig-height: 4.25
 #| fig-cap: An example to show how complexity and model error, measured two ways, interact.
 
-smoothed_results %>%
-  filter(Data != "Resampling") %>% 
-  ggplot(aes(deg_free, .pred, col = Data, pch = Data)) +
-  geom_line(linewidth = 1.2) +
-  labs(x = "Spline Degrees of Freedom", y = "RMSE") +
-  scale_color_manual(values = c(
-    Training = "#f6c85f",
-    Testing = "#6f4e7c"
-  ))  
+brier_all %>% 
+  filter(Method != "Resampling") %>% 
+  ggplot(aes(min_n, brier, col = Method, pch = Method)) + 
+  geom_point() + 
+  geom_line() +
+  labs(x = "Minimal Node Size", y = "Brier Score") +
+  scale_color_manual(values = method_cols)
 ```	
 
-We took the training data and fit models that contained anywhere from two spline terms to `r max_df` such features. @fig-complexity-error shows the results. The yellow curve illustrates the root mean squared error change when the training set is re-predicted^[For simplicity, these curves represent smoothed RMSE values.]. There is a sharp initial drop and then a steady, continuous improvement in the model (i.e., falling RMSE). This line suggests that we consider values greater than `r max_df`.
+The purple line shows the Brier score trend on the test set. This tells a different story where small $n_{min}$ values overfit, and the model error improves as larger values are investigated. The Brier score is lowest around $n_{min}$ = `r min_n_df$min_n[min_n_df$Method == "Test Set"]` with a corresponding Brier score estimate of `r signif(min_n_df$brier[min_n_df$Method == "Test Set"], 3)`. From here, increasing the tuning parameter results in shallow trees that underfit. 
 
-The purple line shows the RMSE trend on the test set. More modest improvements also follow an initial drop in RMSE performance. The curve indicates that we can minimize the RMSE using `r min_df$deg_free[min_df$Data == "Testing"]` degrees of freedom. After this, there is a steady rise. This increase in RMSE is evidence that the added complexity in the basis expansion harms the model.
-
-Contrasting these two curves, data that is _external_ to the training set gives a much more accurate picture of performance. However:
+Contrasting these two curves, data that are _external_ to the training set gives a much more accurate picture of performance. However:
 
 ::: {.important-box}
 **Do not use the test set to develop your model.**
@@ -394,11 +388,11 @@ There are two ways to solve this problem:
 
 Both of these options are described in detail in the next chapter. 
 
-Validation sets are a third split of the data, created at the same time as the training and test sets, that can be used as an external data set during model development. This approach is most applicable when the project starts with abundant data. 
+As previously discussed, validation sets are a third split of the data, created at the same time as the training and test sets. They can be used as an external data set during model development (as in @sec-whole-game). This approach is most applicable when the project starts with abundant data. 
 
-Resampling methods take the training set and make multiple variations of it, usually by subsampling the rows of the data. For example, 10-fold cross-validation would make ten versions of the training set, each with a different 90% of the training data. We would say that, for this method, there are ten "resamples" or "folds." To measure performance, we would fit ten models on the majority of the data in each fold, then predict the separate 10% that was held out. This would generate ten different RMSE values, which are averaged to produce the final resampling estimate of the model. If we are trying to optimize complexity, we will apply this process for every candidate tuning parameter value. 
+Resampling methods take the training set and make multiple variations of it, usually by subsampling the rows of the data. For example, 10-fold cross-validation would make ten versions of the training set, each with a different 90% of the training data. We would say that, for this method, there are ten "resamples" or "folds." To measure performance, we would fit ten models on the majority of the data in each fold, then predict the separate 10% that was held out. This would generate ten different Brier scores, which are averaged to produce the final resampling estimate of the model. If we are trying to optimize complexity, we will apply this process for every candidate tuning parameter value. 
 
-@fig-complexity-resampling shows the results when 10-fold cross-validation is used to pick the degrees of freedom. The additional curve is the average of 10 RMSE values from each fold. The resampling curve doesn't precisely mimic the test set results but does have the same genreal pattern: there is a real increase in model accuracy but after too much complexity is added, RMSE worsens due to overfitting. In this case, resampling finds that  `r min_df$deg_free[min_df$Data == "Resampling"]` degrees of freedom is numerically best. 
+@fig-complexity-resampling shows the results when 10-fold cross-validation is used to pick $n_{min}$. The additional curve is the average of 10 Brier scores from each fold. The resampling curve doesn't precisely mimic the test set results but does have the same general pattern: there is a real improvement in model error as $n_{min}$ is increased but it begins to worsen due to underfitting. In this case, resampling finds that  $n_{min}$ = `r min_n_df$min_n[min_n_df$Method == "Resampling"]` is numerically best and the resampling estimate of the Brier score was `r signif(min_n_df$brier[min_n_df$Method == "Resampling"], 3)`, slightly more pessimistic when compared to the test set result.
 
 
 ```{r}
@@ -409,32 +403,29 @@ Resampling methods take the training set and make multiple variations of it, usu
 #| fig-height: 4.25
 #| fig-cap: Model complexity versus model error with external validation via resampling.
 
-smoothed_results %>%
-  ggplot(aes(deg_free, .pred, col = Data, pch = Data)) +
-  geom_line(linewidth = 1.2) +
-  labs(x = "Spline Degrees of Freedom", y = "RMSE") +
-  scale_color_manual(values = c(
-    Training = "#f6c85f",
-    Testing = "#6f4e7c",
-    Resampling = "#0b84a5"
-  ))  
+brier_all %>% 
+  ggplot(aes(min_n, brier, col = Method, pch = Method)) + 
+  geom_point() + 
+  geom_line() +
+  labs(x = "Minimal Node Size", y = "Brier Score") +
+  scale_color_manual(values = method_cols)
 ```	
 
-We suggest using either of these two approaches to using external data to validate your models. 
+We suggest using either of these two approaches (validation set or resampling) to measure performance during model development. 
 
-However, if you have _a lot_ of data, there is also the option to reserve different data partitions for different purposes. For example, when creating a diagnostic test for infectious diseases, it is common to collect a large set of data to help develop the algorithm used with the laboratory test (basically a training set), another to calibrate the model and choose an appropriate cutoff for the predicted probabilities^[See @sec-cls-metrics.], and a third data for validation (i.e., the test set). The results of the second and third data sets are used in regulatory submissions to provide proof of effectiveness and to provide statistical analyses that define the diagnostics performance claims, respectively. 
+However, if you have _a lot_ of data, there is also the option to reserve different data partitions for different purposes. For example, when creating a diagnostic test for infectious diseases, it is common to collect a large set of data to help develop the algorithm used with the laboratory test (basically a training set), another to calibrate the model and choose an appropriate cutoff for the predicted probabilities^[See @sec-cls-metrics.], and a third data set for performance verification (i.e., the test set). The results of the second and third data sets are used in regulatory submissions to provide proof of effectiveness and to provide statistical analyses that define the diagnostics performance claims, respectively. 
 
 Before going to the next chapter, let's give a preview of [Chapters -@sec-grid-search] and [-@sec-iterative-search].
 
 ## How Should We Optimize Complexity? {#sec-optimizing-complexity}
 
-Now that we know how to generate good metrics for evaluating effectiveness, how do we choose tuning parameter values? Do we pick them at random? 
+Now that we know how to estimate good metrics for evaluating effectiveness, how do we choose tuning parameter values? Do we pick them at random? 
 
 Operationally, there are two main classes of search routines for optimizing model complexity via tuning parameters. The oldest is _grid search_. For each tuning parameter in the model, we define a reasonable set of specific candidate values to investigate. When there is more than one tuning parameter, there are various ways to create a multidimensional grid (these are discussed in @sec-grid-search). Each candidate in the grid is evaluated and the "best" combination of parameter values is chosen as the ones to use (if we think the model works well enough). 
 
-One tuning parameter used in tree-based ensembles and neural networks is the _learning rate_. This parameter typically governs how quickly a model adapts during iterations of model fitting (i.e., training). In gradient descent, the learning rate specifies how far we proceed in the optimal direction. For machine learning models, the parameter must be greater than zero and usually has a maximum of one. When evaluating different learning rates, it is common to think of them in logarithmic units (typically, base 10). This is because the effect of the parameter on model performance is often nonlinear; a per-unit change of 0.05 has different effects on when in the total range that it occurs. 
+One tuning parameter used in tree-based ensembles and neural networks is the _learning rate_. This parameter typically governs how quickly a model adapts during iterations of model fitting (i.e., training). In gradient descent, the learning rate specifies how far we proceed in the optimal direction. For machine learning models, the parameter must be greater than zero and usually has a maximum of one. When evaluating different learning rates, it is common to think of them in logarithmic units (typically, base 10). This is because the effect of the parameter on model performance is often nonlinear; a per-unit change of 0.05 has different effects on where in the total range that it occurs. 
 
-Suppose that the performance goal is to minimize some notion of error. @fig-learn-rate-grid shows an example of how the learning rate can affect the model error^[This was taken from a real example.]. At low rates, the error is high. Increasing the rate results in a drop in error that reaches a trough of optimal performance. However, increasing the learning rate at some point causes overfitting, increasing the error. 
+Suppose that the performance goal is to minimize some notion of error. @fig-learn-rate-grid shows an example of how the learning rate can affect the model error^[This was taken from a real example.]. At low rates, the error is high. Increasing the rate results in a drop in error that reaches a trough of optimal performance. However, increasing the learning rate at some point causes a different type of underfitting^[A very high learning rate for tree-based ensembles can result in models that produce near-constant predicted values (as opposed to many unique predicted values that are inaccurate).], increasing the error. 
 
 The solid points illustrate a very simple five-point grid of errors whose y-axis value is the resampled error. While this grid does not pick the absolute best value, it does result in a model with good performance (relatively speaking) very quickly. If a larger grid were used, we would have placed a grid point much closer the optimal value.
 
@@ -469,9 +460,9 @@ grid_points %>%
 
 Grid search pre-defines the grid points and all of them are tested before the results can be analyzed. There are good and bad aspects of this method, and it has been (unjustly) criticized for being inefficient. For most models, it can be very efficient and there are additional tools and tricks to make it even faster. See @sec-grid-search for more details. 
 
-The other class of search methods are _iterative_. These tools start with one or more initial candidate points and conduct analyses that predict which tuning parameter value(s) should be evaluated next. The most widely used iterative tuning method is Bayesian optimization. After each candidate is evaluated, a Bayesian model is used to suggest the next value and this process repeats until a pre-defined number of iterations is reached. Any search method could be used, such as simulated annealing, genetic algorithms, and others. 
+The other type of search method is _iterative_. These tools start with one or more initial candidate points and conduct analyses that predict which tuning parameter value(s) should be evaluated next. The most widely used iterative tuning method is Bayesian optimization. After each candidate is evaluated, a Bayesian model is used to suggest the next value and this process repeats until a pre-defined number of iterations is reached. Any search method could be used, such as simulated annealing, genetic algorithms, and others. 
 
-@fig-learn-rate-seq has an animation to demonstrate. First, three initial points were sampled (shown as open circles). A Bayesian model is fit to these data points and is used to predict the error metric's mean and variance for different candidate points. A tool called an acquisition function is utilized to choose which learning rate value to evaluate on the next search iteration. This process repeats for a total of `r max(bayes_points$.iter)` iterations. 
+@fig-learn-rate-seq has an animation to demonstrate. First, three initial points were sampled (shown as open circles). A Bayesian model is fit to these data points and is used to predict the probability distribution of the metric (e.g. RMSE, Brier score, .etc). A tool called an acquisition function is utilized to choose which learning rate value to evaluate on the next search iteration based on the mean and variance of the predicted distribution. In @fig-learn-rate-seq, this process repeats for a total of `r max(bayes_points$.iter)` iterations. 
 
 ```{r}
 #| label: fig-learn-rate-seq
