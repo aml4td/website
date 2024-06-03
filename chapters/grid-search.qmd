@@ -289,38 +289,44 @@ For example, @fig-knn-grids shows a `r sfd_size` point “Audze-Eglais“ space-
 
 There are many types of space-filling designs, and it is worth taking the time to take a quick tour of some of them. 
 
-The Latin hypercube design (LHD) is the most popular method for constructing space-filling designs [@Viana2016; @husslage2011space]. These designs have a simple definition. If our hyperparameter space is rectangular and partitioned into smaller (hyper)cubes, a LHD is a set of distinct points. For our application, and most others, this definition is inadequate^[Other applications may want the points to have properties such as orthogonality, symmetry, etc.]. We desire candidates that fill the space and are not close to one another. 
+The Latin hypercube design (LHD) is the most popular method for constructing space-filling designs [@Viana2016; @husslage2011space]. These designs have a simple definition. Suppose our hyperparameter space is rectangular and partitioned into smaller (hyper)cubes. In that case, a LHD is a set of distinct points where no one dimension has multiple values in any bins^[Other applications may want the points to have properties such as orthogonality, symmetry, etc.]. We desire candidates that fill the space of each parameter and are not close to one another. 
 
-The most basic approach to creating a LHD is random sampling [@Mckay2000]. If there are $m$ parameters and we request $s$ candidate values, the parameter space is initially divided into $s^m$ hypercubes of equal size. For each tuning parameter, a random value is created for each of the $s$ bins in that dimension. Suppose there are five bins for a parameter that ranges between zero and one. We randomly order the bins and then create a random number in the bin range. If the first design point selects bin two, a random uniform value is created in the range `[0.2 0.4)`. This process continues for each parameter. @fig-lhs-sampled shows three such designs, each generated with different random numbers. 
+The most basic approach to creating a Latin hypercube design is random sampling [@Mckay2000]. If there are $m$ parameters and we request $s$ candidate values, the parameter space is initially divided into $s^m$ hypercubes of equal size. For each tuning parameter, $s$ regions in its dimension are selected at random, and a value is placed in this box (also at random). This process repeats for each dimension. Suppose there are ten bins for a parameter that ranges between zero and one. If the first design point selects bin two, a random uniform value is created in the range `[0.1 0.2)`.  @fig-lhs-sampled shows three such designs, each generated with different random numbers. 
 
 ```{r}
 #| label: fig-lhs-sampled
 #| echo: false
-#| out-width: 80%
+#| out-width: 90%
 #| fig-width: 9
 #| fig-height: 3
-#| fig-cap: Three replicate Latin hypercube sampling designs of size five for two parameters. Each design uses different random numbers. The grid lines illustrate the 25 hypercubes used to generate the values.  
+#| fig-cap: Three replicate Latin hypercube sampling designs of size ten for two parameters. Each design uses different random numbers. The grid lines illustrate the 100 hypercubes used to generate the values.  
 
 make_lhc <- function(ind, m, s) {
-  des <- DiceDesign::lhsDesign(s, m, seed = sample.int(10^4, 1))$design
+  des <- DiceDesign::lhsDesign(s, m, seed = ind + 287)$design
   colnames(des) <- paste("Parameter", letters[1:ncol(des)])
   des <- as_tibble(des)
   des$Replicate <- paste("Replicate", ind)
+
   des
 }
 
 set.seed(202)
-map_dfr(1:3, ~ make_lhc(.x, 2, 5)) %>% 
+map_dfr(1:3, ~ make_lhc(.x, 2, 10)) %>% 
   ggplot(aes(`Parameter a`, `Parameter b`)) + 
-  geom_point(cex = 2) + 
+  geom_point(cex = 1.5) + 
   coord_equal() +
-  scale_y_continuous(breaks = seq(0, 1, by = 1 / 5), limits = 0:1) + 
-  scale_x_continuous(breaks = seq(0, 1, by = 1 / 5), limits = 0:1) + 
+  geom_hline(yintercept = seq(0, 1, by = 1 / 10), alpha = 1 / 10) +
+  geom_vline(xintercept = seq(0, 1, by = 1 / 10), alpha = 1 / 10) +
+  lims(x = 0:1, y = 0:1) +
   theme(panel.grid.minor = element_blank()) + 
-  facet_wrap(~ Replicate)
+  facet_wrap(~ Replicate) +
+  theme(
+    panel.grid.major = element_blank(),
+    panel.grid.minor = element_blank(),
+  )
 ```
 
-While the points do not overlap, each design covers the parameter space poorly. Additional constraints can be used to make the design more consistent with our desires.
+Technically, these designs cover the space of each predictor univariately. However, large multivariate regions can be empty. For example, one design only samples combinations along the diagonal. Additional constraints can make the design more consistent with our desires. 
 
 ```{r}
 #| label: design-crit
@@ -342,7 +348,7 @@ reg_maxmin <-
     round(2)
 ```
 
-For example, we could choose points to maximize the minimum pairwise distances between the candidates. These designs are usually referred to as MaxiMin designs [@pronzato2017minimax]. Comparing the two irregular designs in @fig-knn-grids, the random grid has a maximum minimum distance value of `r rnd_maxmin`. In contrast, the corresponding space-filling design's value (`r mm_maxmin`) is `r round(mm_maxmin/rnd_maxmin, 1)`-fold larger^[Using Euclidean distance.]. The latter design was optimized for this criterion, and we can see far less redundancy in the optimized design. 
+For example, we could choose points to maximize the minimum pairwise distances between the candidates. These designs are usually referred to as MaxiMin designs [@pronzato2017minimax]. Comparing the two irregular designs in @fig-knn-grids, the random grid has a maximum minimum distance value of `r rnd_maxmin`. In contrast, the corresponding space-filling design's value (`r mm_maxmin`) is `r round(mm_maxmin/rnd_maxmin, 1)`-fold larger^[Using Euclidean distance.]. The latter design was optimized its coverage, and we can see far less redundancy in the optimized design. 
 
 A similar method, initially proposed by @audze1977new, maximizes a function of the inverse distances between $s$ candidate points: 
 
@@ -351,15 +357,17 @@ criterion = \sum_{i=1}^s \sum_{j=1,\;i\ne j}^s\frac{1}{dist(\theta_i, \theta_j)^
 $$
 @bates2004formulation devised search methods to find optimal designs for this criterion.
 
-Additionally, maximum entropy sampling selects points based on assumptions related to the distributions of the tuning parameters and their covariance matrix [@shewry1987maximum;@joseph2015maximum]. 
+Some other space-filling designs of note: 
+
+- Maximum entropy sampling selects points based on assumptions related to the distributions of the tuning parameters and their covariance matrix [@shewry1987maximum;@joseph2015maximum]. 
+
+- Uniform designs [@fang2000uniform;@wang2022design] are designs that optimally allocate points so that they are uniformly distributed in the space. 
 
 While these methods can be constructed generally by sampling random points and using a search method to optimize a specific criterion, there has been scholarship that has pre-optimized designs for some combination of the number of tuning parameters and the requested grid size. 
 
 The advantage of space-filling designs over random designs is that, for smaller designs, the candidates do a better job covering the space and have a low probability of producing redundant points. Also, it is possible to create a space-filling design so that the candidates for each numerical parameter are nearly equally spaced (as was done in @fig-knn-grids). 
 
-So far, the Latin hypercube design math assumes that all of the tuning parameter values are quantitative in nature. That’s not the case in our example. There are only two values of the weighting function. As a simple workaround, these two parameter values are repeated as if they were $s$ distinct values when making the design. This allows them to be used with a Latin hypercube design and any space-filling design that uses this approach is not technically optimal. Practically speaking, this is an effective approach for tuning models.  However, there are _sliced_ LHD that can accomplish the same goal [@qian2012sliced;@ba2015optimal].
-
-- The distance weighting function (qualitative with values "rectangular" and "inverse"). 
+Many designs assume that all the tuning parameter values are quantitative. That may not always be the case. For example, KNN can adjust its predictions by considering how far the neighbors are from a new point; more distant points should not have the same influence as close neighbors. A weighting function can be used for this purpose. For example, weights based on an inverse function may produce better results. Equal weighting is often called a “rectangular weighting” function. As a simple workaround, the unique parameter values are repeated as if they were $s$ distinct values when making the design. This allows them to be used with a Latin hypercube design and any space-filling design that uses this approach is not technically optimal. Practically speaking, this is an effective approach for tuning models.  However, there are _sliced_ LHD that can accomplish the same goal [@qian2012sliced;@ba2015optimal].
 
 We recommend space-filling designs since they are more efficient than regular designs. Regular designs have a lot of benefits when using an unfamiliar modeling methodology since you will learn a lot more about the nuances of how the tuning parameters affect one another. 
 
