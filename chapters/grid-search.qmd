@@ -15,6 +15,7 @@ source("../R/_common.R")
 
 library(tidymodels)
 library(finetune)
+library(rlang)
 library(sfd)
 library(doParallel)
 
@@ -168,6 +169,11 @@ knn_spec <-
                    weight_func = "rectangular") %>% 
   set_mode("classification")
 
+knn_wflow <-
+  workflow() %>%
+  add_model(knn_spec) %>%
+  add_formula(class ~ A + B)
+
 format_best_knn <- function(x, ...) {
   bst <- select_best(x, ...)
   paste0(
@@ -179,9 +185,8 @@ format_best_knn <- function(x, ...) {
 # ------------------------------------------------------------------------------
 
 knn_reg_res <- 
-  knn_spec %>% 
+  knn_wflow %>% 
   tune_grid(
-    class ~ A + B,
     resamples = sim_rs,
     metrics = metric_set(brier_class),
     grid = knn_reg %>% select(-grid)
@@ -190,9 +195,8 @@ knn_reg_res <-
 knn_reg_best <- format_best_knn(knn_reg_res, metric = "brier_class")
 
 knn_rnd_res <- 
-  knn_spec %>% 
+  knn_wflow %>% 
   tune_grid(
-    class ~ A + B,
     resamples = sim_rs,
     metrics = metric_set(brier_class),
     grid = knn_random %>% select(-grid)
@@ -200,9 +204,8 @@ knn_rnd_res <-
 knn_rnd_best <- format_best_knn(knn_rnd_res, metric = "brier_class")
 
 knn_sfd_res <- 
-  knn_spec %>% 
+  knn_wflow %>% 
   tune_grid(
-    class ~ A + B,
     resamples = sim_rs,
     metrics = metric_set(brier_class),
     grid = knn_sfd %>% select(-grid)
@@ -346,6 +349,7 @@ A similar method, initially proposed by @audze1977new, maximizes a function of t
 $$
 criterion = \sum_{i=1}^s \sum_{j=1,\;i\ne j}^s\frac{1}{dist(\theta_i, \theta_j)^2}
 $$
+
 @bates2004formulation devised search methods to find optimal designs for this criterion.
 
 Some other space-filling designs of note: 
@@ -364,11 +368,62 @@ We recommend space-filling designs since they are more efficient than regular de
 
 ## Optimization Bias and Nested Resampling {#sec-nested-resampling}
 
-Looking back at the analysis of the space-filling design shown in @fig-knn-irregular-grid-tuning, we found that the numerically best candidate value was `r knn_sfd_best`. The corresponding resampling estimate of the Brier score was `r knn_sfd_brier` with a standard error of `r knn_sfd_brier_se`. If someone were to ask us how well the KNN model performs, we would probably give them these estimates. 
+Looking back at the analysis of the space-filling design analysis shown in @fig-knn-irregular-grid-tuning, we found that the numerically best candidate value was `r knn_sfd_best`. The corresponding resampling estimate of the Brier score was `r knn_sfd_brier` with a standard error of `r knn_sfd_brier_se`. If someone were to ask us how well the KNN model performs, we would probably give them these estimates. 
 
 However, there may be an issue in doing so. We are using grid search and resampling to find the best combination of parameters _and_ to estimate the performance. In some situations, this dual use of the model tuning process can introduce **optimization bias** where, to some degree, our performance statistics are optimistic. 
 
 @tibshirani2009bias @boulesteix2009optimal and maybe @tibshirani2018excess
+
+
+
+
+```{r}
+#| label: nested-sfd
+#| include: false
+knn_sfd_nest_res <-
+  knn_wflow %>%
+  tune_nested(
+    resamples = sim_nested_rs,
+    metrics = metric_set(brier_class),
+    grid = knn_sfd %>% select(-grid)
+  )
+
+knn_sfd_nest_metrics <- collect_metrics(knn_sfd_nest_res)
+knn_sfd_nest_brier <- signif(knn_sfd_nest_metrics$mean, 3)
+knn_sfd_nest_brier_se <- signif(knn_sfd_nest_metrics$std_err, 3)
+
+
+selected_configs <- 
+  knn_sfd_nest_res %>%
+  select(.selected) %>%
+  unnest(.selected) %>%
+  count(neighbors, dist_power, name = "# Selections") %>%
+  mutate(method = "Grid Search")
+```
+
+```{r}
+#| label: fig-nested-grid-selection
+#| echo: false
+#| out-width: 40%
+#| fig-width: 4
+#| fig-height: 4
+#| fig-cap: The KNN space filling design with the frequency that points selected during nested resampling. Empty circles represent points that were never selected.
+
+knn_sfd %>%
+  ggplot(aes(neighbors, dist_power)) + 
+  geom_point(pch = 1, alpha = 1 / 2) +
+  geom_point(
+    data = selected_configs,
+    aes(size = `# Selections`),
+    col = "darkred"
+  ) +
+  labs(x = neighbors()$label, y = dist_power()$label) +
+  coord_fixed(ratio = 50) +
+  theme(legend.position = "top")
+```
+
+Nested resampling reports that the optimal Brier score for the tuning process is `r knn_sfd_nest_brier` with a standard error of `r knn_sfd_nest_brier_se`. 
+
 
 ## Efficient Computations for Conventional Grid Search {#sec-efficient-grid}
 
