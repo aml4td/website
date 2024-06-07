@@ -1,0 +1,415 @@
+---
+knitr:
+  opts_chunk:
+    cache.path: "../_cache/resampling/"
+---
+
+# Measuring Performance with Resampling {#sec-resampling}
+
+```{r}
+#| label: resampling-setup
+#| include: false
+
+source("../R/_common.R")
+
+# ------------------------------------------------------------------------------
+# Required packages
+library(readr)
+library(tidymodels)
+library(patchwork)
+library(doParallel)
+
+# Also requires: 
+# for model fitting
+# rlang::is_installed(c("kernlab")) 
+
+# ------------------------------------------------------------------------------
+# Set options
+cl <- makePSOCKcluster(parallel::detectCores(logical = TRUE))
+registerDoParallel(cl)
+tidymodels_prefer()
+theme_set(theme_transparent())
+set_options()
+
+# ------------------------------------------------------------------------------
+# Load previous data sets
+
+load("../RData/resampling_var_bias.RData")
+sel_model <- "logistic"
+sel_metric <- "brier_class"
+
+metric_data <-
+  bind_rows(
+    stats_bootstraps %>% filter(.metric == sel_metric),
+    stats_mc_cv %>% filter(.metric == sel_metric),
+    stats_v_fold_cv %>% filter(.metric == sel_metric)
+  ) %>%
+  filter(model == sel_model)
+
+
+rng_bias <- range(c(metric_data$bias, 0))
+rng_std_err <- range(metric_data$std_err, na.rm = TRUE)
+rng_std_err[1] <- 0
+```
+
+In @sec-external-validation, it was shown that using the same data to estimate and evaluate our model can inappropriately over-interpret small trends in the training data. It also described using separate partitions of the data to fit and evaluate the model. 
+
+There are two general methods for using different data for model evaluation. The first is a validation set, which we’ve seen before in REF. This is a good approach if you have a lot of data on hand. The second approach is to resample the training set. This is an iterative approach that reuses the training data multiple times using sound statistical methodology. We’ll discuss both validation sets and resampling in this chapter. 
+
+
+
+```{r}
+#| label: fig-resampling-scheme
+#| echo: false
+#| out-width: 80%
+#| fig-align: "center" 
+#| fig-cap: "A general data usage scheme that includes resampling. The colors denote the data used to train the model (in tan) and the separate data sets for evaluating the model (colored periwinkle)."
+
+knitr::include_graphics("../premade/resampling.svg")
+```
+
+@fig-resampling-scheme shows a standard data usage scheme that includes resampling. After an initial partition, the training set is used to create multiple **resampled versions** of the training set to evaluate the models. We'll use special terminology^[The names used here are not universally used. We only invent new terminology to avoid confusion; people often refer to the data in our analysis set as the "training set" because it has the same purpose.] for the data partitions within each resample. These partitions serve the same function as the training and test sets:
+
+- The **analysis set** estimates quantities associated with preprocessing, model training, and postprocessing. 
+- The **assessment set** is only used to compute measures of model effectiveness (e.g., RMSE, classification accuracy, etc).  
+
+Like the training and test sets, the analysis and assessment sets are mutually exclusive data partitions and are different for each of the $B$ iterations of resampling. 
+
+The process fits a model to an analysis set and predicts the corresponding assessment set. One or more performance statistics are calculated from these held-out predictions and saved. This process continues for $B$ iterations, and, in the end, there is a collection of $B$ statistics of efficacy. These are averaged to produce the overall **resampling estimate** of performance.  @alg-resampling formalizes this process. 
+
+:::: {#alg-resampling}
+
+::: {.column width="15%"}
+
+:::
+
+::: {.column width="70%"}
+
+
+```pseudocode
+#| label: alg-resampling
+#| html-indent-size: "1.2em"
+#| html-comment-delimiter: "//"
+#| html-line-number: true
+#| html-line-number-punc: ":"
+#| html-no-end: false
+\begin{algorithm}
+\begin{algorithmic}
+\State $D$: training set of predictors $X$ and outcome $y$
+\State $B$: number of resamples
+\State $f()$: model pipeline 
+\Procedure{Resample}{$D, B, f()$}
+  \For{$b =1$ \To $B$}
+    \State Partition $D^{tr}$ into $D_b^{model}$ and $D_b^{pred}$.
+    \State Train model $f$ on the analysis set to produce $\hat{f}_{b}(D_b^{model})$.
+    \State Generate assessment set predictions $\hat{y}_b$ by applying model $\hat{f}_{b}$ to $D_b^{pred}$.
+    \State Estimate performance statistic $\hat{Q}_{b}$.
+  \EndFor 
+  \State Compute reampling estimate $\hat{Q} = \sum_{b=1}^B \hat{Q}_{b}$.
+  \Return $\hat{Q}$.
+\Endprocedure
+\end{algorithmic}
+\end{algorithm}
+```
+
+:::
+
+::: {.column width="15%"}
+
+:::
+
+::::
+
+
+:::{.callout-note}
+In @alg-resampling, $f()$ is the model pipeline described in @sec-model-pipeline. Any estimation methods, before, during, or after the supervised model, are executed on the analysis set $B$ times during resampling.
+:::
+
+There are many different resampling methods, such as cross-validation and the bootstrap. They differ in how the analysis and assessment sets are created. Subsequent sections below discuss a number of these. 
+
+Three primary aspects of resampling make it an effective tool. First, the separation of data used to create and appraise the model avoids the data reuse problem described in @sec-external-validation. Second, the assessment set can effectively measure when the model overfits. 
+
+Lastly, using multiple iterations ($B > 1$) means that you are evaluating your model under slightly different conditions (because the analysis and assessment sets are different). This is a bit like a "multiversal" science fiction story: what would have happened if the situation were slightly different before I made decisions? This lets us directly observe the model variance; how stable is it when the inputs are slightly modified? An unstable model (or one that overfits) will have a high variance.
+
+In this chapter, we'll describe some conceptual aspects of resampling. Then, we’ll define and discuss various methods. Finally, the last section lists frequently asked questions we often hear when teaching these tools. 
+
+## What is resampling trying to do? 
+
+It's important to understand some of the philosophical aspects of resampling. It is a statistical estimation procedure that tries to estimate some true, unknowable performance value (let's call it $Q$) associated with the same population of data represented by the training set. This could be RMSE, the Brier score, or any other performance statistic. 
+
+Let’s start with analogy; consider the usual sample mean estimator used in basic statistics. Based on assumptions about the data, we can derive an equation that optimally estimates the true mean value for some criterion. Often, the statistical theory focuses on our estimators' theoretical mean and variance. For example, if the data are independent and follow the same Gaussian distribution, the sample mean (on average) estimates the actual population mean (i.e., it is an unbiased estimator). We can sometimes derive what the estimator's theoretical variance is, too. These properties, or some combination of them, such as mean squared error, help guide us to the best estimator. 
+
+The same is true for resampling methods. We can understand how their bias and variances change under different circumstances and choose a technique appropriately. We'll also focus on bias and variance as the main properties of interest^[This discussion is very similar to the variance-bias tradeoff discussed in @sec-variance-bias. The context here differs, but the themes are the same.]. 
+
+First is bias: how accurately does a resampling technique estimate the true population value? We'd like it to be unbiased, but to our knowledge, that is nearly impossible. However, some things we do know.  @fig-resampling-scheme shows that the training set (of size $n_{tr}$) is split into two partitions. Let's say the analysis set has size $n_{model}$, and the assessment contains $n_{perf}$ data points from the training set. It turns out that, as $n_{perf}$ becomes larger, the bias increases in a pessimistic direction^[Meaning that performance looks worse than it should. For example, smaller $R^2$ or inflated Brier score.]. In other words, if our training set has 1,000 samples, a resampling method where the assessment set has $n_{perf} = 100$ data points has a smaller bias than one with $n_{perf} = 500$. Another thing that we know is that increasing the number of resamples ($B$) can't significantly reduce the bias. 
+
+The variance (often called precision) of resampling is also important. We want to get a performance estimate that gives us consistent results if we repeat it. The resampling precision is driven mainly by $B$ and $n_{tr}$. With some resampling techniques, if your results are too noisy, you can resample more and stabilize or reduce the estimated variance (at the cost of increased computational time).
+
+We'll examine the bias and precision of different methods as we discuss each particular resampling technique in @sec-resampling-summary. 
+
+Let's examine a few types of resampling methods, starting with the most simple: a single validation set. 
+
+## Validation Sets {#sec-validation}
+
+We’ve already described a validation set; it is typically created via a three-way initial split of the data (as shown in @sec-validation). The split can be made using random (or stratified random) sampling. For time series data, it is common to use the most recent data for the test set. Similarly, the validation set would include the most recent data (once the test set partition is created). The training set would include everything else.
+
+
+```{r}
+#| label: fig-validation
+#| echo: false
+#| out-width: 45%
+#| fig-align: "center" 
+#| fig-cap: An initial data splitting scheme that incorporates a validation set. 
+
+knitr::include_graphics("../premade/validation.svg")
+```
+
+While not precisely the same, a validation set is extremely similar to an approach described below called Monte Carlo cross-validation (MCCV). If we used a single MCCV resample, the results would be effectively the same as those of a validation set. 
+
+One aspect of using the validation set is what to do with it after you’ve made your final decision about the model pipeline. Ordinarily, the entire training set is used for the final model fit, which is the model used with the test set and eventually deployed as the official model. 
+
+Data are precious, and, in some cases, an argument can be made that the final model fit could include the training _and_ validation set. Doing this does add some risk; your validation set statistics are no longer completely valid since they measured how well the model works with your specific training set (of $n_{tr}$ samples). If you have an abundance of data, the risk is low, but, at the same time, the model fit won’t change much by adding $n_{val}$ data points. However, if your training data is not large, adding model data could have a profound impact, and you risk using the wrong model for your data^[Also, if $n_{tr}$ is not “large,” you shouldn’t use a validation set anyway.]. 
+
+## Monte Carlo cross-validation {#sec-cv-mc}
+
+Monte Carlo cross-validation emulates the initial training/test partition. For each one of $B$ resamples, it takes a random sample of the training set (say about 75%) and alots it to the analysis set. The remainder is used for model assessment. Each of the $B$ resamples is independent of the others, so some of the training set points are included in multiple assessment sets. Figure REF shows a schematic of three MCCV resamples of a data set with $n_{tr} = 30$ data points. 
+
+TODO Add a schematic like the one from TMwR.
+
+How many resamples should we use, and what proportion of the data should be used for the analysis set? 
+
+
+### Another Simulation Study  {.unnumbered}
+
+@sec-complexity described a simulated data set that included 200 training set points. In that section, @fig-two-class-overfit illustrates the effect of overfitting using a particular model (KNN). This chapter will use the same training set but with a simple logistic regression model where a four-degree of freedom spline was used with each of the two predictors. 
+
+Since these are simulated data, a very large data set was simulated and used to approximate the model's true performance, once again computed using a Brier score. Our logistic model has a Brier score value of TODO, which is quite good. Using this estimate, the model bias can be computed by subtracting the resampling estimate from XXX. 
+
+The simulation created 500 realizations of this 200 sample training set^[The simulation details, sources, and results can be found at [`https://github.com/topepo/resampling_sim`](https://github.com/topepo/resampling_sim).]. We resampled the logistic model for each and then computed the corresponding Brier score estimate. This process was repeated using the different analysis set proportions and values of $B$ shown in @fig-mccv-stats. The left panel shows the bias decreases as the proportion of data in the analysis set becomes closer to the amount in the training set. It is also apparent that the bias is unaffected by the number of resamples ($B$). The panel on the right shows the precision, estimated using the standard deviation, of the resampled estimates.  This decreases nonlinearly as $B$ increases; the cost-benefit ratio of adding more resamples shows diminishing returns. The amount retained for the analysis set shows that values close to one have higher precision than the others.  Regarding computational costs, the time to resample a model increases with both parameters (amount retained and $B$). 
+
+The results of this simulation indicate that, in terms of precision, there is little benefit in including more than 70% of the training set in the assessment set. Also, while more resamples always help, there is incremental benefit in using more than 50 or 60 resamples (for this size training set). Regarding bias, the decrease somewhat slows down near 70% of the training set retained. Holdout proportions of at least 70% this might be a reasonable rule of thumb.
+
+```{r}
+#| label: fig-mccv-stats
+#| echo: false
+#| fig-width: 6
+#| fig-height: 3.5
+#| fig-align: "center"
+#| out-width: "70%"
+#| fig-cap: Variance and bias statistics for simulated data using different configurations for Monte Carlo cross-validation. The range of the y-axes are common across similar plots below for different resampling techniques.  
+
+mc_bias <-
+  stats_mc_cv %>%
+  filter(model == sel_model & .metric == sel_metric) %>%
+  ggplot(aes(times, bias, col = retain, pch = retain)) +
+  geom_point() +
+  geom_line() +
+  geom_hline(yintercept = 0, lty = 2) +
+  scale_y_continuous(labels = scales::percent, limits = rng_bias) +
+  scale_color_brewer(palette = "Set1") +
+  labs(y = "Bias", x = "Number of Resamples")
+
+mc_prec <-
+  stats_mc_cv %>%
+  filter(model == sel_model & .metric == sel_metric) %>%
+  ggplot(aes(times, std_err, col = retain, pch = retain)) +
+  geom_point() +
+  geom_line() +
+  lims(y = rng_std_err) +
+  geom_hline(yintercept = 0, lty = 2) +
+  labs(y = "Std. Error", x = "Number of Resamples") +
+  scale_color_brewer(palette = "Set1")
+
+mc_bias + mc_prec +
+  plot_layout(guides = 'collect') &
+  theme(legend.position = "top")
+```
+
+## V-fold cross-validation {#sec-cv}
+
+**V-fold cross-validation** (sometimes called K-fold cross-validation) is the most well-known resampling method. It randomly allocates the training data to one of _V_ groups of about equal size, called a "fold" (a stratified allocation can also be used). There are $B = V$ iterations where the analysis set comprises _V_ -1 of the groups, and the remaining group defines the assessment set. For example, for 10-fold cross-validation, the ten analysis sets consist of 90% of the data, and the remaining 10% are used to quantify performance. @fig-cv-scheme shows the process for _V_ = 3 (for brevity). 
+
+::: {#fig-cv-scheme layout-ncol=1}
+
+![](../premade/three-CV.svg){width=40% fig-align="center"}
+
+![](../premade/three-CV-iter.svg){width=60% fig-align="center"}
+
+An example of using V-fold cross-validation.
+:::
+
+
+_V_ is typically 5 or 10. Again, the choice can be driven by computational costs (smaller values of _V_ are faster) or more statistical considerations, specifically bias and variance again. _V_-fold cross-validation generally has a smaller bias than other methods (due to the round-robin scheme of switching out folds) but has relatively poor precision. As with MCCV, the degree of bias is determined by how much data are retained for the assessment sets (as defined by _V_). _V_ = 5 has substantial bias compared to the more common _V_ = 10. The precision also improves when _V_ increases. 
+
+One way to improve the precision is to use **repeated V-fold cross-validation**. In this case, the same sample allocation scheme is used to create the folds and this is repeated multiple times using different random number seeds. For example, two repeats of 10-fold cross-validation create two sets of _V_ folds, which are treated as a collection of twenty resamples (e.g., $B = V \times R$ for $R$ repeats). Again, increasing the number of resamples does not generally change the bias. 
+
+```{r}
+#| label: fig-mc-stats
+#| echo: false
+#| fig-width: 6
+#| fig-height: 3.5
+#| fig-align: "center"
+#| out-width: "70%"
+#| fig-cap: Variance and bias statistics for simulated data using different configurations for $V$-fold cross-validation. 
+
+vfold_bias <-
+  stats_v_fold_cv %>%
+  filter(model == sel_model & .metric == sel_metric) %>%
+  ggplot(aes(times, bias, col = folds, pch = folds)) +
+  geom_point() +
+  geom_line() +
+  scale_y_continuous(labels = scales::percent, limits = rng_bias)  + #
+  scale_color_brewer(palette = "Dark2") +
+  geom_hline(yintercept = 0, lty = 2) +
+  labs(y = "Bias", x = "Number of Resamples")
+
+vfold_prec <-
+  stats_v_fold_cv %>%
+  filter(model == sel_model & .metric == sel_metric) %>%
+  ggplot(aes(times, std_err, col = folds, pch = folds)) +
+  geom_point() +
+  geom_line() +
+  lims(y = rng_std_err) +
+  geom_hline(yintercept = 0, lty = 2) +
+  labs(y = "Std. Error", x = "Number of Resamples")  +
+  scale_color_brewer(palette = "Dark2")
+
+vfold_bias + vfold_prec +
+  plot_layout(guides = 'collect') &
+  theme(legend.position = "top")
+```
+
+
+### Leave-one-out cross-validation {.unnumbered}
+
+aka jackkife 
+
+## The bootstrap {#sec-bootstrap}
+
+The bootstrap is a resampling methodology originally created to compute the sampling distribution of statistics using minimal probabilistic assumptions. This application will be discussed in section TODO. In this chapter, we'll define a bootstrap sample and how it can be used to measure how well a model fits the data. 
+
+For a training set with $n_{tr}$ data points, a bootstrap resample takes a random sample of the training set that is also size $n_{tr}$. It does this by sampling with replacement; when each of the $n_{tr}$ samples is drawn, it has no memory of the prior selections. This means that each row can be randomly selected again. For example, @fig-bootstrap-scheme shows another schematic for three bootstrap samples. In this figure, the thirteenth training set sample was selected to go into the first analysis set three times. For this reason, a bootstrap resample will contain multiple replicates of some training set points, while others will not be selected at all. 
+
+```{r}
+#| label: fig-bootstrap-scheme
+#| echo: false
+#| out-width: '70%'
+#| fig-cap: "A schematic of three bootstraps samples created from an initial pool of 30 data points."
+knitr::include_graphics("../premade/bootstraps.svg")
+```
+
+The probability that a data point will be picked is $1 / n_{tr}$ and, from this, the probability that a training set point is _not selected at all_ is 
+
+$$\prod_{i=1}^{n_{tr}} \left(1 - \frac{1}{n_{tr}}\right) = \left(1 - \frac{1}{n_{tr}}\right)^{n_{tr}}$$
+
+and this can be approximated by $e^{-1} \approx `r round(exp(-1), 3)`$. Since the boostrap sample contains the _selected_ data, they are selected with probability $1 - e^{-1} \approx `r round((1 - exp(-1)), 3)`$. The implication is that, on average, the analysis set, contains about `r round((1 - exp(-1)) * 100, 1)`% unique training set points and the assessment set includes, on average, $e^{-1}$ or `r round(100 - (1 - exp(-1)) * 100, 1)`% of the training data. If we were to compare the amount of unique training set points held out by the bootstrap to V-fold cross-validation, the bootstrap is comparable to using $V = 3$. 
+
+@fig-boot-stats shows these statistics for the simulated data. As one might expect, there is considerable bias in the bootstrap estimate of performance. In comparison to the corresponding plot for MCCV, the bootstrap bias is worse than the MCCV curve where 60% were held out. The curve is also flat; the bias does't go away by increasing $B$.
+
+However, the precision is extremely good, even with very few resamples. 
+
+```{r}
+#| label: fig-boot-stats
+#| echo: false
+#| fig-width: 6
+#| fig-height: 3.5
+#| fig-align: "center"
+#| out-width: "70%"
+#| fig-cap: Variance and bias statistics for simulated data using different configurations for the bootstrap. 
+
+bt_est <- c("standard", "bootstrap 632", "bootstrap 632+")
+
+boot_bias <-
+  stats_bootstraps %>%
+  filter(model == sel_model & .metric == sel_metric) %>%
+  rename(estimator = .estimator) %>%
+  mutate(estimator = factor(estimator, levels = bt_est)) %>% 
+  ggplot(aes(times, bias, col = estimator, pch = estimator)) +
+  geom_point() +
+  geom_line() +
+  scale_y_continuous(labels = scales::percent, limits = rng_bias) +
+  geom_hline(yintercept = 0, lty = 2) +
+  labs(y = "Bias", x = "Number of Resamples")
+
+boot_prec <-
+  stats_bootstraps %>%
+  filter(model == sel_model & .metric == sel_metric) %>%
+  filter(.estimator == "standard") %>%
+  rename(estimator = .estimator) %>%
+  ggplot(aes(times, std_err)) +
+  geom_point(col = "#F8766D") +
+  geom_line(col = "#F8766D") +
+  lims(y = rng_std_err) +
+  geom_hline(yintercept = 0, lty = 2) +
+  labs(y = "Std. Error", x = "Number of Resamples")
+
+boot_bias + boot_prec +
+  plot_layout(guides = 'collect') &
+  theme(legend.position = "top")
+```
+
+### Correcting for Bias {.unnumbered}
+
+There have been some attempts to de-bias the bootstrap estimates. The "632 rule" uses the bootstrap estimate ($Q_{bt}$) and the resubstitution estimate ($Q_{rsub}$) together: 
+
+$$Q_{632} = (1 - e^{-1})\; Q_{bt} + e^{-1}\; Q_{rsub}$$
+
+the problem with this approach is that, for very complex models, the resubstitution estimate can be very close to zero.
+
+## Time series data {#sec-time-series-resampling}
+
+```{r}
+#| label: fig-rolling-scheme
+#| echo: false
+#| out-width: '55%'
+#| fig-cap: "A schematic of rolling origin resampling for time series data."
+knitr::include_graphics("../premade/rolling.svg")
+```
+
+
+
+## Spatial data {#sec-spatial-resampling}
+
+
+## Summarizing methods {#sec-resampling-summary}
+
+
+## Frequently asked questions {#sec-resampling-faq}
+
+Take a look at
+
+https://stats.stackexchange.com/questions/tagged/resampling?sort=MostFrequent&edited=true
+
+https://stats.stackexchange.com/questions/tagged/cross-validation?tab=Frequent
+
+
+#### Is it bad to get different results within each resample? Which should I keep?  {.unnumbered}
+
+#### What happens to the $B$ models? Is this some sort of ensemble thingy?  {.unnumbered}
+
+#### Can I accidentally do it wrong?  {.unnumbered}
+
+#### Why do I need a test set?  {.unnumbered}
+ 
+#### What is nested resampling? {.unnumbered}
+
+@sec-nested-resampling
+
+#### Are these methods related to permutation tests? {.unnumbered}
+
+#### Are sub-sampling or over-sampling the same as resampling?  {.unnumbered}
+ 
+@sec-imbalance-sampling 
+ 
+#### Why do I only hear about validation sets?  {.unnumbered}
+
+
+```{r}
+#| label: teardown-cluster
+#| include: false
+
+stopCluster(cl)
+```
+
+
+## Chapter References {.unnumbered}
