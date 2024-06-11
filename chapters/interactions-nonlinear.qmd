@@ -789,6 +789,196 @@ The H-statistic and its alternatives can be an incredibly valuable tool for lear
 
 ## Discretization
 
+
+## Sidebar: The Variance-Bias Tradeoff {#sec-variance-bias}
+
+Our discussion of basis expansions presents an excellent time for a segue to discuss an essential idea in statistics and modeling: the variance-bias tradeoff. This idea will be relevant in upcoming sections for resampling and specific models. At the end of this section, we’ll also connect it to @sec-effect-encodings. 
+
+What does variance mean in terms of a machine learning model? In this context, it would quantify how much the fitted model changes if we slightly change the data. For example, would the curve change much if we repeat the data collection that produces the values in @sec-polynomials and fit the sample model (for a fixed sample size and polynomial degree)? We can also look at the _variance of prediction_: for a specific new data point $x_0$, how much intrinsic uncertainty is there? Similar to the discussion regarding extrapolation of global polynomials, we might want to compare how much the uncertainty changes as we move outside the training set’s range. 
+
+Bias is the difference between some estimate, like an average or a model prediction, and its true value. The true value is not the same as the data we collect; it is the unknowable theoretical value. For this reason, bias is often difficult to compute directly. For machine learning, the most pertinent idea of bias relates to how well a model can conform to the patterns we see in the data (hoping that the observed data is a good representation of the true values). Back in @fig-global-polynomial, we saw that a linear model didn’t fit the data well. This is due to simple linear regression being a high-bias model because, without additional feature engineering, it cannot replicate nonlinear trends. Adding polynomial or spline terms decreased the model’s bias since it was more flexible.
+
+::: {.important-box}
+We can think of bias in terms of the question: "How close are we _aiming_ to the center of the target?" and variance as: "How much do our results vary when shooting at the target?"
+:::
+
+The concepts of variance and bias are paired because they are often at odds with one another. For models that predict, we’d like a _low variance_, _low bias_ model. In many cases, that can be exceedingly difficult to achieve. We can often lower bias by adding model complexity. However, increased complexity usually comes at the expense of stability (i.e., high variance). We will often be in the position of trying to find an acceptable compromise between the two. This was discussed with global polynomials; linear models were bad for our data, but adding too many polynomial terms adds unnecessary complexity and an explosion of variance (reflected in the confidence bands). 
+
+This leads us to the mean squared error (MSE). We’ve seen the root mean squared error already where we used it as a measure of accuracy for regression models. More generally, we can write it in terms of some unknown parameter $\theta$ and some estimate $\hat{\theta}$ based on statistical estimation from data: 
+$$MSE = E\left[(\theta - \hat{\theta})^2\right]$$
+
+It turns out that the MSE is a combination of model variance and (squared) bias ($\theta - \hat{\theta}$): 
+
+$$MSE = E\left[(\theta - \hat{\theta})^2\right] = Var[\hat{\theta}] + (\theta - \hat{\theta})^2 + \sigma^2$$
+
+where $\sigma^2$ represents some unknown amount of "irreducible noise." Because of this, MSE offers a statistic to minimize that accounts for both properties. This can offer a compromise between the two.  
+
+To illustrate this, we simulated a simple nonlinear model: 
+
+$$y_i = x_i^3 + 2\exp\left[-6(x_i - 0.3)^2\right] + \epsilon_i$$
+
+where the error terms are $\epsilon_i \sim N(0, 0.1)$ and the predictor values were uniformly spaced across [-1.2, 1.2]. Since we know the true values, we can compute the model bias. 
+
+```{r}
+#| label: variance-bias-functions
+#| echo: false
+make_data <- function(num_points = 30, error_sd =  0.2) {
+  te_n <- ceiling(num_points * .25)
+  holdout <- num_points - 4
+  tr_n <- num_points
+  dat <- 
+    tibble(x = seq(from = -1.2, to = 1.2, length.out = num_points + 1)) %>% 
+    mutate(
+      truth = (x^3) + 2 * exp(-6 * (x - 0.3)^2),
+      y = truth + rnorm(num_points + 1, sd = error_sd)
+    )
+  dat$data <- "train"
+  dat$data[holdout] <- "test"
+  dat
+}
+get_preds <- function(dat, deg) {
+  tr <- dat[dat$data == "train", ]
+  te <- dat[dat$data == "test", ]
+  te$point <- seq_along(te$data)
+  if (deg == 0) {
+    mod <- lm(y ~ 1, data = tr)
+  } else {
+    mod <- lm(y ~ poly(x, deg), data = tr)
+  }
+  te$.pred <- predict(mod, newdata = te)
+  te$degree <- deg
+  te
+}
+sim <- function(deg, n = 30) {
+  make_data(num_points = n) %>% 
+    get_preds(deg)
+}
+```
+
+To create a simulated data set, `r nrow(make_data())` samples were generated. Of these, `r nrow(make_data()) - 1` were used for the training set and one was reserved for the estimating the variance and bias. The test set values were roughly equally spaced across the range of the predictor. One simulated data set is shown in @fig-nonlinear-sim, along with the true underlying pattern.  
+
+```{r}
+#| label: fig-nonlinear-sim
+#| echo: false
+#| out-width: 70%
+#| fig-width: 6
+#| fig-height: 4.25
+#| fig-cap: "A simulated data set with a nonlinear function."
+sim_grid <- 
+  tibble(x = seq(from = -1.2, to = 1.2, length.out = 500)) %>% 
+  mutate(y = (x^3) + 2 * exp(-6 * (x - 0.3)^2))
+set.seed(12)
+make_data() %>% 
+  ggplot(aes(x, y)) + 
+  geom_line(data = sim_grid, lty = 3) +
+  geom_point(aes(col = data, pch = data), cex = 2, alpha = 3 / 4) +
+  labs(x = "predictor", y = "outcome")
+```
+
+
+```{r}
+#| label: variance-bias-stats
+#| echo: false
+#| cache: true
+set.seed(614)
+sim_res <- 
+  map_dfr(rep(1:23, each = 50000), sim) %>%
+  mutate(bias = truth - .pred) %>% 
+  summarize(
+    rmse = rmse_vec(y, .pred),
+    bias = mean(bias),
+    var = var(.pred),
+    n  = length(.pred),
+    .by = c(degree, point)
+  ) %>% 
+  mutate(
+    double_check = var + bias^2, 
+    mse = rmse^2, 
+    point = format(point)
+  )
+```
+
+A linear model was estimated using ordinary least squares and a polynomial expansion for each simulated data set. The test set values were predicted, and the bias, variance, and root mean squared error statistics were computed. This was repeated 50,000 times for polynomial degrees ranging from one to twenty.  
+
+@fig-sim-results shows the average statistic values across model complexity (i.e., polynomial degree). A linear model performs poorly for the bias due to underfitting (as expected). In panel (a), adding more nonlinearity results in a substantial decrease in bias because the model fit is closer to the true equation. This improvement plateaus at a sixth-degree polynomial and stays low (nearly zero). The variance begins low; even though the linear model is ineffective, it is stable. Once additional terms are added, the variance of the model steadily increases then explodes around an 20<sup>th</sup> degree polynomial^[In this particular case, the variance becomes very large since the number of parameters is nearly the same as the number of training set points (`r nrow(make_data()) - 1`). This makes the underlying mathematical operation (matrix inversion) numerically unstable. Even so, it is the result of excessive model complexity.]. This shows the tradeoff; as the model becomes more complex, it fits the data better but eventually becomes unstable.
+
+```{r}
+#| label: fig-sim-results
+#| echo: false
+#| out-width: 80%
+#| fig-width: 7
+#| fig-height: 4.25
+#| warning: false
+#| fig-cap: "Simulation results showing variances, squared biases, and mean squared errors."
+plot_data <- 
+  sim_res %>%
+  mutate(`Squared Bias` = bias^2) %>% 
+  select(degree, point, MSE = mse, `Squared Bias`, Variance = var) %>%
+  filter(degree > 0) %>% 
+  pivot_longer(
+    cols = c(MSE, `Squared Bias`, Variance),
+    names_to = "statistic",
+    values_to = "value"
+  ) %>% 
+  mutate(statistic = factor(statistic, levels = c("Squared Bias", "Variance", "MSE")))
+
+plot_rng <- range(plot_data$value)
+
+p_vb <- 
+  plot_data %>% 
+  filter(statistic != "MSE") %>% 
+  ggplot(aes(degree, value, col = statistic, pch = statistic)) + 
+  stat_smooth(geom = "line", se = FALSE, span = .4) +
+  geom_point(cex = 2, alpha = 1 / 2) +
+  scale_shape_manual(values = c(16, 4, 1)) +
+  scale_color_brewer(palette = "Dark2") +
+  labs(x = "Polynomial Degree", y = "Statistic", title = "(a)") +
+  lims(y = plot_rng) +
+  theme(legend.position = "top")
+
+p_mse <- 
+  plot_data %>% 
+  filter(statistic == "MSE") %>% 
+  ggplot(aes(degree, value, col = statistic, pch = statistic)) + 
+  stat_smooth(geom = "line", se = FALSE, span = .4, show.legend = FALSE) +
+  geom_point(cex = 2, alpha = 1 / 2, show.legend = FALSE) +
+  scale_shape_manual(values = c(16, 4, 1), drop = FALSE) +
+  scale_color_brewer(palette = "Dark2", drop = FALSE) +
+  labs(x = "Polynomial Degree", y = "MSE", title = "(b)") +
+  lims(y = plot_rng)
+
+p_vb + p_mse
+```
+
+The mean squared error in panel (b) shows the combined effect of variance and bias. It shows a steep decline as we add more terms, then plateaus between seven and fifteenth-degree models. After that, the rapidly escalating variance dominates the MSE as it rapidly increases.  
+
+The variance-bias tradeoff is the idea that we can exploit one for the other. Let’s go back to the basic sample mean statistic. If the data being averaged are normally distributed, the simple average is an _unbiased estimator_: it is always "aiming" for the true theoretical value. That’s a great property to have. The issue is that many unbiased estimators can have very high variance. In some cases, a slight increase in bias might result in a drastic decrease in variability. The variance-bias tradeoff helps us when one of those two quantities is more important. 
+
+@fig-tradeoff shows a simple example. Suppose we have some alternative method for estimating the mean of a group that adds some bias while reducing variance. That tradeoff might be worthwhile if some bias will greatly reduce the variance. In our figure, suppose the true population mean is zero. The green curve represents the sample mean for a fixed sample size. It is centered at zero but has significant uncertainty. The other curve might be an alternative estimator that produces a slightly pessimistic estimate (its mean is slightly smaller than zero) but has 3-fold smaller variation. When estimating the location of the mean of the population, the biased estimate will have a smaller confidence interval for a given sample size than the unbiased estimate.  While the biased estimate may slightly miss the target, the window of the location will be much smaller than the unbiased estimate.  This may be a good idea depending on how the estimate will be used ^[This specific example will be referenced again when discussing resampling in @sec-resampling.].
+
+```{r}
+#| label: fig-tradeoff
+#| echo: false
+#| out-width: 70%
+#| fig-width: 6.25
+#| fig-height: 4
+#| fig-cap: "A simnple example of the variance-bias tradeoff."
+unbiased <- tibble(value = rnorm(50000, sd = 3), 
+                   case = "unbiased, high variance")
+biased <- tibble(value = rnorm(50000, mean = - 1 / 2, sd = 1), 
+                 case = "biased, smaller variance")
+two_choices <- bind_rows(unbiased, biased)
+two_choices %>% 
+  ggplot(aes(value, col = case)) +
+  geom_vline(xintercept = 0, lty = 3) +
+  geom_line(stat = "density", adjust = 1.5, trim = TRUE) +
+  labs(x = "Value of Interest\n(larger is better)")
+```
+
+The categorical encoding approach shown in @eq-effect-posterior from @sec-effect-encodings is another example. Recall that $\bar{y}_j$ was the average daily rate for agent $j$. That is an unbiased estimator but has high variance, especially for agents with few bookings. The more complex estimator $\hat{y}_j$ in @eq-effect-posterior is better because it is more reliable. That reliability is bought by biasing the estimator towards the overall mean ($\mu_0$). 
+
+As mentioned, we’ll return to this topic several times in upcoming sections. 
+
 ## Chapter References {.unnumbered}
 
 ```{r}
