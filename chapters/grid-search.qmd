@@ -48,11 +48,11 @@ The previous chapter demonstrated that using external data to evaluate the model
 
 :::: {.columns}
 
-::: {.column width="20%"}
+::: {.column width="10%"}
 
 :::
 
-::: {.column width="60%"}
+::: {.column width="80%"}
 
 
 ```pseudocode
@@ -61,12 +61,13 @@ The previous chapter demonstrated that using external data to evaluate the model
 
 \begin{algorithm}
 \begin{algorithmic}
-\State $D$: training set
+\State $\mathfrak{D}^{tr}$: training set of predictors $X$ and outcome $y$
 \State $B$: number of resamples
-\State $f()$: modeling function
+\State $M(\mathfrak{D}^{tr}, B)$: a mapping function to split $\mathfrak{D}^{tr}$ for each of  $B$ iterations.
+\State $f()$: model pipeline 
 \State $\Theta$: Parameter set ($s \times m$) with candidates $\theta_j$
 \For{$j=1$ \To $s$}
-  \State Generate $\hat{Q}_{j} =$ \Call{Resample}{$D, B, f(\cdot; \theta_j)$} corresponding to candidate $\theta_j$.
+  \State Generate $\hat{Q}_{j} =$ \Call{Resample}{$\mathfrak{D}^{tr}, f(\cdot;\theta_j), M(\mathfrak{D}^{tr}, B)$} corresponding to candidate $\theta_j$.
 \EndFor
 \State Determine $\hat{\theta}_{opt}$ that optimizes $\hat{Q}_{j}$.
 \end{algorithmic}
@@ -75,7 +76,7 @@ The previous chapter demonstrated that using external data to evaluate the model
 
 :::
 
-::: {.column width="20%"}
+::: {.column width="10%"}
 
 :::
 
@@ -380,6 +381,7 @@ However, there may be an issue in doing so. We are using grid search and resampl
 ```{r}
 #| label: nested-sfd
 #| include: false
+#| eval: false
 knn_sfd_nest_res <-
   knn_wflow %>%
   tune_nested(
@@ -404,6 +406,7 @@ selected_configs <-
 ```{r}
 #| label: fig-nested-grid-selection
 #| echo: false
+#| eval: false
 #| out-width: 40%
 #| fig-width: 4
 #| fig-height: 4
@@ -422,7 +425,7 @@ knn_sfd %>%
   theme(legend.position = "top")
 ```
 
-Nested resampling reports that the optimal Brier score for the tuning process is `r knn_sfd_nest_brier` with a standard error of `r knn_sfd_nest_brier_se`. 
+Nested resampling reports that the optimal Brier score for the tuning process is ` knn_sfd_nest_brier` with a standard error of ` knn_sfd_nest_brier_se`. 
 
 
 ## Efficient Computations for Conventional Grid Search {#sec-efficient-grid}
@@ -482,18 +485,24 @@ Summed up in @alg-race.
 
 \begin{algorithm}
 \begin{algorithmic}
-\State $D$: training set
+\State $\mathfrak{D}^{tr}$: training set of predictors $X$ and outcome $y$
 \State $B$: number of resamples
-\State Define initial number of resamples $1 \lt B_{min} \lt B$ 
-\State $f()$: modeling function
+\State Initial number of resamples $1 \lt B_{min} \lt B$ 
+\State $M(\mathfrak{D}^{tr}, B)$: a mapping function to split $\mathfrak{D}^{tr}$ for each of  $B$ iterations.
+\State $f()$: model pipeline 
 \State $\Theta$: Parameter set ($s \times m$) with candidates $\theta_j$
-\For{$j=1$ \To $B_{min}$}
-  \State Generate $\hat{Q}_{j} =$ \Call{Resample}{$D, j, f(\cdot; \theta_j)$} corresponding to candidate $\theta_j$.
+\For{$j=1$ \To $s$}
+  \For{$b=1$ \To $B_{min}$}
+    \State Generate $\hat{Q}_{jb} =$ \Call{Resample}{$\mathfrak{D}^{tr}, f(\cdot;\theta_j), M_b(\mathfrak{D}^{tr}, B)$}
+  \EndFor
+\State Compute $\hat{Q}_{j} = 1/B_{min}\sum_b \hat{Q}_{jb}$. 
 \EndFor
-\State Eliminate candidates so that only $s_i$ remain. 
-  \For{$k = B_{min} + 1$ \To $B$} 
-    \State Generate $\hat{Q}_j^k =$ \Call{Resample}{$D, k, f(\cdot; \theta_j)$} corresponding to candidate $\theta_j$ as of resample $k$.
-    \State Eliminate candidates so that only $s_k$ remain. 
+\State Eliminate candidates to produce $\Theta^b$ ($s_b \times m$)
+  \For{$b = B_{min} + 1$ \To $B$} 
+    \For{$j=1$ \To $s$}
+      \State Generate $\hat{Q}_{jb} =$ \Call{Resample}{$\mathfrak{D}^{tr}, f(\cdot;\theta_j), M_b(\mathfrak{D}^{tr}, B)$}
+      \State Update candidate subset $\Theta^b$
+    \Endfor
   \Endfor
 \State Determine $\hat{\theta}_{opt}$ that optimizes $\hat{Q}_j^k$.   
 \end{algorithmic}
