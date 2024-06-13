@@ -10,7 +10,7 @@ teardown <- TRUE
 
 # ------------------------------------------------------------------------------
 
-light_bg <- "#fcfefe" # from aml4td.scss
+light_bg <- "#fcfefe" # from aml4td.scss in light mode
 
 # ------------------------------------------------------------------------------
 # ggplot stuff
@@ -211,11 +211,6 @@ if (is_html) {
     collapse = TRUE,
     fig.align = 'center',
     fig.path = "../figures/",
-    fig.width = 10,
-    fig.height = 6,
-    out.width = "95%",
-    dev = 'svg',
-    dev.args = list(bg = "transparent"),
     tidy = FALSE,
     echo = FALSE
   )
@@ -225,10 +220,6 @@ if (is_html) {
     collapse = TRUE,
     fig.align = 'center',
     fig.path = "../figures/",
-    fig.width = 10,
-    fig.height = 6,
-    out.width = "95%",
-    dev = "pdf",
     tidy = FALSE,
     echo = FALSE
   )
