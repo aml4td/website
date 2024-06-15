@@ -1,7 +1,8 @@
 
 ui <- page_fillable(
-  theme = bs_theme(bg = "#fcfefe", fg = "#595959"),
+  theme = bs_theme(),
   padding = "1rem",
+  bslib::input_dark_mode(),
   layout_columns(
     fill = FALSE,
     col_widths = breakpoints(xs = c(-2, 8, -2), sm = 4),
