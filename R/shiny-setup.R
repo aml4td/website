@@ -1,9 +1,8 @@
 
-light_bg <- "#fcfefe" # from aml4td.scss
-light_bg <- "transparent"
-grid_theme <- bs_theme(
-  # bg = light_bg, fg = "#595959"
-)
+light_bg <- "#00000000" # from aml4td.scss
+# grid_theme <- bs_theme(
+#   # bg = light_bg, fg = "#00000000"
+# )
 
 theme_light_bl<- function(...) {
   
