@@ -111,12 +111,12 @@ server <- function(input, output, session) {
         geom_ribbon(
           data = poly_pred,
           aes(y = NULL, ymin = lwr, ymax = upr),
-          fill = "#FF0099",
+          fill = "#FBE577",
           alpha = 1 / 5) +
         geom_line(
           data = poly_pred,
           aes(y = fit),
-          col = "#FF0099",
+          col = "#FFBA18",
           linewidth = line_wd) +
         theme(
           plot.margin = margin(t = -20, r = 0, b = 0, l = 0),
