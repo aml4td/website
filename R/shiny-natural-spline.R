@@ -22,6 +22,21 @@ ui <- page_fillable(
 
 server <- function(input, output, session) {
   
+  theme_transparent <- function(...) {
+    
+    ret <- ggplot2::theme_bw(...)
+    
+    transparent_rect <- ggplot2::element_rect(fill = "transparent", colour = NA)
+    ret$panel.background  <- transparent_rect
+    ret$plot.background   <- transparent_rect
+    ret$legend.background <- transparent_rect
+    ret$legend.key        <- transparent_rect
+    
+    ret$legend.position <- "top"
+    
+    ret
+  }
+  
   theme_set(theme_transparent())
   transparent_rect <- ggplot2::element_rect(fill = "transparent", colour = NA)
   
