@@ -23,6 +23,7 @@ ui <- page_fillable(
 server <- function(input, output, session) {
   
   theme_set(theme_transparent())
+  transparent_rect <- ggplot2::element_rect(fill = "transparent", colour = NA)
   
   # ------------------------------------------------------------------------------
 
@@ -103,10 +104,10 @@ server <- function(input, output, session) {
       theme_void() +
       theme(
         plot.margin = margin(t = 0, r = 0, b = -20, l = 0),
-        panel.background = col_rect,
-        plot.background = col_rect,
-        legend.background = col_rect,
-        legend.key = col_rect
+        panel.background = transparent_rect,
+        plot.background = transparent_rect,
+        legend.background = transparent_rect,
+        legend.key = transparent_rect
       ) +
       scale_color_viridis(discrete = TRUE, option = "turbo")
     
