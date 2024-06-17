@@ -112,7 +112,7 @@ server <- function(input, output, session) {
           data = poly_pred,
           aes(y = NULL, ymin = lwr, ymax = upr),
           fill = "#FF0099",
-          alpha = 1 / 10) +
+          alpha = 1 / 5) +
         geom_line(
           data = poly_pred,
           aes(y = fit),
