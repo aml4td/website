@@ -36,14 +36,6 @@ ui <- page_fillable(
 
 server <- function(input, output) {
 
-  theme_set(theme_transparent())
-  
-  # ------------------------------------------------------------------------------
-
-  n_grid <- 100
-  grid_1d <- seq(-1, 1, length.out = n_grid)
-  grid <- expand.grid(A = grid_1d, B = grid_1d)
-
   theme_transparent <- function(...) {
     
     ret <- ggplot2::theme_bw(...)
@@ -58,6 +50,14 @@ server <- function(input, output) {
     
     ret
   }
+  
+  theme_set(theme_transparent())
+  
+  # ------------------------------------------------------------------------------
+
+  n_grid <- 100
+  grid_1d <- seq(-1, 1, length.out = n_grid)
+  grid <- expand.grid(A = grid_1d, B = grid_1d)
   
   output$contours <-
     renderPlot({
