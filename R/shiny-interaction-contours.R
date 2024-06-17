@@ -36,6 +36,8 @@ ui <- page_fillable(
 
 server <- function(input, output) {
 
+  # theme_light_bl()
+  
   # ------------------------------------------------------------------------------
 
   n_grid <- 100
@@ -52,8 +54,7 @@ server <- function(input, output) {
       p <-
         ggplot(grid, aes(A, B)) +
         coord_equal() +
-        labs(x = "Predictor 1", y = "Predictor 1") +
-        theme_light_bl()
+        labs(x = "Predictor 1", y = "Predictor 1")
 
       if (length(unique(grid$outcome)) >= 15) {
         p <- p +
