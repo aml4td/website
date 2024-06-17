@@ -46,25 +46,27 @@ server <- function(input, output) {
   
   output$contours <-
     renderPlot({
-
+      
       grid$outcome <-
         input$beta_1 * grid$A + input$beta_2 * grid$B +
         input$beta_int * grid$A * grid$B
-
+      
       p <-
         ggplot(grid, aes(A, B)) +
         coord_equal() +
         labs(x = "Predictor 1", y = "Predictor 1")
-
+      
       if (length(unique(grid$outcome)) >= 15) {
         p <- p +
           geom_contour_filled(aes(z = scale(outcome)), bins = 15, show.legend = FALSE) +
           scale_fill_viridis_d(option = "G")
       }
-
+      
       print(p)
-
-    })
+      
+    }, 
+    bg = NA
+    )
 }
 
 app <- shinyApp(ui, server)

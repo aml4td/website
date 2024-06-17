@@ -146,7 +146,8 @@ server <- function(input, output, session) {
     
     print(p)
     
-  })
+  }, 
+  bg = NA)
   
 }
 

@@ -44,7 +44,8 @@ server <- function(input, output) {
 
       print(p)
       
-    })
+    }, 
+    bg = NA)
   
 }
 

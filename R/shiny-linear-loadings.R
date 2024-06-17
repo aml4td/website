@@ -53,7 +53,8 @@ server <- function(input, output) {
         p <- p + facet_wrap(~ id, nrow = 1)
       }
       print(p)
-    })
+    }, 
+    bg = NA)
 }
 
 app <- shinyApp(ui = ui, server = server)

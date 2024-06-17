@@ -88,7 +88,8 @@ server <- function(input, output) {
 
       print(p)
 
-    })
+    }, 
+    bg = NA)
 }
 
 app <- shinyApp(ui = ui, server = server)
