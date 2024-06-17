@@ -103,8 +103,8 @@ server <- function(input, output, session) {
       geom_ribbon(
         data = spline_pred,
         aes(y = NULL, ymin = lwr, ymax = upr),
-        fill = "#FF0099",
-        alpha = 1 / 5) +
+        fill = "#fff2f9",
+        alpha = 1 / 2) +
       geom_line(
         data = spline_pred,
         aes(y = fit),
