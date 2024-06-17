@@ -788,9 +788,930 @@ Caution should be exercised with this method. First, some tree ensembles randoml
 
 The H-statistic and its alternatives can be an incredibly valuable tool for learning about the data early on as well as suggesting new features that should be included in the model. They are, however, computationally expensive. 
 
-## Basis Expansions and Splines {#sec-splines}
+## Polynomial Basis Expansions {#sec-polynomials}
 
-## Discretization
+In the food delivery data, we have thoroughly demonstrated that there are quantitative predictors that have nonlinear relationships with the outcome. In @sec-model-development-whole-game, two of the three models for these data could naturally estimate nonlinear trends. Linear regression, however, could not. To fix this, the hour predictor spawned multiple features called spline terms and adding these to the model enables it to fit nonlinear patterns. This approach is called a _basis expansion_. In this section, we’ll consider (global) polynomial basis expansions. 
+
+The most traditional basis function is the polynomial expansion. If we start with a simple linear regression model with a single predictor: 
+
+$$ 
+y_i = \beta_0 + \beta_1 x_{i} + \epsilon_i
+$$ 
+
+the expansion would add additional terms with values of the predictor exponentiated to the $p^{th}$ power^[In actuality, a more computationally preferred method is to use _orthogonal polynomials_ which rescale the variables before we exponentiate them. We’ll denote these modified versions of the predictor in equation @eq-poly-linear-reg as just $x$ to reduce mathematical clutter. We've seen these before in @fig-ordered]. For a cubic polynomial model:
+
+$$ 
+y_i = \beta_0 + \beta_1 x_{i} + \beta_2 x_{i}^2 + \beta_3 x_{i}^3 + \epsilon_i
+$$ {#eq-poly-linear-reg}
+
+This is a _linear model_ in the sense that it is linear in the statistical parameters (the $\beta$ values), so we can use standard parameter estimation procedures (e.g., least squares). 
+
+@fig-global-polynomial shows data from @bralower1997mid which was collected to understand the relationship between the age of a fossil and the ratio of two radioactive isotopes. The data set contains `r nrow(fossil)` data points for these two variables. The relationship is highly nonlinear, with several regions where the data have significant convex or concave patterns. 
+
+For simplicity, a fit from a cubic model [@eq-poly-linear-reg] is shown as the default. While the pattern is nonlinear, the line does not conform well to the data. The lines above the plot show the three basis functions that, for $p=3$, correspond to linear ($x$), quadratic ($x^2$), and cubic ($x^3$) terms. The effects of these terms are blended using their estimated slopes ($\hat{\beta}_j$) to produce the fitted line. Notice that the cubic fit is very similar to the cubic basis shown at the top of the figure. The estimated coefficient for the cubic term is much larger than the linear or quadratic coefficients 
+
+::: {#fig-global-polynomial}
+
+::: {.figure-content}
+
+```{shinylive-r}
+#| label: fig-global-polynomial
+#| viewerHeight: 600
+#| viewerWidth: "100%"
+#| standalone: true
+library(shiny)
+library(patchwork)
+library(dplyr)
+library(tidyr)
+library(ggplot2)
+library(splines2)
+library(bslib)
+library(viridis)
+library(aspline)
+
+data(fossil)
+
+ui <- page_fillable(
+  theme = bs_theme(bg = "#fcfefe", fg = "#595959"),
+  padding = "1rem",
+  layout_columns(
+    fill = FALSE,
+    col_widths = breakpoints(sm = c(-3, 6, -3)),
+    sliderInput(
+      "global_deg",
+      label = "Polynomial Degree",
+      min = 1L, max = 20L, step = 1L, value = 3L,
+      ticks = TRUE
+    ) # sliderInput
+  ), # layout_columns
+  layout_columns(
+    fill = FALSE,
+    col_widths = breakpoints(sm = c(-1, 10, -1)),
+    as_fill_carrier(plotOutput('global'))
+  )
+)
+
+
+server <- function(input, output, session) {
+  
+  light_bg <- "#fcfefe" # from aml4td.scss
+  grid_theme <- bs_theme(
+    bg = "#fcfefe", fg = "#595959"
+  )
+  
+  # ------------------------------------------------------------------------------
+  
+  theme_light_bl<- function(...) {
+    
+    ret <- ggplot2::theme_bw(...)
+    
+    col_rect <- ggplot2::element_rect(fill = light_bg, colour = light_bg)
+    ret$panel.background  <- col_rect
+    ret$plot.background   <- col_rect
+    ret$legend.background <- col_rect
+    ret$legend.key        <- col_rect
+    
+    larger_x_text <- ggplot2::element_text(size = rel(1.25))
+    larger_y_text <- ggplot2::element_text(size = rel(1.25), angle = 90)
+    ret$axis.text.x <- larger_x_text
+    ret$axis.text.y <- larger_y_text
+    ret$axis.title.x <- larger_x_text
+    ret$axis.title.y <- larger_y_text  
+    
+    ret$legend.position <- "top"
+    
+    ret
+  }
+  
+  col_rect <- ggplot2::element_rect(fill = light_bg, colour = light_bg)
+  
+  maybe_lm <- function(x) {
+    try(lm(y ~ poly(x, input$piecewise_deg), data = x), silent = TRUE)
+  }
+  
+  expansion_to_tibble <- function(x, original, prefix = "term ") {
+    cls <- class(x)[1]
+    nms <- recipes::names0(ncol(x), prefix)
+    colnames(x) <- nms
+    x <- as_tibble(x)
+    x$variable <- original
+    res <- tidyr::pivot_longer(x, cols = c(-variable))
+    if (cls != "poly") {
+      res <- res[res$value > .Machine$double.eps,]
+    }
+    res
+  } 
+  
+  mult_poly <- function(dat, degree = 4) {
+    rng <- extendrange(dat$x, f = .025)
+    grid <- seq(rng[1], rng[2], length.out = 1000)
+    grid_df <- tibble(x = grid)
+    feat <- poly(grid_df$x, degree)
+    res <- expansion_to_tibble(feat, grid_df$x)
+    
+    # make some random names so that we can plot the features with distinct colors
+    rand_names <- lapply(1:degree, function(x) paste0(sample(letters)[1:10], collapse = ""))
+    rand_names<- unlist(rand_names)
+    rand_names <- tibble(name = unique(res$name), name2 = rand_names)
+    res <- 
+      dplyr::inner_join(res, rand_names, by = dplyr::join_by(name)) %>% 
+      dplyr::select(-name) %>% 
+      dplyr::rename(name = name2)
+    res
+  }
+  
+  # ------------------------------------------------------------------------------
+  
+  spline_example <- tibble(x = fossil$age, y = fossil$strontium.ratio)
+  rng <- extendrange(fossil$age, f = .025)
+  grid <- seq(rng[1], rng[2], length.out = 1000)
+  grid_df <- tibble(x = grid)
+  alphas <- 1 / 4
+  line_wd <- 1.0
+  
+  base_p <-
+    spline_example %>%
+    ggplot(aes(x = x, y = y)) +
+    geom_point(alpha = 3 / 4, pch = 1, cex = 3) +
+    labs(x = "Age", y = "Isotope Ratio") +
+    lims(x = rng) +
+    theme_light_bl()
+  
+  output$global <- renderPlot({
+    
+    poly_fit <- lm(y ~ poly(x, input$global_deg), data = spline_example)
+    poly_pred <- 
+      predict(poly_fit, grid_df, interval = "confidence", level = .90) %>% 
+      bind_cols(grid_df)
+    
+    global_p <- base_p
+    
+    if (input$global_deg > 0) {
+      global_p <-
+        global_p +
+        geom_ribbon(
+          data = poly_pred,
+          aes(y = NULL, ymin = lwr, ymax = upr),
+          alpha = 1 / 15) +
+        geom_line(
+          data = poly_pred,
+          aes(y = fit),
+          col = "black",
+          linewidth = line_wd) +
+        theme(
+          plot.margin = margin(t = -20, r = 0, b = 0, l = 0),
+          panel.background = col_rect,
+          plot.background = col_rect,
+          legend.background = col_rect,
+          legend.key = col_rect
+        )
+      
+      feature_p <-
+        poly(grid_df$x,  input$global_deg) %>% 
+        expansion_to_tibble(grid_df$x) %>% 
+        ggplot(aes(variable, y = value, group = name, col = name)) +
+        geom_line(show.legend = FALSE) + # , linewidth = 1, alpha = 1 / 2
+        theme_void() +
+        theme(
+          plot.margin = margin(t = 0, r = 0, b = -20, l = 0),
+          panel.background = col_rect,
+          plot.background = col_rect,
+          legend.background = col_rect,
+          legend.key = col_rect
+        ) +
+        scale_color_viridis(discrete = TRUE, option = "turbo")
+      
+      p <- (feature_p / global_p) + plot_layout(heights = c(1.5, 4))
+    }
+    
+    print(p)
+    
+  })
+  
+}
+
+app <- shinyApp(ui = ui, server = server)
+```
+
+:::
+
+A global polynomial approach to modeling data from @bralower1997mid along with a representation of the features (above the data plot). The black dashed line is the true function and the shaded region is the 90% confidence intervals around the mean. 
+
+:::
+
+
+We might improve the fit by increasing the model complexity, i.e., adding additional polynomial terms. An eight-degree polynomial seems to fit better, especially in the middle of the data where the pattern is most dynamic. However, there are two issues. 
+
+First, we can see from the 90% confidence bands around the line that the variance can be very large, especially at the ends. The fitted line and confidence bands go slightly beyond the range of the data (i.e., extrapolation). Polynomial functions become erratic when they are not close to observed data points. This becomes increasingly pathological as the polynomial degree increases. For example, in @fig-global-polynomial, choosing degrees greater than 14 will show extreme uncertainty in the variance of the mean fit (the solid line). This is a good example of the variance-bias tradeoff discussed in @sec-variance-bias below.
+
+Decreasing the polynomial degree will result in less complex patterns that tend to underfit the data. Increasing the degree will result in the fitted line being closer to the data, but, as evidenced by the confidence interval in the shaded region, the uncertainty in the model explodes (especially near or outside of the range range). This is due to severe overfitting. Eventually, you can increase the degree until the curve passes through every data point. However, the fit for any other values will be wildly inaccurate and unstable.
+
+Second, the trend is concave for age values greater than 121 when it probably should be flat. The issue here is that a _global polynomial_ pattern is stipulated. The effect of each model term is the same across the entire data range^[This can be seen in the basis functions above the plot: each line covers the entire range of the data.]. We increased the polynomial degree to eight to improve the fit via additional nonlinearity. Unfortunately, this means that some parts of the data range will be _too nonlinear_ than required, resulting in poor fit. 
+
+A global polynomial is often insufficient because the nonlinear relationships are different in different data sections. There may be steep increases in one area and gradual increases in others. Rather than using a global polynomial, what if we used different basis expansions in regions with more consistent trends rather than a global polynomial?
+
+@fig-piecewise-polynomials shows a crude approach where three different regions have different polynomial fits with the same degree. The pre-set degree and data ranges are probably as good as can be (after much manual fiddling) but the approach isn’t terribly effective. The curves do not connect. This discontinuity is visually discordant and most likely inconsistent with the true, underlying pattern we are attempting to estimate. Also, there are large jumps in uncertainty when predicting values at the extremes of each region’s range. 
+
+
+::: {#fig-piecewise-polynomials}
+
+::: {.figure-content}
+
+```{shinylive-r}
+#| label: fig-piecewise-polynomials
+#| viewerHeight: 600
+#| viewerWidth: "100%"
+#| standalone: true
+
+library(shiny)
+library(patchwork)
+library(dplyr)
+library(tidyr)
+library(ggplot2)
+library(splines2)
+library(bslib)
+library(viridis)
+library(aspline)
+
+data(fossil)
+
+ui <- page_fillable(
+  theme = bs_theme(bg = "#fcfefe", fg = "#595959"),
+  padding = "1rem",
+  layout_columns(
+    fill = FALSE,
+    col_widths = breakpoints(sm = c(-1, 5, 5, -1)),
+    sliderInput(
+      "piecewise_deg",
+      label = "Polynomial Degree",
+      min = 0L, max = 6L, step = 1L, value = 4L
+    ), # sliderInput
+    sliderInput(
+      "cuts",
+      label = "Cutpoints",
+      min = 93L, max = 122L, step = 1, value = c(101, 118)
+    ) # sliderInput
+  ), # layout_columns
+  layout_columns(
+    fill = FALSE,
+    col_widths = breakpoints(sm = c(-1, 10, -1)),
+    as_fill_carrier(plotOutput('pieces'))
+  )      
+)
+
+server <- function(input, output, session) {
+  
+  light_bg <- "#fcfefe" # from aml4td.scss
+  grid_theme <- bs_theme(
+    bg = "#fcfefe", fg = "#595959"
+  )
+  
+  # ------------------------------------------------------------------------------
+  
+  theme_light_bl<- function(...) {
+    
+    ret <- ggplot2::theme_bw(...)
+    
+    col_rect <- ggplot2::element_rect(fill = light_bg, colour = light_bg)
+    ret$panel.background  <- col_rect
+    ret$plot.background   <- col_rect
+    ret$legend.background <- col_rect
+    ret$legend.key        <- col_rect
+    
+    larger_x_text <- ggplot2::element_text(size = rel(1.25))
+    larger_y_text <- ggplot2::element_text(size = rel(1.25), angle = 90)
+    ret$axis.text.x <- larger_x_text
+    ret$axis.text.y <- larger_y_text
+    ret$axis.title.x <- larger_x_text
+    ret$axis.title.y <- larger_y_text  
+    
+    ret$legend.position <- "top"
+    
+    ret
+  }
+  
+  col_rect <- ggplot2::element_rect(fill = light_bg, colour = light_bg)
+  
+  maybe_lm <- function(x) {
+    try(lm(y ~ poly(x, input$piecewise_deg), data = x), silent = TRUE)
+  }
+  
+  expansion_to_tibble <- function(x, original, prefix = "term ") {
+    cls <- class(x)[1]
+    nms <- recipes::names0(ncol(x), prefix)
+    colnames(x) <- nms
+    x <- as_tibble(x)
+    x$variable <- original
+    res <- tidyr::pivot_longer(x, cols = c(-variable))
+    if (cls != "poly") {
+      res <- res[res$value > .Machine$double.eps,]
+    }
+    res
+  } 
+  
+  mult_poly <- function(dat, degree = 4) {
+    rng <- extendrange(dat$x, f = .025)
+    grid <- seq(rng[1], rng[2], length.out = 1000)
+    grid_df <- tibble(x = grid)
+    feat <- poly(grid_df$x, degree)
+    res <- expansion_to_tibble(feat, grid_df$x)
+    
+    # make some random names so that we can plot the features with distinct colors
+    rand_names <- lapply(1:degree, function(x) paste0(sample(letters)[1:10], collapse = ""))
+    rand_names<- unlist(rand_names)
+    rand_names <- tibble(name = unique(res$name), name2 = rand_names)
+    res <- 
+      dplyr::inner_join(res, rand_names, by = dplyr::join_by(name)) %>% 
+      dplyr::select(-name) %>% 
+      dplyr::rename(name = name2)
+    res
+  }
+  
+  # ------------------------------------------------------------------------------
+  
+  spline_example <- tibble(x = fossil$age, y = fossil$strontium.ratio)
+  rng <- extendrange(fossil$age, f = .025)
+  grid <- seq(rng[1], rng[2], length.out = 1000)
+  grid_df <- tibble(x = grid)
+  alphas <- 1 / 4
+  line_wd <- 1.0
+  
+  base_p <-
+    spline_example %>%
+    ggplot(aes(x = x, y = y)) +
+    geom_point(alpha = 3 / 4, pch = 1, cex = 3) +
+    labs(x = "Age", y = "Isotope Ratio") +
+    theme_light_bl()
+  
+  output$pieces <- renderPlot({
+    
+    cuts <- c(0, sort(input$cuts), 60)
+    piece_cols <- c("#1B9E77", "#D95F02", "#7570B3")
+    piece_p <- base_p
+    
+    if (input$piecewise_deg > 0) {
+      data_splt <-
+        spline_example %>%
+        dplyr::mutate(x_cut = cut(x, breaks = cuts, include.lowest = TRUE)) %>%
+        tidyr::nest(.by = x_cut) %>%
+        mutate(
+          fit = lapply(data, maybe_lm),
+          features = lapply(data, mult_poly, degree = input$piecewise_deg)
+        )
+      grid_splt <-
+        dplyr::tibble(x = grid) %>%
+        dplyr::mutate(x_cut = cut(x, breaks = cuts, include.lowest = TRUE))  %>%
+        tidyr::nest(.by = x_cut)
+      
+      for (i in 1:3) {
+        sub_pred <- grid_splt$data[[i]]
+        if (!inherits(data_splt$fit[[i]], "try-error")) {
+          sub_pred <-
+            sub_pred %>%
+            dplyr::bind_cols(predict(data_splt$fit[[i]], sub_pred, 
+                                     interval = "confidence", level = .90))
+          
+          piece_p <-
+            piece_p +
+            geom_ribbon(
+              data = sub_pred,
+              aes(y = NULL, ymin = lwr, ymax = upr),
+              alpha = 1 / 15
+            ) +
+            geom_line(
+              data = sub_pred,
+              aes(y = fit),
+              linewidth = line_wd
+            )
+        }
+      }
+      
+      set.seed(383) # to control colors
+      feature_p <- 
+        data_splt %>% 
+        dplyr::select(features) %>% 
+        tidyr::unnest(features) %>% 
+        ggplot(aes(x = variable, y = value, col = name)) + 
+        geom_line(show.legend = FALSE) +
+        theme_void() +
+        theme(
+          plot.margin = margin(t = 0, r = 0, b = -20, l = 0),
+          panel.background = col_rect,
+          plot.background = col_rect,
+          legend.background = col_rect,
+          legend.key = col_rect
+        ) +
+        scale_color_viridis(discrete = TRUE, option = "turbo")
+      
+      p <- (feature_p / piece_p) + plot_layout(heights = c(1, 4))
+      
+    }
+    
+    print(p)
+    
+  })
+}
+
+app <- shinyApp(ui = ui, server = server)
+```
+
+:::
+
+A piecewise polynomial approach to model the data from @fig-global-polynomial.
+
+:::
+
+It turns out that we can make sure that the different fitted curves can connect at the ends and that they do that smoothly. This is done via a technique called splines which yield better results and are more mathematically elegant.
+
+## Spline Functions {#sec-splines}
+
+Let’s assume we use piecewise cubic polynomials in the regional curve fits. To make the curves connect, we can add additional features that isolate local areas of $x$ via a new feature column such as $h(x - \xi)^3$ where
+
+$$
+h(u)  =
+\begin{cases} x & \text{if $u > 0$,}
+\\
+0 & \text{if $u \le 0$.}
+\end{cases}
+$$
+
+and $\xi$ defines one of the boundary points.
+
+This zeros out parts of the predictor’s range that are greater than $\xi$. A smooth, continuous model would include a global polynomial expansion (i.e., $x$, $x^2$, and $x^3$) and these partial features for each value that defines the regions (these breakpoints, denoted with $\xi$, are called _knots_^[Actually, they are the _interior knots_. The full set of knots includes the minimum and maximum values of $x$ in the training set.]). For example, if a model has three regions,  the basis expansion has 3 + 2 = 5 feature columns. For the fossil data, a three region model with knots at $\xi_1 = 107$ and $\xi_2 = 114$ would have model terms
+
+$$
+y_i = \beta_0 + \beta_1x_i + \beta_2x^2 + \beta_3x^3 + \beta_4h(x_i - 107)^3 + \beta_5h(x_i - 114)^3 + \epsilon_i
+$$ {#eq-simple-spline}
+
+The model fit, with the default interior knots, shown in @fig-simple-spline looks acceptable. As with global polynomials, there is a significant increase in the confidence interval width as the model begins to extrapolate slightly beyond the data used to fit the model.  
+
+::: {#fig-simple-spline}
+
+::: {.figure-content}
+
+```{shinylive-r}
+#| label: fig-simple-spline
+#| viewerHeight: 600
+#| viewerWidth: "100%"
+#| standalone: true
+library(shiny)
+library(patchwork)
+library(dplyr)
+library(tidyr)
+library(ggplot2)
+library(bslib)
+library(aspline)
+
+data(fossil)
+
+ui <- page_fillable(
+  theme = bs_theme(bg = "#fcfefe", fg = "#595959"),
+  padding = "1rem",
+  layout_columns(
+    fill = FALSE,
+    col_widths = breakpoints(sm = c(-2, 8, -2)),
+    sliderInput(
+      "cuts",
+      label = "Cutpoints",
+      min = 93L, max = 122L, step = 1, value = c(107, 114)
+    ) # sliderInput
+  ), # layout_columns
+  layout_columns(
+    fill = FALSE,
+    col_widths = breakpoints(sm = c(-1, 10, -1)),
+    as_fill_carrier(plotOutput('splime_spline'))
+  )      
+)
+
+server <- function(input, output, session) {
+  
+  light_bg <- "#fcfefe" # from aml4td.scss
+  grid_theme <- bs_theme(
+    bg = "#fcfefe", fg = "#595959"
+  )
+  
+  # ------------------------------------------------------------------------------
+  
+  theme_light_bl<- function(...) {
+    
+    ret <- ggplot2::theme_bw(...)
+    
+    col_rect <- ggplot2::element_rect(fill = light_bg, colour = light_bg)
+    ret$panel.background  <- col_rect
+    ret$plot.background   <- col_rect
+    ret$legend.background <- col_rect
+    ret$legend.key        <- col_rect
+    
+    larger_x_text <- ggplot2::element_text(size = rel(1.25))
+    larger_y_text <- ggplot2::element_text(size = rel(1.25), angle = 90)
+    ret$axis.text.x <- larger_x_text
+    ret$axis.text.y <- larger_y_text
+    ret$axis.title.x <- larger_x_text
+    ret$axis.title.y <- larger_y_text  
+    
+    ret$legend.position <- "top"
+    
+    ret
+  }
+  
+  col_rect <- ggplot2::element_rect(fill = light_bg, colour = light_bg)
+  
+  # ------------------------------------------------------------------------------
+  
+  spline_example <- tibble(x = fossil$age, y = fossil$strontium.ratio)
+  rng <- extendrange(fossil$age, f = .025)
+  grid <- seq(rng[1], rng[2], length.out = 1000)
+  grid_df <- tibble(x = grid)
+  alphas <- 1 / 4
+  line_wd <- 1.0
+  
+  base_p <-
+    spline_example %>%
+    ggplot(aes(x = x, y = y)) +
+    geom_point(alpha = 3 / 4, pch = 1, cex = 3) +
+    labs(x = "Age", y = "Isotope Ratio") +
+    theme_light_bl()
+  
+  output$splime_spline <- renderPlot({
+    
+    spline_p <- base_p
+    
+    h <- function(x) {
+      ifelse(x > 0, x, 0)
+    }
+    
+    mod_dat <- 
+      spline_example %>% 
+      mutate(
+        x_2 = x^2, 
+        x_3 = x^3,
+        x_k_1 = pmax(h(x-min(input$cuts))^3, 0),
+        x_k_2 = pmax(h(x-max(input$cuts))^3, 0)
+      )
+    
+    grid_spln <- 
+      grid_df %>% 
+      mutate(
+        x_2 = x^2, 
+        x_3 = x^3,
+        x_k_1 = pmax(h(x-min(input$cuts))^3, 0),
+        x_k_2 = pmax(h(x-max(input$cuts))^3, 0)
+      )
+    
+    features <- 
+      rbind(
+        tibble::tibble(x = grid_spln$x, value = grid_spln$x_k_1, term = "4") %>% 
+          filter(value != 0),
+        tibble::tibble(x = grid_spln$x, value = grid_spln$x_k_2, term = "5") %>% 
+          filter(value != 0)
+      )
+    
+    fit_1 <- lm(y ~ ., data = mod_dat)
+    spline_pred <- 
+      predict(fit_1, grid_spln, interval = "confidence", level = .90) %>% 
+      bind_cols(grid_df)
+    
+    spline_p <-
+      spline_p +
+      geom_ribbon(
+        data = spline_pred,
+        aes(y = NULL, ymin = lwr, ymax = upr),
+        alpha = 1 / 15
+      ) +
+      geom_line(
+        data = spline_pred,
+        aes(y = fit),
+        linewidth = line_wd
+      ) +
+      geom_vline(xintercept = min(input$cuts), col = "#A6CEE3", lty = 2, linewidth = 1) +
+      geom_vline(xintercept = max(input$cuts), col = "#1F78B4", lty = 2, linewidth = 1)
+    
+    term_p <- 
+      features %>% 
+      ggplot(aes(x, value, col = term)) +
+      geom_line(show.legend = FALSE, linewidth = 1) +
+      lims(x = rng) +
+      theme_void() +
+      theme(
+        plot.margin = margin(t = 0, r = 0, b = -20, l = 0),
+        panel.background = col_rect,
+        plot.background = col_rect,
+        legend.background = col_rect,
+        legend.key = col_rect
+      ) +
+      scale_color_brewer(palette = "Paired")
+    
+    p <- (term_p / spline_p) + plot_layout(heights = c(1, 4))
+    
+    print(p)
+    
+  })
+}
+
+app <- shinyApp(ui = ui, server = server)
+```
+
+:::
+
+A simple cubic spline function with three regions. By default, the regions are partitions at age values of 107 and 114. The fitted curve has the same form as @eq-simple-spline. The two curves above the data plot indicate the range and values of the partial featured truncated using the function $h(\cdot)$. 
+
+:::
+
+Let’s consider how each model parameter affects the predictor’s space by labeling the regions A, B, and C (from left to right). For region A, the model is a standard cubic function (using $\beta_0$ though $\beta_3$). Region B adds the effect of the first partial function by including $\beta_4$. Finally, region C  is a function of all five model parameters. This representation of a spline is called a truncated power series and is mostly used to demonstrate how spline functions can flexibly model local trends. 
+
+::: {.note-box}
+The word "spline" is used in many different contexts. It’s confusing, but we’ll try to clear it up. 
+
+We’ll define a "spline" or "spline function" as a collection of features that represent continuous and smooth piece-wise polynomial features of a single-number predictor (with some specific properties). 
+
+"Regression splines" usually describe the use of splines of one or more predictors in a model fit such as ordinary least squares [@wood2006generalized;@arnold2019computational].
+
+The term "smoothing splines" refers to a procedure that encapsulates both a spline function as well as an estimation method to fit it to the data (usually via regularization). There is typically a knot for each unique data point in $x$ [@Wang2011].
+
+Also, there are many types of spline functions; we’ll focus on one but describe a few others at the end of this section.
+:::
+
+A different method for representing spline basis expansions is the *B-spline* [@deboor2003practical]. The terms in the model are parameterized in a completely different manner. Instead of the regions using increasingly more model parameters to define the regional fit, B-spline terms have more localized features such that only a few are “active” (i.e., non-zero) at a particular point $x_0$. This can be seen in @fig-bases which contains the basis function values for the truncated power series and B-spines
+
+```{r}
+#| label: fig-bases
+#| echo: false
+#| out-width: 60%
+#| fig-width: 6
+#| fig-height: 4.25
+#| fig-cap: "Two representations of a cubic spline for the fossil data with knots at 107 and 114. The top panel illustrates the model terms defined by @eq-simple-spline. The bottom panel shows the B-spline representation. All lines have been scaled to the same y-axis range for easy visualization."
+
+h <- function(x) {
+  ifelse(x > 0, x, 0)
+}
+
+scale_range <- function(x) {
+  x[x == 0] <- NA
+  (x - min(x, na.rm = TRUE)) / (max(x, na.rm = TRUE) - min(x, na.rm = TRUE))
+}
+
+spline_example <- tibble(x = fossil$age, y = fossil$strontium.ratio)
+rng <- extendrange(fossil$age, f = .025)
+grid <- seq(rng[1], rng[2], length.out = 1000)
+
+two_knots <- c(107, 114)
+trunc_power <-
+  tibble(x = grid) %>% 
+  mutate(
+    x_1 = x,
+    x_2 = x^2,
+    x_3 = x^3,
+    x_k_1 = pmax(h(x-min(two_knots))^3, 0),
+    x_k_2 = pmax(h(x-max(two_knots))^3, 0),
+    across(c(contains("_")), ~ scale_range(.x))
+  )
+
+two_knot_b <- splines2::bSpline(grid, knots = two_knots)
+colnames(two_knot_b) <- recipes::names0(ncol(two_knot_b), "basis_")
+two_knot_b <- apply(as.matrix(two_knot_b), 2, scale_range)
+two_knot_b_df <- as_tibble(two_knot_b)
+two_knot_b_df$x <- grid
+
+both_sets <- 
+  trunc_power %>% 
+  pivot_longer(cols = c(-x)) %>% 
+  filter(!is.na(value)) %>% 
+  mutate(type = "Truncated Power") %>% 
+  bind_rows(
+    two_knot_b_df %>% 
+      pivot_longer(cols = c(-x)) %>% 
+      filter(value > 0) %>% 
+      mutate(type = "B-Spline") 
+  ) %>% 
+  mutate(type = factor(type, levels = c("Truncated Power", "B-Spline")))
+
+both_sets %>% 
+  ggplot(aes(x, value, col = name)) + 
+  geom_line(show.legend = FALSE) +
+  lims(x = range(grid)) +
+  facet_wrap(~ type, ncol = 1) +
+  labs(x = "Age", y = NULL) 
+```
+
+B-spline parameterizations are used primarily for their numerical properties and, for this reason, we’ll use them to visualize different types of splines. 
+
+Before considering another type of spline function, let's look at one practical aspect of splines: choosing the knots. 
+
+### Defining the Knots {#sec-define-knots}
+
+How do we choose the knots? We can select them manually, and some authors advocate for this point of view. As stated by @breiman1988monotone: 
+
+> My impression, after much experimentation, is the same - that few knots suffice providing that they are in the right place.
+
+A good example is seen in @fig-simple-spline with the fossil data. Using the knot positioning widget at the top, we can find good _and_ bad choices for $\xi_1$ and $\xi_2$; knot placement can matter. However, hand-curating each feature becomes practically infeasible as the number of knots/features increases.  Otherwise, they can be set algorithmically. 
+
+There are two main choices for automatic knot selection. The first uses a sequence of equally-spaced values encompassing the predictor space. The second is to estimate percentiles of the predictor data so that regions have about the same number of values they capture. For example, a fourth degree of freedom spline would have three split points within the data arranged at the 25th, 50th, and 75th percentiles (with the minimum and maximum values bracketing the outer regions). 
+
+It would be unwise to place knots as evenly spaced values between the minimum and maximum values. Without taking the distribution of the predictor into account, it is possible that the region between some knots might not contain any training data. Since there are usually several overlapping spline features for a given predictor value, we can still estimate the model despite empty regions (but it should be avoided). 
+
+Many, but not all, splines specify how complex the fit should be in the area between the knots. However, cubic splines are a common choice because they allow for greater flexibility than linear or quadratic fits, but are not overly flexible, which could lead to over-fitting. Increasing the polynomial degree beyond three has more disadvantages than advantages. Recall that, in @fig-global-polynomial, variance exploded at the ends of the predictor distribution when the polynomial degree was very large. 
+
+### Natural cubic splines {#sec-natural-splines}
+
+The type of spline that we suggest using by default is the _natural cubic spline_^[Also called a _restricted cubic spline_ in @harre1988regression.]  [@stone1985additive;@arnold2019computational;@gauthier2020cubic]. It uses cubic fits in the interior regions and linear fits in regions on either end of the predictor distribution. For a simple two-knot model similar to @eq-simple-spline, there are only three slope parameters (the global quadratic and cubic terms are not used): 
+
+$$
+y_i = \beta_0 + \beta_1x_i + \beta_2h(x_i - \xi_1)^3 + \beta_3h(x_i - \xi_2)^3 + \epsilon_i
+$$ {#eq-natural-cubic-spline}
+
+For the fossil data, @fig-natural-cubic-spline shows how this model performs with different numbers of knots chosen using quantiles. The 90% confidence bands show an increase in uncertainty when extrapolating, but the increase is orders of magnitude smaller than a global polynomial with the same number of model terms. 
+
+::: {#fig-natural-cubic-spline}
+
+::: {.figure-content}
+
+```{shinylive-r}
+#| label: fig-natural-cubic-spline
+#| viewerHeight: 600
+#| viewerWidth: "100%"
+#| standalone: true
+
+library(shiny)
+library(patchwork)
+library(dplyr)
+library(tidyr)
+library(ggplot2)
+library(splines2)
+library(bslib)
+library(viridis)
+library(aspline)
+
+data(fossil)
+
+ui <- page_fillable(
+  theme = bs_theme(bg = "#fcfefe", fg = "#595959"),
+  padding = "1rem",
+  layout_columns(
+    fill = FALSE,
+    col_widths = breakpoints(sm = c(-3, 6, -3)),
+    sliderInput(
+      "spline_df",
+      label = "# Spline Terms",
+      min = 3L, max = 20L, step = 1L, value = 9L
+    ), # sliderInput
+  ), # layout_columns
+  layout_columns(
+    fill = FALSE,
+    col_widths = breakpoints(sm = c(-1, 10, -1)),
+    as_fill_carrier(plotOutput('spline'))
+  )         
+)
+
+server <- function(input, output, session) {
+  
+  light_bg <- "#fcfefe" # from aml4td.scss
+  grid_theme <- bs_theme(
+    bg = "#fcfefe", fg = "#595959"
+  )
+  
+  # ------------------------------------------------------------------------------
+  
+  theme_light_bl<- function(...) {
+    
+    ret <- ggplot2::theme_bw(...)
+    
+    col_rect <- ggplot2::element_rect(fill = light_bg, colour = light_bg)
+    ret$panel.background  <- col_rect
+    ret$plot.background   <- col_rect
+    ret$legend.background <- col_rect
+    ret$legend.key        <- col_rect
+    
+    larger_x_text <- ggplot2::element_text(size = rel(1.25))
+    larger_y_text <- ggplot2::element_text(size = rel(1.25), angle = 90)
+    ret$axis.text.x <- larger_x_text
+    ret$axis.text.y <- larger_y_text
+    ret$axis.title.x <- larger_x_text
+    ret$axis.title.y <- larger_y_text  
+    
+    ret$legend.position <- "top"
+    
+    ret
+  }
+  
+  col_rect <- ggplot2::element_rect(fill = light_bg, colour = light_bg)
+  
+  maybe_lm <- function(x) {
+    try(lm(y ~ poly(x, input$piecewise_deg), data = x), silent = TRUE)
+  }
+  
+  expansion_to_tibble <- function(x, original, prefix = "term ") {
+    cls <- class(x)[1]
+    nms <- recipes::names0(ncol(x), prefix)
+    colnames(x) <- nms
+    x <- as_tibble(x)
+    x$variable <- original
+    res <- tidyr::pivot_longer(x, cols = c(-variable))
+    if (cls != "poly") {
+      res <- res[res$value > .Machine$double.eps,]
+    }
+    res
+  } 
+  
+  mult_poly <- function(dat, degree = 4) {
+    rng <- extendrange(dat$x, f = .025)
+    grid <- seq(rng[1], rng[2], length.out = 1000)
+    grid_df <- tibble(x = grid)
+    feat <- poly(grid_df$x, degree)
+    res <- expansion_to_tibble(feat, grid_df$x)
+    
+    # make some random names so that we can plot the features with distinct colors
+    rand_names <- lapply(1:degree, function(x) paste0(sample(letters)[1:10], collapse = ""))
+    rand_names<- unlist(rand_names)
+    rand_names <- tibble(name = unique(res$name), name2 = rand_names)
+    res <- 
+      dplyr::inner_join(res, rand_names, by = dplyr::join_by(name)) %>% 
+      dplyr::select(-name) %>% 
+      dplyr::rename(name = name2)
+    res
+  }
+  
+  # ------------------------------------------------------------------------------
+  
+  spline_example <- tibble(x = fossil$age, y = fossil$strontium.ratio)
+  rng <- extendrange(fossil$age, f = .025)
+  grid <- seq(rng[1], rng[2], length.out = 1000)
+  grid_df <- tibble(x = grid)
+  alphas <- 1 / 4
+  line_wd <- 1.0
+  
+  base_p <-
+    spline_example %>%
+    ggplot(aes(x = x, y = y)) +
+    geom_point(alpha = 3 / 4, pch = 1, cex = 3) +
+    labs(x = "Age", y = "Isotope Ratio") +
+    theme_light_bl()
+  
+  output$spline <- renderPlot({
+    
+    spline_fit <- lm(y ~ naturalSpline(x, df = input$spline_df), data = spline_example)
+    spline_pred <- 
+      predict(spline_fit, grid_df, interval = "confidence", level = .90) %>% 
+      bind_cols(grid_df)
+    
+    spline_p <- base_p +
+      geom_ribbon(
+        data = spline_pred,
+        aes(y = NULL, ymin = lwr, ymax = upr),
+        alpha = 1 / 15) +
+      geom_line(
+        data = spline_pred,
+        aes(y = fit),
+        col = "black",
+        linewidth = line_wd)
+    
+    feature_p <-
+      naturalSpline(grid_df$x, df = input$spline_df) %>% 
+      expansion_to_tibble(grid_df$x) %>% 
+      ggplot(aes(variable, y = value, group = name, col = name)) +
+      geom_line(show.legend = FALSE) + 
+      lims(x = rng) +
+      theme_void() +
+      theme(
+        plot.margin = margin(t = 0, r = 0, b = -20, l = 0),
+        panel.background = col_rect,
+        plot.background = col_rect,
+        legend.background = col_rect,
+        legend.key = col_rect
+      ) +
+      scale_color_viridis(discrete = TRUE, option = "turbo")
+    
+    p <- (feature_p / spline_p) + plot_layout(heights = c(1, 4))
+    
+    print(p)
+    
+  })
+  
+}
+
+app <- shinyApp(ui = ui, server = server)
+```
+
+:::
+
+A natural cubic spline fit to the data previously shown in @fig-simple-spline. Good fits occur when approximately nine degrees of freedom are used. The top curves are the B-spline representation of the model terms. 
+
+:::
+
+::: {.important-box}
+
+Given the simplicity of this spline function, the fixed polynomial degree, and its stability in the tails of the predictor’s distribution, we suggest choosing natural cubic splines for most problems. 
+
+:::
+
+Splines can be configured in different ways. Two details to specify are how many regions should be separately modeled and how they are apportioned. The number of regions is related to how many features are used in the basis expansion. As the number of regions increases, so does the ability of the spline to adapt to whatever trend might be in the data. However, the risk of overfitting the model to individual data points increases as the flexibility increases.
+
+For this reason, we often tune the amount of complexity that the spline will accommodate. Generally, since the number of regions is related to the number of features, we'll refer to the complexity of the basis function via the number of degrees of freedom afforded by the spline. We don't necessarily know how many degrees of freedom to use. There are two ways to determine this. First, we can treat the complexity of the spline as a tuning parameter and optimize it with the tuning methods mentioned in Chapters [-@sec-grid] and [-@sec-iterative]. Another option is to over-specify the number of degrees of freedom and let specialized training methods solve the potential issue of over-fitting. From @wood2006generalized: 
+
+> An alternative to controlling smoothness by altering the basis dimension, is to keep the basis dimension fixed, at a size a little larger than it is believed it could reasonably be necessary, but to control the model’s smoothness by adding a "wiggliness" penalty to the least squares fitting objective. 
+
+This approach is advantageous when there are separate basis expansions for multiple predictors. The overall smoothness can be estimated along with the parameter estimates in the model. The process could be used with general linear models (Chapters [-@sec-ols] and [-@sec-ordinary-logistic-regression]) or other parametric linear models. 
+
+Splines are extremely useful and are especially handy when we want to encourage a simple model (such as linear regression) to approximate the predictive performance of a much more complex black-box model (e.g., a neural network or tree ensemble). We’ll also see splines and spline-like features used within different modeling techniques, such as generalized additive models (Sections [-@sec-reg-gam] and [-@sec-cls-gam]), multivariate adaptive regression splines (@sec-mars), and a few others. 
 
 
 ## Sidebar: The Variance-Bias Tradeoff {#sec-variance-bias}
@@ -858,7 +1779,7 @@ sim <- function(deg, n = 30) {
 }
 ```
 
-To create a simulated data set, `r nrow(make_data())` samples were generated. Of these, `r nrow(make_data()) - 1` were used for the training set and one was reserved for the estimating the variance and bias. The test set values were roughly equally spaced across the range of the predictor. One simulated data set is shown in @fig-nonlinear-sim, along with the true underlying pattern.  
+To create a simulated data set, `r nrow(make_data())` samples were generated. Of these, `r nrow(make_data()) - 1` were used for the training set and one was reserved for the estimating the variance and bias. The training set values were roughly equally spaced across the range of the predictor. One simulated data set is shown in @fig-nonlinear-sim, along with the true underlying pattern.  
 
 ```{r}
 #| label: fig-nonlinear-sim
@@ -866,7 +1787,7 @@ To create a simulated data set, `r nrow(make_data())` samples were generated. Of
 #| out-width: 70%
 #| fig-width: 6
 #| fig-height: 4.25
-#| fig-cap: "A simulated data set with a nonlinear function."
+#| fig-cap: "A simulated data set with a nonlinear function. The test set point is the location where our simulation estimates the bias and variance."
 sim_grid <- 
   tibble(x = seq(from = -1.2, to = 1.2, length.out = 500)) %>% 
   mutate(y = (x^3) + 2 * exp(-6 * (x - 0.3)^2))
@@ -965,7 +1886,7 @@ The variance-bias tradeoff is the idea that we can exploit one for the other. Le
 #| out-width: 70%
 #| fig-width: 6.25
 #| fig-height: 4
-#| fig-cap: "A simnple example of the variance-bias tradeoff."
+#| fig-cap: "A simple example of the variance-bias tradeoff."
 unbiased <- tibble(value = rnorm(50000, sd = 3), 
                    case = "unbiased, high variance")
 biased <- tibble(value = rnorm(50000, mean = - 1 / 2, sd = 1), 
