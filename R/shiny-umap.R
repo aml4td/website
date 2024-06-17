@@ -1,5 +1,6 @@
 ui <- fluidPage(
-  theme = grid_theme,
+  theme = bs_theme(),
+  bslib::input_dark_mode(),
   fluidRow(
 
     column(
