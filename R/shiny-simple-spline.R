@@ -100,13 +100,13 @@ server <- function(input, output, session) {
       geom_ribbon(
         data = spline_pred,
         aes(y = NULL, ymin = lwr, ymax = upr),
-        fill = "#FF0099",
-        alpha = 1 / 5
+        fill = "#FBE577",
+        alpha = 1 / 2
       ) +
       geom_line(
         data = spline_pred,
         aes(y = fit),
-        col = "#FF0099",
+        col = "#FFBA18",
         linewidth = line_wd
       ) +
       geom_vline(xintercept = min(input$cuts), col = "#A6CEE3", lty = 2, linewidth = 1) +
