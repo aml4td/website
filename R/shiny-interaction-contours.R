@@ -36,7 +36,7 @@ ui <- page_fillable(
 
 server <- function(input, output) {
 
-  # theme_light_bl()
+  theme_set(theme_transparent())
   
   # ------------------------------------------------------------------------------
 
