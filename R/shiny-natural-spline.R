@@ -92,7 +92,6 @@ server <- function(input, output, session) {
       geom_line(
         data = spline_pred,
         aes(y = fit),
-        col = "black",
         linewidth = line_wd)
     
     feature_p <-
