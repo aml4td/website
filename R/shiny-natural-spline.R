@@ -89,7 +89,7 @@ server <- function(input, output, session) {
         data = spline_pred,
         aes(y = NULL, ymin = lwr, ymax = upr),
         fill = "#FF0099",
-        alpha = 1 / 15) +
+        alpha = 1 / 10) +
       geom_line(
         data = spline_pred,
         aes(y = fit),

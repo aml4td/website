@@ -23,6 +23,7 @@ ui <- page_fillable(
 
 
 server <- function(input, output, session) {
+  
   theme_transparent <- function(...) {
     
     ret <- ggplot2::theme_bw(...)
@@ -40,6 +41,9 @@ server <- function(input, output, session) {
 
   theme_set(theme_transparent())
   transparent_rect <- ggplot2::element_rect(fill = "transparent", colour = NA)
+  
+  # ------------------------------------------------------------------------------
+  
   
   maybe_lm <- function(x) {
     try(lm(y ~ poly(x, input$piecewise_deg), data = x), silent = TRUE)
@@ -108,7 +112,7 @@ server <- function(input, output, session) {
           data = poly_pred,
           aes(y = NULL, ymin = lwr, ymax = upr),
           fill = "#FF0099",
-          alpha = 1 / 15) +
+          alpha = 1 / 10) +
         geom_line(
           data = poly_pred,
           aes(y = fit),
