@@ -32,6 +32,9 @@ ui <- page_fillable(
 server <- function(input, output) {
   load(url("https://raw.githubusercontent.com/aml4td/website/main/RData/barley_linear_embeddings.RData"))
   
+  theme_set(theme_transparent())
+  
+  # ------------------------------------------------------------------------------
   
   output$loadings <-
     renderPlot({
@@ -43,8 +46,8 @@ server <- function(input, output) {
         geom_hline(yintercept = 0, lty = 3) +
         geom_line(alpha = 3 / 4, linewidth = 1) +
         labs(y = "Loading Value") +
-        scale_color_brewer(palette = "Dark2") +
-        theme_light_bl() 
+        scale_color_brewer(palette = "Dark2") 
+      
       if ( length(input$method) > 1) {
         p <- p + facet_wrap(~ id, nrow = 1)
       }

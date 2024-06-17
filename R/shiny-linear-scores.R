@@ -22,6 +22,9 @@ ui <- page_fillable(
 server <- function(input, output) {
   load(url("https://raw.githubusercontent.com/aml4td/website/main/RData/barley_linear_embeddings.RData"))
   
+  theme_set(theme_transparent())
+  
+  # ------------------------------------------------------------------------------
   
   output$scores <-
     renderPlot({
@@ -36,10 +39,8 @@ server <- function(input, output) {
         geom_point(aes(col = barley), alpha = 1 / 3, cex = 1) + 
         geom_autodensity(alpha = 1 / 2) +
         facet_matrix(vars(c(-barley, -.row)), layer.diag = 2, grid.y.diag = FALSE) +
-        scale_color_viridis(option = "viridis") +
-        theme_light_bl()
+        scale_color_viridis(option = "viridis")
 
-      
       print(p)
       
     })

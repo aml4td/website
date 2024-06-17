@@ -60,7 +60,11 @@ ui <- fluidPage(
 
 server <- function(input, output) {
   load(url("https://raw.githubusercontent.com/aml4td/website/main/RData/umap_results.RData"))
-
+  
+  theme_set(theme_transparent())
+  
+  # ------------------------------------------------------------------------------
+  
   output$umap <-
     renderPlot({
       
@@ -77,7 +81,6 @@ server <- function(input, output) {
         ggplot(dat, aes(UMAP1, UMAP2, col = barley)) +
         geom_point(alpha = 1 / 3, cex = 3) +
         scale_color_viridis(option = "viridis") +
-        theme_light_bl() +
         coord_fixed() +
         labs(x = "UMAP Embedding #1", y = "UMAP Embedding #2") +
         guides(col = guide_colourbar(barheight = 0.5))
