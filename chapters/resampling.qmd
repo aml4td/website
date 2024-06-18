@@ -17,7 +17,7 @@ source("../R/_common.R")
 library(readr)
 library(tidymodels)
 library(patchwork)
-library(gt)
+library(kableExtra)
 library(doParallel)
 library(leaflet)
 library(spatialsample)
@@ -501,7 +501,7 @@ cv_10_bias <-
         stats_v_fold_cv$.metric == "brier_class"]) * 100
 ```
 
-There have been some attempts to de-bias the ordinary bootstrap estimate. The "632 rule" [@Efron1983p51] uses the ordinary bootstrap estimate ($\hat{Q}_{bt}$) and the resubstitution estimate ($\hat{Q}_{rsub}$) together: 
+There have been some attempts to de-bias the ordinary bootstrap estimate. The "632 estimator" [@Efron1983p51] uses the ordinary bootstrap estimate ($\hat{Q}_{bt}$) and the resubstitution estimate ($\hat{Q}_{rsub}$) together: 
 
 $$\hat{Q}_{632} = e^{-1}\, \hat{Q}_{rsub} + (1 - e^{-1})\, \hat{Q}_{bt} = 0.368\,\hat{Q}_{rsub} + 0.632\,\hat{Q}_{bt}$$
 @fig-boot-stats shows that there is a significant drop in the bias when using this correction. The 632 estimator combines two different statistical estimates, and we only know the standard error of $\hat{Q}_{bt}$. Therefore, the right-hand panel does not show a standard error curve for the 632 estimator.  
@@ -524,30 +524,55 @@ $$
 \hat{w} &= \frac{0.632}{1 - 0.368ROR} \notag
 \end{align}
 $$
-Plugging in our values, the final weight on the ordinary estimator ($w$ = `r signif(wt_632p, 3)`) is very close to what is used by the regular 632 rule ($w$ = `r signif(1 - exp(-1), 3)`). The final estimate is also similar: $\hat{Q}_{632+}$ = `r signif(Q_632p, 3)`. 
+Plugging in our values, the final weight on the ordinary estimator ($w$ = `r signif(wt_632p, 3)`) is very close to what is used by the regular 632 estimator ($w$ = `r signif(1 - exp(-1), 3)`). The final estimate is also similar: $\hat{Q}_{632+}$ = `r signif(Q_632p, 3)`. 
+
+
+
+::: {#tbl-bootstrap-bias}
+
+:::: {.columns}
+
+::: {.column width="35%"}
+
+:::
+
+::: {.column width="30%"}
 
 ```{r}
 #| label: tbl-bootstrap-bias
 #| echo: false
-#| tbl-cap: "Bias correction values for two models on a simulated data set."
 
-table_boot_632 %>%
+table_boot_632_sub <-
+  table_boot_632 %>%
   select(-contains("accuracy")) %>% 
-  gt(groupname_col = "type") %>%
-    tab_spanner(
-    label = "Brier Score",
-    columns = c(brier_class_knn, brier_class_logistic)
-  ) %>%
-  cols_label(
-    statistic = " ",
-    brier_class_knn = "1 NN",
-    brier_class_logistic = "Logistic",
-    blank = " "
-  ) %>%
-  fmt_number(columns = c(-statistic), decimals = 3)
+  mutate(type = factor(type, levels = c("estimates", "intermediates", "final estimates"))) %>% 
+  arrange(type, statistic)
+ind_est <- range(which(table_boot_632_sub$type == "estimates"))
+int_est <- range(which(table_boot_632_sub$type == "intermediates"))
+fin_est <- range(which(table_boot_632_sub$type == "final estimates"))
+
+table_boot_632_sub %>% 
+  select(statistic, brier_class_logistic, brier_class_knn) %>% 
+  kbl(digits = 3, escape = TRUE, col.names = c(" ", "Logistic", "1 NN")) %>% 
+  add_header_above(c(" " = 1, "Brier Score" = 2)) %>% 
+  pack_rows("Estimates", start_row = ind_est[1], end_row = ind_est[2]) %>% 
+  pack_rows("Intermediates", start_row = int_est[1], end_row = int_est[2]) %>% 
+  pack_rows("Final Estimates", start_row = fin_est[1], end_row = fin_est[2])
 ```
 
-The simulations studies shown here in @fig-boot-stats replicated what @Molinaro2005p47 found; the 632+ rule has bias properties about the same as 10-fold cross-validation. 
+:::
+
+::: {.column width="35%"}
+
+:::
+
+::::
+
+Bias correction values for two models on a simulated data set.
+
+:::
+
+The simulations studies shown here in @fig-boot-stats replicated what @Molinaro2005p47 found; the 632+ estimator has bias properties about the same as 10-fold cross-validation. 
 
 How do these bias corrected estimators work when there is extreme overfitting? One way to tell is to consider a 1-nearest neighbor model. In this case, re-predicting the training set predicts every data point with its outcome value (i.e., a “perfect” model). For the Brier score, this means $\hat{Q}_{rsub}$ is zero. @tbl-bootstrap-bias shows the rest of the computations. For this model $Q\approx$ `r signif(Q_knn_true, 3)` and the ordinary estimate comes close: $\hat{Q}_{bt}$ = `r signif(Q_knn_bt, 3)`. 
 
