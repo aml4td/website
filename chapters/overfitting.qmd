@@ -321,15 +321,22 @@ lgb_test_res <-
 
 # ------------------------------------------------------------------------------
 
+smoothed <- function(x, y) {
+  supsmu(x, y, span = 0.1)$y
+}
+
 brier_cv <- 
   collect_metrics(lgb_cv_res) %>% 
   select(min_n, brier = mean) %>% 
-  mutate(Method = "Resampling")
+  mutate(
+    Method = "Resampling",
+    smoothed = smoothed(min_n, brier))
 
 brier_test <- 
   collect_metrics(lgb_test_res) %>% 
   select(min_n, brier = mean) %>% 
-  mutate(Method = "Test Set")
+  mutate(Method = "Test Set",
+         smoothed = smoothed(min_n, brier))
 
 brier_resub <- 
   collect_extracts(lgb_test_res) %>% 
@@ -338,7 +345,8 @@ brier_resub <-
     brier = map_dbl(train_pred, ~ brier_class(.x, class, .pred_one)$.estimate)
   ) %>% 
   select(min_n, brier) %>% 
-  mutate(Method = "Resubstituion")
+  mutate(Method = "Resubstituion",
+         smoothed = smoothed(min_n, brier))
 
 brier_all <- 
   bind_rows(brier_resub, brier_cv, brier_test) %>% 
@@ -355,20 +363,19 @@ We took the training data and fit models using values $n_{min}$ = 3, 4, ..., 80.
 
 @fig-complexity-error shows the results. The yellow curve illustrates the Brier score when the training set is re-predicted. There is a sharp increase in error as the tuning parameter values increase. This line suggests that we use very small values. The smallest Brier score is associated with $n_{min}$ = `r min_n_df$min_n[min_n_df$Method == "Resubstituion"]` (producing an effectively zero Brier score).
 
-
 ```{r}
 #| label: fig-complexity-error
 #| echo: false
 #| out-width: 60%
 #| fig-width: 6
 #| fig-height: 4.25
-#| fig-cap: "An example to show how complexity and model error, measured two ways, interact. The tuning parameter on the x-axis is $n_{min}$ used for moderating tree growth."
+#| fig-cap: "An example to show how complexity and model error, measured two ways, interact. The tuning parameter on the x-axis is $n_{min}$ used for moderating decision tree growth."
 
 brier_all %>% 
   filter(Method != "Resampling") %>% 
-  ggplot(aes(min_n, brier, col = Method, pch = Method)) + 
-  geom_point(cex = 1.2) + 
-  geom_line() +
+  ggplot(aes(min_n, smoothed, col = Method, pch = Method)) + 
+  geom_point(aes(y = brier), cex = 1.2, alpha = 1 / 4) +
+  geom_line(linewidth = 1) +
   labs(x = "Minimal Node Size", y = "Brier Score") +
   scale_color_manual(values = method_cols)
 ```	
@@ -406,9 +413,9 @@ Resampling methods take the training set and make multiple variations of it, usu
 #| fig-cap: Model complexity versus model error with external validation via resampling.
 
 brier_all %>% 
-  ggplot(aes(min_n, brier, col = Method, pch = Method)) + 
-  geom_point(cex = 1.2) + 
-  geom_line() +
+  ggplot(aes(min_n, smoothed, col = Method, pch = Method)) + 
+  geom_point(aes(y = brier), cex = 1.2, alpha = 1 / 4) +
+  geom_line(linewidth = 1) +
   labs(x = "Minimal Node Size", y = "Brier Score") +
   scale_color_manual(values = method_cols)
 ```	
