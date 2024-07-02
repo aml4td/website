@@ -52,7 +52,7 @@ tree_light <-
   geom_node_splitvar() +
   geom_node_plot(
     gglist = list(
-      geom_boxplot(aes(y = time_to_delivery)),
+      geom_boxplot(aes(y = time_to_delivery), outlier.size = 1/2),
       labs(x = NULL, y = NULL),
       lims(x = c(-1, 1)),
       theme_transparent(),
@@ -82,7 +82,7 @@ tree_dark <-
   geom_node_splitvar() +
   geom_node_plot(
     gglist = list(
-      geom_boxplot(aes(y = time_to_delivery)),
+      geom_boxplot(aes(y = time_to_delivery), outlier.size = 1/2),
       labs(x = NULL, y = NULL),
       lims(x = c(-1, 1)),
       theme_transparent(),
