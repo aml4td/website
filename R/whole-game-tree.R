@@ -1,6 +1,8 @@
 library(rpart)
 library(partykit)
 library(tidymodels)
+library(ggparty)
+library(ggdark)
 
 # ------------------------------------------------------------------------------
 
@@ -23,26 +25,82 @@ cart_tree <-
   rpart(time_to_delivery ~ ., data = delivery_train,
         control = rpart.control(maxdepth = 3))
 
-# ------------------------------------------------------------------------------
-
-pdf("premade/delivery-tree.pdf", width = 12, height = 6)
-  cart_tree %>% 
-    as.party() %>% 
-    plot()
-dev.off()
+cart_party_tree <- as.party(cart_tree)
 
 # ------------------------------------------------------------------------------
 
+theme_transparent <- function(...) {
+  
+  ret <- ggplot2::theme_bw(...)
+  
+  transparent_rect <- ggplot2::element_rect(fill = "transparent", colour = NA)
+  ret$panel.background  <- transparent_rect
+  ret$plot.background   <- transparent_rect
+  ret$legend.background <- transparent_rect
+  ret$legend.key        <- transparent_rect
+  
+  ret$legend.position <- "top"
+  
+  ret
+}
 
-svg("premade/delivery-tree.svg", width = 12, height = 6)
-  grid.newpage()
-  grid.rect(gp = gpar(col = light_bg, fill = light_bg))
+tree_light <- 
+  cart_party_tree %>% 
+  ggparty() +
+  geom_edge() +
+  geom_edge_label(size = 3.2) +
+  geom_node_splitvar() +
+  geom_node_plot(
+    gglist = list(
+      geom_boxplot(aes(y = time_to_delivery)),
+      labs(x = NULL, y = NULL),
+      lims(x = c(-1, 1)),
+      theme_transparent(),
+      theme(
+        axis.ticks.x = element_blank(),
+        axis.text.x = element_blank(),
+        panel.grid.major.x = element_blank(),
+        panel.grid.major.y = element_blank())
+      )
+    )
 
-  cart_tree %>% 
-    as.party() %>% 
-    plot(ip_args = list(id = FALSE, fill = light_bg),
-         ep_args = list(fill = light_bg),
-         tp_args = list(id = FALSE, bg = light_bg, fill = light_bg),
-         newpage = FALSE)
-dev.off()
 
+ggsave(
+  filename = "premade/delivery-tree-light.svg",
+  plot = tree_light,
+  width = 9,
+  height = 4.5,
+  dev = "svg",
+  bg = "transparent"
+)
+
+tree_dark <- 
+  cart_party_tree %>% 
+  ggparty() +
+  geom_edge() +
+  geom_edge_label(size = 3.2) +
+  geom_node_splitvar() +
+  geom_node_plot(
+    gglist = list(
+      geom_boxplot(aes(y = time_to_delivery)),
+      labs(x = NULL, y = NULL),
+      lims(x = c(-1, 1)),
+      theme_transparent(),
+      dark_theme_grey(),
+      theme(
+        axis.ticks.x = element_blank(),
+        axis.text.x = element_blank(),
+        panel.grid.major.x = element_blank(),
+        panel.grid.major.y = element_blank())
+    )
+  )
+
+
+ggsave(
+  filename = "premade/delivery-tree-dark.svg",
+  plot = tree_dark,
+  width = 9,
+  height = 4.5,
+  dev = "svg",
+  bg = "transparent"
+)
