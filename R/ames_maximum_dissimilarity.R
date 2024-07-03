@@ -192,6 +192,7 @@ animate(
   detail = 5,
   width = 1500,
   height = 1000,
+  bg = "black",
   res = 200,
   renderer = gifski_renderer(),
   duration = 25

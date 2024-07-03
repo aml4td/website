@@ -2,6 +2,7 @@ library(tidymodels)
 library(bestNormalize)
 library(gganimate)
 library(viridis)
+library(ggdark)
 
 # ------------------------------------------------------------------------------
 
@@ -136,9 +137,10 @@ ranges <-
 # ------------------------------------------------------------------------------
 # make the animation
 
-pca_animation <-
+pca_animation_light <-
   ggplot(rotations, aes(x = wvlgth_001, y = wvlgth_050)) +
-  geom_text(data = ranges, aes(x = note_x, y = note_y, label = note)) +
+  geom_text(data = ranges, aes(x = note_x, y = note_y, label = note),
+            size = 3, col = "black") +
   geom_point(aes(col = barley), alpha = 1 / 3) +
   transition_states(state2) +
   labs(x = "Dimension 1", y = "Dimension 2", title = "(b)") +
@@ -146,20 +148,55 @@ pca_animation <-
   exit_shrink() +
   ease_aes('sine-in-out') +
   scale_color_viridis(option = "viridis") +
-  theme_transparent()
+  theme_transparent() +
+  theme(legend.position = "none")
 
-anim <-
+anim_light <-
   gganimate::animate(
-    pca_animation,
+    pca_animation_light,
     detail = 5,
     width = 750,
     height = 750,
     res = 200
   )
 
-anim
+anim_light
 
-anim_save("premade/anime_barley_pca.gif")
+anim_save("premade/anime-barley-pca-light.gif")
+
+# ------------------------------------------------------------------------------
+
+
+ggplot2::reset_theme_settings()
+ggplot2::theme_set(theme_transparent())
+ggplot2::theme_set(ggdark::dark_theme_grey())
+
+pca_animation_dark <-
+  ggplot(rotations, aes(x = wvlgth_001, y = wvlgth_050)) +
+  geom_text(data = ranges, aes(x = note_x, y = note_y, label = note),
+            col = "yellow", size = 3) +
+  geom_point(aes(col = barley), alpha = 1 / 3) +
+  transition_states(state2) +
+  labs(x = "Dimension 1", y = "Dimension 2", title = "(b)") +
+  enter_fade() +
+  exit_shrink() +
+  ease_aes('sine-in-out') +
+  scale_color_viridis(option = "viridis") +
+  theme(legend.position = "none")
+
+anim_dark <-
+  gganimate::animate(
+    pca_animation_dark,
+    bg = "black",
+    detail = 5,
+    width = 750,
+    height = 750,
+    res = 200
+  )
+
+anim_dark
+
+anim_save("premade/anime-barley-pca-dark.gif")
 
 # ------------------------------------------------------------------------------
 
