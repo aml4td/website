@@ -13,10 +13,11 @@ source("../R/_common.R")
 
 # ------------------------------------------------------------------------------
 
+library(lme4)
+library(broom.mixed)
 library(tidymodels)
 library(finetune)
 library(rlang)
-library(sfd)
 library(doParallel)
 
 # ------------------------------------------------------------------------------
@@ -113,9 +114,7 @@ knn_random <-
   mutate(grid = "Random")
 
 knn_sfd <- 
-  get_design(2, sfd_size, type = "max_min_l1") %>% 
-  update_values(vals) %>% 
-  setNames(names(knn_random)) %>%
+  grid_space_filling(knn_prm, size = sfd_size) %>%
   mutate(grid = "Space-Filling")
  
 knn_grids <- 
@@ -467,7 +466,13 @@ TODO move all timing computations to a separate file for batch processing
 
 ### Racing {#sec-racing}
 
-Summed up in @alg-race.
+Racing [@maron1997racing] is a technique that adaptively resamples the data during grid search. The goal is to cull tuning parameter combinations with no real hope of being optimal. For example, in our previous tuning of the KNN model, it is clear that the single neighbor model performs very poorly. Unfortunately, we can’t know that until we’ve finished all the computations. 
+
+Racing tries to circumvent this issue by doing an interim statistical analysis of the tuning results. From this, we can compute a probability (or score) that measures how likely each candidate will be the best (for some single metric). If a candidate is exceedingly poor, we can tell that after a few resamples. 
+
+There are a variety of ways to do this. See @kuhn2014futility, @krueger2015fast, and @bergman2024don. The general process is shown in @alg-race. The resampling process starts normally for the first $B_{min}$ resamples. Lines 7-12 can be conducted in parallel for additional computation speed. After the initial resampling for all candidates, the interim analysis results in a potentially smaller set of $s_b$ candidates. 
+
+At each resampling estimate beyond the first $B_{min}$ iterations, the current candidate set is evaluated for a single resample, and the interim analysis potentially prunes tuning parameter combinations. 
 
 ::: {#alg-race}
 
@@ -519,6 +524,167 @@ Summed up in @alg-race.
 Using racing for grid search tuning parameter optimization. 
 
 :::
+
+The details are in the analysis used to discard tuning parameter combinations.  For simplicity, we’ll focus on a basic method that uses a form of analysis of variance (ANOVA), a standard statistical tool for determining whether there are differences between conditions. In our context, the conditions are the tuning parameter candidates; we ignore their values and treat them as qualitative samples from the distribution of all possible tuning parameter combinations. The ANOVA model uses the candidate conditions as the predictor and the metric of choice as the numeric outcome. 
+
+There are two statistical considerations to think about. 
+
+First, the ANOVA model is used for statistical inference; we’ll use it to compute confidence intervals on differences in performance. This means that the probabilistic assumptions about our data matter. The ANOVA method requires that the errors follow a Gaussian distribution. That distribution can be strongly influenced by the distribution of the outcome, and, in our case, this is a performance metric. Previously, we used the Brier score, which has non-negative values and might be prone to follow a right-skewed statistical distribution. However, each resampled Brier score is the average of differences, and the Central Limit Theorem suggests that as the number of data points used to compute the score increases, the sampling distribution will become more Gaussian. If we use this type of racing model, we should use it on a model and check the normality assumptions of the errors. 
+
+The second statistical complication is related to the resamples. Basic ANOVA methods require the data to be independent of one another, which is definitely not the case for resampling results. A “within-resample” correlation occurs since some resamples are “easier” to predict than others. This means that the metrics associated with each resample are more similar to one another than to the metrics from other resamples. 
+
+This extra correlation means that a simple ANOVA model cannot be used. Instead, our interim analysis can use a hierarchical random effects model. This is the same methodology used in @sec-effect-encodings for effect encodings. We’ll treat our set of resamples as a random sample of possible resampling indices and then estimate the within-resample variation. The model itself is: 
+
+$$
+Q_{ij} =(\beta_0 + \beta_{0i}) + \beta_1x_{i1} + \ldots +  \beta_{s-1}x_{i(s-1)}+ \epsilon_{ij}
+$$ 
+
+for $i=1,\ldots, B$ resamples and $j=1, \ldots, s$ candidates. This random intercept model assumes that the ranking of candidates is the same across resamples and only the magnitude of the pattern changes from resample to resample. 
+
+This model’s form is the reference cell parameterization discussed in @sec-indicators For each interim analysis, the reference cell will be set to the current best candidate. This means that the $\hat{\beta}_j$ parameter estimates are loss of performance relative to the current best. A one-sided confidence interval is constructed to determine if a candidate should be removed. We can stop considering candidates whose interval does not contain zero. 
+```{r}
+#| label: racing-anova
+#| include: false
+#| cache: true
+
+large_grid <- grid_space_filling(knn_prm, size = 100)
+
+large_par_time <- 
+  system.time({
+    knn_large_par_res <- 
+      knn_wflow %>% 
+      tune_grid(
+        resamples = sim_rs,
+        metrics = metric_set(brier_class),
+        grid = large_grid
+      ) 
+  })
+
+large_race_time <- 
+  system.time({
+    set.seed(1)
+    knn_large_race_res <- 
+      knn_wflow %>% 
+      tune_race_anova(
+        resamples = sim_rs,
+        metrics = metric_set(brier_class),
+        grid = large_grid,
+        control = control_race(verbose_elim = FALSE)
+      ) 
+  })
+
+registerDoSEQ()
+
+large_seq_time <- 
+  system.time({
+    knn_large_seq_res <- 
+      knn_wflow %>% 
+      tune_grid(
+        resamples = sim_rs,
+        metrics = metric_set(brier_class),
+        grid = large_grid
+      ) 
+  })
+
+num_remaining <- knn_large_race_res %>% collect_metrics() %>% nrow()
+num_fit <- nrow(map_dfr(knn_large_race_res$.metrics, I))
+
+loss_text <- knn_large_race_res %>% 
+  select(.order, .metrics) %>% 
+  mutate(remaining = map_int(.metrics, nrow)) %>% 
+  arrange(.order) %>% 
+  mutate(loss = dplyr::lag(remaining) - remaining) %>% 
+  slice(-1) %>% 
+  filter(loss > 0) %>% 
+  mutate(
+    chr_order = xfun::numbers_to_words(.order - 1),
+    text = map_chr(loss, ~ cli::pluralize("({.x} configuration{?s})")),
+    text = paste(chr_order, text)
+  ) %>% 
+  summarize(glue::glue_collapse(text, ", ", last = ", and "))
+
+best_race <- show_best(knn_large_race_res, metric = "brier_class", n = 1) 
+best_grid <- show_best(knn_large_par_res, metric = "brier_class", n = 1) 
+
+if (isTRUE(all.equal(best_race[, c("neighbors", "dist_power")], best_grid[, c("neighbors", "dist_power")]))) {
+  best_text <- "The numerically best candidate set for racing and basic grid search were the same."
+} else {
+  best_text <- 
+    glue::glue("The numerically best candidate set for racing and basic grid \\
+               search were different. Racing chose a model with \\
+               {best_race$neighbors} neighbors and a exponent value of \\
+               {round(best_race$dist_power, 3)}. Full grid search chose \\
+               {best_grid$neighbors} neighbors and an exponent of \\
+               {round(best_grid$dist_power, 3)}. The difference in Brier \\
+               scores was {signif(abs(best_race$mean - best_grid$mean), 2)}.")
+}
+```
+```{r}
+#| label: racing-filter
+#| include: false
+
+initial_resamples <- 
+  knn_large_race_res %>% 
+  filter(.order <= control_race()$burn_in) %>% 
+  unnest(.metrics) %>% 
+  select(id, .config, .estimate, neighbors, dist_power)
+
+initial_means <- 
+  initial_resamples %>% 
+  summarize(mean = mean(.estimate), .by = c(.config))
+
+initial_resamples <- 
+  initial_resamples %>% 
+  full_join(initial_means, by = ".config") %>% 
+  arrange(mean) %>% 
+  mutate(
+    .config = factor(.config),
+    .config = reorder(.config, mean),
+    id = factor(id)
+  )
+
+brier_mod <- lmer(.estimate ~ .config + (1|id), data = initial_resamples)
+
+brier_coefs <- tidy(brier_mod, conf.int = TRUE, conf.level = 0.95)
+brier_param <- 
+  brier_coefs %>% 
+  arrange(estimate) %>% 
+  filter(!is.na(estimate) & grepl("config", term)) %>% 
+  mutate(
+    candidate = row_number(),
+    Decision = ifelse(conf.low <= 0, "keep", "remove"),
+    Decision = factor(Decision, levels = c("remove", "keep"))
+  )
+num_removed <- sum(brier_param$Decision == "remove")
+num_removed <- xfun::numbers_to_words(num_removed)
+num_removed <- tools::toTitleCase(num_removed)
+
+resample_var <- brier_coefs$estimate[brier_coefs$term == "sd__(Intercept)"]^2
+residual_var <- brier_coefs$estimate[brier_coefs$term == "sd__Observation"]^2
+within_corr <- resample_var / (resample_var + residual_var)
+```
+
+To demonstrate the racing procedure, a space-filling design with `r format(nrow(large_grid), big.mark = ",")` candidates was created and evaluated with racing. The folds were randomized, and after `r control_race()$burn_in` resamples, the ANOVA method was used to analyze the results. @fig-racing-initial shows the one-sided 95% confidence intervals for the loss of Brier score relative to the current best configuration (_K_ = `r initial_resamples$neighbors[1]` and $\phi$ = `r initial_resamples$dist_power[1]`). `r num_removed` were eliminated at this round. 
+
+```{r}
+#| label: fig-racing-initial
+#| echo: false
+#| out-width: 70%
+#| fig-align: center
+#| fig-width: 6
+#| fig-height: 4.25
+#| fig-cap: The first interim analysis in racing using a larger space-filling design.
+
+brier_param %>% 
+  ggplot(aes(y = candidate)) + 
+  geom_point(aes(x = estimate), cex = 1 / 2) +
+  geom_vline(xintercept = 0, lty = 2) +
+  geom_errorbar(aes(xmin = conf.low, xmax = estimate, col = Decision), 
+                alpha = 1 / 3) +
+  labs(x = "Drop in Brier Score", y = "Candidate Rank")
+```
+
+In the end, the racing process eliminated all but `r num_remaining` candidates. The process eliminated candidates at iterations `r loss_text[[1]]`. In all, `r num_fit` models were fit out of the possible `r format(nrow(large_grid) * nrow(sim_rs), big.mark = ",")` (`r round(num_fit / (nrow(large_grid) * nrow(sim_rs)) * 100, 1)`%). The speed-up relative to sequential grid search was `r round(large_seq_time[3]/large_race_time[3], 1)`-fold and `r round(large_par_time[3]/large_race_time[3], 1)`-fold relative to parallel processing with basic grid search. `r best_text`
 
 ## Chapter References {.unnumbered}
 
