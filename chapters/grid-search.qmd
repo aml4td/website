@@ -474,11 +474,11 @@ First, the ANOVA model is used for statistical inference; we’ll use it to comp
 
 The second statistical complication is related to the resamples. Basic ANOVA methods require the data to be independent of one another, which is definitely not the case for resampling results. A “within-resample” correlation occurs since some resamples are “easier” to predict than others. This means that the metrics associated with each resample are more similar to one another than to the metrics from other resamples. 
 
-This extra correlation means that a simple ANOVA model cannot be used. Instead, our interim analysis can use a hierarchical random effects model. This is the same methodology used in @sec-effect-encodings for effect encodings. We’ll treat our set of resamples as a random sample of possible resampling indices and then estimate the within-resample variation. The model itself is: 
+This extra correlation means that a simple ANOVA model cannot be used. Instead, our interim analysis can use a hierarchical random effects model. This is the same methodology used in @sec-effect-encodings for effect encodings. We’ll treat our set of resamples as a random sample of possible resampling indices. The ANOVA model itself is: 
 
 $$
 Q_{ij} =(\beta_0 + \beta_{0i}) + \beta_1x_{i1} + \ldots +  \beta_{s-1}x_{i(s-1)}+ \epsilon_{ij}
-$$ 
+$$ {#eq-perf-mod-racing}
 
 for $i=1,\ldots, B$ resamples and $j=1, \ldots, s$ candidates. This random intercept model assumes that the ranking of candidates is the same across resamples and only the magnitude of the pattern changes from resample to resample. 
 
@@ -608,7 +608,7 @@ residual_var <- brier_coefs$estimate[brier_coefs$term == "sd__Observation"]^2
 within_corr <- resample_var / (resample_var + residual_var)
 ```
 
-To demonstrate the racing procedure, a space-filling design with `r format(nrow(large_grid), big.mark = ",")` candidates was created and evaluated with racing. Since racing can me more efficient, we also expanded the hyperparameter space to be $K \in \{1, 100\}$ and $\phi \in \{0.5, 2.5\}$. The folds were randomized, and after `r control_race()$burn_in` resamples, the ANOVA method was used to analyze the results. @fig-racing-initial shows the one-sided 95% confidence intervals for the loss of Brier score relative to the current best configuration (_K_ = `r initial_resamples$neighbors[1]` and $\phi$ = `r initial_resamples$dist_power[1]`). `r num_removed` were eliminated at this round. 
+To demonstrate the racing procedure, a space-filling design with `r format(nrow(large_grid), big.mark = ",")` candidates was created and evaluated with racing. If we were starting from scratch and, since racing can be more efficient, we might expand the hyperparameter space to be $K \in \{1, 100\}$ and $\phi \in \{0.5, 2.5\}$. The folds were randomized, and after `r control_race()$burn_in` resamples, the ANOVA method was used to analyze the results. @fig-racing-initial shows the one-sided 95% confidence intervals for the loss of Brier score relative to the current best configuration (_K_ = `r initial_resamples$neighbors[1]` and $\phi$ = `r initial_resamples$dist_power[1]`). `r num_removed` were eliminated at this round. 
 
 ```{r}
 #| label: fig-racing-initial
@@ -630,7 +630,9 @@ brier_param %>%
 
 In the end, the racing process eliminated all but `r num_remaining` candidates. The process eliminated candidates at iterations `r loss_text[[1]]`. In all, `r num_fit` models were fit out of the possible `r format(nrow(large_grid) * nrow(sim_rs), big.mark = ",")` (`r round(num_fit / (nrow(large_grid) * nrow(sim_rs)) * 100, 1)`%). The speed-up relative to sequential grid search was `r round(large_seq_time[3]/large_race_time[3], 1)`-fold and `r round(large_par_time[3]/large_race_time[3], 1)`-fold relative to parallel processing with basic grid search^[Since this same size is small and KNN models are very efficient (for this data size), there is a limited computational efficiency gained by using racing. However, @kuhn2014futility, @tmwr [Section 15.4](https://www.tmwr.org/workflow-sets#racing-example), and other references demonstrate how fast racing can be for screening or optimizing models.]. `r best_text`
 
-Racing can be an effective tool for screening a large number of models while using comprehensive grids. 
+The model in @eq-perf-mod-racing allows us to estimate the within-resample correlation coefficient. This estimates how similar the performance metric values are to one another relative to values between samples. The estimate is `r signif(within_corr, 2)`, indicating a moderate similarity of metrics within a resample. 
+
+In summary, racing can be an effective tool for screening a large number of models while using comprehensive grids. 
 
 
 ## Optimization Bias and Nested Resampling {#sec-nested-resampling}
@@ -719,7 +721,10 @@ bind_rows(
   ) %>% 
   select(Algorithm, Brier_Single_CV, std_err_Single_CV, 
          Brier_Nested_CV, std_err_Nested_CV) %>% 
-  mutate(bias = (Brier_Nested_CV - Brier_Single_CV) / Brier_Single_CV * 100) %>%
+  mutate(
+    bias = (Brier_Nested_CV - Brier_Single_CV) / Brier_Single_CV * 100,
+    bias = round(bias, 2)
+  ) %>%
   kable(digits = 3, col.names = c("Algorithm", rep(c("Brier", "Std. Err."), 2), "Bias (%)")) %>% 
   add_header_above(c(" ", "Single CV" = 2, "Nested CV" = 2, " ")) %>% 
   kable_styling(full_width = FALSE)
