@@ -21,16 +21,10 @@ source("R/setup_two_class_example.R")
 # ------------------------------------------------------------------------------
 
 knn_prm <- parameters(neighbors(c(2, 50)), dist_power())
+knn_sfd <- grid_space_filling(knn_prm, size = 15)
 
-knn_reg <-
-  grid_regular(knn_prm, levels = c(5, 3)) %>%
-  mutate(grid = "Regular")
-
-sfd_size <- nrow(knn_reg)
-
-knn_sfd <- 
-  grid_space_filling(knn_prm, size = sfd_size) %>%
-  mutate(grid = "Space-Filling")
+wide_knn_prm <- parameters(neighbors(c(1, 100)), dist_power(c(0.5, 2.5)))
+large_grid <- grid_space_filling(wide_knn_prm, size = 100)
 
 knn_spec <- 
   nearest_neighbor(neighbors = tune(), dist_power = tune(), 
@@ -43,7 +37,20 @@ knn_wflow <-
   add_formula(class ~ A + B)
 
 # ------------------------------------------------------------------------------
+
 library(rlang)
+
+knn_sfd_grid_time <- 
+  system.time({
+    set.seed(1)
+    knn_sfd_nest_res <-
+      knn_wflow %>%
+      tune_grid(
+        resamples = sim_rs,
+        metrics = metric_set(brier_class),
+        grid = knn_sfd
+      )
+  })
 
 knn_sfd_nest_time <- 
   system.time({
@@ -53,13 +60,11 @@ knn_sfd_nest_time <-
       tune_nested(
         resamples = sim_nested_rs,
         metrics = metric_set(brier_class),
-        grid = knn_sfd %>% select(-grid)
+        grid = knn_sfd
       )
   })
 
 # ------------------------------------------------------------------------------
-
-large_grid <- grid_space_filling(knn_prm, size = 100)
 
 large_nest_race_time <- 
   system.time({
@@ -74,10 +79,23 @@ large_nest_race_time <-
       )
   })
 
+large_nest_grid_time <- 
+  system.time({
+    set.seed(1)
+    tmp <-
+      knn_wflow %>%
+      tune_grid(
+        resamples = sim_rs,
+        metrics = metric_set(brier_class),
+        grid = large_grid
+      )
+  })
+
 # ------------------------------------------------------------------------------
 
 save(knn_sfd_nest_res, knn_race_nest_res, 
      knn_sfd_nest_time, large_nest_race_time, 
+     large_nest_grid_time, knn_sfd_grid_time,
      file = "RData/nested_res.RData")
 
 # ------------------------------------------------------------------------------

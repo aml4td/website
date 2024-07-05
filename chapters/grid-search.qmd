@@ -483,12 +483,15 @@ $$
 for $i=1,\ldots, B$ resamples and $j=1, \ldots, s$ candidates. This random intercept model assumes that the ranking of candidates is the same across resamples and only the magnitude of the pattern changes from resample to resample. 
 
 This model’s form is the reference cell parameterization discussed in @sec-indicators For each interim analysis, the reference cell will be set to the current best candidate. This means that the $\hat{\beta}_j$ parameter estimates are loss of performance relative to the current best. A one-sided confidence interval is constructed to determine if a candidate should be removed. We can stop considering candidates whose interval does not contain zero. 
+
 ```{r}
 #| label: racing-anova
 #| include: false
 #| cache: true
 
-large_grid <- grid_space_filling(knn_prm, size = 100)
+wide_knn_prm <- parameters(neighbors(c(1, 100)), dist_power(c(0.5, 2.5)))
+
+large_grid <- grid_space_filling(wide_knn_prm, size = 100)
 
 large_par_time <- 
   system.time({
@@ -605,7 +608,7 @@ residual_var <- brier_coefs$estimate[brier_coefs$term == "sd__Observation"]^2
 within_corr <- resample_var / (resample_var + residual_var)
 ```
 
-To demonstrate the racing procedure, a space-filling design with `r format(nrow(large_grid), big.mark = ",")` candidates was created and evaluated with racing. The folds were randomized, and after `r control_race()$burn_in` resamples, the ANOVA method was used to analyze the results. @fig-racing-initial shows the one-sided 95% confidence intervals for the loss of Brier score relative to the current best configuration (_K_ = `r initial_resamples$neighbors[1]` and $\phi$ = `r initial_resamples$dist_power[1]`). `r num_removed` were eliminated at this round. 
+To demonstrate the racing procedure, a space-filling design with `r format(nrow(large_grid), big.mark = ",")` candidates was created and evaluated with racing. Since racing can me more efficient, we also expanded the hyperparameter space to be $K \in \{1, 100\}$ and $\phi \in \{0.5, 2.5\}$. The folds were randomized, and after `r control_race()$burn_in` resamples, the ANOVA method was used to analyze the results. @fig-racing-initial shows the one-sided 95% confidence intervals for the loss of Brier score relative to the current best configuration (_K_ = `r initial_resamples$neighbors[1]` and $\phi$ = `r initial_resamples$dist_power[1]`). `r num_removed` were eliminated at this round. 
 
 ```{r}
 #| label: fig-racing-initial
@@ -625,7 +628,7 @@ brier_param %>%
   labs(x = "Drop in Brier Score", y = "Candidate Rank")
 ```
 
-In the end, the racing process eliminated all but `r num_remaining` candidates. The process eliminated candidates at iterations `r loss_text[[1]]`. In all, `r num_fit` models were fit out of the possible `r format(nrow(large_grid) * nrow(sim_rs), big.mark = ",")` (`r round(num_fit / (nrow(large_grid) * nrow(sim_rs)) * 100, 1)`%). The speed-up relative to sequential grid search was `r round(large_seq_time[3]/large_race_time[3], 1)`-fold and `r round(large_par_time[3]/large_race_time[3], 1)`-fold relative to parallel processing with basic grid search. `r best_text`
+In the end, the racing process eliminated all but `r num_remaining` candidates. The process eliminated candidates at iterations `r loss_text[[1]]`. In all, `r num_fit` models were fit out of the possible `r format(nrow(large_grid) * nrow(sim_rs), big.mark = ",")` (`r round(num_fit / (nrow(large_grid) * nrow(sim_rs)) * 100, 1)`%). The speed-up relative to sequential grid search was `r round(large_seq_time[3]/large_race_time[3], 1)`-fold and `r round(large_par_time[3]/large_race_time[3], 1)`-fold relative to parallel processing with basic grid search^[Since this same size is small and KNN models are very efficient (for this data size), there is a limited computational efficiency gained by using racing. However, @kuhn2014futility, @tmwr [Section 15.4](https://www.tmwr.org/workflow-sets#racing-example), and other references demonstrate how fast racing can be for screening or optimizing models.]. `r best_text`
 
 Racing can be an effective tool for screening a large number of models while using comprehensive grids. 
 
@@ -680,13 +683,22 @@ unused_points <-
     by = c("neighbors", "dist_power"))
 ```
 
-For the racing analysis, nested resampling was `r round(large_nest_race_time[3]/large_race_time[3], 1)`-fold slower than using a single 10-fold cross-validation. 
+For the racing analysis, nested resampling was `r round(knn_sfd_nest_time[3]/knn_sfd_grid_time[3], 1)`-fold slower for the 15-point grid than using a single 10-fold cross-validation. For the larger gird, the slow-down was `r round(large_nest_race_time[3]/large_nest_grid_time[3], 1)`-fold. 
+
+::: {#tbl-nested-cv}
+
+:::: {.columns}
+
+::: {.column width="20%"}
+
+:::
+
+::: {.column width="60%"}
 
 
 ```{r}
 #| label: tbl-nested-cv
 #| echo: false
-#| tbl-cap: Brier scores for two tuning algorithms evaluated with regular 10-fold cross-validation and nested 10-fold cross-validation.
 bind_rows(
   knn_sfd_res %>% 
     show_best(metric = "brier_class", n = 1) %>% 
@@ -707,10 +719,24 @@ bind_rows(
   ) %>% 
   select(Algorithm, Brier_Single_CV, std_err_Single_CV, 
          Brier_Nested_CV, std_err_Nested_CV) %>% 
-  kable(digits = 3, col.names = c("Algorithm", rep(c("Brier", "Std. Err."), 2))) %>% 
-  add_header_above(c(" ", "Single CV" = 2, "Nested CV" = 2)) %>% 
+  mutate(bias = (Brier_Nested_CV - Brier_Single_CV) / Brier_Single_CV * 100) %>%
+  kable(digits = 3, col.names = c("Algorithm", rep(c("Brier", "Std. Err."), 2), "Bias (%)")) %>% 
+  add_header_above(c(" ", "Single CV" = 2, "Nested CV" = 2, " ")) %>% 
   kable_styling(full_width = FALSE)
 ```
+
+
+:::
+
+::: {.column width="20%"}
+
+:::
+
+::::
+
+Brier scores for two tuning algorithms evaluated with regular 10-fold cross-validation and nested 10-fold cross-validation.
+
+:::
 
 
 ```{r}
@@ -719,16 +745,18 @@ bind_rows(
 #| out-width: 60%
 #| fig-width: 5
 #| fig-height: 5.2
-#| fig-cap: KNN space filling design with the frequency that points selected during nested resampling for a complete grid and with a large grid combined with racing. Empty circles represent points that were never selected.
+#| fig-cap: KNN space filling design with the frequency that points selected during nested resampling for a complete grid and with a large grid combined with racing. The range of each axis shows the entire hyperparameter space.
 
 both_selections %>% 
     ggplot(aes(neighbors, dist_power)) +
-    geom_point(data = unused_points, pch = 1, alpha = 1 / 6, cex = 3/4) +
-    geom_point(aes(col = Algorithm, size = `# Selections`), alpha = 1) +
+    # geom_point(data = unused_points, pch = 1, alpha = 1 / 6, cex = 3/4) +
+    geom_point(aes(col = Algorithm, size = `# Selections`), alpha = 3/4) +
     labs(x = neighbors()$label, y = dist_power()$label) +
+    lims(x = c(1, 100), y = c(0.5, 2.5)) +
     coord_fixed(ratio = 50) +
     scale_size(breaks = 1:3, range = c(1, 5)) +
-    theme(legend.direction='horizontal', legend.box = "vertical")
+    theme(legend.direction='horizontal', legend.box = "vertical") +
+    scale_color_brewer(palette = "Set1")
 ```
 
 Nested resampling reports that the optimal Brier score for the tuning process is ` knn_sfd_nest_brier` with a standard error of ` knn_sfd_nest_brier_se`. 
