@@ -13,6 +13,7 @@ source("../R/_common.R")
 
 # ------------------------------------------------------------------------------
 
+library(kableExtra)
 library(lme4)
 library(broom.mixed)
 library(tidymodels)
@@ -366,67 +367,6 @@ Many designs assume that all the tuning parameter values are quantitative. That 
 
 We recommend space-filling designs since they are more efficient than regular designs. Regular designs have a lot of benefits when using an unfamiliar modeling methodology since you will learn a lot more about the nuances of how the tuning parameters affect one another. 
 
-## Optimization Bias and Nested Resampling {#sec-nested-resampling}
-
-Looking back at the analysis of the space-filling design analysis shown in @fig-knn-irregular-grid-tuning, we found that the numerically best candidate value was `r knn_sfd_best`. The corresponding resampling estimate of the Brier score was `r knn_sfd_brier` with a standard error of `r knn_sfd_brier_se`. If someone were to ask us how well the KNN model performs, we would probably give them these estimates. 
-
-However, there may be an issue in doing so. We are using grid search and resampling to find the best combination of parameters _and_ to estimate the performance. In some situations, this dual use of the model tuning process can introduce **optimization bias** where, to some degree, our performance statistics are optimistic. 
-
-@tibshirani2009bias @boulesteix2009optimal and maybe @tibshirani2018excess
-
-
-
-
-```{r}
-#| label: nested-sfd
-#| include: false
-#| eval: false
-knn_sfd_nest_res <-
-  knn_wflow %>%
-  tune_nested(
-    resamples = sim_nested_rs,
-    metrics = metric_set(brier_class),
-    grid = knn_sfd %>% select(-grid)
-  )
-
-knn_sfd_nest_metrics <- collect_metrics(knn_sfd_nest_res)
-knn_sfd_nest_brier <- signif(knn_sfd_nest_metrics$mean, 3)
-knn_sfd_nest_brier_se <- signif(knn_sfd_nest_metrics$std_err, 3)
-
-
-selected_configs <- 
-  knn_sfd_nest_res %>%
-  select(.selected) %>%
-  unnest(.selected) %>%
-  count(neighbors, dist_power, name = "# Selections") %>%
-  mutate(method = "Grid Search")
-```
-
-```{r}
-#| label: fig-nested-grid-selection
-#| echo: false
-#| eval: false
-#| out-width: 40%
-#| fig-width: 4
-#| fig-height: 4
-#| fig-cap: The KNN space filling design with the frequency that points selected during nested resampling. Empty circles represent points that were never selected.
-
-knn_sfd %>%
-  ggplot(aes(neighbors, dist_power)) + 
-  geom_point(pch = 1, alpha = 1 / 2) +
-  geom_point(
-    data = selected_configs,
-    aes(size = `# Selections`),
-    col = "darkred"
-  ) +
-  labs(x = neighbors()$label, y = dist_power()$label) +
-  coord_fixed(ratio = 50) +
-  theme(legend.position = "top")
-```
-
-Nested resampling reports that the optimal Brier score for the tuning process is ` knn_sfd_nest_brier` with a standard error of ` knn_sfd_nest_brier_se`. 
-
-
 ## Efficient Computations for Conventional Grid Search {#sec-efficient-grid}
 
 The computational cost of grid search can become large, depending on the resampling strategy and the number of candidates under consideration. In our example, a total of `r format(nrow(sim_rs) * sfd_size, big.mark = ",")` KNN models are evaluated before determining which candidates are most favorable to our data. 
@@ -447,30 +387,31 @@ Unfortunately, irregular designs cannot exploit the submodel trick since they ar
 
 Fortunately, none of these `r format(nrow(sim_rs) * sfd_size, big.mark = ",")` models depend on one another and can be computed separately. Since almost all modern computers have multiple CPUs and GPUs, we can break the computations into different "chunks" of work and execute them simultaneously on other processors (or separate computers entirely). The parallel processing of models can significantly reduce the time it takes to tune using grid search.
 
-when does this become more effective? 
-
 ```{r}
 #| label: knn-speeds
 #| include: false
 knn_speedup <- round(max(knn_times$time)/min(knn_times$time), 1)
 ```
 
-Despite the meager computation costs of tuning the KNN model, there was still a `r knn_speedup`-fold speedup (`r round(max(knn_times$time), 1)`s versus `r round(min(knn_times$time), 1)`s) when using `r max(knn_times$cores)` parallel workers. 
-There are some nuances related to parallel processing. It is an excellent idea to parallelize the "longest loop" (literally or figuratively). 
+For example, take the KNN space-filling design with `r nrow(knn_sfd)` candidates evaluated across `r nrow(sim_rs)` resamples. We spread these models  `r nrow(knn_sfd) * nrow(sim_rs)` model fits across ten worker processes (on the same computer). Despite the meager computation costs of training each KNN model, there was still a `r knn_speedup`-fold speedup (`r round(max(knn_times$time), 1)`s versus `r round(min(knn_times$time), 1)`s) when run in parallel. 
 
-* Parallel individual model fits or resampling. 
-* data preprocessing conditional computations
-* keep data on one core or shotgun approach See @tmwr [Section 13.5.2](https://www.tmwr.org/grid-search#parallel-processing)
+However, there are some nuances related to parallel processing. 
 
-TODO move all timing computations to a separate file for batch processing
+First, it is an excellent idea to parallelize the "longest loop" (literally or figuratively). Looking back at @alg-grid-search, there is a loop across the $s$ candidates in line 6. Line 7 contains the resampling loop across $B$ resamples. If the data set is large, it may be optimal to invert the loop where we parallel process across the $B$ resamples and execute the $s$ models within each. Keeping each resample on a single worker means less input/output traffic across the workers. See @tmwr [Section 13.5.2](https://www.tmwr.org/grid-search#parallel-processing). Alternatively, if the data are not large, it could be best to “flatten” the two loops into a single loop with $s\times B$ iterations (with as many workers as possible). 
+
+Additionally, if expensive preprocessing is used, a naive approach where each pipeline is processed in parallel might be counterproductive because we unnecessarily repeat the same preprocessing. For example, suppose we are tuning a supervised model along with UMAP preprocessing. By sending each of the $s$ candidates to a worker, the same UMAP training occurs for each set of candidates that correspond to the supervised model. Instead, a _conditional process_ can be used where we loop across the UMAP tuning parameter combinations and, for each, run another loop across the parameters associated with the supervised model. 
+
+One other consideration is memory. If the data used to train and evaluate is copied for each worker, the number of workers can be restricted to work within system memory. 
+
+In any case, parallel processing can almost always improve the speed of model tuning. 
 
 ### Racing {#sec-racing}
 
-Racing [@maron1997racing] is a technique that adaptively resamples the data during grid search. The goal is to cull tuning parameter combinations with no real hope of being optimal. For example, in our previous tuning of the KNN model, it is clear that the single neighbor model performs very poorly. Unfortunately, we can’t know that until we’ve finished all the computations. 
+Racing [@maron1997racing] is a technique that adaptively resamples the data during grid search. The goal is to cull tuning parameter combinations with no real hope of being optimal before they are completely resampled. For example, in our previous tuning of the KNN model, it is clear that the single neighbor model performs very poorly. Unfortunately, we can’t know that until we’ve finished all the computations. 
 
-Racing tries to circumvent this issue by doing an interim statistical analysis of the tuning results. From this, we can compute a probability (or score) that measures how likely each candidate will be the best (for some single metric). If a candidate is exceedingly poor, we can tell that after a few resamples. 
+Racing tries to circumvent this issue by doing an interim statistical analysis of the tuning results. From this, we can compute a probability (or score) that measures how likely each candidate will be the best (for some single metric). If a candidate is exceedingly poor, we can tell that after a few resamples^[Note that racing requires multiple assessment sets. A single validation set could not be used with racing.]. 
 
-There are a variety of ways to do this. See @kuhn2014futility, @krueger2015fast, and @bergman2024don. The general process is shown in @alg-race. The resampling process starts normally for the first $B_{min}$ resamples. Lines 7-12 can be conducted in parallel for additional computation speed. After the initial resampling for all candidates, the interim analysis results in a potentially smaller set of $s_b$ candidates. 
+There are a variety of ways to do this. See @kuhn2014futility, @krueger2015fast, and @bergman2024don. The general process is shown in @alg-race. The resampling process starts normally for the first $B_{min}$ resamples. Lines 7-12 can be conducted in parallel for additional computation speed. After the initial resampling for all candidates, the interim analysis at iteration $b$ results in a potentially smaller set of $s_b$ candidates. Note that parallel processing can be incorporated into this process for each loop and the speed-up from using submodels also occurs automatically. 
 
 At each resampling estimate beyond the first $B_{min}$ iterations, the current candidate set is evaluated for a single resample, and the interim analysis potentially prunes tuning parameter combinations. 
 
@@ -685,6 +626,113 @@ brier_param %>%
 ```
 
 In the end, the racing process eliminated all but `r num_remaining` candidates. The process eliminated candidates at iterations `r loss_text[[1]]`. In all, `r num_fit` models were fit out of the possible `r format(nrow(large_grid) * nrow(sim_rs), big.mark = ",")` (`r round(num_fit / (nrow(large_grid) * nrow(sim_rs)) * 100, 1)`%). The speed-up relative to sequential grid search was `r round(large_seq_time[3]/large_race_time[3], 1)`-fold and `r round(large_par_time[3]/large_race_time[3], 1)`-fold relative to parallel processing with basic grid search. `r best_text`
+
+Racing can be an effective tool for screening a large number of models while using comprehensive grids. 
+
+
+## Optimization Bias and Nested Resampling {#sec-nested-resampling}
+
+Looking back at the analysis of the space-filling design analysis shown in @fig-knn-irregular-grid-tuning, we found that the numerically best candidate value was `r knn_sfd_best`. The corresponding resampling estimate of the Brier score was `r knn_sfd_brier` with a standard error of `r knn_sfd_brier_se`. If someone were to ask us how well the KNN model performs, we would probably give them these estimates. 
+
+However, there may be an issue in doing so. We are using grid search and resampling to find the best combination of parameters _and_ to estimate the performance. In some situations, this dual use of the model tuning process can introduce **optimization bias** where, to some degree, our performance statistics are optimistic. 
+
+@tibshirani2009bias @boulesteix2009optimal and maybe @tibshirani2018excess
+
+```{r}
+#| label: nested-sfd
+#| include: false
+load("../RData/nested_res.RData")
+
+knn_sfd_nest_metrics <- collect_metrics(knn_sfd_nest_res)
+knn_sfd_nest_brier <- signif(knn_sfd_nest_metrics$mean, 3)
+knn_sfd_nest_brier_se <- signif(knn_sfd_nest_metrics$std_err, 3)
+
+sfd_selected_configs <- 
+  knn_sfd_nest_res %>%
+  select(.selected) %>%
+  unnest(.selected) %>%
+  count(neighbors, dist_power, name = "# Selections") %>%
+  mutate(Algorithm = "Basic Grid Search")
+
+knn_race_nest_metrics <- collect_metrics(knn_race_nest_res)
+knn_race_nest_brier <- signif(knn_race_nest_metrics$mean, 3)
+knn_race_nest_brier_se <- signif(knn_race_nest_metrics$std_err, 3)
+
+race_selected_configs <- 
+  knn_race_nest_res %>%
+  select(.selected) %>%
+  unnest(.selected) %>%
+  count(neighbors, dist_power, name = "# Selections") %>%
+  mutate(Algorithm = "Racing")
+
+both_selections <- 
+  sfd_selected_configs %>% 
+  bind_rows(race_selected_configs) 
+
+all_grid_points <- 
+  bind_rows(knn_sfd, large_grid) %>% 
+  distinct(neighbors, dist_power)
+
+unused_points <- 
+  anti_join(
+    all_grid_points, 
+    both_selections %>% select(neighbors, dist_power), 
+    by = c("neighbors", "dist_power"))
+```
+
+For the racing analysis, nested resampling was `r round(large_nest_race_time[3]/large_race_time[3], 1)`-fold slower than using a single 10-fold cross-validation. 
+
+
+```{r}
+#| label: tbl-nested-cv
+#| echo: false
+#| tbl-cap: Brier scores for two tuning algorithms evaluated with regular 10-fold cross-validation and nested 10-fold cross-validation.
+bind_rows(
+  knn_sfd_res %>% 
+    show_best(metric = "brier_class", n = 1) %>% 
+    mutate(Algorithm = "Basic Grid Search", `Estimation Method` = "Single_CV"),
+  knn_sfd_nest_metrics %>% 
+    mutate(Algorithm = "Basic Grid Search", `Estimation Method` = "Nested_CV"),
+  knn_large_race_res %>% 
+    show_best(metric = "brier_class", n = 1) %>% 
+    mutate(Algorithm = "Racing", `Estimation Method` = "Single_CV"),
+  knn_race_nest_metrics %>% 
+    mutate(Algorithm = "Racing", `Estimation Method` = "Nested_CV")
+) %>% 
+  select(Brier = mean, std_err, Algorithm, `Estimation Method`) %>% 
+  pivot_wider(
+    id_cols = c(Algorithm),
+    names_from = c(`Estimation Method`),
+    values_from = c(Brier, std_err)
+  ) %>% 
+  select(Algorithm, Brier_Single_CV, std_err_Single_CV, 
+         Brier_Nested_CV, std_err_Nested_CV) %>% 
+  kable(digits = 3, col.names = c("Algorithm", rep(c("Brier", "Std. Err."), 2))) %>% 
+  add_header_above(c(" ", "Single CV" = 2, "Nested CV" = 2)) %>% 
+  kable_styling(full_width = FALSE)
+```
+
+
+```{r}
+#| label: fig-nested-cv
+#| echo: false
+#| out-width: 60%
+#| fig-width: 5
+#| fig-height: 5.2
+#| fig-cap: KNN space filling design with the frequency that points selected during nested resampling for a complete grid and with a large grid combined with racing. Empty circles represent points that were never selected.
+
+both_selections %>% 
+    ggplot(aes(neighbors, dist_power)) +
+    geom_point(data = unused_points, pch = 1, alpha = 1 / 6, cex = 3/4) +
+    geom_point(aes(col = Algorithm, size = `# Selections`), alpha = 1) +
+    labs(x = neighbors()$label, y = dist_power()$label) +
+    coord_fixed(ratio = 50) +
+    scale_size(breaks = 1:3, range = c(1, 5)) +
+    theme(legend.direction='horizontal', legend.box = "vertical")
+```
+
+Nested resampling reports that the optimal Brier score for the tuning process is ` knn_sfd_nest_brier` with a standard error of ` knn_sfd_nest_brier_se`. 
+
 
 ## Chapter References {.unnumbered}
 
