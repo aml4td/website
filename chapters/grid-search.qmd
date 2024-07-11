@@ -24,6 +24,16 @@ library(doParallel)
 # ------------------------------------------------------------------------------
 
 source("../R/setup_two_class_example.R")
+
+set.seed(943)
+sim_tr <- sim_logistic(5000, sim_f)
+
+set.seed(14)
+sim_rs <- vfold_cv(sim_tr)
+
+set.seed(14)
+sim_nested_rs <- nested_cv(sim_tr, outside = vfold_cv(), inside = vfold_cv())
+
 load("../RData/grid_benchmarks.RData")
 
 # ------------------------------------------------------------------------------
@@ -35,11 +45,15 @@ tidymodels_prefer()
 theme_set(theme_transparent())
 set_options()
 
+# ------------------------------------------------------------------------------
+# Until the interface in the tune package is finalized, do some computations 
+# offline
+load("../RData/nested_res.RData")
 ```
 
 Grid search is a method to optimize tuning parameters for a model pipeline^[Preprocessing and postprocessig operations can have tuning parameters.]. It creates a pre-defined set of candidate values and computes performance from each. From there, the numerically best candidate could be chosen, or the relationship between the tuning parameter(s) and model performance can be inspected to see if the model might benefit from additional optimization. 
 
-Suppose there is a single tuning parameter, as in the $n_{min}$ example of @sec-grid-and-sequential; each candidate takes a scalar value (quantitative or qualitative). In other cases, there are multiple tuning parameters. For example, the K-nearest neighbors  (KNN) model has multiple tuning parameters and we'll look at two of them in detail below. 
+Suppose there is a single tuning parameter, as in the $n_{min}$ example of @sec-grid-and-sequential; each candidate takes a scalar value (quantitative or qualitative). In other cases, there are multiple tuning parameters. For example, the K-nearest cost  (KNN) model has multiple tuning parameters and we'll look at two of them in detail below. 
 
 The previous chapter demonstrated that using external data to evaluate the model is crucial (be it resampling or a validation set). Grid search has no free lunch: we cannot simply fit the model and evaluate it by simply re-predicting the same data. 
 
@@ -90,42 +104,53 @@ Grid search for tuning parameter optimization that loops over the resampling alg
 
 
 ```{r}
-#| label: knn-grids
+#| label: grids
 #| include: false
 
-knn_prm <- parameters(neighbors(c(2, 50)), dist_power())
+bst_spec <- 
+  boost_tree(learn_rate = tune(), trees = tune()) %>% 
+  set_mode("classification")
 
-knn_reg <-
-  grid_regular(knn_prm, levels = c(5, 3)) %>%
+bst_wflow <-
+  workflow() %>%
+  add_model(bst_spec) %>%
+  add_formula(class ~ A + B)
+
+bst_prm <- bst_wflow %>% extract_parameter_set_dials()
+
+bst_reg <-
+  grid_regular(bst_prm, levels = c(5, 3)) %>%
   mutate(grid = "Regular")
 
-seq_k <- sort(unique(knn_reg$neighbors))
-txt_k <- knitr::combine_words(seq_k)
+sfd_size <- nrow(bst_reg)
 
-seq_ord <- format(sort(unique(knn_reg$dist_power)))
-txt_ord <- knitr::combine_words(seq_ord)
-
-sfd_size <- nrow(knn_reg)
-
-vals <- map(knn_prm$object, ~ rep_len(value_seq(.x, sfd_size), length.out = sfd_size))
-
-set.seed(nrow(knn_reg))
-knn_random <-
-  grid_random(knn_prm, size = sfd_size) %>%
+set.seed(nrow(bst_reg))
+bst_random <-
+  grid_random(bst_prm, size = sfd_size) %>%
   mutate(grid = "Random")
 
-knn_sfd <- 
-  grid_space_filling(knn_prm, size = sfd_size) %>%
+bst_sfd <- grid_space_filling(bst_prm, size = sfd_size) %>%
   mutate(grid = "Space-Filling")
- 
-knn_grids <- 
-  bind_rows(knn_reg, knn_random, knn_sfd) %>%
+
+large_grid <- 
+  bst_prm %>% 
+  update(trees = trees(c(1, 3000))) %>% 
+  grid_space_filling(size = 100)
+
+seq_tree <- sort(unique(bst_reg$trees))
+txt_tree <- knitr::combine_words(seq_tree)
+
+seq_ord <- format(sort(unique(bst_reg$learn_rate)))
+txt_ord <- knitr::combine_words(seq_ord)
+
+bst_grids <- 
+  bind_rows(bst_reg, bst_random, bst_sfd) %>%
   mutate(
     grid = factor(grid, levels = c("Regular", "Random", "Space-Filling"))
   )
 ```
 
-To demonstrate, this chapter will initially focus on grids for a K-nearest neighbors model with two tuning parameters^[These are described in more detail in @sec-cls-knn]. Nearest neighbors were initially described in @sec-isomap for multidimensional scaling embeddings. Supervised KNN models predict a new point by finding the _K_ most similar data point in the training set. It then uses the _K_ outcome values to form a prediction for the new data. The number of neighbors is a tuning parameter. For our example, we’ll consider 2 to 50 neighbors. Another parameter focuses on how to compute the distance. There are a lot of different choices, and several commonly used distance metrics are special cases of Minkowski distance:
+To demonstrate, this chapter will initially focus on grids for a K-nearest cost model with two tuning parameters^[These are described in more detail in @sec-cls-boosting]. Nearest cost were initially described in @sec-isomap for multidimensional scaling embeddings. Supervised KNN models predict a new point by finding the _K_ most similar data point in the training set. It then uses the _K_ outcome values to form a prediction for the new data. The number of cost is a tuning parameter. For our example, we’ll consider 2 to 50 cost. Another parameter focuses on how to compute the distance. There are a lot of different choices, and several commonly used distance metrics are special cases of Minkowski distance:
 
 $$
 d\left(\boldsymbol{x},\boldsymbol{x}'\right)={\biggl(}\sum_{j=1}^{p}|x_{j}-x_{j}'|^{\phi}{\biggr)}^{\frac {1}{\phi}}.
@@ -141,109 +166,101 @@ The following two sections describe different methods for creating the candidate
 
 A regular grid starts with a sequence or set of candidate values for each tuning parameter and then creates all combinations. In statistics, this is referred to as a factorial design. The number of values per tuning parameter does not have to be the same. 
 
-To illustrate a regular grid, we'll use `r xfun::numbers_to_words(length(seq_k))` values of the number of neighbors (K = `r txt_k`) and `r xfun::numbers_to_words(length(seq_ord))` values of the distance order ($\phi$ = `r txt_ord`). This grid of `r nrow(knn_reg)` candidates is shown in @fig-knn-grids. The grid covers the entire space with significant gaps in between.  
+To illustrate a regular grid, we'll use `r xfun::numbers_to_words(length(seq_tree))` values of the number of cost (K = `r txt_tree`) and `r xfun::numbers_to_words(length(seq_ord))` values of the distance order ($\phi$ = `r txt_ord`). This grid of `r nrow(bst_reg)` candidates is shown in @fig-bst-grids. The grid covers the entire space with significant gaps in between.  
 
 ```{r}
-#| label: fig-knn-grids
+#| label: fig-bst-grids
 #| echo: false
 #| out-width: 75%
 #| fig-width: 7
 #| fig-height: 3
 #| fig-cap: Three types of grids (in columns) are illustrated with tuning parameters from a K-nearest neighbor model. Each grid contains 15 candidates. The space-filling design was created using the MaxiMin method described in @sec-irregular-grid. 
 
-knn_grids %>%
-  ggplot(aes(neighbors, dist_power)) +
+bst_grids %>%
+  ggplot(aes(trees, learn_rate)) +
   geom_point(cex = 2, alpha = 2 / 3) +
-  labs(x = neighbors()$label, y = dist_power()$label) +
+  labs(x = trees()$label, y = learn_rate()$label) +
   facet_wrap(~ grid) +
-  coord_fixed(ratio = 50) 
+  scale_y_log10() + 
+  coord_fixed(ratio = 700)
 ```
 
 
 ```{r}
-#| label: knn-grid-res
+#| label: bst-grid-res
 #| include: false
-#| cache: false
+#| cache: true
 
-knn_spec <- 
-  nearest_neighbor(neighbors = tune(), dist_power = tune(), 
-                   weight_func = "rectangular") %>% 
-  set_mode("classification")
-
-knn_wflow <-
-  workflow() %>%
-  add_model(knn_spec) %>%
-  add_formula(class ~ A + B)
-
-format_best_knn <- function(x, ...) {
+format_best_bst <- function(x, ...) {
   bst <- select_best(x, ...)
   paste0(
-      bst$neighbors, " neighbors and and a Minkowski distance order of ",
-      # sprintf("%1.1f", bst$dist_power)
-      signif(bst$dist_power, 3)
+      bst$trees, " trees and and a learning rate of 10<sup>",
+      # sprintf("%1.1f", bst$learn_rate)
+      signif(log10(bst$learn_rate), 3),
+      "</sup>"
       )
 }
 
 # ------------------------------------------------------------------------------
 
-knn_reg_res <- 
-  knn_wflow %>% 
+set.seed(200)
+bst_reg_res <- 
+  bst_wflow %>% 
   tune_grid(
     resamples = sim_rs,
     metrics = metric_set(brier_class),
-    grid = knn_reg %>% select(-grid)
+    grid = bst_reg %>% select(-grid)
   )
 
-knn_reg_best <- format_best_knn(knn_reg_res, metric = "brier_class")
+bst_reg_best <- format_best_bst(bst_reg_res, metric = "brier_class")
 
-knn_rnd_res <- 
-  knn_wflow %>% 
+bst_rnd_res <- 
+  bst_wflow %>% 
   tune_grid(
     resamples = sim_rs,
     metrics = metric_set(brier_class),
-    grid = knn_random %>% select(-grid)
+    grid = bst_random %>% select(-grid)
   )
-knn_rnd_best <- format_best_knn(knn_rnd_res, metric = "brier_class")
+bst_rnd_best <- format_best_bst(bst_rnd_res, metric = "brier_class")
 
-knn_sfd_res <- 
-  knn_wflow %>% 
+bst_sfd_res <- 
+  bst_wflow %>% 
   tune_grid(
     resamples = sim_rs,
     metrics = metric_set(brier_class),
-    grid = knn_sfd %>% select(-grid)
+    grid = bst_sfd %>% select(-grid)
   )   
-knn_sfd_best <- format_best_knn(knn_sfd_res, metric = "brier_class")
-knn_sfd_brier <- signif(show_best(knn_sfd_res, metric = "brier_class", n = 1)$mean, 3)
-knn_sfd_brier_se <- signif(show_best(knn_sfd_res, metric = "brier_class", n = 1)$std_err, 3)
+bst_sfd_best <- format_best_bst(bst_sfd_res, metric = "brier_class")
+bst_sfd_brier <- signif(show_best(bst_sfd_res, metric = "brier_class", n = 1)$mean, 3)
+bst_sfd_brier_se <- signif(show_best(bst_sfd_res, metric = "brier_class", n = 1)$std_err, 3)
 
-knn_irr_grid_res <- 
-  collect_metrics(knn_rnd_res) %>% 
+bst_irr_grid_res <- 
+  collect_metrics(bst_rnd_res) %>% 
   mutate(grid = "Random") %>% 
   bind_rows(
-    collect_metrics(knn_sfd_res) %>% 
+    collect_metrics(bst_sfd_res) %>% 
       mutate(grid = "Space-Filling")
   ) %>% 
-  rename(
-    `# Nearest Neighbors` = neighbors,
-    `Minkowski Distance Order` = dist_power) %>% 
+  mutate(`learn_rate (log-10)` = log10(learn_rate)) %>% 
+  select(-learn_rate) %>% 
   pivot_longer(
-    c(`# Nearest Neighbors`, `Minkowski Distance Order`),
+    c(trees, `learn_rate (log-10)`),
     names_to = "parameter",
     values_to = "value"
   ) 
 ```
 
-We’ll use the simulated training set in @sec-complexity-overfitting with the same 10-fold cross-validation scheme described there. Once again, Brier scores were used to measure how well each of the `r nrow(knn_reg)`  configurations of KNN predicted the data. @fig-knn-regular-grid-tuning shows the results: a small number of nearest neighbors is a poor choice (due to overfitting), and the Minkowski distance parameter matters little for these data. Even though this is not a diverse set of candidate values, we can probably pick out a reasonable candidate with a small Brier score, such as `r knn_reg_best` (although any of the values of $\phi$ would be good choices). 
+We’ll use the simulated training set in @sec-complexity-overfitting with the same 10-fold cross-validation scheme described there. Once again, Brier scores were used to measure how well each of the `r nrow(bst_reg)`  configurations of KNN predicted the data. @fig-bst-regular-grid-tuning shows the results: a small number of nearest cost is a poor choice (due to overfitting), and the Minkowski distance parameter matters little for these data. Even though this is not a diverse set of candidate values, we can probably pick out a reasonable candidate with a small Brier score, such as `r bst_reg_best` (although any of the values of $\phi$ would be good choices). 
 
 ```{r}
-#| label: fig-knn-regular-grid-tuning
+#| label: fig-bst-regular-grid-tuning
 #| echo: false
 #| out-width: 50%
 #| fig-width: 4
 #| fig-height: 3.5
-#| fig-cap: "The tuning results for the regular grid shown in @fig-knn-grids."
+#| fig-cap: "The tuning results for the regular grid shown in @fig-bst-grids."
 
-autoplot(knn_reg_res)  +
+autoplot(bst_reg_res)  +
   labs(y = "Brier Score") +
   theme(legend.position = "top")
 ```
@@ -254,21 +271,21 @@ The primary downside to regular grids is that, as the number of tuning parameter
 
 ## Irregular Grids {#sec-irregular-grid}
 
-Irregular grids are not factorial in nature. A simple example is a _random grid_ where points are randomly placed using a uniform distribution on an appropriate range for each tuning parameter. A design of size `r sfd_size` is shown in @fig-knn-grids. There are some gaps and clustering of the points, but the space for each individual dimension is covered well. The tuning results are shown in the top panels of @fig-knn-irregular-grid-tuning. Because it is an irregular design, we can't use the same visualization as in @fig-knn-regular-grid-tuning. Instead, a "marginal" plot is shown, where each numeric tuning parameter is plotted against performance in a separate panel. 
+Irregular grids are not factorial in nature. A simple example is a _random grid_ where points are randomly placed using a uniform distribution on an appropriate range for each tuning parameter. A design of size `r sfd_size` is shown in @fig-bst-grids. There are some gaps and clustering of the points, but the space for each individual dimension is covered well. The tuning results are shown in the top panels of @fig-bst-irregular-grid-tuning. Because it is an irregular design, we can't use the same visualization as in @fig-bst-regular-grid-tuning. Instead, a "marginal" plot is shown, where each numeric tuning parameter is plotted against performance in a separate panel. 
 
-The top left panel illustrates a clear signal that the number of neighbors matters for these data. However, recall that each point also corresponds to a random Minkowski parameter value. 
+The top left panel illustrates a clear signal that the number of cost matters for these data. However, recall that each point also corresponds to a random Minkowski parameter value. 
 
-The top right panel is less clear regarding a relationship between the Minkowski parameter and the Brier score. From the regular grid results in @fig-knn-grids, we know definitively that there isn’t^[At least for this range of $\phi$.]. However, for the random design it may appear that something going on. The problem is that the two-neighbor model result is so poor that the location of its matching Minkowski parameter value may influence our impression of an effect. This wasn’t an issue in the regular design since you get to see all combinations of the two parameters.  The numerically best candidate was not too dissimilar from the regular grid: `r knn_rnd_best`.
+The top right panel is less clear regarding a relationship between the Minkowski parameter and the Brier score. From the regular grid results in @fig-bst-grids, we know definitively that there isn’t^[At least for this range of $\phi$.]. However, for the random design it may appear that something going on. The problem is that the two-neighbor model result is so poor that the location of its matching Minkowski parameter value may influence our impression of an effect. This wasn’t an issue in the regular design since you get to see all combinations of the two parameters.  The numerically best candidate was not too dissimilar from the regular grid: `r bst_rnd_best`.
 
 ```{r}
-#| label: fig-knn-irregular-grid-tuning
+#| label: fig-bst-irregular-grid-tuning
 #| echo: false
 #| out-width: 80%
 #| fig-width: 7
 #| fig-height: 3.75
-#| fig-cap: "The tuning results for the irregular grids shown in @fig-knn-grids. The lines are spline smooths."
+#| fig-cap: "The tuning results for the irregular grids shown in @fig-bst-grids. The lines are spline smooths."
 
-knn_irr_grid_res %>% 
+bst_irr_grid_res %>% 
   ggplot(aes(value, mean)) + 
   geom_smooth(se = FALSE, method = lm, formula = y ~ splines::ns(x, df = 3),
               col = rgb(0, 0, 1, 1 / 5)) +
@@ -277,11 +294,11 @@ knn_irr_grid_res %>%
   labs(y = "Brier Score", x = NULL)
 ```
 
-For this example, the patterns for the number of neighbors do not change across values of the Minkowski distance parameter (i.e., there is no interaction). If this were not the case, the relationship between these parameters and performance would be more difficult to understand in marginal effect plots. Examples of this will be seen in later chapters, such as in TODO and TODO.
+For this example, the patterns for the number of cost do not change across values of the Minkowski distance parameter (i.e., there is no interaction). If this were not the case, the relationship between these parameters and performance would be more difficult to understand in marginal effect plots. Examples of this will be seen in later chapters, such as in TODO and TODO.
 
 Another type of irregular grid is a _space-filling design_ [@joseph2016space], where the goal is to make sure that the tuning parameter space is covered and that there is minimal redundancy in the candidate values. There are a variety of methods for achieving this goal. 
 
-For example, @fig-knn-grids shows a `r sfd_size` point “Audze-Eglais“ space-filling design. The space is covered more compactly than the regular design of the same size and is much more uniform than the `r sfd_size` point random design. The lower panels of @fig-knn-irregular-grid-tuning show the tuning results. The results are somewhat cleaner than the random grid results but would lead to the same conclusions. Here, the best candidate was similar to those found by the random grid: `r knn_sfd_best`. 
+For example, @fig-bst-grids shows a `r sfd_size` point “Audze-Eglais“ space-filling design. The space is covered more compactly than the regular design of the same size and is much more uniform than the `r sfd_size` point random design. The lower panels of @fig-bst-irregular-grid-tuning show the tuning results. The results are somewhat cleaner than the random grid results but would lead to the same conclusions. Here, the best candidate was similar to those found by the random grid: `r bst_sfd_best`. 
 
 There are many types of space-filling designs, and it is worth taking the time to take a quick tour of some of them. 
 
@@ -329,22 +346,22 @@ Technically, these designs cover the space of each predictor univariately. Howev
 #| include: false
 
 rnd_maxmin <-
-  encode_set(knn_random %>% select(-grid), pset = knn_prm, as_matrix = TRUE) %>% 
+  encode_set(bst_random %>% select(-grid), pset = bst_prm, as_matrix = TRUE) %>% 
   DiceDesign::mindist() %>% 
   round(2)
 
-mm_maxmin <-
-  encode_set(knn_sfd %>% select(-grid), pset = knn_prm, as_matrix = TRUE) %>% 
+sfd_maxmin <-
+  encode_set(bst_sfd %>% select(-grid), pset = bst_prm, as_matrix = TRUE) %>% 
   DiceDesign::mindist() %>% 
   round(2)
 
 reg_maxmin <-
-    encode_set(knn_reg %>% select(-grid), pset = knn_prm, as_matrix = TRUE) %>% 
+    encode_set(bst_reg %>% select(-grid), pset = bst_prm, as_matrix = TRUE) %>% 
     DiceDesign::mindist() %>% 
     round(2)
 ```
 
-For example, we could choose points to maximize the minimum pairwise distances between the candidates. These designs are usually referred to as MaxiMin designs [@pronzato2017minimax]. Comparing the two irregular designs in @fig-knn-grids, the random grid has a maximum minimum distance value of `r rnd_maxmin`. In contrast, the corresponding space-filling design's value (`r mm_maxmin`) is `r round(mm_maxmin/rnd_maxmin, 1)`-fold larger^[Using Euclidean distance.]. The latter design was optimized its coverage, and we can see far less redundancy in the optimized design. 
+For example, we could choose points to maximize the minimum pairwise distances between the candidates. These designs are usually referred to as MaxiMin designs [@pronzato2017minimax]. Comparing the two irregular designs in @fig-bst-grids, the random grid has a maximum minimum distance value of `r rnd_maxmin`. In contrast, the corresponding space-filling design's value (`r sfd_maxmin`) is `r round(sfd_maxmin/rnd_maxmin, 1)`-fold larger^[Using Euclidean distance.]. The latter design was optimized its coverage, and we can see far less redundancy in the optimized design. 
 
 A similar method, initially proposed by @audze1977new, maximizes a function of the inverse distances between $s$ candidate points: 
 
@@ -362,9 +379,9 @@ Some other space-filling designs of note:
 
 While these methods can be constructed generally by sampling random points and using a search method to optimize a specific criterion, there has been scholarship that has pre-optimized designs for some combination of the number of tuning parameters and the requested grid size. 
 
-The advantage of space-filling designs over random designs is that, for smaller designs, the candidates do a better job covering the space and have a low probability of producing redundant points. Also, it is possible to create a space-filling design so that the candidates for each numerical parameter are nearly equally spaced (as was done in @fig-knn-grids). 
+The advantage of space-filling designs over random designs is that, for smaller designs, the candidates do a better job covering the space and have a low probability of producing redundant points. Also, it is possible to create a space-filling design so that the candidates for each numerical parameter are nearly equally spaced (as was done in @fig-bst-grids). 
 
-Many designs assume that all the tuning parameter values are quantitative. That may not always be the case. For example, KNN can adjust its predictions by considering how far the neighbors are from a new point; more distant points should not have the same influence as close neighbors. A weighting function can be used for this purpose. For example, weights based on an inverse function may produce better results. Equal weighting is often called a “rectangular weighting” function. As a simple workaround, the unique parameter values are repeated as if they were $s$ distinct values when making the design. This allows them to be used with a Latin hypercube design and any space-filling design that uses this approach is not technically optimal. Practically speaking, this is an effective approach for tuning models.  However, there are _sliced_ LHD that can accomplish the same goal [@qian2012sliced;@ba2015optimal].
+Many designs assume that all the tuning parameter values are quantitative. That may not always be the case. For example, KNN can adjust its predictions by considering how far the cost are from a new point; more distant points should not have the same influence as close cost. A weighting function can be used for this purpose. For example, weights based on an inverse function may produce better results. Equal weighting is often called a “rectangular weighting” function. As a simple workaround, the unique parameter values are repeated as if they were $s$ distinct values when making the design. This allows them to be used with a Latin hypercube design and any space-filling design that uses this approach is not technically optimal. Practically speaking, this is an effective approach for tuning models.  However, there are _sliced_ LHD that can accomplish the same goal [@qian2012sliced;@ba2015optimal].
 
 We recommend space-filling designs since they are more efficient than regular designs. Regular designs have a lot of benefits when using an unfamiliar modeling methodology since you will learn a lot more about the nuances of how the tuning parameters affect one another. 
 
@@ -384,17 +401,19 @@ Some different models and pre-processors can have this quality, including the gl
 Unfortunately, irregular designs cannot exploit the submodel trick since they are not factorial in nature. A hybrid design could be used where a dense sequence of $s_1$ parameter values is created for the tuning parameter associated with submodels and a separate space-filling design of size $s_2$ for the other parameters. These two grids can be crossed so that the space-filling design is replicated for each value of the submodel parameter. This produces $s_1\times s_2$ grid points but, effectively, only $s_2$ models are fit. 
 
 
+large grid covering the same space with the same number of grid points had a `r round(large_grid_time[3]/large_grid_reg_time[3], 1)`-fold speed-up. 
+
 ### Parallel Processing {#sec-parallel}
 
 Fortunately, none of these `r format(nrow(sim_rs) * sfd_size, big.mark = ",")` models depend on one another and can be computed separately. Since almost all modern computers have multiple CPUs and GPUs, we can break the computations into different "chunks" of work and execute them simultaneously on other processors (or separate computers entirely). The parallel processing of models can significantly reduce the time it takes to tune using grid search.
 
 ```{r}
-#| label: knn-speeds
+#| label: bst-speeds
 #| include: false
-knn_speedup <- round(max(knn_times$time)/min(knn_times$time), 1)
+bst_speedup <- round(sfd_seq_time[3]/sfd_time[3], 1)
 ```
 
-For example, take the KNN space-filling design with `r nrow(knn_sfd)` candidates evaluated across `r nrow(sim_rs)` resamples. We spread these models  `r nrow(knn_sfd) * nrow(sim_rs)` model fits across ten worker processes (on the same computer). Despite the meager computation costs of training each KNN model, there was still a `r knn_speedup`-fold speedup (`r round(max(knn_times$time), 1)`s versus `r round(min(knn_times$time), 1)`s) when run in parallel. 
+For example, take the KNN space-filling design with `r nrow(bst_sfd)` candidates evaluated across `r nrow(sim_rs)` resamples. We spread these models  `r nrow(bst_sfd) * nrow(sim_rs)` model fits across ten worker processes (on the same computer). Despite the meager computation costs of training each KNN model, there was still a `r bst_speedup`-fold speedup (`r round(sfd_seq_time[3], 1)`s versus `r round(sfd_time[3], 1)`s) when run in parallel. 
 
 However, there are some nuances related to parallel processing. 
 
@@ -490,51 +509,10 @@ This model’s form is the reference cell parameterization discussed in @sec-ind
 #| include: false
 #| cache: true
 
-wide_knn_prm <- parameters(neighbors(c(1, 100)), dist_power(c(0.5, 2.5)))
+num_remaining <- large_race_res %>% collect_metrics() %>% nrow()
+num_fit <- nrow(map_dfr(large_race_res$.metrics, I))
 
-large_grid <- grid_space_filling(wide_knn_prm, size = 100)
-
-large_par_time <- 
-  system.time({
-    knn_large_par_res <- 
-      knn_wflow %>% 
-      tune_grid(
-        resamples = sim_rs,
-        metrics = metric_set(brier_class),
-        grid = large_grid
-      ) 
-  })
-
-large_race_time <- 
-  system.time({
-    set.seed(1)
-    knn_large_race_res <- 
-      knn_wflow %>% 
-      tune_race_anova(
-        resamples = sim_rs,
-        metrics = metric_set(brier_class),
-        grid = large_grid,
-        control = control_race(verbose_elim = FALSE)
-      ) 
-  })
-
-registerDoSEQ()
-
-large_seq_time <- 
-  system.time({
-    knn_large_seq_res <- 
-      knn_wflow %>% 
-      tune_grid(
-        resamples = sim_rs,
-        metrics = metric_set(brier_class),
-        grid = large_grid
-      ) 
-  })
-
-num_remaining <- knn_large_race_res %>% collect_metrics() %>% nrow()
-num_fit <- nrow(map_dfr(knn_large_race_res$.metrics, I))
-
-loss_text <- knn_large_race_res %>% 
+loss_text <- large_race_res %>% 
   select(.order, .metrics) %>% 
   mutate(remaining = map_int(.metrics, nrow)) %>% 
   arrange(.order) %>% 
@@ -548,19 +526,19 @@ loss_text <- knn_large_race_res %>%
   ) %>% 
   summarize(glue::glue_collapse(text, ", ", last = ", and "))
 
-best_race <- show_best(knn_large_race_res, metric = "brier_class", n = 1) 
-best_grid <- show_best(knn_large_par_res, metric = "brier_class", n = 1) 
+best_race <- show_best(large_race_res, metric = "brier_class", n = 1) 
+best_grid <- show_best(large_grid_res, metric = "brier_class", n = 1) 
 
-if (isTRUE(all.equal(best_race[, c("neighbors", "dist_power")], best_grid[, c("neighbors", "dist_power")]))) {
+if (isTRUE(all.equal(best_race[, c("trees", "learn_rate")], best_grid[, c("trees", "learn_rate")]))) {
   best_text <- "The numerically best candidate set for racing and basic grid search were the same."
 } else {
   best_text <- 
     glue::glue("The numerically best candidate set for racing and basic grid \\
                search were different. Racing chose a model with \\
-               {best_race$neighbors} neighbors and a exponent value of \\
-               {round(best_race$dist_power, 3)}. Full grid search chose \\
-               {best_grid$neighbors} neighbors and an exponent of \\
-               {round(best_grid$dist_power, 3)}. The difference in Brier \\
+               {best_race$trees} trees and a exponent value of \\
+               {round(best_race$learn_rate, 3)}. Full grid search chose \\
+               {best_grid$trees} trees and an exponent of \\
+               {round(best_grid$learn_rate, 3)}. The difference in Brier \\
                scores was {signif(abs(best_race$mean - best_grid$mean), 2)}.")
 }
 ```
@@ -569,10 +547,10 @@ if (isTRUE(all.equal(best_race[, c("neighbors", "dist_power")], best_grid[, c("n
 #| include: false
 
 initial_resamples <- 
-  knn_large_race_res %>% 
+  large_race_res %>% 
   filter(.order <= control_race()$burn_in) %>% 
   unnest(.metrics) %>% 
-  select(id, .config, .estimate, neighbors, dist_power)
+  select(id, .config, .estimate, trees, learn_rate)
 
 initial_means <- 
   initial_resamples %>% 
@@ -609,7 +587,7 @@ residual_var <- brier_coefs$estimate[brier_coefs$term == "sd__Observation"]^2
 within_corr <- resample_var / (resample_var + residual_var)
 ```
 
-To demonstrate the racing procedure, a space-filling design with `r format(nrow(large_grid), big.mark = ",")` candidates was created and evaluated with racing. If we were starting from scratch and, since racing can be more efficient, we might expand the hyperparameter space to be $K \in \{1, 100\}$ and $\phi \in \{0.5, 2.5\}$. The folds were randomized, and after `r control_race()$burn_in` resamples, the ANOVA method was used to analyze the results. @fig-racing-initial shows the one-sided 95% confidence intervals for the loss of Brier score relative to the current best configuration (_K_ = `r initial_resamples$neighbors[1]` and $\phi$ = `r initial_resamples$dist_power[1]`). `r num_removed` were eliminated at this round. 
+To demonstrate the racing procedure, a space-filling design with `r format(nrow(large_grid), big.mark = ",")` candidates was created and evaluated with racing. If we were starting from scratch and, since racing can be more efficient, we might expand the hyperparameter space to be $K \in \{1, 100\}$ and $\phi \in \{0.5, 2.5\}$. The folds were randomized, and after `r control_race()$burn_in` resamples, the ANOVA method was used to analyze the results. @fig-racing-initial shows the one-sided 95% confidence intervals for the loss of Brier score relative to the current best configuration (`r initial_resamples$trees[1]` trees and a learnig rate of 10<sup>`r log10(initial_resamples$learn_rate[1])`</sup>). `r num_removed` were eliminated at this round. 
 
 ```{r}
 #| label: fig-racing-initial
@@ -629,7 +607,7 @@ brier_param %>%
   labs(x = "Drop in Brier Score", y = "Candidate Rank")
 ```
 
-In the end, the racing process eliminated all but `r num_remaining` candidates. The process eliminated candidates at iterations `r loss_text[[1]]`. In all, `r num_fit` models were fit out of the possible `r format(nrow(large_grid) * nrow(sim_rs), big.mark = ",")` (`r round(num_fit / (nrow(large_grid) * nrow(sim_rs)) * 100, 1)`%). The speed-up relative to sequential grid search was `r round(large_seq_time[3]/large_race_time[3], 1)`-fold and `r round(large_par_time[3]/large_race_time[3], 1)`-fold relative to parallel processing with basic grid search^[Since this same size is small and KNN models are very efficient (for this data size), there is a limited computational efficiency gained by using racing. However, @kuhn2014futility, @tmwr [Section 15.4](https://www.tmwr.org/workflow-sets#racing-example), and other references demonstrate how fast racing can be for screening or optimizing models.]. `r best_text`
+In the end, the racing process eliminated all but `r num_remaining` candidates. The process eliminated candidates at iterations `r loss_text[[1]]`. In all, `r num_fit` models were fit out of the possible `r format(nrow(large_grid) * nrow(sim_rs), big.mark = ",")` (`r round(num_fit / (nrow(large_grid) * nrow(sim_rs)) * 100, 1)`%). The speed-up relative to sequential grid search was `r round(large_seq_time[3]/large_race_time[3], 1)`-fold and `r round(large_grid_time[3]/large_race_time[3], 1)`-fold relative to parallel processing with basic grid search^[Since this same size is small and KNN models are very efficient (for this data size), there is a limited computational efficiency gained by using racing. However, @kuhn2014futility, @tmwr [Section 15.4](https://www.tmwr.org/workflow-sets#racing-example), and other references demonstrate how fast racing can be for screening or optimizing models.]. `r best_text`
 
 The model in @eq-perf-mod-racing allows us to estimate the within-resample correlation coefficient. This estimates how similar the performance metric values are to one another relative to values between samples. The correlation estimate is `r signif(within_corr, 2)`, indicating a moderate similarity of metrics within a resample. 
 
@@ -638,7 +616,7 @@ In summary, racing can be an effective tool for screening a large number of mode
 
 ## Optimization Bias and Nested Resampling {#sec-nested-resampling}
 
-Looking back at the analysis of the space-filling design analysis shown in @fig-knn-irregular-grid-tuning, we found that the numerically best candidate value was `r knn_sfd_best`. The corresponding resampling estimate of the Brier score was `r knn_sfd_brier` with a standard error of `r knn_sfd_brier_se`. If someone were to ask us how well the KNN model performs, we would probably give them these estimates. 
+Looking back at the analysis of the space-filling design analysis shown in @fig-bst-irregular-grid-tuning, we found that the numerically best candidate value was `r bst_sfd_best`. The corresponding resampling estimate of the Brier score was `r bst_sfd_brier` with a standard error of `r bst_sfd_brier_se`. If someone were to ask us how well the KNN model performs, we would probably give them these estimates. 
 
 However, there may be an issue in doing so. We are using grid search and resampling to find the best combination of parameters _and_ to estimate the performance. In some situations, this dual use of the model tuning process can introduce **optimization bias** where, to some degree, our performance statistics are optimistic. 
 
@@ -647,28 +625,28 @@ However, there may be an issue in doing so. We are using grid search and resampl
 ```{r}
 #| label: nested-sfd
 #| include: false
-load("../RData/nested_res.RData")
+#| eval: true
 
-knn_sfd_nest_metrics <- collect_metrics(knn_sfd_nest_res)
-knn_sfd_nest_brier <- signif(knn_sfd_nest_metrics$mean, 3)
-knn_sfd_nest_brier_se <- signif(knn_sfd_nest_metrics$std_err, 3)
+bst_sfd_nest_metrics <- collect_metrics(sfd_nest_res)
+bst_sfd_nest_brier <- signif(bst_sfd_nest_metrics$mean, 3)
+bst_sfd_nest_brier_se <- signif(bst_sfd_nest_metrics$std_err, 3)
 
 sfd_selected_configs <- 
-  knn_sfd_nest_res %>%
+  sfd_nest_res %>%
   select(.selected) %>%
   unnest(.selected) %>%
-  count(neighbors, dist_power, name = "# Selections") %>%
+  count(trees, learn_rate, name = "# Selections") %>%
   mutate(Algorithm = "Basic Grid Search")
 
-knn_race_nest_metrics <- collect_metrics(knn_race_nest_res)
-knn_race_nest_brier <- signif(knn_race_nest_metrics$mean, 3)
-knn_race_nest_brier_se <- signif(knn_race_nest_metrics$std_err, 3)
+bst_race_nest_metrics <- collect_metrics(bst_race_nest_res)
+bst_race_nest_brier <- signif(bst_race_nest_metrics$mean, 3)
+bst_race_nest_brier_se <- signif(bst_race_nest_metrics$std_err, 3)
 
 race_selected_configs <- 
-  knn_race_nest_res %>%
+  bst_race_nest_res %>%
   select(.selected) %>%
   unnest(.selected) %>%
-  count(neighbors, dist_power, name = "# Selections") %>%
+  count(trees, learn_rate, name = "# Selections") %>%
   mutate(Algorithm = "Racing")
 
 both_selections <- 
@@ -676,69 +654,73 @@ both_selections <-
   bind_rows(race_selected_configs) 
 
 all_grid_points <- 
-  bind_rows(knn_sfd, large_grid) %>% 
-  distinct(neighbors, dist_power)
+  bind_rows(bst_sfd, large_grid) %>% 
+  distinct(trees, learn_rate)
 
 unused_points <- 
   anti_join(
     all_grid_points, 
-    both_selections %>% select(neighbors, dist_power), 
-    by = c("neighbors", "dist_power"))
+    both_selections %>% select(trees, learn_rate), 
+    by = c("trees", "learn_rate"))
 
 nested_stats <- 
   bind_rows(
-  knn_sfd_res %>% 
-    show_best(metric = "brier_class", n = 1) %>% 
-    mutate(Algorithm = "Basic Grid Search", `Estimation Method` = "Single_CV"),
-  knn_sfd_nest_metrics %>% 
-    mutate(Algorithm = "Basic Grid Search", `Estimation Method` = "Nested_CV"),
-  knn_large_race_res %>% 
-    show_best(metric = "brier_class", n = 1) %>% 
-    mutate(Algorithm = "Racing", `Estimation Method` = "Single_CV"),
-  knn_race_nest_metrics %>% 
-    mutate(Algorithm = "Racing", `Estimation Method` = "Nested_CV")
-) %>% 
-  select(Brier = mean, std_err, Algorithm, `Estimation Method`) %>% 
-  pivot_wider(
-    id_cols = c(Algorithm),
-    names_from = c(`Estimation Method`),
-    values_from = c(Brier, std_err)
+    large_race_res %>% 
+      show_best(metric = "brier_class", n = 1) %>% 
+      mutate(Algorithm = "Racing", `Estimation Method` = "Single CV"),
+    
+    bst_race_nest_res %>% 
+      collect_metrics() %>% 
+      mutate(Algorithm = "Racing", `Estimation Method` = "Nested CV")
+    
   ) %>% 
-  select(Algorithm, Brier_Single_CV, std_err_Single_CV, 
-         Brier_Nested_CV, std_err_Nested_CV) %>% 
-  mutate(
-    bias = (Brier_Nested_CV - Brier_Single_CV) / Brier_Single_CV * 100,
-    bias = round(bias, 2),
-    SNR = signif((Brier_Nested_CV - Brier_Single_CV) / std_err_Single_CV, 3)
-  )
+  select(`Estimation Method`, Brier = mean, std_err)  
+nested_stats$bias <- c(
+  (nested_stats$Brier[2] - nested_stats$Brier[1]) /
+  nested_stats$Brier[1] * 100,
+  NA)
+nested_stats$bias <- format(nested_stats$bias, digits = 3)
+nested_stats$bias[2] <- ""
+nested_stats$SNR <- 
+  c(
+    (nested_stats$Brier[2] - nested_stats$Brier[1]) /
+      max(nested_stats$std_err),
+    NA)
+nested_stats$SNR <- format(nested_stats$SNR, digits = 3)
+nested_stats$SNR[2] <- ""
 ```
 
 Let’s use two of the previous examples from this chapter to demonstrate nested resampling: the space-filling design with `r sfd_size` candidates and the larger grid used with racing. Each used the same 10-fold cross-validation indices. We’ll use this as the outer resampling method and, within each, we’ll create 10-fold inner cross-validations based on each of the 90% analysis sets of the outer resamples. 
 
-@fig-nested-cv visualizes the selected candidates for each of the ten outer resamples. Since some of the grid points are selected more than once, the image uses the size of the points to illustrate this. Also, the figure’s axis ranges portrays the entire tuning space for the two parameters (based on the larger grid). The y-axis variation is quite large, futher illustrating the lack of importance of the $\phi$ parameter. For the number of neighbors, relatively small number of neighbors appears to be optimal more often.
+@fig-nested-cv visualizes the selected candidates for each of the ten outer resamples. Since some of the grid points are selected more than once, the image uses the size of the points to illustrate this. Also, the figure’s axis ranges portrays the entire tuning space for the two parameters (based on the larger grid). The y-axis variation is quite large, futher illustrating the lack of importance of the $\phi$ parameter. For the number of cost, relatively small number of cost appears to be optimal more often.
 
 
 ```{r}
 #| label: fig-nested-cv
 #| echo: false
+#| eval: true
 #| out-width: 60%
 #| fig-width: 5
 #| fig-height: 5.2
 #| fig-cap: KNN space filling design with the frequency that points selected during nested resampling for a complete grid and with a large grid combined with racing. The range of each axis shows the entire hyperparameter space.
 
-both_selections %>% 
-  ggplot(aes(neighbors, dist_power)) +
+bst_rngs <- map(large_param$object, ~ as.numeric(.x$range))
+
+both_selections %>%
+  ggplot(aes(trees, learn_rate)) +
   geom_point(aes(col = Algorithm, pch = Algorithm, size = `# Selections`), alpha = 3/4) +
-  labs(x = neighbors()$label, y = dist_power()$label) +
-  lims(x = c(1, 100), y = c(0.5, 2.5)) +
-  coord_fixed(ratio = 50) +
-  scale_size(breaks = 1:3, range = c(1, 5)) +
+  labs(x = trees()$label, y = learn_rate()$label) +
+  lims(x = bst_rngs[[1]]) +
+  # coord_fixed(ratio = diff(bst_rngs[[1]]) / diff(bst_rngs[[2]])) +
+  scale_y_log10(limits = 10^bst_rngs[[2]]) +
+  scale_size(breaks = 1:max(both_selections$`# Selections`), 
+             range = c(1, 5)) +
   theme(legend.direction = 'horizontal', legend.box = "vertical") +
-  scale_color_brewer(palette = "Set1") + 
-  scale_shape_manual(values = c(0, 2))
+  scale_color_brewer(palette = "Set1") +
+  scale_shape_manual(values = c(0, 1))
 ```
 
-@tbl-nested-cv shows how the performance statistics differs between a single 10-fold cross-validation and two-level nested cross-validation. For basic grid search and racing, the Brier score estimates are worst for nested cross-validation (as expected). However, notice that the standard errors are very similar since the same external resampling indices are used. The percent bias from single resampling ranges between `r floor(min(nested_stats$bias))`% and `r ceiling(max(nested_stats$bias))`%. These values are fairly substantial but lack any sense of uncertainty. The final column of the table shows the raw difference in Brier scores divided by the standard error to form a signal-to-noise ratio (SNR). This shows that the bias is relatively small relative to the experimental noise^[To conceptualize this, many hypothesis testing statistics are signal-to-noise ratios. For example, to assess the simple difference between means, the basic t-test would probably use an SNF cutoff between 1.6 and 2 to be thought of as a “significant” signal.]. 
+@tbl-nested-cv shows how the performance statistics differs between a single 10-fold cross-validation and two-level nested cross-validation. For basic grid search and racing, the Brier score estimates are worst for nested cross-validation (as expected). However, notice that the standard errors are very similar since the same external resampling indices are used. The percent bias from single resampling was `r nested_stats$bias[1]`%. These values are fairly substantial but lack any sense of uncertainty. The final column of the table shows the raw difference in Brier scores divided by the standard error to form a signal-to-noise ratio (SNR). This shows that the bias is small relative to the experimental noise^[To conceptualize this, many hypothesis testing statistics are signal-to-noise ratios. For example, to assess the simple difference between means, the basic t-test would probably use an SNF cutoff between 1.6 and 2 to be thought of as a “significant” signal.]. 
 
 ::: {#tbl-nested-cv}
 
@@ -754,11 +736,12 @@ both_selections %>%
 ```{r}
 #| label: tbl-nested-cv
 #| echo: false
+#| eval: true
 nested_stats %>%
   kable(digits = 3, 
         col.names = 
-          c("Algorithm", rep(c("Brier", "Std. Err."), 2), "Bias (%)", "SNR")) %>% 
-  add_header_above(c(" ", "Single CV" = 2, "Nested CV" = 2, " " = 2)) %>% 
+          c("Resampling", "Mean", "Std. Err.", "Bias (%)", "SNR")) %>% 
+  add_header_above(c(" ", "Brier Score" = 2, " " = 2)) %>% 
   kable_styling(full_width = FALSE)
 ```
 
@@ -775,7 +758,7 @@ Brier scores for two tuning algorithms evaluated with regular 10-fold cross-vali
 
 :::
 
-The computational costs of nested resampling of basic grid search and racing were `r sprintf("%2.1f", knn_sfd_nest_time[3]/knn_sfd_grid_time[3])`-fold  and `r sprintf("%2.1f", large_nest_race_time[3]/large_nest_grid_time[3])`-fold slower, respectfully.
+The computational costs of nested resampling of basic grid search and racing were `r sprintf("%2.1f", sfd_nest_time[3]/sfd_time[3])`-fold  and `r sprintf("%2.1f", large_nest_race_time[3]/large_race_time[3])`-fold slower, respectfully.
 
 
 ## Chapter References {.unnumbered}

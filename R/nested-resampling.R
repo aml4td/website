@@ -12,91 +12,180 @@ library(doMC)
 tidymodels_prefer()
 theme_set(theme_bw())
 options(pillar.advice = FALSE, pillar.min_title_chars = Inf)
-registerDoMC(cores = parallel::detectCores())
 
 # ------------------------------------------------------------------------------
 
-source("R/setup_two_class_example.R")
+source("~/content/website/R/setup_two_class_example.R")
 
 # ------------------------------------------------------------------------------
 
-knn_prm <- parameters(neighbors(c(2, 50)), dist_power())
-knn_sfd <- grid_space_filling(knn_prm, size = 15)
-
-wide_knn_prm <- parameters(neighbors(c(1, 100)), dist_power(c(0.5, 2.5)))
-large_grid <- grid_space_filling(wide_knn_prm, size = 100)
-
-knn_spec <- 
-  nearest_neighbor(neighbors = tune(), dist_power = tune(), 
-                   weight_func = "rectangular") %>% 
+bst_spec <- 
+  boost_tree(learn_rate = tune(), trees = tune()) %>% 
   set_mode("classification")
 
-knn_wflow <-
+bst_wflow <-
   workflow() %>%
-  add_model(knn_spec) %>%
+  add_model(bst_spec) %>%
   add_formula(class ~ A + B)
+
+bst_prm <- bst_wflow %>% extract_parameter_set_dials()
+
+bst_reg <-
+  grid_regular(bst_prm, levels = c(5, 3)) %>%
+  mutate(grid = "Regular")
+
+sfd_size <- nrow(bst_reg)
+
+set.seed(nrow(bst_reg))
+bst_random <-
+  grid_random(bst_prm, size = sfd_size) %>%
+  mutate(grid = "Random")
+
+bst_sfd <- grid_space_filling(bst_prm, size = sfd_size)
+
+large_param <- 
+  bst_prm %>% 
+  update(trees = trees(c(1, 3000)))
+
+large_sfd <- 
+  large_param %>% 
+  grid_space_filling(size = 100)
+
+large_reg <- 
+  large_param %>% 
+  grid_regular(levels = 10)
 
 # ------------------------------------------------------------------------------
 
-library(rlang)
-
-knn_sfd_grid_time <- 
+sfd_seq_time <- 
   system.time({
     set.seed(1)
-    knn_sfd_nest_res <-
-      knn_wflow %>%
+    tmp <-
+      bst_wflow %>%
       tune_grid(
         resamples = sim_rs,
         metrics = metric_set(brier_class),
-        grid = knn_sfd
+        grid = bst_sfd
       )
   })
 
-knn_sfd_nest_time <- 
+registerDoMC(cores = parallel::detectCores())
+
+sfd_time <- 
   system.time({
     set.seed(1)
-    knn_sfd_nest_res <-
-      knn_wflow %>%
+    sfd_res <-
+      bst_wflow %>%
+      tune_grid(
+        resamples = sim_rs,
+        metrics = metric_set(brier_class),
+        grid = bst_sfd
+      )
+  })
+
+
+sfd_nest_time <- 
+  system.time({
+    set.seed(1)
+    sfd_nest_res <-
+      bst_wflow %>%
       tune_nested(
         resamples = sim_nested_rs,
         metrics = metric_set(brier_class),
-        grid = knn_sfd
+        grid = bst_sfd
       )
   })
+
+# TODO not naming an argument gets an error of :
+# Caused by error in `rlang::call_modify()`:
+#   ! argument "arg" is missing, with no default
 
 # ------------------------------------------------------------------------------
 
-large_nest_race_time <- 
+large_grid_time <- 
   system.time({
     set.seed(1)
-    knn_race_nest_res <-
-      knn_wflow %>%
-      tune_nested(
-        resamples = sim_nested_rs,
+    large_grid_res <-
+      bst_wflow %>%
+      tune_grid(
+        resamples = sim_rs,
         metrics = metric_set(brier_class),
-        fn = "tune_race_anova",
-        grid = large_grid
+        grid = large_sfd
       )
   })
+
+
+large_grid_reg_time <- 
+  system.time({
+    set.seed(1)
+    large_grid_reg_res <-
+      bst_wflow %>%
+      tune_grid(
+        resamples = sim_rs,
+        metrics = metric_set(brier_class),
+        grid = large_reg
+      )
+  })
+
 
 large_nest_grid_time <- 
   system.time({
     set.seed(1)
-    tmp <-
-      knn_wflow %>%
-      tune_grid(
+    large_nest_grid_res <-
+      bst_wflow %>%
+      tune_nested(
+        resamples = sim_nested_rs,
+        metrics = metric_set(brier_class),
+        grid = large_sfd
+      )
+  })
+
+
+large_race_time <- 
+  system.time({
+    set.seed(1)
+    large_race_res <-
+      bst_wflow %>% 
+      tune_race_anova(
         resamples = sim_rs,
         metrics = metric_set(brier_class),
-        grid = large_grid
+        grid = large_sfd,
+        control = control_race(verbose_elim = FALSE)
+      ) 
+  })
+
+large_nest_race_time <- 
+  system.time({
+    set.seed(1)
+    bst_race_nest_res <-
+      bst_wflow %>%
+      tune_nested(
+        resamples = sim_nested_rs,
+        metrics = metric_set(brier_class),
+        fn = "tune_race_anova",
+        grid = large_sfd
       )
+  })
+
+registerDoSEQ()
+
+large_seq_time <- 
+  system.time({
+    set.seed(1)
+    large_race_tmp <-
+      bst_wflow %>% 
+      tune_race_anova(
+        resamples = sim_rs,
+        metrics = metric_set(brier_class),
+        grid = large_sfd,
+        control = control_race(verbose_elim = FALSE)
+      ) 
   })
 
 # ------------------------------------------------------------------------------
 
-save(knn_sfd_nest_res, knn_race_nest_res, 
-     knn_sfd_nest_time, large_nest_race_time, 
-     large_nest_grid_time, knn_sfd_grid_time,
-     file = "RData/nested_res.RData")
+save(list = c(ls(pattern = "_res$"), ls(pattern = "_time$"), "large_param"),
+     file = "~/content/website/RData/nested_res.RData")
 
 # ------------------------------------------------------------------------------
 
