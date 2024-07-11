@@ -1,4 +1,5 @@
 library(tidymodels)
+library(bonsai)
 library(finetune)
 # pak::pak(c("tidymodels/finetune@nested"), ask = FALSE)
 if ( packageVersion("finetune") < "1.2.0.9000" ) {
@@ -19,11 +20,21 @@ num_workers <- parallel::detectCores()
 
 source("~/content/website/R/setup_two_class_example.R")
 
+set.seed(943)
+sim_tr <- sim_logistic(2000, sim_f)
+
+set.seed(14)
+sim_rs <- vfold_cv(sim_tr)
+
+set.seed(14)
+sim_nested_rs <- nested_cv(sim_tr, outside = vfold_cv(), inside = vfold_cv())
+
 # ------------------------------------------------------------------------------
 
 bst_spec <- 
   boost_tree(learn_rate = tune(), trees = tune()) %>% 
-  set_mode("classification")
+  set_mode("classification") %>% 
+  set_engine("lightgbm")
 
 bst_wflow <-
   workflow() %>%
@@ -50,7 +61,10 @@ bst_sfd <- grid_space_filling(bst_param, size = sfd_size)
 
 large_param <- 
   bst_param %>% 
-  update(trees = trees(c(1, 3000)))
+  update(
+    trees = trees(c(1, 3000)),
+    learn_rate = learn_rate(c(-5, -1))
+  )
 
 large_sfd <- 
   large_param %>% 

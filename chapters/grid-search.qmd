@@ -18,6 +18,7 @@ library(lme4)
 library(broom.mixed)
 library(tidymodels)
 library(finetune)
+library(bonsai)
 library(rlang)
 library(doParallel)
 
@@ -26,7 +27,7 @@ library(doParallel)
 source("../R/setup_two_class_example.R")
 
 set.seed(943)
-sim_tr <- sim_logistic(5000, sim_f)
+sim_tr <- sim_logistic(2000, sim_f)
 
 set.seed(14)
 sim_rs <- vfold_cv(sim_tr)
@@ -109,7 +110,8 @@ Grid search for tuning parameter optimization that loops over the resampling alg
 
 bst_spec <- 
   boost_tree(learn_rate = tune(), trees = tune()) %>% 
-  set_mode("classification")
+  set_mode("classification")%>% 
+  set_engine("lightgbm")
 
 bst_wflow <-
   workflow() %>%
@@ -289,8 +291,6 @@ bst_irr_grid_res %>%
   labs(y = "Brier Score", x = NULL)
 ```
 
-For this example, the patterns for the number of cost do not change across values of the Minkowski distance parameter (i.e., there is no interaction). If this were not the case, the relationship between these parameters and performance would be more difficult to understand in marginal effect plots. Examples of this will be seen in later chapters, such as in TODO and TODO.
-
 Another type of irregular grid is a _space-filling design_ [@joseph2016space], where the goal is to make sure that the tuning parameter space is covered and that there is minimal redundancy in the candidate values. There are a variety of methods for achieving this goal. 
 
 For example, @fig-bst-grids shows a `r sfd_size` point Audze-Eglais space-filling design. The space is covered more compactly than the regular design of the same size and is much more uniform than the `r sfd_size` point random design. The lower panels of @fig-bst-irregular-grid-tuning show the tuning results. The results are somewhat cleaner than the random grid results but show similar trends. Here, the numerically best candidate was: `r bst_sfd_best`. 
@@ -422,7 +422,7 @@ In any case, parallel processing can almost always improve the speed of model tu
 
 ### Racing {#sec-racing}
 
-Racing [@maron1997racing] is a technique that adaptively resamples the data during grid search. The goal is to cull tuning parameter combinations with no real hope of being optimal before they are completely resampled. For example, in our previous tuning of the KNN model, it is clear that the single neighbor model performs very poorly. Unfortunately, we can’t know that until we’ve finished all the computations. 
+Racing [@maron1997racing] is a technique that adaptively resamples the data during grid search. The goal is to cull tuning parameter combinations with no real hope of being optimal before they are completely resampled. For example, in our previous tuning of the boosting model, it is clear that a single tree performs very poorly. Unfortunately, we can’t know that until we’ve finished all the computations. 
 
 Racing tries to circumvent this issue by doing an interim statistical analysis of the tuning results. From this, we can compute a probability (or score) that measures how likely each candidate will be the best (for some single metric). If a candidate is exceedingly poor, we can tell that after a few resamples^[Note that racing requires multiple assessment sets. A single validation set could not be used with racing.]. 
 
@@ -624,42 +624,6 @@ However, there may be an issue in doing so. We are using grid search and resampl
 #| include: false
 #| eval: true
 
-bst_sfd_nest_metrics <- collect_metrics(sfd_nest_res)
-bst_sfd_nest_brier <- signif(bst_sfd_nest_metrics$mean, 3)
-bst_sfd_nest_brier_se <- signif(bst_sfd_nest_metrics$std_err, 3)
-
-sfd_selected_configs <- 
-  sfd_nest_res %>%
-  select(.selected) %>%
-  unnest(.selected) %>%
-  count(trees, learn_rate, name = "# Selections") %>%
-  mutate(Algorithm = "Basic Grid Search")
-
-bst_race_nest_metrics <- collect_metrics(bst_race_nest_res)
-bst_race_nest_brier <- signif(bst_race_nest_metrics$mean, 3)
-bst_race_nest_brier_se <- signif(bst_race_nest_metrics$std_err, 3)
-
-race_selected_configs <- 
-  bst_race_nest_res %>%
-  select(.selected) %>%
-  unnest(.selected) %>%
-  count(trees, learn_rate, name = "# Selections") %>%
-  mutate(Algorithm = "Racing")
-
-both_selections <- 
-  sfd_selected_configs %>% 
-  bind_rows(race_selected_configs) 
-
-all_grid_points <- 
-  bind_rows(bst_sfd, large_sfd) %>% 
-  distinct(trees, learn_rate)
-
-unused_points <- 
-  anti_join(
-    all_grid_points, 
-    both_selections %>% select(trees, learn_rate), 
-    by = c("trees", "learn_rate"))
-
 large_race_selections <- 
   large_nest_grid_res %>% 
   select(id, .selected) %>% 
@@ -739,8 +703,8 @@ large_race_selections %>%
 #| eval: true
 nested_stats %>%
   kable(digits = 3, 
-        col.names = 
-          c("Resampling", "Mean", "Std. Err.", "Bias (%)", "SNR")) %>% 
+        col.names = c("Resampling", "Mean", "Std. Err.", "Bias (%)", "SNR"),
+        align = "ccccc") %>% 
   add_header_above(c(" ", "Brier Score" = 2, " " = 2)) %>% 
   kable_styling(full_width = FALSE)
 ```
@@ -761,6 +725,12 @@ Brier scores for two tuning algorithms evaluated with regular 10-fold cross-vali
 TODO Talk about cases where nested resampling is more likely to produce more bias. 
 
 ## Setting Parameter Ranges
+
+Specifying the range of parameters use to define the grid may involve some guesswork. For some parameter types, there is a well understood and defined range. For others, such as learning rate, there is a lower bound (zero) and a loosely defined upper bound mostly based on convention and prior experience. For grids, we want to avoid configurations with few unique values and a wide range. This might not sample the section of the parameter space that includes nonlinearity and the region of optimal results. @fig-learn-rate-seq shows an example of this for the learning rate. The initial grid included three points that missed the regions of interest. @fig-learn-rate-grid did a better job with more grid points. In high dimensional parameter space, the likelihood of a poor grid increases, esepcially for relatively “small” grid sizes. 
+
+When often envision of the relationship between a predictor and model performance as being a shark peak. If we cannot find the pinnacle, the model optimization would fail. Luckily, as seen in @fig-nested-cv, there are often substantial regions of parameter space with good performance. Model optimization may not be superficially easy but it is often not impossible. We only need to sample the optimal region once to be successful. 
+
+If we worry that our tuning grid did not produce good results, another strategy is to _increase_ the parameter ranges and use an iterative approach that can naturally explore the parameter space and let the current set of results guide the exploration about the space. These methods are discussed in the next chapter. 
 
 
 ## Chapter References {.unnumbered}
