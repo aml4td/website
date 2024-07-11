@@ -28,23 +28,26 @@ bst_wflow <-
   add_model(bst_spec) %>%
   add_formula(class ~ A + B)
 
-bst_prm <- bst_wflow %>% extract_parameter_set_dials()
+bst_param <- 
+  bst_wflow %>% 
+  extract_parameter_set_dials() %>% 
+  update(learn_rate = learn_rate(c(-3, -1)))
 
 bst_reg <-
-  grid_regular(bst_prm, levels = c(5, 3)) %>%
+  grid_regular(bst_param, levels = c(5, 3)) %>%
   mutate(grid = "Regular")
 
 sfd_size <- nrow(bst_reg)
 
 set.seed(nrow(bst_reg))
 bst_random <-
-  grid_random(bst_prm, size = sfd_size) %>%
+  grid_random(bst_param, size = sfd_size) %>%
   mutate(grid = "Random")
 
-bst_sfd <- grid_space_filling(bst_prm, size = sfd_size)
+bst_sfd <- grid_space_filling(bst_param, size = sfd_size)
 
 large_param <- 
-  bst_prm %>% 
+  bst_param %>% 
   update(trees = trees(c(1, 3000)))
 
 large_sfd <- 
@@ -184,7 +187,8 @@ large_seq_time <-
 
 # ------------------------------------------------------------------------------
 
-save(list = c(ls(pattern = "_res$"), ls(pattern = "_time$"), "large_param"),
+save(list = c(ls(pattern = "_res$"), ls(pattern = "_time$"), 
+              "large_param", "large_sfd"),
      file = "~/content/website/RData/nested_res.RData")
 
 # ------------------------------------------------------------------------------
