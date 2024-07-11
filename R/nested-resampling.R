@@ -13,6 +13,8 @@ tidymodels_prefer()
 theme_set(theme_bw())
 options(pillar.advice = FALSE, pillar.min_title_chars = Inf)
 
+num_workers <- parallel::detectCores()
+
 # ------------------------------------------------------------------------------
 
 source("~/content/website/R/setup_two_class_example.R")
@@ -72,7 +74,7 @@ sfd_seq_time <-
       )
   })
 
-registerDoMC(cores = parallel::detectCores())
+registerDoMC(cores = num_workers)
 
 sfd_time <- 
   system.time({
@@ -188,7 +190,7 @@ large_seq_time <-
 # ------------------------------------------------------------------------------
 
 save(list = c(ls(pattern = "_res$"), ls(pattern = "_time$"), 
-              "large_param", "large_sfd"),
+              "large_param", "large_sfd", "num_workers"),
      file = "~/content/website/RData/nested_res.RData")
 
 # ------------------------------------------------------------------------------
