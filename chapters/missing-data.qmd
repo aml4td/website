@@ -299,9 +299,16 @@ There can also be random occurrences.  Missing values often occur at random with
 
 We might be able to identify specific causes for missingness. As we will see later in this chapter (@sec-encoding-missing-data), several basement variables in the original Ames data have missing values. This information was not missing because there was some failure in recording the data. The explanation was much simpler:  these homes had no basements. This type of missing data is the most challenging to manage, and the appropriateness of techniques can vary. Hence, understanding the nature of the missing data is crucial before applying any methods. 
 
-TODO callout here
-
+::: {.important-box}
 Understanding these mechanisms will guide us in choosing appropriate techniques for handling missing data appropriately.
+:::
+
+
+## Approaches for Resolving Missing Data
+
+There are three general ways to resolve missing values:  removal, imputation, or encoding. Each of these approaches has advantages and disadvantages, and which we choose should depend on the specific problem context and data set. We will review these approaches in the subsections below and provide guidance on when each would be appropriate to use.
+
+### Models that Tolerate Missing Data
 
 Instead of directly addressing the problem of missing data, we could sidestep it by using models that tolerate it. Methods based on the concept of recursive partitioning, such as classification and regression trees (CART), random forests, and boosted trees, algorithmically sidestep the probelms of missing data while constructing the model. The Naive Bayes model can also be built in the presence of missing data.
 
@@ -317,9 +324,9 @@ Naive Bayes [@webb2010naive] builds models using each predictor separately. When
 
 The primary benefit of these types of models is that we can use the original data as-is. This eliminates potential biases that could occur through imputing missing values or removing samples that contain missing values. The drawback is that the number of models that can be applied to the data is very limited. As we know from the No Free Lunch theorem, no one model will be optimal for all problems. Therefore, we will need to address the missing data problem head-on to adequately explore the predictive ability of a wide range of models.
 
-## Approaches for Resolving Missing Data
-
-There are three general ways to resolve missing values:  removal, imputation, or encoding. Each of these approaches has advantages and disadvantages, and which we choose should depend on the specific problem context and data set. We will review these approaches in the subsections below and provide guidance on when each would be appropriate to use.
+::: {.dangerous-box}
+These models only solve the logistical aspect of missing data. If the nature of missing values in your data causes a systematic bias in the data, the models above will not correct this bias.
+:::
 
 ### Removal
 
@@ -358,6 +365,7 @@ There are a couple of caveats to removing predictors or samples based on missing
 #| message: false
 #| warning: false
 
+# TODO center and scale these predictors at the end
 set.seed(331)
 simulation_nonlinear <- 
   tibble(
@@ -368,7 +376,7 @@ simulation_nonlinear <-
     prob = 1,
     true_class = ifelse(x2 > x2_act, 1, -1),
     misclass_error = 1.5 * runif(200),
-    obs_class = ifelse(abs(error) < 1.5 - misclass_error, true_class * (-1), true_class),
+    obs_class = ifelse(abs(error) < 1.5 - misclass_error, true_class * (-1), true_class), 
     Observed = factor(ifelse(obs_class == -1, "Group 1", "Group 2"))
   ) %>%
   rename(`Predictor 1` = x1, `Predictor 2` = x2) %>%
@@ -407,7 +415,7 @@ simulation_nonlinear_missing <-
 impute_mean_recipe <- 
   recipe(Observed ~ ., data = simulation_nonlinear_missing) %>%
   step_impute_mean(all_predictors()) %>%
-  prep(training = simulation_nonlinear_missing, retain = TRUE)
+  prep(training = simulation_nonlinear_missing)
 
 impute_mean_data <- 
   bake(impute_mean_recipe, simulation_nonlinear_missing) %>%
@@ -421,7 +429,7 @@ impute_mean_data <-
 impute_median_recipe <- 
   recipe(Observed ~ ., data = simulation_nonlinear_missing) %>%
   step_impute_median(all_predictors()) %>%
-  prep(training = simulation_nonlinear_missing, retain = TRUE)
+  prep(training = simulation_nonlinear_missing)
 
 impute_median_data <- 
   bake(impute_median_recipe, simulation_nonlinear_missing) %>%
@@ -435,7 +443,15 @@ impute_median_data <-
 impute_linear_recipe <- 
   recipe(Observed ~ ., data = simulation_nonlinear_missing) %>%
   step_impute_linear(all_predictors()) %>%
-  prep(training = simulation_nonlinear_missing, retain = TRUE)
+  prep(training = simulation_nonlinear_missing)
+
+# TODO use a nonlinear model for each? 
+# impute_linear_recipe <- 
+#   recipe(Observed ~ ., data = simulation_nonlinear_missing) %>%
+#   step_mutate(quad_term = Predictor_1^2) %>% 
+#   step_impute_linear(Predictor_2, impute_with = imp_vars(quad_term)) %>%
+#   step_rm(quad_term) %>% 
+#   prep(training = simulation_nonlinear_missing)
 
 impute_linear_data <- 
   bake(impute_linear_recipe, simulation_nonlinear_missing) %>%
@@ -449,7 +465,7 @@ impute_linear_data <-
 impute_knn_recipe <- 
   recipe(Observed ~ ., data = simulation_nonlinear_missing) %>%
   step_impute_knn(all_predictors()) %>%
-  prep(training = simulation_nonlinear_missing, retain = TRUE)
+  prep(training = simulation_nonlinear_missing)
 
 impute_knn_data <- 
   bake(impute_knn_recipe, simulation_nonlinear_missing) %>%
@@ -463,7 +479,7 @@ impute_knn_data <-
 impute_bag_recipe <- 
   recipe(Observed ~ ., data = simulation_nonlinear_missing) %>%
   step_impute_bag(all_predictors()) %>%
-  prep(training = simulation_nonlinear_missing, retain = TRUE)
+  prep(training = simulation_nonlinear_missing)
 
 impute_bag_data <- 
   bake(impute_bag_recipe, simulation_nonlinear_missing) %>%
@@ -505,13 +521,13 @@ imputation_distance_comparison <-
          Linear = sqrt((Orig1 - Linear1)^2 + (Orig2 - Linear2)^2),
          `k-NN` = sqrt((Orig1 - knn1)^2 + (Orig2 - knn2)^2),
          Bag = sqrt((Orig1 - Bag1)^2 + (Orig2 - Bag2)^2)) %>%
-  dplyr::select(Mean, Median, Linear, `k-NN`, Bag) %>%
+  dplyr::select(Mean, Median, `Linear\nRegression` = Linear, KNN = `k-NN`, Bagging = Bag) %>%
   pivot_longer(
     everything(),
     names_to = "Method",
     values_to = "Distance"
   ) %>%
-  mutate(Method = factor(Method, levels=c("Mean", "Median", "Linear", "k-NN", "Bag")))
+  mutate(Method = factor(Method, levels=c("Mean", "Median", "Linear\nRegression", "KNN", "Bagging")))
 ```
 
 For missing data, imputation is the process of using other existing information (i.e., the predictors) to estimate what each missing value might have been. In other words, we will build an imputation model to fill in the missing column(s) so that we can run the primary machine-learning model. A separate imputation model is required for each column that contains (or could contain) missing data. 
@@ -617,13 +633,14 @@ Returning to the simulation illustration, the linear imputation method creates t
 #| echo: false
 #| warning: false
 #| out-width: 60%
-#| fig-width: 7.5
-#| fig-height: 5
-#| fig-cap: A comparison of the distribution of distances between the actual and imputed samples across imputation techniques. The mean, median, and linear techniques perform similarly, while k-NN and bagging generate imputed values that are modestly closer to the actual values.
+#| fig-width: 6
+#| fig-height: 4.25
+#| fig-cap: A comparison of the distribution of distances between the actual and imputed samples across imputation techniques. The mean, median, and linear techniques perform similarly, while K-NN and bagging generate imputed values that are modestly closer to the actual values.
 
-ggplot(imputation_distance_comparison, aes(x=Method, y=Distance)) +
-  geom_boxplot(outlier.size=0) +
-  geom_jitter(height = 0, width = 0.05, color = "blue", alpha = 3 / 4)
+ggplot(imputation_distance_comparison, aes(x = Method, y = Distance)) +
+  geom_boxplot(outlier.size = 0) +
+  geom_jitter(height = 0, width = 0.05, color = "blue", alpha = 3 / 4) + 
+  labs(x = NULL)
 ```
 
 @fig-imputation-distance-comparison provides another visual comparison of the imputation techniques. In this figure, each point represents the Euclidean distance from the imputed sample to its known location. The mean, median, and linear methods have similar distributions of distances. 
