@@ -20,6 +20,8 @@ source("../R/_common.R")
 library(tidymodels)
 library(rpart)
 library(partykit)
+library(naniar)
+library(janitor)
 
 # ------------------------------------------------------------------------------
 # Set options
@@ -41,16 +43,50 @@ load("../RData/hotel_rates_all.RData")
 #| message: false
 #| warning: false
 
+# TODO document/get code for ames_original
+
 #Note:  Remove quality predictors. These are subjective and related to Sale Price
+# TODO move some of this to the data generation script
+
+load("../RData/ames_original.RData")
 ames_original <-
   ames_original %>%
-  dplyr::select(!contains("Qual")) %>%
+  dplyr::select(!contains("Qual"), -`Misc Feature`) %>%
+  mutate(
+    `basement type` = 
+      if_else(is.na(`BsmtFin Type 1`) & is.na(`BsmtFin Type 2`), 
+              NA_character_, "non_missing"),
+    `basement size` = 
+      if_else(is.na(`BsmtFin SF 1`) & is.na(`BsmtFin SF 1`), 
+              NA_real_, `BsmtFin SF 1` + `BsmtFin SF 2`),
+    
+  ) %>% 
   mutate(Neighborhood = factor(Neighborhood)) %>%
-  arrange(Neighborhood, Order)
+  arrange(Neighborhood, Order) %>% 
+  select(-`BsmtFin Type 1`, -`BsmtFin Type 2`, -`BsmtFin SF 1`, -`BsmtFin SF 2`) %>% 
+  clean_names() %>% 
+  rename_with(~ gsub("_", " ", .)) %>% 
+  rename_with(~ gsub("(qu$)|(qc$)", "quality", .)) %>% 
+  rename_with(~ gsub("(sf)", "area", .)) %>% 
+  rename_with(~ gsub("(cond)", "condition", .)) %>% 
+  rename_with(~ gsub("(bsmt)", "basement", .)) %>% 
+  rename_with(~ gsub(" unf", "unfinished", .)) %>% 
+  rename_with(~ gsub("yr blt", "year", .)) %>% 
+  rename_with(~ gsub("mas vnr", "masonry", .)) %>% 
+  rename_with(~ gsub("total basement area", "basement area total", .))
+  
+ames_has_missing_vals <- 
+  ames_original %>% 
+  naniar::miss_var_summary() %>% 
+  filter(pct_miss > 0)
+
+ames_has_missing_cols <- 
+  ames_has_missing_vals %>% 
+  pluck("variable")
 
 ames_predictors <-
   ames_original %>%
-  dplyr::select(-Order, -PID, -SalePrice)
+  dplyr::select(-order, -pid, -`sale price`)
 
 ames_pct_missing <- 
   100 * sum(is.na(ames_predictors)) / (nrow(ames_predictors) * ncol(ames_predictors))
@@ -165,19 +201,21 @@ hotels_samples <-
 max_missing_hotels_samples <- max(hotels_samples)
 ```
 
-When collecting data for analysis, it is not uncommon for some predictor values to be unknown. There can be a multitude of reasons that this can happen. For example, when a laboratory test for a respiratory disease is included in a data set, a sample may have no result for a few reasons. First, there might have been a data collection error; someone forgot to include the value. It could also be due to a database merge where a key field was unspecified and a subset of the data was not properly joined. It is also possible that the test itself failed to produce a result. For example, the test might fail for diagnostics that use throat swabs because an interfering substance, such as food coloring from a lozenge, is on the swab. 
+It is not uncommon for some predictor values to be unknown. There can be a multitude of reasons for this. To illustrate, let’s consider a laboratory test for a respiratory disease. One or more results may be missing due to a failed control or an inappropriate database join. It is also possible that the test itself failed to produce a result. For example, the test might fail for diagnostics that use throat swabs because an interfering substance, such as food coloring from a lozenge, is on the swab. 
 
-As another example, two data sets used throughout this text, houses in Ames and hotel rates, contain missing data. The Ames Housing data has `r round(ames_pct_missing, 1)`% missing values across `r ames_num_missing_predictors` predictors, while the hotel rate data has `r round(hotels_pct_missing, 1)`% missing values across `r hotels_num_missing_predictors` predictors. @fig-ames-missing illustrates the occurrence of missingness for the Ames data. This figure presents the full rectangular data matrix where each property (sorted alphabetically by neighborhood) is on the x-axis, and each predictor is on the y-axis. Red indicates that the value was missing in the data, while gray indicates that the value was not missing. 
+One of our illustrative data sets have also contained missing data. The Ames housing data has missing values in `r ames_num_missing_predictors` predictors. @fig-ames-missing illustrates the occurrence of missingness for the Ames data. This figure presents the full rectangular data matrix where each property (sorted alphabetically by neighborhood) is on the x-axis, and each predictor is on the y-axis. Red indicates that the value was missing in the data, while gray indicates that the value was not missing. 
 
 ```{r}
 #| label: fig-ames-missing
 #| echo: false
-#| out-width: 100%
-#| fig-width: 10.5
-#| fig-height: 10.5
+#| out-width: 90%
+#| fig-width: 8
+#| fig-height: 5
 #| fig-cap: A visualization of the missing data for the Ames Housing data set.
 
-ggplot(ames_missing_long, aes(x = RowNum, y = Predictor, fill = Missing)) + 
+ames_missing_long %>% 
+  filter(Predictor %in% ames_has_missing_cols) %>% 
+  ggplot(aes(x = RowNum, y = Predictor, fill = Missing)) + 
   geom_tile() + 
   scale_fill_manual(values = c("darkred", "lightgray")) +
   xlab("Property") +
@@ -190,9 +228,24 @@ ggplot(ames_missing_long, aes(x = RowNum, y = Predictor, fill = Missing)) +
   )
 ```
 
-The figure highlights several characteristics of the missing data. The most noteworthy: missing data affects *every* property (i.e., row) in the data. Pool quality is missing for nearly every property, while the column for miscellaneous features, alleys, fences, and fireplace quality are missing for the vast majority of properties. Second, there are specific patterns of missing information that are visually apparent. For example, when missing data occurs in one garage variable, it likely occurs across other garage variables (condition, finish, quality, type, and year built). The same is true for basement variables (condition, exposure, quality, type 1, and type 2). Other variables, like fence, fireplace quality, lot frontage, and masonry veneer area, and masonry veneer area do not appear to have any visual structure to their missingness.
+The figure highlights several characteristics of the missing data. The most noteworthy: missing data affects *every* property (i.e., row) in the data. Pool quality is missing for nearly every property, while the columns for alleys, basements, fences, and fireplaces are missing for the vast majority of properties. Second, there are specific patterns of missing information that are visually apparent. For example, when missing data occurs in one garage variable, it likely occurs across other garage variables (condition, finish, quality, type, and year built). The same is true for basement variables (condition, exposure, quality, type 1, and type 2). Other variables, like fence, fireplace quality, and lot frontage do not appear to have any visual structure to their missingness.
 
-TODO nanair pattern plot
+
+An “upset plot” is a method for visualizing high-dimensional Venn diagrams [@lex2014upset]. We can use this to explore potential patterns of missingness across predictors. For example, @fig-ames-patterns shows that the majority of the properties in Ames are missing values for ally, fence, or pool.
+
+```{r}
+#| label: fig-ames-patterns
+#| echo: false
+#| out-width: 100%
+#| fig-width: 8
+#| fig-height: 6
+#| fig-cap: An upset plot showing a few patterns of missingness in the Ames data. 
+
+ames_predictors %>% 
+  select(all_of(ames_has_missing_cols)) %>% 
+  naniar::gg_miss_upset(nsets = 8)
+```
+
 
 The problem with missing data is that many models are not naturally equipped to deal with this lack of information. As a simple example, consider the multiple linear regression model. Deriving the regression coefficients depends on computing the covariance matrix. If the predictors contain just one missing value, then this calculation cannot be performed. Partial least squares (@sec-pls-cls), support vector machines (@sec-svm-cls), k-nearest neighbors (@sec-knn-cls), and neural networks (@sec-neural-nets-cls), are also unable to tolerate missing data. Consequently, it is crucial to address the presence of missing data in order to build any of these predictive methods. In addition to addressing missing data, the pattern and nature of the missing data itself can sometimes serve as a significant predictor of the response. In this chapter we will explore the root causes of missing data, examine approaches for resolving the problem, and understand when it should be addressed in the modeling process.
 
