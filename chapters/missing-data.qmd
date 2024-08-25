@@ -247,38 +247,47 @@ ames_predictors %>%
 ```
 
 
-The problem with missing data is that many models are not naturally equipped to deal with this lack of information. As a simple example, consider the multiple linear regression model. Deriving the regression coefficients depends on computing the covariance matrix. If the predictors contain just one missing value, then this calculation cannot be performed. Partial least squares (@sec-pls-cls), support vector machines (@sec-svm-cls), k-nearest neighbors (@sec-knn-cls), and neural networks (@sec-neural-nets-cls), are also unable to tolerate missing data. Consequently, it is crucial to address the presence of missing data in order to build any of these predictive methods. In addition to addressing missing data, the pattern and nature of the missing data itself can sometimes serve as a significant predictor of the response. In this chapter we will explore the root causes of missing data, examine approaches for resolving the problem, and understand when it should be addressed in the modeling process.
+The problem with missing data is that many models are not naturally equipped to deal with this lack of information. As a simple example, consider the multiple linear regression model. Deriving the regression coefficients depends on computing the covariance matrix. If the predictors contain just one missing value, then this calculation cannot be performed. Partial least squares (@sec-pls-cls), support vector machines (@sec-svm-cls), K-nearest neighbors (@sec-knn-cls), and neural networks (@sec-neural-nets-cls), are also unable to tolerate missing data. Consequently, it is crucial to address the presence of missing data in order to build any of these predictive methods. In addition to addressing missing data, the pattern and nature of the missing data itself can sometimes serve as a significant predictor of the response. In this chapter we will explore the root causes of missing data, examine approaches for resolving the problem, and understand when it should be addressed in the modeling process.
 
 
 ## Root Causes {#sec-root-causes}
 
 When encountering missing data, the primary question is, "Why are these values missing?"  It is a good idea to know, and the answer can substantially affect how we compensate for the problem. In some instances, the answer might be apparent or can be inferred from the data. In the example of the laboratory test, suppose a random defect in the test kit was to blame for the missing measurements. In this instance, the value was missing completely at random (MCAR). If this is the case, we have significant latitude in terms of how to handle the situation. As a counter-example, suppose that patients with more severe illnesses were more likely to deal with their symptoms by using a lozenge. If the likelihood of a missing value is a function of some other variable (whether it is in the data or not), the missingness of the data is _informative_. Here, we have to worry about biases that can creep into our analysis, which might reduce the effectiveness of our model. 
 
-As another example, it would be helpful to understand why the agent variable in the hotel rate data was missing for `r round(hotels_pct_missing_agent,1)`% of the data. Treating agent as a categorical outcome, we can use a simple recursive partitioning model (@sec-recursive-partitioning) to understand potential relationships with other predictors. @fig-hotels-agent-missing illustrates the predictors that partition the missing agent data into increasing homogeneous groups. Here, we see that the entries for many agents are missing when a corporate customer has a reservation. When missing values occur for a non-corporate customer, the lead times are very short, indicating that the customer may have taken a spur-of-the-moment trip and did not have time to contact an agent for a reservation. 
+Another example data set will be introduced in @sec-hotel-rates, where we try to predict the cost of a hotel room (known as the "average daily rate" or ADR). The data set includes data on the method of booking the room, such as the name of the travel agent, the travel company, and the customer's country of origin. The agent variable in the hotel rate data was missing for `r round(hotels_pct_missing_agent,1)`% of the data. We don't always know if the agent field is missing because no agent was used or because the value was not recorded. Treating the missingness of the agent as a binary outcome, we can use a simple recursive partitioning model (@sec-cart-cls) to understand potential relationships with other predictors. @fig-hotels-agent-missing illustrates the predictors that partition the missing agent data into increasing homogeneous groups. Here, we see that the entries for many agents are missing when a corporate customer has a reservation. When missing values occur for a non-corporate customer, it is notable that the lead times are very short, indicating that the customer may have taken a spur-of-the-moment trip.  
 
 ```{r}
 #| label: fig-hotels-agent-missing
 #| echo: false
-#| out-width: 80%
+#| out-width: 90%
 #| fig-width: 10.5
 #| fig-height: 7.5
-#| fig-cap: A classification tree to predict the missing category of agent in the hotel rate dataset.
+#| fig-cap: A classification tree to predict the missing category of agent in the hotel rate dataset. "TA" stands for travel agent and "TO" means tour operators.
 
 hotels_for_rpart <-
   hotels_predictors %>%
-  mutate(agent = ifelse(is.na(agent), "Missing", "Not Missing"),
-         company = ifelse(is.na(company), "Missing", "Not Missing"),
-         country = ifelse(is.na(country), "Missing", "Not Missing")) %>%
-  mutate(agent = factor(agent),
-         company = factor(company),
-         country = factor(country))
+  mutate(
+    across(where(is.factor), as.character),
+    across(where(is.character), tolower),
+    agent = ifelse(is.na(agent), "missing", "not missing"),
+    company = ifelse(is.na(company), "missing", "not missing"),
+    country = ifelse(is.na(country), "Missing", "not missing"),
+    distribution_channel = as.character(distribution_channel),
+    distribution_channel = gsub("ta_to", "TA/TO", distribution_channel),
+    market_segment = gsub("travel_agent", "TA", market_segment),
+    across(where(is.character), ~ gsub("_", " ", .x)),
+    across(where(is.character), as.factor)
+  ) %>%
+  rename_with(~ gsub("_", " ", .))
 
-rpart_mod <- rpart(agent ~ ., 
-                   data=hotels_for_rpart,
-                   control=rpart.control(maxdepth=3))
+rpart_mod <- rpart(agent ~ ., data = hotels_for_rpart, 
+                   control = rpart.control(maxdepth = 3))
 rpart_party <- as.party(rpart_mod)
-plot(rpart_party)
+rpart_party %>% 
+  plot(ep_args = list(justmin = 20, abbreviate = TRUE), 
+       tp_args = list(text = "vertical", rot = 45, gp = gpar(cex = .9)))
 ```
+
 
 With some simple exploration, as demonstrated with the Ames and hotel rate data sets, we can begin to understand the causes or potential reasons for missing data. However, determining the cause of missing data may be more challenging for many other data sets. We need a framework to understand and manage missing data in such cases.
 
@@ -288,7 +297,7 @@ First there can be structural deficiencies. This type of missing data arises whe
 
 There can also be random occurrences.  Missing values often occur at random with no defined root cause. For example, a patient in a clinical trial may miss a scheduled visit due to an illness on the day of the visit. As another example, sporadically occurring severe weather can create missing data for collection devices that depend on continuous power. Generally, missing data due to random occurrences occur a small percentage of the time and can be remedied. However, if randomly missing data occurs a large percentage of the time, the measurement system should be evaluated, and the collected variables should be scrutinized before being included in the modeling process. For a detailed understanding of this type of problem, see @little2019statistical.
 
-We might be able to identify specific casues for missingness. As we will see later in this chapter (@sec-encoding-missing-data), several basement variables in the original Ames data have missing values. This information was not missing because there was some failure in recording the data. The explanation was much simpler:  these homes had no basements. This type of missing data is the most challenging to manage, and the appropriateness of techniques can vary. Hence, understanding the nature of the missing data is crucial before applying any methods. 
+We might be able to identify specific causes for missingness. As we will see later in this chapter (@sec-encoding-missing-data), several basement variables in the original Ames data have missing values. This information was not missing because there was some failure in recording the data. The explanation was much simpler:  these homes had no basements. This type of missing data is the most challenging to manage, and the appropriateness of techniques can vary. Hence, understanding the nature of the missing data is crucial before applying any methods. 
 
 TODO callout here
 
@@ -296,15 +305,15 @@ Understanding these mechanisms will guide us in choosing appropriate techniques 
 
 Instead of directly addressing the problem of missing data, we could sidestep it by using models that tolerate it. Methods based on the concept of recursive partitioning, such as classification and regression trees (CART), random forests, and boosted trees, algorithmically sidestep the probelms of missing data while constructing the model. The Naive Bayes model can also be built in the presence of missing data.
 
-The CART approach [@breiman1984classification, @sec-recursive-partitioning] recursively identifies variables and split points that optimally partition the data into subsets that are more homogeneous with respect to the outcome being modeled. For each selected variable and split point, additional variables and split points are identified that have the next best ability to partition the data into homogeneous subsets. These additional variables are called _surrogate splits_. When a sample has a missing value for a predictor in the tree, the surrogate predictors are then used to direct the sample toward the appropriate terminal node in the tree. 
+The CART approach [@breiman1984classification] recursively identifies variables and split points that optimally partition the data into subsets that are more homogeneous with respect to the outcome being modeled. For each selected variable and split point, additional variables and split points are identified that have the next best ability to partition the data into homogeneous subsets. These additional variables are called _surrogate splits_. When a sample has a missing value for a predictor in the tree, the surrogate predictors are then used to direct the sample toward the appropriate terminal node in the tree. 
 
 The boosted trees, such ase xgboost [@chen2016xgboost], is also based on a recursive partitioning framework. However, xgboost's approach to addressing missing data is more complex and is called _sparsity-aware split finding_. In the model-building process, the algorithm determines which direction would be more optimal for each node in the tree if a sample had a missing value for that predictor. 
 
-Random forest [@breiman2001random, @sec-random-forest] has several different approaches to handling missing values. The naive approach is to internally impute the missing value with the median of non-missing values for continuous predictors or the most frequent value for categorical predictors. A more advanced approach identifies the nearest non-missing samples to the sample with the missing value and imputes the value based on a weighted distance score.
+Random forest [@breiman2001random] has several different approaches to handling missing values. The naive approach is to internally impute the missing value with the median of non-missing values for continuous predictors or the most frequent value for categorical predictors. A more advanced approach identifies the nearest non-missing samples to the sample with the missing value and imputes the value based on a weighted distance score.
 
-While C5.0 [@quinlan1993c4;@apm, @sec-c5-0] is also a decision tree, it adopts a unique approach to addressing missing values. This method utilizes fractional counts in subsequent splits based on the frequency distribution of missing data for a predictor. This approach enables the model to maintain an ongoing estimate of where the missing values might fall within the partitioning.
+While C5.0 [@quinlan1993c4;@apm] is also a decision tree, it adopts a unique approach to addressing missing values. This method utilizes fractional counts in subsequent splits based on the frequency distribution of missing data for a predictor. This approach enables the model to maintain an ongoing estimate of where the missing values might fall within the partitioning.
 
-Naive Bayes [@webb2010naive, @sec-naive-bayes] builds models using each predictor separately. When a predictor contains a missing value, this missing sample’s information is omitted from the probability calculation for only this predictor. For predictors in which the missing data informs our understanding of the response, omitting the missing samples will be detrimental to the model. 
+Naive Bayes [@webb2010naive] builds models using each predictor separately. When a predictor contains a missing value, this missing sample’s information is omitted from the probability calculation for only this predictor. For predictors in which the missing data informs our understanding of the response, omitting the missing samples will be detrimental to the model. 
 
 The primary benefit of these types of models is that we can use the original data as-is. This eliminates potential biases that could occur through imputing missing values or removing samples that contain missing values. The drawback is that the number of models that can be applied to the data is very limited. As we know from the No Free Lunch theorem, no one model will be optimal for all problems. Therefore, we will need to address the missing data problem head-on to adequately explore the predictive ability of a wide range of models.
 
@@ -550,7 +559,7 @@ ggplot(simulation_nonlinear, aes(x=`Predictor 1`, y=`Predictor 2`, pch = Observe
 
 ### Encoding Missing Data {#sec-encoding-missing-data}
 
-When a predictor takes categorical values, an alternative approach to imputation is encoding. Consider the basement exposure variable in the original Ames data set. This variable takes values of good (Gd), average (Av), minimum (Mn), and no (No) exposure, and contains `r sum(is.na(ames_original$"Bsmt Exposure"))` missing values. The most likely value approach would impute the missing values with the "no" category since this is the most frequent category. A model-based approach would utilize information across the rest of the variables to predict which of the 4 available categories would be best. Would imputing with one of the 4 available categories be a good approach for the missing samples?  In this case, the answer is "no!". With a little more investigation, we can see that the reason the exposure variable contains missing values for these houses is because these houses do not have basements.
+When a predictor takes categorical values, an alternative approach to imputation is encoding. Consider the basement exposure variable in the original Ames data set. This variable takes values of good (Gd), average (Av), minimum (Mn), and no (No) exposure, and contains `r sum(is.na(ames_original["basement exposure"]))` missing values. The most likely value approach would impute the missing values with the "no" category since this is the most frequent category. A model-based approach would utilize information across the rest of the variables to predict which of the 4 available categories would be best. Would imputing with one of the 4 available categories be a good approach for the missing samples?  In this case, the answer is "no!". With a little more investigation, we can see that the reason the exposure variable contains missing values for these houses is because these houses do not have basements.
 
 When a value is missing for a specific reason like we see with the basement exposure variable, encoding the missing information will be more informative to the models. In an encoding procedure, we simply acknowledge that the value is missing by creating a new category such as "unspecified."  Or, in the case of basement exposure, a more appropriate categorization would be "No basement."
 
@@ -625,13 +634,13 @@ When the predictor that requires imputation is categorical, then logistic regres
 
 ### Nearest Neighbors
 
-$K$-nearest neighbor calculations were previously discussed in @sec-mds where it was used in some multidimensional scaling methods. When imputing a missing predictor value for a new sample, the $K$ most similar samples from the training set are determined (using all complete predictor values). The $K$ predictor values for the predictor of interest are summarized via the mean (for numeric outcomes) or the mode. This summary statistic is used to fill in the missing value. 
+$K$-nearest neighbor calculations will be discussed in @sec-mds, where it will be used in some multidimensional scaling methods, and in @sec-knn-cls in the context of a supervised model. In short, when imputing a missing predictor value for a new sample, the $K$ most similar samples from the training set are determined (using all complete predictor values). The $K$ predictor values for the predictor of interest are summarized via the mean (for numeric outcomes) or the mode. This summary statistic is used to fill in the missing value. 
 
 ### Trees
 
 As mentioned earlier, tree-based models are a reasonable choice for imputation techniques because many types of trees do not require complete data themselves. They generally provide good accuracy and do not extrapolate values beyond the bounds of the training data. While using a single tree can be used for imputation, we know that the resulting imputation will likely have low bias and high variance. Ideally, we would like imputed values would have low bias and low variance.
 
-Tree ensembles, such as bagging and random forests (Sections X and Y), help solve this issue since they blend the predictors from many individual tree models. However, these methods can be computationally taxing for moderate to large size data sets. Specifically, random forests require a large number of trees (hundreds to thousands) to achieve a stable and reliable imputation model. This comes at a cost of a large computational footprint which may become a challenge as the number of predictors with missing data increases; a separate model must be trained and retained for each predictor. As we will discuss later, bagged tree models tend to be smaller and faster than their random forest counterparts. 
+Tree ensembles, such as bagging and random forests (Chapters [-@sec-trees-cls] and [-@sec-trees-reg]), help solve this issue since they blend the predictors from many individual tree models. However, these methods can be computationally taxing for moderate to large size data sets. Specifically, random forests require a large number of trees (hundreds to thousands) to achieve a stable and reliable imputation model. This comes at a cost of a large computational footprint which may become a challenge as the number of predictors with missing data increases; a separate model must be trained and retained for each predictor. As we will discuss later, bagged tree models tend to be smaller and faster than their random forest counterparts. 
 
 Like nearest neighbor imputation, the bagged tree also places most of the imputed values close to the distribution of the original data as see in @fig-imputation-comparison. The distribution of distances (@fig-imputation-distance-comparison) for bagged imputation is similar to nearest neighbors.
 
