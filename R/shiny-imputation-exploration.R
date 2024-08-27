@@ -2,7 +2,7 @@
 library(tidyverse)
 library(recipes)
 
-load("https://raw.githubusercontent.com/aml4td/website/main/RData/simulation_data.RData")
+load(url("https://raw.githubusercontent.com/aml4td/website/main/RData/simulation_data.RData"))
 
 ui <-
   fluidPage(
