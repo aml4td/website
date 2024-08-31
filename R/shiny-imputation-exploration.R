@@ -1,6 +1,3 @@
-#move the library calls to the shiny live code chunk
-library(tidyverse)
-library(recipes)
 
 load(url("https://raw.githubusercontent.com/aml4td/website/main/RData/simulation_data.RData"))
 
