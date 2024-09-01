@@ -5,7 +5,7 @@ ui <- fluidPage(
       width = 2,
       radioButtons(
         "selection", "Select data:",
-        c(`Linear` = "LINEAR", `Nonlinear` = "NONLINEAR")
+        choices = c(`Nonlinear` = "NONLINEAR", `Linear` = "LINEAR")
       )
     ), # data type
     column(
