@@ -63,7 +63,14 @@ forested_split_info <-
 # Resample the training set
 
 set.seed(670)
-forested_rs <- spatial_block_cv(forested_sf_train, v = 20, buffer = 100 * 100)
+forested_rs <- spatial_block_cv(
+  forested_sf_train,
+  v = 10,
+  buffer = 80 * 80,
+  method = "continuous",
+  n = 25,
+  square = FALSE
+)
 
 # ------------------------------------------------------------------------------
 # re-calculate geocodes and strip off geometry column
@@ -88,10 +95,26 @@ forested_test  <- re_geocode(forested_sf_test)
 forested_rs$splits <- map(forested_rs$splits, no_geometry)
 
 # ------------------------------------------------------------------------------
+# Make map for a single cv iteration
+
+cv_split_groups <- tibble(.row = 1:nrow(forested_sf_train), group = "buffer")
+cv_split_groups$group[forested_rs$splits[[1]]$in_id] <- "analysis"
+cv_split_groups$group[forested_rs$splits[[1]]$out_id] <- "assessment"
+
+forested_cv_split_info <- 
+  forested_train %>% 
+  add_rowindex() %>% 
+  full_join(cv_split_groups, by = ".row") %>% 
+  mutate(
+    group_col = if_else(group == "analysis", "#E7298A", "#7570B3"),
+    group_col = if_else(group == "buffer", "#000000", group_col)
+  )
+
+# ------------------------------------------------------------------------------
 # Save various things
 
 save(forested_train, forested_test, forested_rs, file = "RData/forested_data.RData")
-save(forested_split_info, file = "RData/forested_split_info.RData")
+save(forested_split_info, forested_cv_split_info, file = "RData/forested_split_info.RData")
 save(forested_sf, file = "RData/forested_sf.RData")
 
 # ------------------------------------------------------------------------------
