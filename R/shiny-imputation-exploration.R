@@ -144,7 +144,7 @@ getData <- function(DATA = inputData,
         step_impute_linear(x2_new, impute_with = imp_vars(x2_new, x1_new_sq)) %>% 
         step_rm(x1_new_sq)
     }
-  
+
   }
   
   current_recipe <- prep(current_recipe, training = current_data, retain = TRUE)
