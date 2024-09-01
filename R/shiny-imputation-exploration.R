@@ -132,7 +132,19 @@ getData <- function(DATA = inputData,
   } else if(IMPUTETYPE == "MEDIANIMPUTE"){
     current_recipe <- current_recipe %>% step_impute_median(all_predictors())
   } else if(IMPUTETYPE == "LINEARIMPUTE"){
-    current_recipe <- current_recipe %>% step_impute_linear(all_predictors())
+    
+    if (DATA == "LINEAR") {
+      current_recipe <- current_recipe %>% step_impute_linear(all_predictors())
+    } else {
+      current_recipe <- 
+        current_recipe %>% 
+        step_impute_linear(x1_new, impute_with = imp_vars(x2_new)) %>% 
+        step_mutate(x1_new_sq =  x1_new * x1_new) %>% 
+        step_impute_linear(x1_new, impute_with = imp_vars(x2_new)) %>% 
+        step_impute_linear(x2_new, impute_with = imp_vars(x2_new, x1_new_sq)) %>% 
+        step_rm(x1_new_sq)
+    }
+    
   }
   
   current_recipe <- prep(current_recipe, training = current_data, retain = TRUE)
