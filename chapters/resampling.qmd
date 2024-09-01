@@ -584,6 +584,193 @@ Should we use the bootstrap to compare models? Its small variance is enticing, b
 
 Let's take a look at a few specialized resampling methods. 
 
+
+## Time Series Data {#sec-time-series-resampling}
+
+Time series data [@Hyndmanforecast] are sequential observations ordered over time. The most common example is daily stock prices. These data are a special case due to _autocorrelation_: rows of the data set are not independent. This can occur for many different reasons (e.g. underlying seasonal trends, etc.), but it complicates the resampling process in different ways: 
+
+ - We want to avoid analysis and assessment partitions where older data are in the assessment set (to avoid predicting past data with future data). 
+ - Random sampling might destroy the underlying data structures that can be used to measure specific trends (such as seasonality). 
+
+_Rolling forecasting origin_ splitting [@tashman2000out] is a resampling scheme that mimics the train/test splitting pattern from @sec-basic-splitting where the most recent data are used in the assessment set. We would choose how much data (or what range of time) to use for the analysis and assessment sets, then slide this pattern over the whole data set. @fig-rolling-scheme illustrates this process where each block could represent some unit of time. For example, we might build the model on six months of data and then predict with one month. The next resample iteration could bump that forward by a month or another period (so that the assessment sets can be distinct or overlapping).
+
+```{r}
+#| label: fig-rolling-scheme
+#| echo: false
+#| out-width: '55%'
+#| fig-cap: "A schematic of rolling origin resampling for time series data. Each box corresponds to a unit of time (e.g., day, month, year, etc.)."
+knitr::include_graphics("../premade/rolling.svg")
+```
+
+We also have the choice to cumulatively expand the assessment data from the start of the training set to the end of the current slice.
+
+We'll use rolling forecasting origin resampling in one of the upcoming case studies using the hotel rate data previously discussed in @sec-hotel-rates.
+
+## Spatial Data {#sec-spatial-resampling}
+
+Like time series data, spatial data can have autocorrelation, with objects being more similar to closer objects than to objects further away. Tobler's First Law of Geography [@bjorholm2008extent] is: 
+
+> "Everything is related to everything else, but near things are more related than distant things."
+
+Think of an overhead color satellite image of a forest. Different types of trees have different foliage colors. If we focus on the color green, the distribution of "greeness" is not a random pattern of the x/y axes (random distribution would resemble resembling static). In other words, pixels cannot be assumed to be independent of one another. 
+
+Spatial autocorrelation will generally affect how we partition the data; we want to avoid having very similar training set points in both the analysis and assessment sets. There are a few ways to compensate for this issue: 
+
+ - Group the data into local areas and iterate by removing one group at a time. If there is no rational, objective process for creating groups, use clustering methods or create a regular grid across the data range. 
+ - Buffering is a method that excludes data around a specific data point or group. For example, if leave-one-out cross-validation were used, it would be a good idea to filter the analysis set so that the other data are not within some pre-defined radius of the held-out sample. 
+
+@Roberts2017, @Pohjankukka2017, @karasiak2022spatial, and @mahoney2023assessing have good overviews of these techniques.
+
+@fig-sole-eggs shows an example from @horwood1993bristol, where sole fish were sampled across locations west of England at specific times. The sampling plan appears to include a buffer. We could use an algorithm to estimate groups as blocks, or perhaps a context-specific rule exists. For example, rational subgroups may focus on distance from the coastline.
+
+```{r}
+#| label: fig-sole-eggs
+#| echo: false
+#| fig-width: 6
+#| fig-height: 3.5
+#| fig-align: "center"
+#| out-width: "100%"
+#| fig-cap: Spatial distirbution of sole eggs in the Bristol channel. 
+
+data(sole, package = "gamair")
+
+sole_df <- 
+  sole %>% 
+  as_tibble() %>% 
+  mutate(long = lo, lat = la) %>% 
+  filter(t == 140.5)
+
+leaflet() %>%
+  addProviderTiles(providers$CartoDB.DarkMatterNoLabels)%>%
+  addCircles(
+    data = sole_df,
+    lng = ~ lo,
+    lat = ~ la,
+    fill = TRUE,
+    opacity = .01,
+    fillOpacity = 1,
+    color = ~ "white",
+    radius = ~ 3000
+  )
+```
+
+As an example, @fig-sole-eggs-cv shows the results when 10 clusters are estimated from the data to use as folds. K-means clustering was used to determine the ten clusters. 
+
+```{r}
+#| label: fig-sole-eggs-cv
+#| echo: false
+#| fig-width: 6
+#| fig-height: 3.5
+#| fig-align: "center"
+#| out-width: "100%"
+#| fig-cap: 10-fold cross-validation assignments using spatial clustering. The points are clickable. 
+
+sole_cols <- 
+  c("#4147ADFF", "#4777EFFF", "#A2FC3CFF", "#1BD0D5FF", "#39A4FBFF",
+    "white", "#F4C73AFF", "#F46516FF", "#DB3A07FF", "#B21A01FF")
+
+sole_sf <- sf::st_as_sf(
+  sole_df,
+  coords = c("lo", "la"),
+  crs = 4326
+)
+
+cls_sole <- spatial_clustering_cv(sole_sf, v = 10)
+cls_plot_data <- 
+  autoplot(cls_sole)$data %>% 
+  mutate(color = sole_cols[as.numeric(factor(.fold.))])
+
+num_per_fold <- cls_plot_data %>% as_tibble() %>% count(.fold.) %>% pluck("n")
+
+leaflet() %>%
+  addProviderTiles(providers$CartoDB.DarkMatterNoLabels)%>%
+  addCircles(
+    data = cls_plot_data,
+    lng = ~ long,
+    lat = ~ lat,
+    fill = TRUE,
+    opacity = .01,
+    fillOpacity = 1,
+    color = ~ color,
+    radius = ~ 3000,
+    popup = ~ .fold.
+  )
+```
+
+The number of locations per fold ranged from `r min(num_per_fold)` to  `r max(num_per_fold)` with a median of `r median(num_per_fold)` locations. 
+
+## Grouped or Multi-Level Data {#sec-multilevel-resampling}
+
+When rows of data are correlated for other reasons, such as those discussed in @sec-multilevel-splitting, we can extend the techniques described above. Consider the previously mentioned example of having the purchase histories of many users from a retail database. If we had a training set of 10,000 instances that included 100 customers, we could conduct _V_-fold cross-validation to determine which _customers_ would go into the analysis and assessment sets. As with the initial split, any rows associated with specific customers would be placed into the same partition (i.e., analysis or assessment). 
+
+## Frequently Asked Questions {#sec-resampling-faq}
+
+These questions represent areas of confusion regarding resampling. 
+
+#### Is it bad to get different results from each resample?   {#sec-resampling-Q01 .unnumbered}
+
+The point of resampling is to see how the model pipeline changes when the data changes. There is a good chance that some important estimates differ from resample to resample. For example, when algorithmically filtering predictors, you might get _B_ different predictor lists, and that’s okay. It does give you a sense of how much noise is in the part of your model pipeline.
+
+#### Can/should I use the individual resampling results to change the model pipeline?   {#sec-resampling-Q02 .unnumbered}
+
+We often hear questions about how to use the cross-validated results to define the model. For example, using the top _X_% of predictors selected during resampling as the final predictor set in a new model pipeline seems intuitive. 
+
+One important thing to consider is that _you now have a different model pipeline than what was just resampled_. To understand the performance of your newly informed model, you need to resample a model pipeline that _algorithmically_ selects the _X_% of predictors and resample it.
+
+Note that resampling the specific set of top predictors determined from the resamples is not appropriate. The rule to determine the top set should be resampled, not the specific output of that rule.
+
+For the original pipeline, the final predictor set is determined when you fit that pipeline on the training set. The resampling results tell you about what _could_ have happened; the training set results show what _did happen_.
+
+#### What happens to the _B_ models? Which one should I keep? {#sec-resampling-Q03 .unnumbered}
+
+The _B_ models fit within resampling are _only used_ to estimate how well the model fits the data. You don’t need them after that. You can retain them for diagnostic purposes though. As mentioned above, using the replicate models to look into how parts of the model change can be helpful. 
+
+Also, if you are not using a single validation set, recall that none of these models are trained with the unaltered training set, so none would be the final model.  
+
+#### Is this some sort of ensemble?  {#sec-resampling-Q04 .unnumbered}
+
+No. We'll talk model about ensembles in @sec-ensembles and how the assessment set predictions can be used to create an ensemble.  
+
+#### Can I accidentally do resampling wrong?  {#sec-resampling-Q05 .unnumbered}
+
+Unfortunately yes. As previously mentioned, improper data usage is one of the most frequent ways that machine learning models silently fail; that is, you won’t know that there is a problem until the next set of labeled data. A good example discussed in @sec-removing-predictors is @Ambroise2002p1493. 
+
+If you are 
+
+ - training _every_ part of your model pipeline after the initial data split and using _only_ the training set and, 
+
+- evaluating performance with external data
+
+the risk of error is low.
+
+#### What is nested resampling? {#sec-resampling-Q06 .unnumbered}
+
+This is a version of where an additional layer of resampling occurs. For example, suppose you are using 10-fold cross-validation. Within each of the 10 iterations, you might add 20 bootstrapping iterations (that resamples the analysis set). That ends up training 200 distinct models^[We will refer to the first resample (10-fold CV) as the _outer_ resample and the boostrap as the _inner_ resample.]. 
+
+For a single model, that’s not very useful. However, as discussed in @sec-nested-resampling, there are situations where the analysis set is being used for too many purposes. For example, during model tuning, you might use resampling to find the best model _and_ measure its performance. In certain cases, that can lead to bad results for the latter task.  
+
+Another example is recursive feature selection, where we are trying to rank predictors, sequentially remove them, and determine how many to remove. In this case, it's a good idea to use an outer resampling loop to determine where to stop and an inner loop for the other tasks.
+
+We will see nested resampling in the next chapter.
+
+#### Are these methods related to permutation tests? {#sec-resampling-Q09 .unnumbered}
+
+Not really. Permutation methods are similar to resampling only in that they perform multiple calculations on different versions of the training set. 
+
+We used permutation methods in the bootstrapping section to estimate the no-information rate. Otherwise, they won’t be used to evaluate model performance. 
+
+#### Are sub-sampling or down-sampling the same as resampling?  {#sec-resampling-Q08 .unnumbered}
+ 
+No. These are techniques to modify your training set (or analysis set) to rebalance the data when a classification problem has rare events. They’ll be discussed in @sec-imbalance-sampling.
+ 
+#### Why do I mostly hear about validation sets?  {#sec-resampling-Q09 .unnumbered}
+
+As discussed in @sec-deep-learning, stereotypical deep learning models are trained on _very_ large sets of data. There is very little reason to use multiple resamples in these instances, and deep learning takes up a lot of space in the media and social media. 
+
+Generally, every data set that is not massive could benefit from multiple resamples. 
+
+
+
 ```{r}
 #| label: teardown-cluster
 #| include: false
