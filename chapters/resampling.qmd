@@ -20,11 +20,10 @@ library(patchwork)
 library(kableExtra)
 library(doParallel)
 library(leaflet)
-library(spatialsample)
 
 # Also requires: 
 # for model fitting
-# gamair, viridisLite
+# viridisLite
 
 # ------------------------------------------------------------------------------
 # Set options
@@ -38,6 +37,9 @@ set_options()
 # Load previous data sets
 
 load("../RData/resampling_var_bias.RData")
+load("../RData/forested_split_info.RData")
+load("../RData/forested_data.RData")
+
 sel_model <- "logistic"
 sel_metric <- "brier_class"
 
@@ -608,96 +610,36 @@ We'll use rolling forecasting origin resampling in one of the upcoming case stud
 
 ## Spatial Data {#sec-spatial-resampling}
 
-Like time series data, spatial data can have autocorrelation, with objects being more similar to closer objects than to objects further away. Tobler's First Law of Geography [@bjorholm2008extent] is: 
+@sec-spatial-splitting described the problem of spatial correlation between locations and a method for creating an initial split for the forestation data. 
 
-> "Everything is related to everything else, but near things are more related than distant things."
-
-Think of an overhead color satellite image of a forest. Different types of trees have different foliage colors. If we focus on the color green, the distribution of "greeness" is not a random pattern of the x/y axes (random distribution would resemble resembling static). In other words, pixels cannot be assumed to be independent of one another. 
-
-Spatial autocorrelation will generally affect how we partition the data; we want to avoid having very similar training set points in both the analysis and assessment sets. There are a few ways to compensate for this issue: 
-
- - Group the data into local areas and iterate by removing one group at a time. If there is no rational, objective process for creating groups, use clustering methods or create a regular grid across the data range. 
- - Buffering is a method that excludes data around a specific data point or group. For example, if leave-one-out cross-validation were used, it would be a good idea to filter the analysis set so that the other data are not within some pre-defined radius of the held-out sample. 
-
-@Roberts2017, @Pohjankukka2017, @karasiak2022spatial, and @mahoney2023assessing have good overviews of these techniques.
-
-@fig-sole-eggs shows an example from @horwood1993bristol, where sole fish were sampled across locations west of England at specific times. The sampling plan appears to include a buffer. We could use an algorithm to estimate groups as blocks, or perhaps a context-specific rule exists. For example, rational subgroups may focus on distance from the coastline.
+We specified 10 resamples from the grid. To accomplish this, we sequentially assigns each hexagon in the 2D grid to integers 1 through 10. For the first resample, we pool the hexagonal regions labeled with a 1 to define the overall assessment set. All other data, excluding any within the buffer (if any), are reserved for the analysis set. @fig-forested-blockcv shows the  end product for the first of our 10 folds. 
 
 ```{r}
-#| label: fig-sole-eggs
+#| label: fig-forested-blockcv
 #| echo: false
-#| fig-width: 6
-#| fig-height: 3.5
-#| fig-align: "center"
-#| out-width: "100%"
-#| fig-cap: Spatial distirbution of sole eggs in the Bristol channel. 
-
-data(sole, package = "gamair")
-
-sole_df <- 
-  sole %>% 
-  as_tibble() %>% 
-  mutate(long = lo, lat = la) %>% 
-  filter(t == 140.5)
+#| fig-cap: An example of one split produced by block cross-validation on the forestation data. The analysis (magenta) and assessment (purple) sets are shown with locations in the buffer in black. The empty spaces represent the data reserved for the test set. 
 
 leaflet() %>%
-  addProviderTiles(providers$CartoDB.DarkMatterNoLabels)%>%
+  addProviderTiles(providers$CartoDB.PositronNoLabels) %>%
   addCircles(
-    data = sole_df,
-    lng = ~ lo,
-    lat = ~ la,
+    data = forested_cv_split_info,
+    lng = ~ longitude,
+    lat = ~ latitude,
+    color = ~ group_col,
+    fillColor = ~ group_col,
     fill = TRUE,
     opacity = .01,
-    fillOpacity = 1,
-    color = ~ "white",
-    radius = ~ 3000
-  )
+    fillOpacity = 3 / 4,
+    radius = 1500,
+    popup = htmltools::htmlEscape(forested_cv_split_info$group)
+  ) %>%
+  setView(lng = -120.3945, lat = 47.33047, zoom = 7)
 ```
 
-As an example, @fig-sole-eggs-cv shows the results when 10 clusters are estimated from the data to use as folds. K-means clustering was used to determine the ten clusters. 
+Our training set contains `r format(nrow(forested_train), big.mark = ",")` locations. Across each of the ten folds, every location appears once in the analysis and assessment sets. 
 
-```{r}
-#| label: fig-sole-eggs-cv
-#| echo: false
-#| fig-width: 6
-#| fig-height: 3.5
-#| fig-align: "center"
-#| out-width: "100%"
-#| fig-cap: 10-fold cross-validation assignments using spatial clustering. The points are clickable. 
+Just as with standard _V_-fold cross-validation, the number of folds can be chosen based on bias and variance concerns. Unlike standard resampling, any investigation into this topic would depend on a specific spatial autocorrelation structure. As such, we have decided to follow the recommendations for non-spatial data and use _V_=10. If we find that the variation in our statistics estimated from ten resamples is too large, we can employ the same process of repeating the block resampling process using different random number seeds. For our data, the average number of locations in the assessment sets is `r floor(mean(map_int(forested_rs$splits, ~ length(.x$out_id))))` and this appears large enough to produce sufficiently precise performance statistics. 
 
-sole_cols <- 
-  c("#4147ADFF", "#4777EFFF", "#A2FC3CFF", "#1BD0D5FF", "#39A4FBFF",
-    "white", "#F4C73AFF", "#F46516FF", "#DB3A07FF", "#B21A01FF")
-
-sole_sf <- sf::st_as_sf(
-  sole_df,
-  coords = c("lo", "la"),
-  crs = 4326
-)
-
-cls_sole <- spatial_clustering_cv(sole_sf, v = 10)
-cls_plot_data <- 
-  autoplot(cls_sole)$data %>% 
-  mutate(color = sole_cols[as.numeric(factor(.fold.))])
-
-num_per_fold <- cls_plot_data %>% as_tibble() %>% count(.fold.) %>% pluck("n")
-
-leaflet() %>%
-  addProviderTiles(providers$CartoDB.DarkMatterNoLabels)%>%
-  addCircles(
-    data = cls_plot_data,
-    lng = ~ long,
-    lat = ~ lat,
-    fill = TRUE,
-    opacity = .01,
-    fillOpacity = 1,
-    color = ~ color,
-    radius = ~ 3000,
-    popup = ~ .fold.
-  )
-```
-
-The number of locations per fold ranged from `r min(num_per_fold)` to  `r max(num_per_fold)` with a median of `r median(num_per_fold)` locations. 
 
 ## Grouped or Multi-Level Data {#sec-multilevel-resampling}
 
