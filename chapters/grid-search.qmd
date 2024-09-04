@@ -19,8 +19,9 @@ library(broom.mixed)
 library(tidymodels)
 library(finetune)
 library(bonsai)
+library(patchwork)
 library(rlang)
-library(doParallel)
+library(future)
 
 # ------------------------------------------------------------------------------
 
@@ -40,11 +41,12 @@ load("../RData/grid_benchmarks.RData")
 # ------------------------------------------------------------------------------
 # Set Options
 
-cl <- makePSOCKcluster(parallel::detectCores(logical = TRUE))
-registerDoParallel(cl)
+plan("multisession")
 tidymodels_prefer()
 theme_set(theme_transparent())
 set_options()
+
+num_workers <- parallel::detectCores()
 
 # ------------------------------------------------------------------------------
 # Until the interface in the tune package is finalized, do some computations 
@@ -382,6 +384,82 @@ We recommend space-filling designs since they are more efficient than regular de
 
 ## Efficient Computations for Conventional Grid Search {#sec-efficient-grid}
 
+```{r}
+#| label: timings
+#| include: false
+#| cache: true
+
+large_param <- 
+  bst_param %>% 
+  update(
+    trees = trees(c(1, 3000)),
+    learn_rate = learn_rate(c(-5, -1))
+  )
+
+large_sfd <- 
+  large_param %>% 
+  grid_space_filling(size = 100)
+
+large_reg <- 
+  large_param %>% 
+  grid_regular(levels = 10)
+
+# ------------------------------------------------------------------------------
+
+large_grid_reg_time <- 
+  system.time({
+    set.seed(1)
+    large_grid_reg_res <-
+      bst_wflow %>%
+      tune_grid(
+        resamples = sim_rs,
+        metrics = metric_set(brier_class),
+        grid = large_reg
+      )
+  })
+
+large_grid_time <- 
+  system.time({
+    set.seed(1)
+    large_grid_res <-
+      bst_wflow %>%
+      tune_grid(
+        resamples = sim_rs,
+        metrics = metric_set(brier_class),
+        grid = large_sfd
+      )
+  })
+
+sfd_time <- 
+  system.time({
+    set.seed(1)
+    sfd_res <-
+      bst_wflow %>%
+      tune_grid(
+        resamples = sim_rs,
+        metrics = metric_set(brier_class),
+        grid = bst_sfd %>% select(-grid)
+      )
+  })
+
+# ------------------------------------------------------------------------------
+
+plan("sequential")
+
+sfd_seq_time <- 
+  system.time({
+    set.seed(1)
+    tmp <-
+      bst_wflow %>%
+      tune_grid(
+        resamples = sim_rs,
+        metrics = metric_set(brier_class),
+        grid = bst_sfd %>% select(-grid)
+      )
+  })
+```
+
+
 The computational cost of grid search can become large, depending on the resampling strategy and the number of candidates under consideration. In our example, a total of `r format(nrow(sim_rs) * sfd_size, big.mark = ",")` boosted tree models are evaluated before determining which candidates are most favorable to our data. 
 
 We’ll look at three approaches to making grid search more efficient. One method (“submodels”) happens automatically, another approach (parallel processing) uses software engineering tools, and the last tool (racing) is a statistical solution.
@@ -421,6 +499,28 @@ One other consideration is memory. If the data used to train and evaluate is cop
 In any case, parallel processing can almost always improve the speed of model tuning. 
 
 ### Racing {#sec-racing}
+
+```{r}
+#| label: racing-models
+#| include: false
+#| cache: true
+
+plan("multisession")
+
+large_race_time <- 
+  system.time({
+    set.seed(1)
+    large_race_res <-
+      bst_wflow %>% 
+      tune_race_anova(
+        resamples = sim_rs,
+        metrics = metric_set(brier_class),
+        grid = large_sfd,
+        control = control_race(verbose_elim = FALSE)
+      ) 
+  })
+
+```
 
 Racing [@maron1997racing] is a technique that adaptively resamples the data during grid search. The goal is to cull tuning parameter combinations with no real hope of being optimal before they are completely resampled. For example, in our previous tuning of the boosting model, it is clear that a single tree performs very poorly. Unfortunately, we can’t know that until we’ve finished all the computations. 
 
@@ -615,14 +715,110 @@ In summary, racing can be an effective tool for screening a large number of mode
 
 In the last section, we found that the numerically best candidate was `r best_large`. The corresponding resampling estimate of the Brier score was `r signif(best_grid$mean, 3)` with a standard error of `r signif(best_grid$std_err, 3)`. If someone were to ask us how well the optimal boosted tree performs, we would probably give them these performance estimates. 
 
-However, there may be an issue in doing so. We are using grid search and resampling to find the best combination of parameters _and_ to estimate the performance. In some situations, this dual use of the model tuning process can introduce **optimization bias** where, to some degree, our performance statistics are optimistic. 
+However, there may be an issue in doing so. We are using grid search and resampling to find the best combination of parameters _and_ to estimate the performance. We don't know how accurate or precise the estimate of the _optimal_ candidate (tease this out a little more). In some situations, this dual use of the model tuning process can introduce **optimization bias** where, to some degree, our performance statistics are optimistic. 
 
-@tibshirani2009bias @boulesteix2009optimal and maybe @tibshirani2018excess
+```{r}
+#| label: 1d-boost
+#| include: false
+
+nest_grid_brier <- collect_metrics(nest_grid_res)
+grid_brier <- show_best(grid_res, metric = "brier_class", n = 1)
+```
+
+The results of this process indicates that the smallest Brier score is achieved with a learning rate of 10<sup>`r signif(log10(grid_brier$learn_rate), 3)`</sup>. The Brier score that corresponds to this tuning parameter values is estimated to be `r signif(grid_brier$mean, 3)`.
+
+
+```{r}
+#| label: fig-1d-boost
+#| echo: false
+#| fig-align: center
+#| out-width: 70%
+#| fig-width: 7
+#| fig-height: 4
+#| fig-cap: Basic grid search for learning rate with 100 grid points. 
+
+autoplot(grid_res) +
+  labs(y = "Brier Score")
+```
+
+
+
+
+one dim example
+
+@tibshirani2009bias 
+
+adjusted the Brier score from `r signif(debiased_grid$mean, 3)` to `r signif(debiased_grid$adjusted, 3)`. 
+
+@boulesteix2009optimal and maybe @tibshirani2018excess
+
+
+
+```{r}
+#| label: fig-nested
+#| echo: false
+#| fig-align: center
+#| out-width: 80%
+#| fig-width: 8
+#| fig-height: 4
+#| fig-cap: Each line corresponds to a complete resampled grid search that uses the inner resamples. The points indicate the estimates of the optimal learning rate as determined by the inner results. The panel on the right contrasts the Brier score for the inner assessment set with the outer assessment sets. 
+
+nest_grid_lines <- 
+  nest_grid_res %>% 
+  select(id, .metrics_inner) %>% 
+  unnest(.metrics_inner) 
+
+nest_grid_best <-
+  nest_grid_lines %>% 
+  slice_min(mean, by = id)
+
+nest_grid_outer_best <- 
+  collect_metrics(nest_grid_res, summarize = FALSE) %>% 
+  select(id, outer = .estimate)
+
+two_levels_wide <- 
+  inner_join(nest_grid_best, nest_grid_outer_best, by = "id") %>% 
+  select(id, inner = mean, outer) 
+
+two_levels <- 
+  two_levels_wide %>% 
+  pivot_longer(cols = c(inner, outer), names_to = "level", values_to = "brier")
+
+brier_range <- extendrange(c(nest_grid_lines$mean, two_levels$brier))
+
+p_trend <- 
+  nest_grid_lines %>% 
+  ggplot(aes(learn_rate, mean, col = id)) + 
+  geom_line(show.legend = FALSE, linewidth = 1, alpha = 1 / 3) + 
+  scale_x_log10() +
+  labs(x = "Learning Rate", y = "Brier Score")  +
+  geom_point(data = nest_grid_best, show.legend = FALSE) + 
+  ylim(brier_range) +
+  theme(plot.margin = margin(r = 0, unit = "pt"))
+
+p_diff <- 
+  two_levels %>% 
+  ggplot(aes(level, brier, group = id, col = id)) + 
+  geom_point(show.legend = FALSE) +
+  geom_path(show.legend = FALSE, , linewidth = 1 /2 , alpha = 1 / 3) + 
+  ylim(brier_range) +
+  labs(y = NULL, x = NULL) + 
+  theme(axis.text.y = element_blank(),  axis.ticks.y = element_blank(),
+        plot.margin = margin(l = 0, unit = "pt"))
+
+p_trend + p_diff +  plot_layout(widths = c(5, 1))
+```
+
+
+The nested resampling estimate of the Brier score was estimated as `r signif(nest_grid_brier$mean, 3)`.
+
+The computational costs of nested resampling of this basic grid search was `r sprintf("%2.1f", grid_nest_time[3]/grid_time[3])`-fold.
+
 
 ```{r}
 #| label: nested-sfd
 #| include: false
-#| eval: true
+#| eval: false
 
 large_race_selections <- 
   large_nest_grid_res %>% 
@@ -664,7 +860,7 @@ Let’s use two of the previous examples from this chapter to demonstrate nested
 ```{r}
 #| label: fig-nested-cv
 #| echo: false
-#| eval: true
+#| eval: false
 #| out-width: 50%
 #| fig-width: 4.5
 #| fig-height: 4.8
@@ -684,7 +880,7 @@ large_race_selections %>%
   theme(legend.position = "top") 
 ```
 
-@tbl-nested-cv shows how the performance statistics differs between a single 10-fold cross-validation and two-level nested cross-validation. For this scenario, the Brier score estimates are negligible worse for nested cross-validation. However, notice that the standard errors are very similar since the same external resampling indices are used. The percent bias from single resampling was `r nested_stats$bias[1]`%. This values is very small but lack any sense of uncertainty. The final column of the table shows the raw difference in Brier scores divided by the standard error to form a signal-to-noise ratio (SNR). This shows that the bias is small relative to the experimental noise^[To conceptualize this, many hypothesis testing statistics are signal-to-noise ratios. For example, to assess the simple difference between means, the basic t-test would probably use an SNF cutoff between 1.6 and 2 to be thought of as a “significant” signal.]. The computational costs of nested resampling of basic grid search and racing were `r sprintf("%2.1f", sfd_nest_time[3]/sfd_time[3])`-fold  and `r sprintf("%2.1f", large_nest_race_time[3]/large_race_time[3])`-fold slower, respectfully.
+@tbl-nested-cv shows how the performance statistics differs between a single 10-fold cross-validation and two-level nested cross-validation. For this scenario, the Brier score estimates are negligible worse for nested cross-validation. However, notice that the standard errors are very similar since the same external resampling indices are used. The percent bias from single resampling was ` nested_stats$bias[1]`%. This values is very small but lack any sense of uncertainty. The final column of the table shows the raw difference in Brier scores divided by the standard error to form a signal-to-noise ratio (SNR). This shows that the bias is small relative to the experimental noise^[To conceptualize this, many hypothesis testing statistics are signal-to-noise ratios. For example, to assess the simple difference between means, the basic t-test would probably use an SNF cutoff between 1.6 and 2 to be thought of as a “significant” signal.]. The computational costs of nested resampling of basic grid search and racing were ` sprintf("%2.1f", sfd_nest_time[3]/sfd_time[3])`-fold  and ` sprintf("%2.1f", large_nest_race_time[3]/large_race_time[3])`-fold slower, respectfully.
 
 ::: {#tbl-nested-cv}
 
@@ -700,9 +896,9 @@ large_race_selections %>%
 ```{r}
 #| label: tbl-nested-cv
 #| echo: false
-#| eval: true
+#| eval: false
 nested_stats %>%
-  kable(digits = 3, 
+  kable(digits = 4, 
         col.names = c("Resampling", "Mean", "Std. Err.", "Bias (%)", "SNR"),
         align = "ccccc") %>% 
   add_header_above(c(" ", "Brier Score" = 2, " " = 2)) %>% 
@@ -737,11 +933,4 @@ If we worry that our tuning grid did not produce good results, another strategy 
 
 ## Chapter References {.unnumbered}
 
-
-```{r}
-#| label: teardown-cluster
-#| include: false
-
-stopCluster(cl)
-```
 
