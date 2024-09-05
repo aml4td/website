@@ -713,20 +713,41 @@ In summary, racing can be an effective tool for screening a large number of mode
 
 ## Optimization Bias and Nested Resampling {#sec-nested-resampling}
 
-In the last section, we found that the numerically best candidate was `r best_large`. The corresponding resampling estimate of the Brier score was `r signif(best_grid$mean, 3)` with a standard error of `r signif(best_grid$std_err, 3)`. If someone were to ask us how well the optimal boosted tree performs, we would probably give them these performance estimates. 
-
-However, there may be an issue in doing so. We are using grid search and resampling to find the best combination of parameters _and_ to estimate the performance. We don't know how accurate or precise the estimate of the _optimal_ candidate (tease this out a little more). In some situations, this dual use of the model tuning process can introduce **optimization bias** where, to some degree, our performance statistics are optimistic. 
-
 ```{r}
 #| label: 1d-boost
 #| include: false
-
+# Objects from nested_res.RData
 nest_grid_brier <- collect_metrics(nest_grid_res)
 grid_brier <- show_best(grid_res, metric = "brier_class", n = 1)
+opt_per_resample <- 
+  collect_metrics(grid_res, summarize = FALSE) %>%
+  slice_min(.estimate, by = id) 
+multiples <- 
+  opt_per_resample %>% 
+  count(learn_rate) %>% 
+  filter(n > 1) %>% 
+  pluck("learn_rate") %>% 
+  log10() %>% 
+  signif(., digits = 3)
+lr_lab <- cli::pluralize("There {?was/were} {length(multiples)} learning rate{?s} selected more than once: ") 
+lr_lab <- paste0(lr_lab, knitr::combine_words(paste0("10<sup>", multiples, "</sup>")), ".")
 ```
 
-The results of this process indicates that the smallest Brier score is achieved with a learning rate of 10<sup>`r signif(log10(grid_brier$learn_rate), 3)`</sup>. The Brier score that corresponds to this tuning parameter values is estimated to be `r signif(grid_brier$mean, 3)`.
+In the last section, we found that the numerically best candidate was `r best_large`. The corresponding resampling estimate of the Brier score was `r signif(best_grid$mean, 3)` with a standard error of `r signif(best_grid$std_err, 3)`. If someone were to ask us how well the optimal boosted tree performs, we would probably give them these performance estimates. 
 
+However, there may be an issue in doing so. We are using grid search and resampling to find the best combination of parameters _and_ to estimate the performance. We don't know how accurate or precise the estimate of the _optimal_ candidate may be. In some situations, this dual use of the model tuning process can introduce **optimization bias** where, to some degree, our performance statistics are optimistic. 
+
+This issue has been studied extensively in the high-dimensional biology literature, where there could be dozens of samples but thousands of predictors. In this case, feature selection is of paramount importance. However, the process of selecting important predictors in this situation can be very difficult and often leads to unstable models or preprocessing methods that overfit the predictor set to the data. Discussions of these issues can be found in @varma2006bias, @boulesteix2009optimal, @bischl2012resampling, and @bernau2013correcting.
+
+In this section, we'll introduce a few methods to quantify and correct for optimization bias. These approaches are not specific to traditional grid search; they can be used with racing, iterative search, or any process that we use to optimize a model. Some of the concepts can be difficult and, for this reason, we'll use a simplified grid search scenario. Let's optimize our boosted tree by fixing the number of boosting iterations to 500 and only optimize the learning rate. The tools that we are about to discuss are not limited to a single tuning parameter; this simplified task can aid us in explaining and visualizing the process^[Unfortunately, this is an example that is not prone to optimization bias. We'll see examples later on this website where we can more effectively use these tools.].
+
+Using the same 10-fold cross-validation scheme, @fig-1d-boost shows the results of a conventional grid search over the learning rate where 100 values of that parameter were evaluated. As usual, the solid line indicates the average of the Brier scores produced by the 10 assessment sets. The results of this process indicates that the smallest Brier score is achieved with a learning rate of 10<sup>`r signif(log10(grid_brier$learn_rate), 3)`</sup>. The Brier score that corresponds to this tuning parameter values is estimated to be `r signif(grid_brier$mean, 3)` with corresponding standard error of `r format(grid_brier$std_err, digits = 3, scientific = FALSE)`.
+
+
+
+::: {#fig-1d-boost}
+
+::: {.figure-content}
 
 ```{r}
 #| label: fig-1d-boost
@@ -735,33 +756,33 @@ The results of this process indicates that the smallest Brier score is achieved 
 #| out-width: 70%
 #| fig-width: 7
 #| fig-height: 4
-#| fig-cap: Basic grid search for learning rate with 100 grid points. 
 
 autoplot(grid_res) +
-  labs(y = "Brier Score")
+  labs(y = "Brier Score") +
+  geom_vline(xintercept = grid_brier$learn_rate, lty = 3) +
+  geom_rug(data = opt_per_resample, aes(x = learn_rate, y = NULL, col = id), sides = "b", show.legend = FALSE, linewidth = 2, alpha = 3 / 4)
 ```
 
+:::
 
+Basic grid search for learning rate with 100 grid points. The dotted vertical line shows the optimal learning rate using the overal resampling estimates. The colored rug values show the learning rates that were optimal _within each resample_. `r lr_lab`
 
+:::
 
-one dim example
+How can we estimate the potential bias in our performance metric by "picking the winner" and citing its resampled estimator?  @tibshirani2009bias  describes a simple analytical estimator applicable when multiple resamples are used to estimate performance. First, we obtain the performance estimates corresponding to the optimal tuning parameter candidate _within each fold_. Let's call that $\hat{Q}_j^*$ (where $j=1\ldots B$) and denote $\hat{Q}_j^{opt}$ as the performance value associated with the overall best candidate value (determined in the usual way). The difference between these values is an estimate of the bias in optimization.  If different resamples have very different optimal performance metrics compared to the optimal performance determined using the averages of the resamples (as shown in @fig-1d-boost), bias can increase. The estimate of the bias is then: 
 
-@tibshirani2009bias 
+$$\widehat{bias} = \frac{1}{B}\sum_{j=1}^B\left[\hat{Q}_j^{opt} - \hat{Q}_j^*\right]$$
+For this particular example, the bias is fairly small (`r format(debiased_grid$mean_bias, digits = 3, scientific = FALSE)` with standard error `r format(debiased_grid$std_err_bias, digits = 3, scientific = FALSE)`). To correct the conventional estimator, we add the bias; the Brier score is adjusted from `r signif(debiased_grid$mean, 3)` to `r signif(debiased_grid$adjusted, 3)`. A more complex analytical estimate can be found in @tibshirani2018excess.
 
-adjusted the Brier score from `r signif(debiased_grid$mean, 3)` to `r signif(debiased_grid$adjusted, 3)`. 
+We can also estimate optimization bias with more complex resampling schemes. Recall that the issue is that we are overextending resampling by estimating performance for individual candidates as well as the optimal performance for that candidate. Nested resampling [@varma2006bias;@boulesteix2009optimal] prevents overuse by using two layers of resampling: the "inner resamples" are used to estimate the optimal candidate values, and the "outer resamples" estimate performance at those values. 
 
-@boulesteix2009optimal and maybe @tibshirani2018excess
+For example, our current resampling scheme is 10-fold cross-validation. Since the training set has `r format(nrow(sim_tr), big.mark = ",")` samples, each fold uses `r format(nrow(sim_tr) * .9, big.mark = ",")` to fit the model and a separate `r nrow(sim_tr) * .1` for assessment. Nested resampling would create 10 more independent resampling schemes within each of the `r format(nrow(sim_tr) * .9, big.mark = ",")`-point analysis sets. If we once again used 10-fold cross-validation for the inner resamples, each would contain 10 analysis sets of size `r format(nrow(sim_tr) * .9 * .9, big.mark = ",")` with corresponding assessment sets of `r format(nrow(sim_tr) * .9 * .1, big.mark = ",")` data points. 
 
-
+The process starts with the inner resamples. The same model tuning procedure is used (basic grid search in our example), and each of the inner resamples estimates its own optimal candidate $\hat{\theta}_k$. The outer resample takes this candidate value and estimates its performance using the assessment sets from the outer resampling loop. These outer estimates are averaged to produce the nested resampling estimate of performance. 
 
 ```{r}
-#| label: fig-nested
-#| echo: false
-#| fig-align: center
-#| out-width: 80%
-#| fig-width: 8
-#| fig-height: 4
-#| fig-cap: Each line corresponds to a complete resampled grid search that uses the inner resamples. The points indicate the estimates of the optimal learning rate as determined by the inner results. The panel on the right contrasts the Brier score for the inner assessment set with the outer assessment sets. 
+#| label: nested-details
+#| include: false
 
 nest_grid_lines <- 
   nest_grid_res %>% 
@@ -771,6 +792,9 @@ nest_grid_lines <-
 nest_grid_best <-
   nest_grid_lines %>% 
   slice_min(mean, by = id)
+
+nest_grid_std_error <- 
+  sd(nest_grid_best$mean) / sqrt(nrow(nest_grid_best))
 
 nest_grid_outer_best <- 
   collect_metrics(nest_grid_res, summarize = FALSE) %>% 
@@ -785,6 +809,18 @@ two_levels <-
   pivot_longer(cols = c(inner, outer), names_to = "level", values_to = "brier")
 
 brier_range <- extendrange(c(nest_grid_lines$mean, two_levels$brier))
+```
+
+Consider @fig-nested. The colored lines in the left-hand panel show the results of the 10 inner resamples. Each line is made up of the averages of the inner 10 assessment sets of size `r format(nrow(sim_tr) * .9 * .1, big.mark = ",")`. The filled circles along these lines indicate the optimal learning rate for that inner resample. Each outer resample takes its corresponding learning rate, trains that model using its analysis set of `r format(nrow(sim_tr) * .9, big.mark = ",")` points, and computes performance using its `r format(nrow(sim_tr) * .1, big.mark = ",")` assessment samples. These 10 statistics are averaged to get the final performance estimate, which should be free of any optimization bias. 
+
+```{r}
+#| label: fig-nested
+#| echo: false
+#| fig-align: center
+#| out-width: 80%
+#| fig-width: 8
+#| fig-height: 4
+#| fig-cap: Each line corresponds to a complete resampled grid search that uses the inner resamples. The points indicate the estimates of the optimal learning rate as determined by the inner results. The panel on the right contrasts the Brier score for the inner assessment set with the outer assessment sets. 
 
 p_trend <- 
   nest_grid_lines %>% 
@@ -809,124 +845,29 @@ p_diff <-
 p_trend + p_diff +  plot_layout(widths = c(5, 1))
 ```
 
+We can see that the resample-specific optimal learning rates vary but are within a consistent region. There are a few resamples that found the same optimal value. There is some variation in the y-axis too; different assessment sets produce different values. The standard error of these inner statistics, `r format(nest_grid_std_error, digits = 3, scientific = FALSE)`, is much smaller than the value of the conventional estimate (`r format(grid_brier$std_err, digits = 3, scientific = FALSE)`).
 
-The nested resampling estimate of the Brier score was estimated as `r signif(nest_grid_brier$mean, 3)`.
+The panel on the left shows boxplots of the Brier scores for the inner resamples and the corresponding outer resample estimates. The standard error of the outer resamples is very similar to the the level of noise in the conventional estimate.  
 
-The computational costs of nested resampling of this basic grid search was `r sprintf("%2.1f", grid_nest_time[3]/grid_time[3])`-fold.
+In the end, the nested resampling estimate of the Brier score was estimated as `r signif(nest_grid_brier$mean, 3)`; a value very close to the single 10-fold cross-validation result shown in @fig-1d-boost.
 
-
-```{r}
-#| label: nested-sfd
-#| include: false
-#| eval: false
-
-large_race_selections <- 
-  large_nest_grid_res %>% 
-  select(id, .selected) %>% 
-  unnest(.selected) %>% 
-  count(.config, trees, learn_rate, name = "# Selections")
-
-nested_stats <- 
-  bind_rows(
-    large_race_res %>% 
-      show_best(metric = "brier_class", n = 1) %>% 
-      mutate(Algorithm = "Racing", `Estimation Method` = "Single CV"),
-    
-    bst_race_nest_res %>% 
-      collect_metrics() %>% 
-      mutate(Algorithm = "Racing", `Estimation Method` = "Nested CV")
-    
-  ) %>% 
-  select(`Estimation Method`, Brier = mean, std_err)  
-nested_stats$bias <- c(
-  (nested_stats$Brier[2] - nested_stats$Brier[1]) /
-  nested_stats$Brier[1] * 100,
-  NA)
-nested_stats$bias <- format(nested_stats$bias, digits = 3)
-nested_stats$bias[2] <- ""
-nested_stats$SNR <- 
-  c(
-    (nested_stats$Brier[2] - nested_stats$Brier[1]) /
-      max(nested_stats$std_err),
-    NA)
-nested_stats$SNR <- format(nested_stats$SNR, digits = 3)
-nested_stats$SNR[2] <- ""
-```
-
-Let’s use two of the previous examples from this chapter to demonstrate nested resampling: the space-filling design with `r sfd_size` candidates and the larger grid used with racing. Each used the same 10-fold cross-validation indices. We’ll use this as the outer resampling method and, within each, we’ll create 10-fold inner cross-validations based on each of the 90% analysis sets of the outer resamples. 
-
-@fig-nested-cv visualizes the selected candidates for each of the ten outer resamples. Since some of the grid points are selected more than once, the image uses the size of the points to illustrate this. Also, the figure’s axis ranges portrays the entire tuning space for the two parameters (based on the larger grid). There appears to be a ridge of best parameters that arcs across the middle of the parameter space. This indicates that there is a region of equivocal performance so that there are a surplus of candidates that could be used. 
-
-```{r}
-#| label: fig-nested-cv
-#| echo: false
-#| eval: false
-#| out-width: 50%
-#| fig-width: 4.5
-#| fig-height: 4.8
-#| fig-cap: The reults of space filling designs with the frequencies in which points were selected during nested resampling for a complete grid and with a large grid combined with racing. The range of each axis shows the entire hyperparameter space.
-
-bst_rngs <- map(large_param$object, ~ as.numeric(.x$range))
-
-large_race_selections %>%
-  ggplot(aes(trees, learn_rate)) +
-  geom_point(aes(size = `# Selections`), alpha = 3/4) +
-  labs(x = trees()$label, y = learn_rate()$label) +
-  lims(x = bst_rngs[[1]]) +
-  # coord_fixed(ratio = diff(bst_rngs[[1]]) / diff(bst_rngs[[2]])) +
-  scale_y_log10(limits = 10^bst_rngs[[2]]) +
-  scale_size(breaks = 1:max(large_race_selections$`# Selections`), 
-             range = c(2, 7)) +
-  theme(legend.position = "top") 
-```
-
-@tbl-nested-cv shows how the performance statistics differs between a single 10-fold cross-validation and two-level nested cross-validation. For this scenario, the Brier score estimates are negligible worse for nested cross-validation. However, notice that the standard errors are very similar since the same external resampling indices are used. The percent bias from single resampling was ` nested_stats$bias[1]`%. This values is very small but lack any sense of uncertainty. The final column of the table shows the raw difference in Brier scores divided by the standard error to form a signal-to-noise ratio (SNR). This shows that the bias is small relative to the experimental noise^[To conceptualize this, many hypothesis testing statistics are signal-to-noise ratios. For example, to assess the simple difference between means, the basic t-test would probably use an SNF cutoff between 1.6 and 2 to be thought of as a “significant” signal.]. The computational costs of nested resampling of basic grid search and racing were ` sprintf("%2.1f", sfd_nest_time[3]/sfd_time[3])`-fold  and ` sprintf("%2.1f", large_nest_race_time[3]/large_race_time[3])`-fold slower, respectfully.
-
-::: {#tbl-nested-cv}
-
-:::: {.columns}
-
-::: {.column width="20%"}
-
+::: {.important-box}
+It is important to emphasize that nested resampling is for **verification, not optimization**. It provides a better estimate of our model optimization process; it does not replace it. 
 :::
 
-::: {.column width="60%"}
+We can look at the candidates produced by the inner resamples to understand the stability of the optimization process and potentially diagnose other issues. We _would not_ choose "the best" inner resampling result and move forward with its candidate value. 
 
+It is a good idea to use nested resampling when the training set is small, the predictor set is very large, or both. The lack of significant bias in the analysis above does not discount the problem of optimization bias. It exists but can sometimes be within the experimental noise. 
 
-```{r}
-#| label: tbl-nested-cv
-#| echo: false
-#| eval: false
-nested_stats %>%
-  kable(digits = 4, 
-        col.names = c("Resampling", "Mean", "Std. Err.", "Bias (%)", "SNR"),
-        align = "ccccc") %>% 
-  add_header_above(c(" ", "Brier Score" = 2, " " = 2)) %>% 
-  kable_styling(full_width = FALSE)
-```
+It is a good idea to choose an inner resampling scheme that is as close as possible to the single resampling scheme that you used for optimization. The outer scheme can vary depending on your needs. Care should be used when the outer resampling method is the bootstrap. Since it replicates training set points in its analysis sets, the inner resamples need to use the _unique_ rows of the original training set. Otherwise a replicate point would end up in both the inner analysis and assessment sets. 
 
-
-:::
-
-::: {.column width="20%"}
-
-:::
-
-::::
-
-Brier scores for two tuning algorithms evaluated with regular 10-fold cross-validation and nested 10-fold cross-validations.
-
-:::
-
-The lack of significant bias in the analysis above does not discount the problem of optimization bias. It exists but can sometimes be within the experimental noise. We do know that some problems/scenareos are more susceptible than others. Model pipelines that include supervised feature selection have a substantial amount of variation. Another situation occurs in high dimensional biology where a relative small number of data points is coupled with an excessively large number of predictors. This $p >>> n$ issue tends to result in selection/optimization bias if not for bias corrections. 
-
-Finally, although we have discussed it in the context of grid search, nested resampling can be utilized with interative search and other techniques.   
+The primary downside to nested resampling is the computational costs. Two layers of resampling have a quadratic cost, and only the inner resamples can be executed in parallel. Using `r num_workers` workers, the analysis in @fig-nested took `r sprintf("%2.1f", grid_nest_time[3]/grid_time[3])`-fold longer to compute than the basic grid search that produced @fig-1d-boost.
 
 ## Setting Parameter Ranges
 
-Specifying the range of parameters use to define the grid may involve some guesswork. For some parameter types, there is a well understood and defined range. For others, such as learning rate, there is a lower bound (zero) and a loosely defined upper bound mostly based on convention and prior experience. For grids, we want to avoid configurations with few unique values and a wide range. This might not sample the section of the parameter space that includes nonlinearity and the region of optimal results. @fig-learn-rate-seq shows an example of this for the learning rate. The initial grid included three points that missed the regions of interest. @fig-learn-rate-grid did a better job with more grid points. In high dimensional parameter space, the likelihood of a poor grid increases, esepcially for relatively “small” grid sizes. 
+Specifying the range of parameters use to define the grid may involve some guesswork. For some parameter types, there is a well understood and defined range. For others, such as learning rate, there is a lower bound (zero) and a loosely defined upper bound mostly based on convention and prior experience. For grids, we want to avoid configurations with few unique values and a wide range. This might not sample the section of the parameter space that includes nonlinearity and the region of optimal results. @fig-learn-rate-seq shows an example of this for the learning rate. The initial grid included three points that missed the regions of interest. @fig-learn-rate-grid did a better job with more grid points. In high dimensional parameter space, the likelihood of a poor grid increases, especially for relatively “small” grid sizes. 
 
-When often envision of the relationship between a predictor and model performance as being a shark peak. If we cannot find the pinnacle, the model optimization would fail. Luckily, as seen in @fig-nested-cv, there are often substantial regions of parameter space with good performance. Model optimization may not be superficially easy but it is often not impossible. We only need to sample the optimal region once to be successful. 
+When often envision of the relationship between a predictor and model performance as being a shark peak. If we cannot find the pinnacle, the model optimization would fail. Luckily, as seen in @fig-nested, there are often substantial regions of parameter space with good performance. Model optimization may not be superficially easy but it is often not impossible. We only need to sample the optimal region once to be successful. 
 
 If we worry that our tuning grid did not produce good results, another strategy is to _increase_ the parameter ranges and use an iterative approach that can naturally explore the parameter space and let the current set of results guide the exploration about the space. These methods are discussed in the next chapter. 
 
