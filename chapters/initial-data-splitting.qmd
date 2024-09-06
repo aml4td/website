@@ -36,6 +36,7 @@ set_options()
 data(ames)
 load("../RData/forested_data.RData")
 load("../RData/forested_split_info.RData")
+load("../RData/forested_plot_sf.RData")
 load("../RData/forested_sf.RData")
 ```
 
@@ -439,14 +440,46 @@ leaflet() %>%
   setView(lng = -120.3945, lat = 47.33047, zoom = 7)
 ```
 
-How should we split these data? A simple random sample is inadequate; we need to ensure that adjacent/nearby locations are not allocated to the training and testing sets. There are a few ways to compensate for this issue: 
+How should we split these data? A simple random sample is inadequate; we need to ensure that adjacent/nearby locations are not allocated to the training and testing sets. There are a few ways to compensate for this issue. 
 
- - Group the data into local areas and iterate by removing one or more group at a time. If there is no rational, objective process for creating groups, use clustering methods or create a regular grid across the data range [@Roberts2017]. 
- - Buffering [@brenning2005spatial;@le2014spatial] is a method that excludes data around a specific data point or group. 
+First, we can group the data into local areas and iterate by removing one or more group at a time. If there is no rational, objective process for creating groups, we can use clustering methods or create a regular grid across the data range [@Roberts2017]. For example, @fig-spatial-block(a) shows a collection of data grouped by a grid of hexagons. We could randomly sample some groups, often referred to as _blocks_, to allocate to the testing set. 
+
+However, notice that some points, while in different hexagonal blocks, are still close to one another. _Buffering_ [@brenning2005spatial;@le2014spatial] is a method that excludes data around a specific data point or group. Panel (b) shows a buffer for one block. If this region was selected for the testing set, we would discard the points that are within the buffer (but are in different blocks) from being allocated to the training set. 
+
+```{r}
+#| label: fig-spatial-block
+#| echo: false
+#| fig-height: 7
+#| fig-width: 7
+#| out-width: 60%
+#| fig-cap: "A plot of 65 spatial data points where (a) shows how they can be blocked into one of seven hexagonal regions. Panel (b) shows the same data with a circular buffer around the center of a single block."  
+
+p_hex <- 
+  hex_data %>% 
+  ggplot() + 
+  geom_sf(data = sel_grid, alpha = 1 / 2) + 
+  geom_sf(aes(col = hex), show.legend = FALSE, cex = 3, alpha = 2 / 4) +
+  theme_void() +
+  scale_color_brewer(palette = "Dark2") +
+  ggtitle("(a) Hexagonal blocks")
+
+p_buff <- 
+  hex_data %>% 
+  ggplot() + 
+  geom_sf(data = sel_grid, alpha = 1 / 2) + 
+  geom_sf(aes(col = hex), show.legend = FALSE, cex = 3, alpha = 2 / 4) +
+  geom_sf(data = sel_buff, fill =  "blue", alpha = 1 / 10) +
+  theme_void() +
+  scale_color_brewer(palette = "Dark2") +
+  ggtitle("(b) Buffered")
+
+p_hex / p_buff
+``` 
+ 
  
 We'll use both of these methods below for illustration. @Pohjankukka2017, @lyons2018comparison, @meyer2019importance @karasiak2022spatial, and @mahoney2023assessing have good overviews of the importance of countering spatial autocorrelation and appropriate sampling methods. 
 
-For our example, we’ll use blocking and buffering to allocate roughly 20% of the data to the testing set. First, the locations were allocated to a 25 x 25 grid of hexagons across the state. After this, a buffer of `r format(80^2, big.mark = ",")` squared map units was created around the hexagon such that outside points within the buffer would be excluded from being used in the training or testing sets. Finally, roughly 20% of the locations were selected for the test set by moving through the space and selecting hexagons sequentially. @fig-forested-split shows the results of this process. 
+For our example, we’ll use blocking and buffering to allocate roughly 20% of the forestry data to the testing set. First, the locations were allocated to a 25 x 25 grid of hexagons across the state. After this, a buffer of `r format(80^2, big.mark = ",")` squared map units was created around the hexagon such that outside points within the buffer would be excluded from being used in the training or testing sets. Finally, roughly 20% of the locations were selected for the test set by moving through the space and selecting hexagons sequentially. @fig-forested-split shows the results of this process. 
 
 In the end, a training set of `r format(forested_n_tr, big.mark = ",")` locations and a test set of `r format(forested_n_te, big.mark = ",")` locations (roughly a `r forested_p_te`% holdout) were assembled. The buffer contained `r format(forested_n_bf, big.mark = ",")` locations which is about `r forested_p_bf`% of the original pool of data points. The event rates were similar between the data sets: `r round(event_rates$event_rate[event_rates$group == "training"], 1)`% for the training set and `r round(event_rates$event_rate[event_rates$group == "testing"], 1)`% for the testing set.
 
