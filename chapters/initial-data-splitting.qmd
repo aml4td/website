@@ -14,10 +14,15 @@ source("../R/_common.R")
 
 # ------------------------------------------------------------------------------
 
+library(sf)
 library(readr)
 library(tidymodels)
 library(patchwork)
 library(gt)
+library(spatialsample)
+library(tidysdm)
+library(forested)
+library(leaflet)
 
 # ------------------------------------------------------------------------------
 # Set options
@@ -29,6 +34,10 @@ set_options()
 # ------------------------------------------------------------------------------
 
 data(ames)
+load("../RData/forested_data.RData")
+load("../RData/forested_split_info.RData")
+load("../RData/forested_plot_sf.RData")
+load("../RData/forested_sf.RData")
 ```
 
 
@@ -338,10 +347,20 @@ knitr::include_graphics("../premade/anime_ames_selection.gif")
 For this example, the two predictors used for splitting were numeric. In this case, we typically use simple distance functions to define dissimilarity. Many other functions are possible. The Gower distance [@gower] is a good alternative when a data set has non-numeric predictors. @sec-cls-knn discusses this metric in more detail. 
 
 ::: {.warning-box}
-While this analysis nicely illustrates the dissimilarity sampling process, it is flawed since it ignores the issue of spatial autocorrelation [@mahoney2023assessing]. This is the idea that things close to one another act more similarly than objects farther away. @sec-spatial-resampling discusses this data-splitting issue in more detail. 
+While this analysis nicely illustrates the dissimilarity sampling process, it is flawed since it ignores the issue of _spatial autocorrelation_. This is the idea that things close to one another act more similarly than objects farther away and will be discussed more in  @sec-spatial-splitting below. 
 :::
 
 There are various other methods to split the data using the predictor set. For example, @kennard1969computer describes an algorithm that attempts to sequentially select points to be uniformly distributed in the space defined by the splitting variables. Similarly, @vakayil2022data proposed a data splitting method called _twinning_, where a split of the data is sought that minimizes an aggregate distance between points in the training and testing set. Twinning uses the energy distance of @szekely2013energy, which measures the equality of distributions, to make the two data sets similar. Any variables can be used in the distance calculations.
+
+## Validation Sets  {#sec-three-way-split}
+
+As previously discussed, validation sets are a separate partition of the data that function as a precursor for the testing set. It allows us to obtain performance estimates on our model(s) during the development cycle. These are commonly used in deep learning and other domains where the initial data sizes range from very large to massive. This additional partition is often created simultaneously with the training and testing sets. 
+
+Validation sets serve the same purpose as resampling methods described in @sec-validation and we can consider them single resamples of the training data. Methods like bootstrapping or cross-validation use many alternative versions of the training set to compute performance statistics. When our data are extensive, multiple resamples are computationally expensive without significantly improving the precision of our estimates. 
+
+Without loss of generalization, we will treat the validation set as a particular case of resampling where there is a single resample of the training set. This difference is not substantive and allows us to have a common framework for measuring model efficacy (before the testing set).
+
+We’ll see validation sets discussed in @sec-validation and used in Sections TODO and TODO.
 
 ## Multi-Level Data  {#sec-multilevel-splitting}
 
@@ -362,15 +381,135 @@ When splitting multi-level data into a training and test set, the data are split
 
 If stratification is required, the process becomes more complicated. Often, the outcome data can vary within a subject. To stratify to balance the outcome distribution, we need a way to quantify the outcome per subject. For regression models, the mean of each subject's outcome might be an excellent choice to summarize them. Analogously, the mode of categorical outcomes may suffice as an input into the stratification procedure.  
 
-## Validation Sets  {#sec-three-way-split}
+## Splitting Spatial Data {#sec-spatial-splitting}
 
-As previously discussed, validation sets are a separate partition of the data that function as a precursor for the testing set. It allows us to obtain performance estimates on our model(s) during the development cycle. These are commonly used in deep learning and other domains where the initial data sizes range from very large to massive. This additional partition is often created simultaneously with the training and testing sets. 
+Spatial data reflect information that corresponds to specific geographic locations, such as longitude and latitude values on the earth^[[Chapters -@sec-grid-search] and [-@sec-iterative-search] will also look at spatial effects unassociated with real geographies.]. Spatial data can have _autocorrelation_, with objects being more similar to closer objects than to objects further away. Tobler's First Law of Geography [@bjorholm2008extent] is: 
 
-Validation sets serve the same purpose as resampling methods described in @sec-validation and we can consider them single resamples of the training data. Methods like bootstrapping or cross-validation use many alternative versions of the training set to compute performance statistics. When our data are extensive, multiple resamples are computationally expensive without significantly improving the precision of our estimates. 
+> "Everything is related to everything else, but near things are more related than distant things."
 
-Without loss of generalization, we will treat the validation set as a particular case of resampling where there is a single resample of the training set. This difference is not substantive and allows us to have a common framework for measuring model efficacy (before the testing set).
+Think of an overhead color satellite image of a forest. Different types of foliage—or lack thereof—have different colors. If we focus on the color green, the distribution of "greeness" is not a random pattern of the x/y axes (random distribution would resemble static). In other words, pixels cannot be assumed to be independent of one another. 
 
-We’ll see validation sets discussed in @sec-validation and used in Sections TODO and TODO.
+Spatial autocorrelation will generally affect how we partition the data; we want to avoid having very similar data points in both the training and testing sets. 
+
+```{R}
+#| label: forested-sizes
+#| echo: false
+
+forested_n <- nrow(forested::forested)
+forested_n_tr <- sum(forested_split_info$group == "training")
+forested_n_te <- sum(forested_split_info$group == "testing")
+forested_n_bf <- sum(forested_split_info$group == "buffer")
+forested_p_bf <- round(forested_n_bf / forested_n * 100, 1)
+forested_p_te <- round(forested_n_te / (forested_n_te + forested_n_tr) * 100, 1)
+
+event_rates <- 
+  forested_split_info %>% 
+  group_by(group) %>%
+  summarize(event_rate = mean(class == "Yes") * 100) %>% 
+  filter(group != "buffer")
+```
+
+The example data that we’ll use is from the US Forest Service, who send experts to specific locations to make a determination about whether an area is forested. @forested state: 
+
+> The U.S. Department of Agriculture, Forest Service, Forest Inventory and Analysis (FIA) Program provides all sorts of estimates of forest attributes for uses in research, legislation, and land management. The FIA uses a set of criteria to classify a plot of land as “forested” or “non-forested,” and that classification is a central data point in many decision-making contexts. A small subset of plots in Washington State are sampled and assessed “on-the-ground” as forested or non-forested, but the FIA has access to remotely sensed data for all land in the state. 
+
+See @Frescino2023 and @white2024smallareaestimationforest for similar data sets and background on the original problem. The Washington State data contains `r format(forested_n, big.mark = ",")` locations. The data are shown in @fig-forested where the points are colored by the outcome class (green representing forestation). This figure shows that locations across the state are not spread uniformly. @FIA2015 describes the sampling protocols and related issues. @finley2008bayesian and @may2024spatial show examples of how models have been applied to US forestry data in other geographic regions.  
+
+The rate for forestation in these data is nearly even at `r round(mean(forested::forested$forested == "Yes") * 100, 1)`%.  
+
+```{r}
+#| label: fig-forested
+#| echo: false
+#| fig-cap: Area locations in Washington State sampled for determining forestation. Green points reflect locations that were determined to be forested. 
+
+forested_labs <- 
+  forested::forested %>% 
+  mutate(class_col = if_else(forested == "Yes", "#218239", "#d4ad42"))
+
+leaflet() %>%
+  addProviderTiles(providers$CartoDB.PositronNoLabels) %>%
+  addCircles(
+    data = forested_labs,
+    lng = ~ lon,
+    lat = ~ lat,
+    color = ~ class_col,
+    fillColor = ~ class_col,
+    fill = TRUE,
+    opacity = .1,
+    fillOpacity = 1,
+    radius = 1500
+  ) %>%
+  setView(lng = -120.3945, lat = 47.33047, zoom = 7)
+```
+
+How should we split these data? A simple random sample is inadequate; we need to ensure that adjacent/nearby locations are not allocated to the training and testing sets. There are a few ways to compensate for this issue. 
+
+First, we can group the data into local areas and iterate by removing one or more group at a time. If there is no rational, objective process for creating groups, we can use clustering methods or create a regular grid across the data range [@Roberts2017]. For example, @fig-spatial-block(a) shows a collection of data grouped by a grid of hexagons. We could randomly sample some groups, often referred to as _blocks_, to allocate to the testing set. 
+
+However, notice that some points, while in different hexagonal blocks, are still close to one another. _Buffering_ [@brenning2005spatial;@le2014spatial] is a method that excludes data around a specific data point or group. Panel (b) shows a buffer for one block. If this region was selected for the testing set, we would discard the points that are within the buffer (but are in different blocks) from being allocated to the training set. 
+
+```{r}
+#| label: fig-spatial-block
+#| echo: false
+#| fig-height: 7
+#| fig-width: 7
+#| out-width: 60%
+#| fig-cap: "A plot of 65 spatial data points where (a) shows how they can be blocked into one of seven hexagonal regions. Panel (b) shows the same data with a circular buffer around the center of a single block."  
+
+p_hex <- 
+  hex_data %>% 
+  ggplot() + 
+  geom_sf(data = sel_grid, alpha = 1 / 2) + 
+  geom_sf(aes(col = hex), show.legend = FALSE, cex = 3, alpha = 2 / 4) +
+  theme_void() +
+  scale_color_brewer(palette = "Dark2") +
+  ggtitle("(a) Hexagonal blocks")
+
+p_buff <- 
+  hex_data %>% 
+  ggplot() + 
+  geom_sf(data = sel_grid, alpha = 1 / 2) + 
+  geom_sf(aes(col = hex), show.legend = FALSE, cex = 3, alpha = 2 / 4) +
+  geom_sf(data = sel_buff, fill =  "blue", alpha = 1 / 10) +
+  theme_void() +
+  scale_color_brewer(palette = "Dark2") +
+  ggtitle("(b) Buffered")
+
+p_hex / p_buff
+``` 
+ 
+@Pohjankukka2017, @lyons2018comparison, @meyer2019importance @karasiak2022spatial, and @mahoney2023assessing have good overviews of the importance of countering spatial autocorrelation and appropriate sampling methods. 
+
+For our example, we used blocking and buffering to allocate roughly 20% of the forestry data to the testing set. First, the locations were allocated to a 25 x 25 grid of hexagons across the state. After this, a buffer was created around the hexagon such that outside points within the buffer would be excluded from being used in the training or testing sets. Finally, roughly 20% of the locations were selected for the test set by moving through the space and selecting hexagons sequentially. @fig-forested-split shows the results of this process. 
+
+In the end, a training set of `r format(forested_n_tr, big.mark = ",")` locations and a test set of `r format(forested_n_te, big.mark = ",")` locations (roughly a `r forested_p_te`% holdout) were assembled. The buffer contained `r format(forested_n_bf, big.mark = ",")` locations which was about `r forested_p_bf`% of the original pool of data points. The event rates were similar between the data sets: `r round(event_rates$event_rate[event_rates$group == "training"], 1)`% for the training set and `r round(event_rates$event_rate[event_rates$group == "testing"], 1)`% for the testing set.
+
+```{r}
+#| label: fig-forested-split
+#| echo: false
+#| fig-cap: A split of the forestation data into training (magenta) and testing (purple) sets. Some locations, in black, correspond to the buffer and are not allocated to either set.  Clicking on individual points will show their allocation results. 
+
+leaflet() %>%
+  addProviderTiles(providers$CartoDB.PositronNoLabels) %>%
+  addCircles(
+    data = forested_split_info,
+    lng = ~ lon,
+    lat = ~ lat,
+    color = ~ group_col,
+    fillColor = ~ group_col,
+    fill = TRUE,
+    opacity = .01,
+    fillOpacity = 1 / 2,
+    radius = 1500,
+    popup = htmltools::htmlEscape(forested_split_info$group)
+  ) %>%
+  setView(lng = -120.3945, lat = 47.33047, zoom = 7)
+```
+
+From this map, we can see that the hexagons selected for the testing set cover the geographic area well. While the training set dominates some spaces, this should be sufficient to reduce the effects of spatial autocorrelation on how we measure model performance. 
+
+We will revisit these data in @sec-spatial-resampling to demonstrate how to _resample_ them appropriately. 
+
 
 ## Chapter References {.unnumbered}
 
