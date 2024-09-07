@@ -67,8 +67,6 @@ In @sec-external-validation, it was shown that using the same data to estimate a
 
 There are two general approaches for using external data for model evaluation. The first is a validation set, which we’ve seen before in @sec-three-way-split. This is a good idea if you have a lot of data on hand. The second approach is to **resample** the training set. Resampling is an iterative approach that reuses the training data multiple times based on sound statistical methodology. We’ll discuss both validation sets and resampling in this chapter. 
 
-
-
 ```{r}
 #| label: fig-resampling-scheme
 #| echo: false
@@ -262,6 +260,329 @@ mc_bias + mc_prec +
 ```
 
 The results of this simulation indicate that, in terms of precision, there is little benefit in including more than 70% of the training set in the assessment set. Also, while more resamples always help, there is incremental benefit in using more than 50 or 60 resamples (for this size training set). Regarding bias, the decrease somewhat slows down near 80% of the training set retained. Holdout proportions of around 75% - 80% might be a reasonable rule of thumb (these are, of course, subjective and based on this simulation).
+
+## V-Fold Cross-Validation {#sec-cv}
+
+**V-fold cross-validation** (sometimes called K-fold cross-validation) [@stone1974cross] is the most well-known resampling method^[@Arlot2010 provides a comprehensive survey of cross-validation]. It randomly allocates the training data to one of _V_ groups of about equal size, called a "fold" (a stratified allocation can also be used). There are _B_ = _V_ iterations where the analysis set comprises _V_ -1 of the folds, and the remaining fold defines the assessment set. For example, for 10-fold cross-validation, the ten analysis sets consist of 90% of the data, and the ten assessment sets contain the remaining 10% of the data and are used to quantify performance. As a visual illustration, @fig-cv-scheme shows the process for _V_ = 3 (for brevity), for a data set with 30 samples. 
+
+::: {#fig-cv-scheme layout-ncol=1}
+
+![](../premade/three-CV.svg){width=45% fig-align="center"}
+
+![](../premade/three-CV-iter.svg){width=60% fig-align="center"}
+
+An example mapping with $V = 3$-fold cross-validation.
+:::
+
+@Arlot2010 is a comprehensive survey of cross-validation. Let's look at two special cases.
+
+
+### Leave-One-Out Cross-Validation {.unnumbered}
+
+Leave-one-out cross-validation (LOOCV, also called the jackknife) sets $V = n_{tr}$. A single sample is withheld and, over $n_{tr}$ iterations, a set of models is created, each with an analysis set of $n_{tr} - 1$ samples. The resampling estimate is created by applying the metric function to the resulting $n_{tr}$ predicted values. There are no replicate performance values; only a single $\hat{Q}$. As one might expect, the bias is nearly zero for this method. Although it would be difficult to quantify, the standard error of the estimator should be very large. 
+
+This method is extremely computationally expensive^[However, for linear regression, the LOOCV predictions can be quickly computed without refitting a large number of models.] and is not often used in practice unless computational shortcuts are available. 
+
+
+### Repeated Cross-Validation {.unnumbered}
+
+One way improve precision of this method is to use **repeated V-fold cross-validation**. In this case, _V_-fold CV is repeated multiple times using different random number seeds.  For example, two repeats of 10-fold cross-validation^[This isn’t the same as using _V_ = 20. That scheme has very different bias properties than two repetitions of _V_ = 10.] create two sets of _V_ folds, which are treated as a collection of twenty resamples (e.g., _B_ = _V_ $\times$ _R_ for _R_ repeats). Again, increasing the number of resamples does not generally change the bias. 
+
+### Variance and Bias for V-Fold Cross-Validation {.unnumbered}
+
+The discussions of LOO and repeated cross-validation beg the question: what value of _V_ should we use?  Sometimes the choice of _V_ is driven by computational costs; smaller values of _V_ require less computation time.  A second consideration for choice of _V_ is metric performance in terms of bias and variance.  As we will see later in this chapter, the degree of bias is determined by how much data are retained in the assessment sets (as defined by _V_).  As _V_ increases, bias decreases; _V_=5 has substantially more bias than _V_=10.  @fushiki2011estimation describes _post hoc_ methods for reducing the bias for this resampling method.
+
+Compared to other resampling methods, _V_-fold cross-validation generally has a smaller bias, but relatively poor precision (that would be improved via repeats).
+
+```{r}
+#| label: cv-stats
+#| include: false
+
+cv_5_bias <- 
+  median(
+    stats_v_fold_cv$bias[
+      stats_v_fold_cv$model == "logistic" & 
+        stats_v_fold_cv$folds == " 5" & 
+        stats_v_fold_cv$.metric == "brier_class"]) * 100
+cv_10_bias <- 
+  median(
+    stats_v_fold_cv$bias[
+      stats_v_fold_cv$model == "logistic" & 
+        stats_v_fold_cv$folds == "10" & 
+        stats_v_fold_cv$.metric == "brier_class"]) * 100
+```
+
+To understand the trade-off, the same simulation approach from the previous section is used. 
+@fig-cv-stats shows bias and variance results, where the x-axis is the total number of resamples $V\times R$. As expected, the bias decreases with _V_ and is constant over the number of resamples. Five-fold cross-validation stands out as particularly bad with a percent bias of roughly `r signif(cv_5_bias, 2)`%. Using ten folds decreases this to about `r signif(cv_10_bias, 2)`%. The precision values show that smaller values of _V_ have better precision; 10-fold CV needs substantially more resamples to have the same standard error than _V_ = 5.
+
+```{r}
+#| label: fig-cv-stats
+#| echo: false
+#| fig-width: 6
+#| fig-height: 3.5
+#| fig-align: "center"
+#| out-width: "70%"
+#| fig-cap: Variance and bias statistics for simulated data using different configurations for $V$-fold cross-validation. 
+
+vfold_bias <-
+  stats_v_fold_cv %>%
+  filter(model == sel_model & .metric == sel_metric) %>%
+  ggplot(aes(times, bias, col = folds, pch = folds)) +
+  geom_point() +
+  geom_line() +
+  scale_y_continuous(labels = scales::percent, limits = rng_bias)  + #
+  scale_color_brewer(palette = "Dark2") +
+  geom_hline(yintercept = 0, lty = 2) +
+  labs(y = "Bias", x = "Number of Resamples")
+
+vfold_prec <-
+  stats_v_fold_cv %>%
+  filter(model == sel_model & .metric == sel_metric) %>%
+  ggplot(aes(times, std_err, col = folds, pch = folds)) +
+  geom_point() +
+  geom_line() +
+  lims(y = rng_std_err) +
+  geom_hline(yintercept = 0, lty = 2) +
+  labs(y = "Std. Error", x = "Number of Resamples")  +
+  scale_color_brewer(palette = "Dark2")
+
+vfold_bias + vfold_prec +
+  plot_layout(guides = 'collect') &
+  theme(legend.position = "top")
+```
+
+Is there any advantage to using _V_ > 10? Not much. The decrease in bias is small and many more replicates are required to reach the same precision as _V_ = 10.  For example, twice as many resamples are required for 20-fold CV to match the variance of 10-fold CV. 
+
+For this simulation, the properties are about the same when MCCV and 10-fold CV are matched in terms of number of resamples and the amount allocated to the assessment set. 
+
+Our recommendation is to almost always use _V_ = 10. The bias and variance improvements are both good with 10 folds. Reducing bias in 5-fold cross-validation is difficult but the precision for 10-fold can be improved by increased replication. 
+
+## The Bootstrap {#sec-bootstrap}
+
+The bootstrap [@Efron1979boot;@davison1997bootstrap;@efron2003second;@EfronHastie2016a] is a resampling methodology originally created to compute the sampling distribution of statistics using minimal probabilistic assumptions^[This application will be discussed in @sec-boot-intervals.]. In this chapter, we'll define a bootstrap sample and show how it can be used to measure fit quality for predictive models. 
+
+For a training set with $n_{tr}$ data points, a bootstrap resample takes a random sample of the training set that is also size $n_{tr}$. It does this by sampling with replacement; when each of the $n_{tr}$ samples is drawn, it has no memory of the prior selections. This means that each row can be randomly selected again. For example, @fig-bootstrap-scheme shows another schematic for three bootstrap samples. In this figure, the thirteenth training set sample was selected to go into the first analysis set three times. For this reason, a bootstrap resample will contain multiple replicates of some training set points, while others will not be selected at all. The data that were never selected are used to create the assessment set.  This means that while the training set will have the same number of data points, the assessment sets will have varying numbers of data points.
+
+For the bootstrap, we'll refer to the mean estimate (line 12 in @alg-resampling) as the "ordinary" estimator (others will follow shortly). 
+
+```{r}
+#| label: fig-bootstrap-scheme
+#| echo: false
+#| out-width: '70%'
+#| fig-cap: "A schematic of three bootstraps resamples created from an initial pool of 30 data points."
+knitr::include_graphics("../premade/bootstraps.svg")
+```
+
+The probability that a data point will be picked is $1 / n_{tr}$ and, from this, the probability that a training set point is _not selected at all_ is 
+
+$$\prod_{i=1}^{n_{tr}} \left(1 - \frac{1}{n_{tr}}\right) = \left(1 - \frac{1}{n_{tr}}\right)^{n_{tr}}\approx e^{-1} = 0.368$$
+
+Since the bootstrap sample contains the _selected_ data, each training point is selected with probability $1 - e^{-1} \approx `r round((1 - exp(-1)), 3)`$. The implication is that, on average, the analysis set, contains about `r round((1 - exp(-1)) * 100, 1)`% unique training set points and the assessment set includes, on average, 36.8% of the training data.  When comparing the number of unique training set points excluded by the bootstrap method to those excluded by V-fold cross-validation, the bootstrap method is roughly equivalent to using $V=3$ in cross-validation. 
+
+@fig-boot-stats shows bias and variance for the simulated data. As one might expect, there is considerable bias in the bootstrap estimate of performance. In comparison to the corresponding plot for MCCV, the bootstrap bias is worse than the MCCV curve where 60% were held out. The curve is also flat; the bias does't go away by increasing _B_.
+
+However, the precision is extremely good, even with very few resamples. 
+
+```{r}
+#| label: fig-boot-stats
+#| echo: false
+#| fig-width: 6
+#| fig-height: 3.5
+#| fig-align: "center"
+#| out-width: "70%"
+#| fig-cap: Variance and bias statistics for simulated data using different configurations for the bootstrap. 
+
+bt_est <- c("standard", "bootstrap 632", "bootstrap 632+")
+
+boot_bias <-
+  stats_bootstraps %>%
+  filter(model == sel_model & .metric == sel_metric) %>%
+  rename(estimator = .estimator) %>%
+  mutate(estimator = factor(estimator, levels = bt_est)) %>% 
+  ggplot(aes(times, bias, col = estimator, pch = estimator)) +
+  geom_point() +
+  geom_line() +
+  scale_y_continuous(labels = scales::percent, limits = rng_bias) +
+  geom_hline(yintercept = 0, lty = 2) +
+  labs(y = "Bias", x = "Number of Resamples")
+
+boot_prec <-
+  stats_bootstraps %>%
+  filter(model == sel_model & .metric == sel_metric) %>%
+  filter(.estimator == "standard") %>%
+  rename(estimator = .estimator) %>%
+  ggplot(aes(times, std_err)) +
+  geom_point(col = "#F8766D") +
+  geom_line(col = "#F8766D") +
+  lims(y = rng_std_err) +
+  geom_hline(yintercept = 0, lty = 2) +
+  labs(y = "Std. Error", x = "Number of Resamples")
+
+boot_bias + boot_prec +
+  plot_layout(guides = 'collect') &
+  theme(legend.position = "top")
+```
+
+### Correcting for Bias {.unnumbered}
+
+```{r}
+#| label: bootstrap-bias
+#| include: false
+
+c_632 <-  1 - exp(-1)
+c_368 <- exp(-1)
+
+table_boot_632 <-
+stats_bootstraps %>%
+  filter(.metric %in% c("accuracy", "brier_class") & times == 100 &
+           .estimator == "standard") %>%
+  select(model, .metric, mean = estimate,
+         `no information rate` = permuted, truth = large_sample,
+         resubstitution = resub) %>%
+  mutate(
+    ror = (mean - resubstitution) / (`no information rate` - resubstitution),
+    ror = ifelse(ror < 0, 0, ror),
+    weights = c_632 / (1 - c_368 * ror),
+    `632`  =     c_632 * mean +    c_368 * resubstitution,
+    `632+` =    weights * mean + (1 - weights) * resubstitution,
+    `(truth)` = truth,
+  )  %>%
+  rename(`simple mean` = mean, `relative overfitting rate` = ror) %>%
+  pivot_longer(
+    cols = c(-model,-.metric),
+    names_to = "statistic",
+    values_to = "value"
+  ) %>%
+  pivot_wider(
+    id_cols = c(statistic),
+    names_from = c(.metric, model),
+    values_from = value
+  ) %>%
+  filter(statistic != "truth") %>%
+  mutate(
+    type = ifelse(grepl("632", statistic), "final estimates", "estimates"),
+    type = ifelse(statistic %in% c("relative overfitting rate", "weights", "no information rate"),
+                  "intermediates", type),
+    blank = "   "
+  ) %>%
+  select(type, statistic, accuracy_knn, accuracy_logistic, blank,
+         brier_class_knn, brier_class_logistic)
+
+Q_bt    <- br_lr$estimate[br_lr$.estimator == "standard"]
+Q_resub <- br_lr$resub[1]
+Q_true  <- br_lr$large_sample[1]
+Q_nir   <- br_lr$permuted[1]
+Q_632   <- table_boot_632$brier_class_logistic[table_boot_632$statistic == "632"]
+Q_632p  <- table_boot_632$brier_class_logistic[table_boot_632$statistic == "632+"]
+
+denom <- Q_nir - Q_resub
+numer <- Q_bt - Q_resub
+ror    <- table_boot_632$brier_class_logistic[table_boot_632$statistic == "relative overfitting rate"]
+wt_632p <- table_boot_632$brier_class_logistic[table_boot_632$statistic == "weights"]
+
+Q_knn_bt    <- br_1nn$estimate[br_1nn$.estimator == "standard"]
+Q_knn_resub <- br_1nn$resub[1]
+Q_knn_true  <- br_1nn$large_sample[1]
+Q_knn_nir   <- br_1nn$permuted[1]
+Q_knn_632   <- table_boot_632$brier_class_knn[table_boot_632$statistic == "632"]
+Q_knn_632p  <- table_boot_632$brier_class_knn[table_boot_632$statistic == "632+"]
+ror_knn    <- table_boot_632$brier_class_knn[table_boot_632$statistic == "relative overfitting rate"]
+wt_632p_knn <- table_boot_632$brier_class_knn[table_boot_632$statistic == "weights"]
+
+cv_5_bias <- 
+  median(
+    stats_v_fold_cv$bias[
+      stats_v_fold_cv$model == "logistic" & 
+        stats_v_fold_cv$folds == " 5" & 
+        stats_v_fold_cv$.metric == "brier_class"]) * 100
+cv_10_bias <- 
+  median(
+    stats_v_fold_cv$bias[
+      stats_v_fold_cv$model == "logistic" & 
+        stats_v_fold_cv$folds == "10" & 
+        stats_v_fold_cv$.metric == "brier_class"]) * 100
+```
+
+There have been some attempts to de-bias the ordinary bootstrap estimate. The "632 estimator" [@Efron1983p51] uses the ordinary bootstrap estimate ($\hat{Q}_{bt}$) and the resubstitution estimate ($\hat{Q}_{rsub}$) together: 
+
+$$\hat{Q}_{632} = e^{-1}\, \hat{Q}_{rsub} + (1 - e^{-1})\, \hat{Q}_{bt} = 0.368\,\hat{Q}_{rsub} + 0.632\,\hat{Q}_{bt}$$
+@fig-boot-stats shows that there is a significant drop in the bias when using this correction. The 632 estimator combines two different statistical estimates, and we only know the standard error of $\hat{Q}_{bt}$. Therefore, the right-hand panel does not show a standard error curve for the 632 estimator.  
+
+Let's look at an average example from the simulated data sets with _B_ = 100. @tbl-bootstrap-bias has the estimator values and their intermediate values. Let's first focus on the values for the column labeld "Logistic." The ordinary bootstrap estimate was $\hat{Q}_{bt}$ = `r signif(Q_bt, 3)` and repredicting the training set produced $\hat{Q}_{rsub}$ = `r signif(Q_resub, 3)`. The 632 estimate shifts the Brier score downward to $\hat{Q}_{632}$ = `r signif(Q_632, 3)`. This reduces the pessimistic bias; our large sample estimate of the true Brier score is `r signif(Q_true, 3)` so we are closer to that value.
+
+Another technique, the 632+ estimator [@Efron1997tc], uses the same blending strategy but uses dynamic weights based on how much the model overfits (if at all). It factors in a model’s “no-information rate”: the metric value if the predicted and true outcome values were independent. The author gives a formula for this, but it can also be estimated using a permutation approach where we repeatedly shuffle the outcome values and compute the metric.  We will denote this value as $\hat{Q}_{nir}$. For our simulated data set $\hat{Q}_{nir}$ = `r signif(Q_nir, 3)`; we believe that this is the worst case value for our metric. 
+
+We then compute the relative overfitting rate (ROR) as 
+
+$$ ROR = \frac{\hat{Q}_{bt}-\hat{Q}_{rsub}}{\hat{Q}_{nir} -\hat{Q}_{rsub}} $$
+
+The denominator measures the range of the metric (from most optimistic to most pessimistic). The numerator measures the optimism of our ordinary estimator. A value of zero implies that the model does not overfit, and values of one indicate the opposite. For our logistic model, the ratio is `r signif(numer, 3)` / `r signif(denom, 3)` = `r signif(ror, 3)`, indicating that the logistic model is not overinterpeting the training set. 
+
+The final 632+ estimator uses a different weighting system to combine estimates:  
+
+$$
+\begin{align}
+\hat{Q}_{632+} &= (1 - \hat{w})\, \hat{Q}_{rsub} + \hat{w}\, \hat{Q}_{bt} \quad \text{with}\notag \\
+\hat{w} &= \frac{0.632}{1 - 0.368ROR} \notag
+\end{align}
+$$
+Plugging in our values, the final weight on the ordinary estimator ($w$ = `r signif(wt_632p, 3)`) is very close to what is used by the regular 632 estimator ($w$ = `r signif(1 - exp(-1), 3)`). The final estimate is also similar: $\hat{Q}_{632+}$ = `r signif(Q_632p, 3)`. 
+
+
+
+::: {#tbl-bootstrap-bias}
+
+:::: {.columns}
+
+::: {.column width="35%"}
+
+:::
+
+::: {.column width="30%"}
+
+```{r}
+#| label: tbl-bootstrap-bias
+#| echo: false
+
+table_boot_632_sub <-
+  table_boot_632 %>%
+  select(-contains("accuracy")) %>% 
+  mutate(type = factor(type, levels = c("estimates", "intermediates", "final estimates"))) %>% 
+  arrange(type, statistic)
+ind_est <- range(which(table_boot_632_sub$type == "estimates"))
+int_est <- range(which(table_boot_632_sub$type == "intermediates"))
+fin_est <- range(which(table_boot_632_sub$type == "final estimates"))
+
+table_boot_632_sub %>% 
+  select(statistic, brier_class_logistic, brier_class_knn) %>% 
+  kbl(digits = 3, escape = TRUE, col.names = c(" ", "Logistic", "1 NN")) %>% 
+  add_header_above(c(" " = 1, "Brier Score" = 2)) %>% 
+  pack_rows("Estimates", start_row = ind_est[1], end_row = ind_est[2]) %>% 
+  pack_rows("Intermediates", start_row = int_est[1], end_row = int_est[2]) %>% 
+  pack_rows("Final Estimates", start_row = fin_est[1], end_row = fin_est[2])
+```
+
+:::
+
+::: {.column width="35%"}
+
+:::
+
+::::
+
+Bias correction values for two models on a simulated data set.
+
+:::
+
+The simulations studies shown here in @fig-boot-stats replicated what @Molinaro2005p47 found; the 632+ estimator has bias properties about the same as 10-fold cross-validation. 
+
+How do these bias corrected estimators work when there is extreme overfitting? One way to tell is to consider a 1-nearest neighbor model. In this case, re-predicting the training set predicts every data point with its outcome value (i.e., a “perfect” model). For the Brier score, this means $\hat{Q}_{rsub}$ is zero. @tbl-bootstrap-bias shows the rest of the computations. For this model $Q\approx$ `r signif(Q_knn_true, 3)` and the ordinary estimate comes close: $\hat{Q}_{bt}$ = `r signif(Q_knn_bt, 3)`. 
+
+The 632 estimate is $\hat{Q}_{632} = 0.632\,\hat{Q}_{bt} =$ `r signif(Q_knn_632, 3)`; this is too much bias reduction as it overshoots the true value by a large margin. The 632+ estimator is slightly better. The ROR value is higher (`r signif(ror_knn, 3)`) leading to a higher weight on the ordinary estimator to produce $\hat{Q}_{632+}$ = `r signif(Q_knn_632p, 3)`.
+
+Should we use the bootstrap to compare models? Its small variance is enticing, but the bias remains an issue. The bias is likely to change as a function of the magnitude of the metric. For example, the bootstrap’s bias is probably different for models with 60% and 95% accuracy. If we think our models will have about the same performance, the bootstrap (with a bias correction) may be a good choice. Note that @Molinaro2005p47 found that the 632+ estimator may not perform well when the training set is small (and especially of the number of predictors is large).
+
+Let's take a look at a few specialized resampling methods. 
 
 ```{r}
 #| label: teardown-cluster
