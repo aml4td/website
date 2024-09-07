@@ -1,0 +1,276 @@
+
+R version 4.4.1 (2024-06-14) -- "Race for Your Life"
+Copyright (C) 2024 The R Foundation for Statistical Computing
+Platform: aarch64-apple-darwin20
+
+R is free software and comes with ABSOLUTELY NO WARRANTY.
+You are welcome to redistribute it under certain conditions.
+Type 'license()' or 'licence()' for distribution details.
+
+  Natural language support but running in an English locale
+
+R is a collaborative project with many contributors.
+Type 'contributors()' for more information and
+'citation()' on how to cite R or R packages in publications.
+
+Type 'demo()' for some demos, 'help()' for on-line help, or
+'help.start()' for an HTML browser interface to help.
+Type 'q()' to quit R.
+
+- Project '~/content/website' loaded. [renv 1.0.7]
+- The project is out-of-sync -- use `renv::status()` for details.
+> library(sf)
+Linking to GEOS 3.11.0, GDAL 3.5.3, PROJ 9.1.0; sf_use_s2() is TRUE
+> library(tidymodels)
+── Attaching packages ────────────────────────────────────── tidymodels 1.2.0 ──
+✔ broom        1.0.6     ✔ recipes      1.1.0
+✔ dials        1.3.0     ✔ rsample      1.2.1
+✔ dplyr        1.1.4     ✔ tibble       3.2.1
+✔ ggplot2      3.5.1     ✔ tidyr        1.3.1
+✔ infer        1.0.7     ✔ tune         1.2.1
+✔ modeldata    1.4.0     ✔ workflows    1.1.4
+✔ parsnip      1.2.1     ✔ workflowsets 1.1.0
+✔ purrr        1.0.2     ✔ yardstick    1.3.1
+── Conflicts ───────────────────────────────────────── tidymodels_conflicts() ──
+✖ purrr::discard() masks scales::discard()
+✖ dplyr::filter()  masks stats::filter()
+✖ dplyr::lag()     masks stats::lag()
+✖ recipes::step()  masks stats::step()
+• Dig deeper into tidy modeling with R at https://www.tmwr.org
+> library(spatialsample)
+> library(tidysdm)
+> library(forested)
+> 
+> # ------------------------------------------------------------------------------
+> 
+> tidymodels_prefer()
+> theme_set(theme_bw())
+> options(pillar.advice = FALSE, pillar.min_title_chars = Inf)
+> 
+> # ------------------------------------------------------------------------------
+> 
+> # These computations take a while so we do them in batch mode then load the 
+> # results in later chapters
+> 
+> # ------------------------------------------------------------------------------
+> # We remove some of the existing algorithmic data already there. 
+> 
+> for_analysis <-
++   forested %>%
++   rename(class = forested) %>%
++   select(-tree_no_tree, -land_type, -canopy_cover) 
+> 
+> # ------------------------------------------------------------------------------
+> # Convert the lon/lat to sf geometry format
+> 
+> forested_sf <-
++   for_analysis %>%
++   st_as_sf(coords = c("lon","lat"), crs = st_crs("EPSG:4326"))
+> 
+> 
+> # ------------------------------------------------------------------------------
+> # Conduct the initial split using block sampling and buffering
+> 
+> set.seed(318)
+> forested_split <-
++   spatial_initial_split(forested_sf, prop = 1 / 5, spatial_block_cv,
++                         buffer = 80 * 80, method = "continuous",
++                         n = 25, square = FALSE)
+> 
+> forested_sf_train <- training(forested_split)
+> forested_sf_test  <- testing(forested_split)
+> 
+> # ------------------------------------------------------------------------------
+> # Make a data frame to use for plotting
+> 
+> split_groups <- tibble(.row = 1:nrow(forested_sf), group = "buffer")
+> split_groups$group[forested_split$in_id] <- "training"
+> split_groups$group[forested_split$out_id] <- "testing"
+> 
+> forested_split_info <- 
++   for_analysis %>% 
++   add_rowindex() %>% 
++   full_join(split_groups, by = ".row") %>% 
++   mutate(
++     group_col = if_else(group == "training", "#E7298A", "#7570B3"),
++     group_col = if_else(group == "buffer", "#000000", group_col)
++   )
+> 
+> # ------------------------------------------------------------------------------
+> # Resample the training set
+> 
+> set.seed(670)
+> forested_rs <- spatial_block_cv(
++   forested_sf_train,
++   v = 10,
++   buffer = 80 * 80,
++   method = "continuous",
++   n = 25,
++   square = FALSE
++ )
+> 
+> # ------------------------------------------------------------------------------
+> # re-calculate geocodes and strip off geometry column
+> 
+> re_geocode <- function(x) {
++   x %>%
++     dplyr::mutate(
++       longitude = sf::st_coordinates(.)[,1],
++       latitude  = sf::st_coordinates(.)[,2]
++     ) %>%
++     st_drop_geometry()
++ }
+> 
+> no_geometry <- function(split) {
++   dat <- re_geocode(split$data)
++   split$data <- dat
++   split
++ }
+> 
+> forested_train <- re_geocode(forested_sf_train)
+> forested_test  <- re_geocode(forested_sf_test)
+> forested_rs$splits <- map(forested_rs$splits, no_geometry)
+> 
+> # ------------------------------------------------------------------------------
+> # Make map for a single cv iteration
+> 
+> cv_split_groups <- tibble(.row = 1:nrow(forested_sf_train), group = "buffer")
+> cv_split_groups$group[forested_rs$splits[[1]]$in_id] <- "analysis"
+> cv_split_groups$group[forested_rs$splits[[1]]$out_id] <- "assessment"
+> 
+> forested_cv_split_info <- 
++   forested_train %>% 
++   add_rowindex() %>% 
++   full_join(cv_split_groups, by = ".row") %>% 
++   mutate(
++     group_col = if_else(group == "analysis", "#E7298A", "#7570B3"),
++     group_col = if_else(group == "buffer", "#000000", group_col)
++   )
+> 
+> # ------------------------------------------------------------------------------
+> # Save various things
+> 
+> save(forested_train, forested_test, forested_rs, file = "RData/forested_data.RData")
+> save(forested_split_info, forested_cv_split_info, file = "RData/forested_split_info.RData")
+> save(forested_sf, file = "RData/forested_sf.RData")
+> 
+> # ------------------------------------------------------------------------------
+> # Session versions
+> 
+> sessioninfo::session_info()
+─ Session info ───────────────────────────────────────────────────────────────
+ setting  value
+ version  R version 4.4.1 (2024-06-14)
+ os       macOS Sonoma 14.5
+ system   aarch64, darwin20
+ ui       X11
+ language (EN)
+ collate  en_US.UTF-8
+ ctype    en_US.UTF-8
+ tz       America/New_York
+ date     2024-09-01
+ pandoc   NA
+
+─ Packages ───────────────────────────────────────────────────────────────────
+ ! package       * version    date (UTC) lib source
+ P backports       1.4.1      2021-12-13 [?] CRAN (R 4.4.0)
+ P BiocManager     1.30.23    2024-05-04 [?] CRAN (R 4.4.0)
+ P broom         * 1.0.6      2024-05-17 [?] CRAN (R 4.4.0)
+ P cachem          1.0.8      2023-05-01 [?] CRAN (R 4.4.0)
+ P class           7.3-22     2023-05-03 [?] CRAN (R 4.4.1)
+ P classInt        0.4-10     2023-09-05 [?] CRAN (R 4.4.0)
+ P cli             3.6.3      2024-06-21 [?] CRAN (R 4.4.0)
+ P codetools       0.2-20     2024-03-31 [?] CRAN (R 4.4.1)
+ P colorspace      2.1-0      2023-01-23 [?] CRAN (R 4.4.0)
+ P conflicted      1.2.0      2023-02-01 [?] CRAN (R 4.4.0)
+ P DALEX           2.4.3      2023-01-15 [?] CRAN (R 4.4.0)
+ P data.table      1.15.4     2024-03-30 [?] CRAN (R 4.4.0)
+ P DBI             1.2.2      2024-02-16 [?] CRAN (R 4.4.0)
+ P dials         * 1.3.0      2024-07-30 [?] RSPM
+ P DiceDesign      1.10       2023-12-07 [?] CRAN (R 4.4.0)
+ P digest          0.6.35     2024-03-11 [?] CRAN (R 4.4.0)
+ P dplyr         * 1.1.4      2023-11-17 [?] CRAN (R 4.4.0)
+ P e1071           1.7-14     2023-12-06 [?] CRAN (R 4.4.0)
+ P fansi           1.0.6      2023-12-08 [?] CRAN (R 4.4.0)
+ P fastmap         1.1.1      2023-02-24 [?] CRAN (R 4.4.0)
+ P foreach         1.5.2      2022-02-02 [?] CRAN (R 4.4.0)
+ P forested      * 0.1.0.9000 2024-09-01 [?] Github (simonpcouch/forested@c3c0d8c)
+ P furrr           0.3.1      2022-08-15 [?] CRAN (R 4.4.0)
+ P future          1.34.0     2024-07-29 [?] RSPM
+ P future.apply    1.11.2     2024-03-28 [?] CRAN (R 4.4.0)
+ P generics        0.1.3      2022-07-05 [?] CRAN (R 4.4.0)
+ P ggplot2       * 3.5.1      2024-04-23 [?] CRAN (R 4.4.0)
+ P globals         0.16.3     2024-03-08 [?] CRAN (R 4.4.0)
+ P glue            1.7.0      2024-01-09 [?] CRAN (R 4.4.0)
+ P gower           1.0.1      2022-12-22 [?] CRAN (R 4.4.0)
+ P GPfit           1.0-8      2019-02-08 [?] CRAN (R 4.4.0)
+ P gtable          0.3.5      2024-04-22 [?] CRAN (R 4.4.0)
+ P hardhat         1.4.0      2024-06-02 [?] CRAN (R 4.4.0)
+ P infer         * 1.0.7      2024-03-25 [?] CRAN (R 4.4.0)
+ P ipred           0.9-15     2024-07-18 [?] RSPM
+ P iterators       1.0.14     2022-02-05 [?] CRAN (R 4.4.0)
+ P KernSmooth      2.23-24    2024-05-17 [?] CRAN (R 4.4.1)
+ P lattice         0.22-6     2024-03-20 [?] CRAN (R 4.4.1)
+ P lava            1.8.0      2024-03-05 [?] CRAN (R 4.4.0)
+ P lhs             1.1.6      2022-12-17 [?] CRAN (R 4.4.0)
+ P lifecycle       1.0.4      2023-11-07 [?] CRAN (R 4.4.0)
+ P listenv         0.9.1      2024-01-29 [?] CRAN (R 4.4.0)
+ P lubridate       1.9.3      2023-09-27 [?] CRAN (R 4.4.0)
+ P magrittr        2.0.3      2022-03-30 [?] CRAN (R 4.4.0)
+ P MASS            7.3-60.2   2024-04-26 [?] CRAN (R 4.4.1)
+ P Matrix          1.7-0      2024-04-26 [?] CRAN (R 4.4.1)
+ P memoise         2.0.1      2021-11-26 [?] CRAN (R 4.4.0)
+ P modeldata     * 1.4.0      2024-06-19 [?] CRAN (R 4.4.0)
+ P munsell         0.5.1      2024-04-01 [?] CRAN (R 4.4.0)
+ P nnet            7.3-19     2023-05-03 [?] CRAN (R 4.4.1)
+ P parallelly      1.38.0     2024-07-27 [?] RSPM
+ P parsnip       * 1.2.1      2024-03-22 [?] CRAN (R 4.4.0)
+ P pillar          1.9.0      2023-03-22 [?] CRAN (R 4.4.0)
+ P pkgconfig       2.0.3      2019-09-22 [?] CRAN (R 4.4.0)
+ P prodlim         2023.08.28 2023-08-28 [?] CRAN (R 4.4.0)
+ P proxy           0.4-27     2022-06-09 [?] CRAN (R 4.4.0)
+ P purrr         * 1.0.2      2023-08-10 [?] CRAN (R 4.4.0)
+ P R6              2.5.1      2021-08-19 [?] CRAN (R 4.4.0)
+ P Rcpp            1.0.12     2024-01-09 [?] CRAN (R 4.4.0)
+ P recipes       * 1.1.0      2024-07-04 [?] RSPM
+   renv            1.0.7      2024-04-11 [1] CRAN (R 4.4.0)
+ P rlang           1.1.3      2024-01-10 [?] CRAN (R 4.4.0)
+ P rpart           4.1.23     2023-12-05 [?] CRAN (R 4.4.0)
+ P rsample       * 1.2.1      2024-03-25 [?] CRAN (R 4.4.0)
+ P rstudioapi      0.16.0     2024-03-24 [?] CRAN (R 4.4.0)
+ P s2              1.1.6      2023-12-19 [?] CRAN (R 4.4.0)
+ P scales        * 1.3.0      2023-11-28 [?] CRAN (R 4.4.0)
+ P sessioninfo     1.2.2      2021-12-06 [?] CRAN (R 4.4.0)
+ P sf            * 1.0-16     2024-03-24 [?] CRAN (R 4.4.0)
+ P spatialsample * 0.5.1      2023-11-08 [?] CRAN (R 4.4.0)
+ P survival        3.6-4      2024-04-24 [?] CRAN (R 4.4.1)
+ P tibble        * 3.2.1      2023-03-20 [?] CRAN (R 4.4.0)
+ P tidymodels    * 1.2.0      2024-03-25 [?] CRAN (R 4.4.0)
+ P tidyr         * 1.3.1      2024-01-24 [?] CRAN (R 4.4.0)
+ P tidysdm       * 0.9.5      2024-06-23 [?] CRAN (R 4.4.0)
+ P tidyselect      1.2.1      2024-03-11 [?] CRAN (R 4.4.0)
+ P timechange      0.3.0      2024-01-18 [?] CRAN (R 4.4.0)
+ P timeDate        4032.109   2023-12-14 [?] CRAN (R 4.4.0)
+ P tune          * 1.2.1      2024-04-18 [?] CRAN (R 4.4.0)
+ P units           0.8-5      2023-11-28 [?] CRAN (R 4.4.0)
+ P utf8            1.2.4      2023-10-22 [?] CRAN (R 4.4.0)
+ P vctrs           0.6.5      2023-12-01 [?] CRAN (R 4.4.0)
+ P withr           3.0.0      2024-01-16 [?] CRAN (R 4.4.0)
+ P wk              0.9.1      2023-11-29 [?] CRAN (R 4.4.0)
+ P workflows     * 1.1.4      2024-02-19 [?] CRAN (R 4.4.0)
+ P workflowsets  * 1.1.0      2024-03-21 [?] CRAN (R 4.4.0)
+ P yardstick     * 1.3.1      2024-03-21 [?] CRAN (R 4.4.0)
+
+ [1] /Users/max/content/website/renv/library/macos/R-4.4/aarch64-apple-darwin20
+ [2] /Users/max/Library/Caches/org.R-project.R/R/renv/sandbox/macos/R-4.4/aarch64-apple-darwin20/f7156815
+
+ P ── Loaded and on-disk path mismatch.
+
+──────────────────────────────────────────────────────────────────────────────
+> 
+> if ( !interactive() ) {
++   q("no")
++ }
+> proc.time()
+   user  system elapsed 
+ 34.722   0.412  35.654 
