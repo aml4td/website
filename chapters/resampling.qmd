@@ -589,12 +589,12 @@ Let's take a look at a few specialized resampling methods.
 
 ## Time Series Data {#sec-time-series-resampling}
 
-Time series data [@Hyndmanforecast] are sequential observations ordered over time. The most common example is daily stock prices. These data are a special case due to _autocorrelation_: rows of the data set are not independent. This can occur for many different reasons (e.g. underlying seasonal trends, etc.), but it complicates the resampling process in different ways: 
+Time series data [@Hyndmanforecast] are sequential observations ordered over time. The most common example is daily stock prices. These data are a special case due to _autocorrelation_: rows of the data set are not independent. This can occur for many different reasons (e.g. underlying seasonal trends, etc.), and this dependency complicates the resampling process in two primary ways.  We need to think more carefully about how analysis and assessment sets are created. 
 
- - We want to avoid analysis and assessment partitions where older data are in the assessment set (to avoid predicting past data with future data). 
- - Random sampling might destroy the underlying data structures that can be used to measure specific trends (such as seasonality). 
+ - Randomly allocating samples to these sets would deteriorate the relationships among the samples due to autocorrelation.  If the autocorrelation is important information related to the response, then random sampling will negatively impact a model's ability to uncover the predictive relationship with the response.
+ - Placing newer data in the analysis set and older data in the assessment set would not make sense because of the time trends in the data.
 
-_Rolling forecasting origin_ splitting [@tashman2000out] is a resampling scheme that mimics the train/test splitting pattern from @sec-basic-splitting where the most recent data are used in the assessment set. We would choose how much data (or what range of time) to use for the analysis and assessment sets, then slide this pattern over the whole data set. @fig-rolling-scheme illustrates this process where each block could represent some unit of time. For example, we might build the model on six months of data and then predict with one month. The next resample iteration could bump that forward by a month or another period (so that the assessment sets can be distinct or overlapping).
+_Rolling forecasting origin_ splitting [@tashman2000out] is a resampling scheme that mimics the train/test splitting pattern from @sec-basic-splitting where the most recent data are used in the assessment set. We would choose how much data (or what range of time) to use for the analysis and assessment sets, then slide this pattern over the whole data set. @fig-rolling-scheme illustrates this process where each block could represent some unit of time. For example, we might build the model on six months of data and then predict the next month. The next resample iteration could bump that forward by a month or some other period (so that the assessment sets can be distinct or overlapping).
 
 ```{r}
 #| label: fig-rolling-scheme
@@ -604,7 +604,7 @@ _Rolling forecasting origin_ splitting [@tashman2000out] is a resampling scheme 
 knitr::include_graphics("../premade/rolling.svg")
 ```
 
-We also have the choice to cumulatively expand the assessment data from the start of the training set to the end of the current slice.
+We also have the choice to cumulatively expand the assessment data from the start of the training set to the end of the current slice.  For example, in Resample 2 of @fig-rolling-scheme, the model would be fit using samples 1-9; in Resample 3, the model would be fit using samples 1-10; and so on.  This approach may be useful when the number of periods of time are smaller and we would like to include as much of the historical data as possible in each resample.
 
 We'll use rolling forecasting origin resampling in one of the upcoming case studies using the hotel rate data previously discussed in @sec-hotel-rates.
 
@@ -612,17 +612,16 @@ We'll use rolling forecasting origin resampling in one of the upcoming case stud
 
 @sec-spatial-splitting described the problem of spatial correlation between locations and a method for creating an initial split for the forestation data. 
 
-Like time-series data, the resampling scheme for this type of data emulates the initial splitting process. We could create groupings for the training set using: 
+Like time-series data, the resampling scheme for this type of data emulates the initial splitting process. We could create groupings for the training set using the following methods: 
 
- - Clustering methods to derive partitions of the data where the spatial coordinates are closer to one another than they are to points in other clusters. 
- - A grid of equally sized blocks, rectangular or hexagonal, are created to encompass the training set points. 
+ - Clustering methods:  These methods create partitions of the data where points with spatial coordinates are closer to each other within the same cluster than to points in other clusters.
+ - Grid-based methods: A grid of equally sized blocks, either rectangular or hexagonal, is created to encompass the training set points.
 
-From these groupings, procedures that are analogous to the previous variations of cross-validation could be used: 
+From these groupings, we can apply procedures similar to previous cross-validation variations:
 
-- Leave-one-group out resampling would have as many resamples as there are groups. The data points from one group are used as the assessment set and the remaining groups are used to train the model. The process repeats for each group. 
-- _V_-fold cross-validation allocates each of the groups to one of _V_ meta-groups (e.g., folds). One fold is left out as the assessment set during each of the _V_ iterations. 
-
-Repeated _V_ fold cross-validation can also be used by restarting the grouping process with a different random number seed. 
+- Leave-one-group-out resampling: This method creates as many resamples as there are groups. In each resample, data points from one group are used as the assessment set, while the remaining groups are used to train the model. This process repeats for each group.
+- _V_-fold cross-validation: This method assigns each group to one of _V_ meta-groups (e.g., folds). In each of the _V_ iterations, one fold is left out as the assessment set, while the remaining folds are used to train the model.
+- Repeated _V_-fold cross-validation: This method involves restarting the grouping process with a different random number seed, allowing for multiple rounds of V-fold cross-validation.
 
 Each of these approaches can be augmented using a buffer to exclude very close neighbors from being used. 
 
@@ -660,11 +659,13 @@ When rows of data are correlated for other reasons, such as those discussed in @
 
 ## Frequently Asked Questions {#sec-resampling-faq}
 
-These questions represent areas of confusion regarding resampling. 
+The general concept of resampling seems clear and straightforward.  However, we regularly encounter confusion and commonly asked questions about this process.  In this section we will address these common questions and misconceptions.
 
 #### Is it bad to get different results from each resample?   {#sec-resampling-faq-diff-results .unnumbered}
 
 The point of resampling is to see how the model pipeline changes when the data changes. There is a good chance that some important estimates differ from resample to resample. For example, when algorithmically filtering predictors, you might get _B_ different predictor lists, and that’s okay. It does give you a sense of how much noise is in the part of your model pipeline.
+
+It can be good to examine the distribution of resampling performance.  Occasionally, we may find a resample that has unusual performance with respect to the rest of the resamples.  This may merit further investigation as to why the resample is unusual.
 
 #### Can/should I use the individual resampling results to change the model pipeline?   {#sec-resampling-faq-indiv .unnumbered}
 
@@ -672,7 +673,7 @@ We often hear questions about how to use the cross-validated results to define t
 
 One important thing to consider is that _you now have a different model pipeline than what was just resampled_. To understand the performance of your newly informed model, you need to resample a model pipeline that _algorithmically_ selects the _X_% of predictors and resample it.
 
-Note that resampling the specific set of top predictors determined from the resamples is not appropriate. The rule to determine the top set should be resampled, not the specific output of that rule.
+Note that resampling the specific set of top predictors determined from the resamples is not appropriate.   We have seen this done many times before in the hopes of improving predictive performance.  Performance often improves for the assessment sets.  But the performance cannot be generalized to the test set or for other new samples.  The rule to determine the top set should be resampled, not the specific output of that rule.
 
 For the original pipeline, the final predictor set is determined when you fit that pipeline on the training set. The resampling results tell you about what _could_ have happened; the training set results show what _did happen_.
 
@@ -688,7 +689,7 @@ No. We'll talk model about ensembles in @sec-ensembles and how the assessment se
 
 #### Can I accidentally resample incorrectly?  {#sec-resampling-faq-error .unnumbered}
 
-Unfortunately yes. As previously mentioned, improper data usage is one of the most frequent ways that machine learning models silently fail; that is, you won’t know that there is a problem until the next set of labeled data. A good example discussed in @sec-removing-predictors is @Ambroise2002p1493. 
+Unfortunately, yes. As previously mentioned, improper data usage is one of the most frequent ways that machine learning models silently fail; that is, you won’t know that there is a problem until the next set of labeled data. A good example discussed in @sec-removing-predictors is @Ambroise2002p1493. 
 
 If you are 
 
@@ -700,7 +701,7 @@ the risk of error is low.
 
 #### What is nested resampling? {#sec-resampling-faq-nested .unnumbered}
 
-This is a version of where an additional layer of resampling occurs. For example, suppose you are using 10-fold cross-validation. Within each of the 10 iterations, you might add 20 bootstrapping iterations (that resamples the analysis set). That ends up training 200 distinct models^[We will refer to the first resample (10-fold CV) as the _outer_ resample and the boostrap as the _inner_ resample.]. 
+This is a version of where an additional layer of resampling occurs. For example, suppose you are using 10-fold cross-validation. Within each of the 10 iterations, you might add 20 bootstrapping iterations (that resamples the analysis set). That ends up training 200 distinct models^[We will refer to the first resample (10-fold CV) as the _outer_ resample and the bootstrap as the _inner_ resample.]. 
 
 For a single model, that’s not very useful. However, as discussed in @sec-nested-resampling, there are situations where the analysis set is being used for too many purposes. For example, during model tuning, you might use resampling to find the best model _and_ measure its performance. In certain cases, that can lead to bad results for the latter task.  
 
