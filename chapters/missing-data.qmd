@@ -436,23 +436,19 @@ There are a couple of caveats to removing predictors or samples based on missing
 #| message: false
 #| warning: false
 
-# TODO center and scale these predictors at the end
-set.seed(331)
+load("../RData/simulation_data.RData")
+
 simulation_nonlinear <- 
-  tibble(
-    x1 = 8 * runif(200) - 4,
-    x2_act = (x1 ^ 2) / 2 + 4,
-    error = 1.5 * rnorm(200),
-    x2 = x2_act + error,
-    prob = 1,
-    true_class = ifelse(x2 > x2_act, 1, -1),
-    misclass_error = 1.5 * runif(200),
-    obs_class = ifelse(abs(error) < 1.5 - misclass_error, true_class * (-1), true_class), 
-    Observed = factor(ifelse(obs_class == -1, "Group 1", "Group 2"))
-  ) %>%
+  simulation_data %>%
+  filter(relationship == "nonlinear") %>% 
   rename(`Predictor 1` = x1, `Predictor 2` = x2) %>%
   dplyr::select(`Predictor 1`, `Predictor 2`, Observed)
 
+simulation_linear <- 
+  simulation_data %>%
+  filter(relationship == "linear") %>% 
+  rename(`Predictor 1` = x1, `Predictor 2` = x2) %>%
+  dplyr::select(`Predictor 1`, `Predictor 2`, Observed)
 
 #Randomly select 10% of samples to have missing values
 set.seed(1009)
@@ -629,29 +625,45 @@ What are the important characteristics of an imputation technique that will be u
 
 By considering each of these characteristics, imputation can effectively alleviate missing data problems, enhancing models’ quality and predictive performance. There are several imputation methods that meet most or all of the above characteristics. These imputation techniques fall into two general categories: most likely value and model-based (i.e., "regression imputation"). 
 
-To illustrate how these methods work, we will use a simple, simulated two-predictor classification data set. @fig-imputation-simulation-data displays the simulated data. For this data, the optimal class separation is defined by a parabola. From this data set, 10% of the samples will be randomly selected. Of these samples, half will have the value of first predictor deleted, while the other half will have the second predictor deleted. 
-
-TODO show the linear one too? 
+To illustrate how these methods work, we will use two simple, simulated two-predictor classification data sets. @fig-imputation-simulation-data displays the simulated data. For these data sets, the optimal class separation is defined by the black lines. We will initially focus on the nonlinear data set. From these data set, 10% of the samples will be randomly selected. Of these samples, half will have the value of first predictor deleted, while the other half will have the second predictor deleted. 
 
 ```{r}
 #| label: fig-imputation-simulation-data
 #| echo: false
 #| warning: false
-#| out-width: 45%
-#| fig-width: 5
-#| fig-height: 5
-#| fig-cap: A complete two-class simulated dataset with 200 data points. The optimal partition of the classes is represented by the parabolic black line.
+#| out-width: 85%
+#| fig-width: 8
+#| fig-height: 4
+#| fig-cap: Two complete two-class simulated datasets with 200 data points, one with a linear relationship between the predictors and the other nonlinear. The optimal partitions of the classes are represented by the black lines.
 
-ggplot(simulation_nonlinear, aes(x=`Predictor 1`, y=`Predictor 2`, pch = Observed, color = Observed)) +
-  geom_point(size = 3, alpha = 3 / 4) +
+p_nonlin <- 
+  ggplot(simulation_nonlinear, aes(x = `Predictor 1`, y = `Predictor 2`)) +
+  geom_point(aes(pch = Observed, color = Observed), size = 2, alpha = 2 / 4) +
   geom_function(
     fun = function(x) (x ^ 2) / 2 + 4,
     col = "black",
     linewidth = 2,
-    alpha = 1 / 10
+    alpha = 1 / 5
   ) +
   scale_color_manual(values = c("#56B4E9", "#D55E00")) +
-  scale_shape_manual(values = c(16, 17)) 
+  scale_shape_manual(values = c(16, 17)) +
+  ggtitle("Nonlinear Relationship")
+
+p_lin <- 
+  ggplot(simulation_linear, aes(x = `Predictor 1`, y = `Predictor 2`)) +
+  geom_point(aes(pch = Observed, color = Observed), size = 2, alpha = 2 / 4) +
+  geom_function(
+    fun = function(x) x + 4,
+    col = "black",
+    linewidth = 2,
+    alpha = 1 / 5
+  ) +
+  scale_color_manual(values = c("#56B4E9", "#D55E00")) +
+  scale_shape_manual(values = c(16, 17))  +
+  ggtitle("Linear Relationship")
+
+p_lin + p_nonlin + plot_layout(guides = 'collect')
+
 ```
 
 ### Encoding Missing Data {#sec-encoding-missing-data}
@@ -670,9 +682,9 @@ Technically, almost any model that can make a prediction is a potential candidat
 
 The simplest approach to imputation is to replace a missing value with its most likely value based on that predictor's non-missing values. For numeric data, the most likely value can be summarized by the mean or median. For categorical data, the most likely value is the mode (or most frequent value). Most likely value imputation meets many of the desirable characteristics for imputation. They can tolerate missing values from other predictors (because they operate one-predictor-at-a-time) and can handle different predictor types while also producing efficient prediction equations. Furthermore, achieving a robust imputation can be done using either the median or the trimmed mean [@barnett1994outliers]. The trimmed mean is the mean of the middle-most samples. For example, we could compute the mean of the samples with 5% of the the most extreme (smallest and largest) samples removed. Doing this would minimize the impact of any extreme sample values on the computation of the mean. However, imputing with the most likely value for a single predictor may not produce an imputed value that is close to the true value.
 
-To demonstrate, we have imputed the missing values in the simulated data using the mean and median imputation techniques. @fig-imputation-exploration shows the values of the original samples that were selected to have missing values along with the imputed values based on mean and median imputation. We can see from this figure that the mean imputed values are pulled towards the larger values for both predictors. In this case, the imputed values are towards the center over the overall plot and away from the parabolic region where we know the actual data is. The median imputed values are less affected by extreme values and are closer to the region of actual data. Both techniques, however, are unable to place most of the missing data near their true values.
+To demonstrate, we have imputed the missing values in the simulated data using the mean and median imputation techniques for both data sets seen in @fig-imputation-simulation-data. @fig-imputation-exploration shows the values of the original samples that were selected to have missing values along with the imputed values based on mean and median imputation. 
 
-TODO describe same for linear?
+For both data sets, the imputed values are towards the center over the overall plot and away from the parabolic/linear regions where we know the actual data are. The median imputed values are less affected by extreme values and are closer to the region of actual data. Both techniques, however, are unable to place most of the missing data near their true values.
 
 For many data sets, and especially for sets with a minimal number of missing values, most likely value imputation may be sufficiently good for what we need. The procedure is fast but is terribly inaccurate. But there may be occasions when when we need the imputations to be closer to the true (yet unknown) values.
 
@@ -699,7 +711,7 @@ app
 ```
 :::
 
-A visualization of the four new features for different linear embedding methods. The data shown are the validation set results from the same simulation mechanism shown in @fig-imputation-simulation-data as well as one where the predictors are linearly related.
+A visualization of the four new features for different linear embedding methods. The data shown are the validation set results from the two simulations shown in @fig-imputation-simulation-data.
 
 :::
 
@@ -710,9 +722,15 @@ When a data set has many predictors and the predictors have some correlation wit
 
 Returning to the simulation illustration, the linear imputation method creates two simple linear regression models, where one model uses predictor 1 as the response and predictor 2 as the predictor, and the other model reverses the roles of the predictors. 
 
-Selecting the linear data set in @fig-imputation-exploration illustrates the impact of this technique.  Assuming that we have conducted some exploratory data analysis, we would be aware of the nonlinear relationship between the predictors. As such, the imputation model for the second predictor included an additional squared term. This greatly improves the imputation quality. Unfortunately, the same approach is not possible for imputing the first predictor (which is poorly predicted).
+Selecting the nonlinear data set in @fig-imputation-exploration illustrates the impact of this technique.  Assuming that we have conducted some exploratory data analysis, we would be aware of the nonlinear relationship between the predictors. As such, the imputation model for the second predictor included an additional squared term. This greatly improves the imputation quality. Unfortunately, the same approach is not possible for imputing the first predictor (which is poorly predicted).
 
 However, if these predictors were linearly related, then this technique would generate values closer to the actual values. This can be seen by choosing the linear data set in @fig-imputation-exploration.
+
+Since this imputation method is basically linear regression, we can use it for slightly more sophisticated results. For example, if we want to impute a predictor’s values based on some other predictors categories, linear regression can achieve this. There is also the possibility of interactions, splines, and so on (as long as the “predictors” in the imputation model are not missing themselves). 
+
+When the predictor that requires imputation is categorical, then logistic or multinomial regression can be used to generate an imputed category.
+
+@fig-imputation-distance-comparison provides another visual comparison of the imputation techniques. In this figure, each point represents the Euclidean distance from the imputed sample to its known location. The mean, median, and linear methods have similar distributions of distances. 
 
 ```{r}
 #| label: fig-imputation-distance-comparison
@@ -721,25 +739,21 @@ However, if these predictors were linearly related, then this technique would ge
 #| out-width: 60%
 #| fig-width: 6
 #| fig-height: 4.25
-#| fig-cap: A comparison of the distribution of distances between the actual and imputed samples across imputation techniques. The mean, median, and linear techniques perform similarly, while K-NN and bagging generate imputed values that are modestly closer to the actual values.
+#| fig-cap: A comparison of the distribution of distances between the actual and imputed samples across imputation techniques for the nonlinear data shown in @fig-imputation-simulation-data. The mean, median, and linear techniques perform similarly, while K-NN and bagging generate imputed values that are modestly closer to the actual values.
 
 ggplot(imputation_distance_comparison, aes(x = Method, y = Distance)) +
   geom_boxplot(outlier.size = 0) +
   geom_jitter(height = 0, width = 0.05, color = "blue", alpha = 3 / 4) + 
+  scale_y_log10() +
   labs(x = NULL)
 ```
 
-@fig-imputation-distance-comparison provides another visual comparison of the imputation techniques. In this figure, each point represents the Euclidean distance from the imputed sample to its known location. The mean, median, and linear methods have similar distributions of distances. 
-
-Since this imputation method is basically linear regression, we can use it for slightly more sophisticated results. For example, if we want to impute a predictor’s values based on some other predictors categories, linear regression can achieve this. There is also the possibility of interactions, splines, and so on (as long as the “predictors” in the imputation model are not missing themselves). 
-
-When the predictor that requires imputation is categorical, then logistic or multinomial regression can be used to generate an imputed category.
 
 ### Nearest Neighbors
 
 $K$-nearest neighbor calculations will be discussed in @sec-mds, where it will be used in some multidimensional scaling methods, and in @sec-knn-cls in the context of a supervised model. In short, when imputing a missing predictor value for a new sample, the $K$ most similar samples from the training set are determined (using all complete predictor values). The $K$ predictor values for the predictor of interest are summarized via the mean (for numeric outcomes) or the mode. This summary statistic is used to fill in the missing value. This is a localized version of the most likely value approach.
 
-@fig-imputation-exploration shows that a nearest-neighbor approach increases the accuracy of the imputation, especially for the first predictor. For the linear case, both predictors have high-quality imputations. 
+@fig-imputation-exploration shows that a nearest-neighbor approach generally increases the accuracy of the imputation, especially for the first predictor. For the linear case, both predictors have high-quality imputations. 
 
 ### Trees
 
