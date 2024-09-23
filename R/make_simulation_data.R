@@ -1,4 +1,4 @@
-library(tidyverse)
+library(tidymodels)
 
 #Simulation_linear
 set.seed(331)
@@ -32,4 +32,4 @@ nonlinear_data <-
 simulation_data <-
   bind_rows(linear_data, nonlinear_data)
 
-save(simulation_data, file="/Users/kjelljohnson/My Drive/Projects/APM/Missing Data/App/simulation_data.RData")
+save(simulation_data, file="RData/simulation_data.RData")
