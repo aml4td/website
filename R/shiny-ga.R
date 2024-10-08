@@ -50,18 +50,32 @@ server <- function(input, output) {
   ga_history$RMSE <- ga_history$fitness
 
   # ------------------------------------------------------------------------------
+  
   x_rng <- 10^extendrange(c(-10, -1/10))
   y_rng <- 2^extendrange(c(-10, 10))
   
+  log10_labs <- trans_format("log10", math_format(10^.x, function(x) format(x, digits = 3)))
+  log2_labs <- trans_format("log2", math_format(2^.x, function(x) format(x, digits = 3)))
+  
+  # ------------------------------------------------------------------------------
+  
   output$generations <-
     renderPlot({
+      
+      last_best <- 
+        ga_history %>%
+        filter(generation <= input$gen) %>% 
+        slice_min(RMSE)
+      
+      current_gen <- ga_history %>% filter(generation == input$gen) 
+      
       p <- 
         ga_history %>%
-        filter(generation == input$gen) %>%
         ggplot(aes(scale_factor, cost)) +
-        geom_point(aes(col = RMSE), alpha = 1/2, cex = 3) +
-        scale_x_log10(limits = x_rng) +
-        scale_y_continuous(trans = "log2", limits = y_rng) +
+        geom_point(data = current_gen, aes(col = RMSE), alpha = 1/2, cex = 3) +
+        # geom_point(data = last_best, cex = 4, pch = 8, col = "yellow") +
+        scale_x_log10(limits = x_rng, labels = log10_labs) +
+        scale_y_continuous(limits = y_rng, trans = "log2", labels = log2_labs) +
         theme_bw() +
         theme(legend.position = "top") +
         labs(x = "Scaling Factor", y = "Cost") +

@@ -70,7 +70,7 @@ server <- function(input, output) {
     ggplot(aes(scale_factor, cost)) +
     geom_point(cex = 5, pch = 1) +
     scale_x_log10(limits = x_rng, labels = log10_labs) +
-    scale_y_continuous(trans = "log2", labels = log2_labs) +
+    scale_y_continuous(limits = y_rng, trans = "log2", labels = log2_labs) +
     theme_bw() +
     labs(x = "Scaling Factor", y = "Cost") +
     coord_fixed(ratio = 1/2)
