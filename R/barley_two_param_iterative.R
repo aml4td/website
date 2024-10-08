@@ -324,6 +324,8 @@ max_vals <- map_dbl(svm_param$object, ~ .x$range[[2]])
 
 pop_size <- 50
 grid_ga <- grid_space_filling(svm_param, size = pop_size, original = FALSE)
+grid_ga$cost <- log2(grid_ga$cost)
+grid_ga$scale_factor <- log10(grid_ga$scale_factor)
 
 ga_time <- system.time({
   set.seed(1528)
@@ -348,7 +350,8 @@ ga_time <- system.time({
 })
 
 ga_history <- 
-  map2_dfr(seq_along(ga_generations), ga_generations, ~ mutate(.y, generation = .x) %>% distinct())
+  map2_dfr(seq_along(ga_generations), ga_generations, ~ mutate(.y, generation = .x) %>% distinct()) %>% 
+  mutate(cost = 2^cost, scale_factor = 10^scale_factor)
 
 save(ga_history, ga_time, ga_res, file = glue("{stub}_ga.RData"))
 
