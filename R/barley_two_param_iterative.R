@@ -7,9 +7,9 @@ suppressPackageStartupMessages(library(glue))
 
 # pak::pak(c("tidymodels/tune@clear-gp"), ask = FALSE)
 
-source("R/setup_chemometrics.R")
+source("~/content/website/R/setup_chemometrics.R")
 
-stub <- "RData/two_param_iter"
+stub <- "~/content/website/RData/two_param_iter"
 plan("multisession")
 
 # ------------------------------------------------------------------------------
@@ -167,7 +167,7 @@ reg_mtr <- metric_set(rmse)
 
 init_grid <- grid_space_filling(svm_param, size = 3)
 
-# used for bo plots: 
+# used for bo plots:
 large_grid <- grid_regular(svm_param, levels = 50)
 large_scaled_grid <- encode_set(large_grid, svm_param, as_matrix = TRUE)
 
@@ -181,7 +181,8 @@ initial_time <- system.time({
     tune_grid(
       resamples = barley_rs,
       grid = init_grid,
-      metrics = reg_mtr
+      metrics = reg_mtr,
+      control = control_grid(save_pred = TRUE)
     )
 })
 
@@ -222,19 +223,23 @@ bo_time <- system.time({
         no_improve = Inf,
         verbose_iter = TRUE,
         verbose = FALSE,
-        save_gp_scoring = TRUE
+        save_gp_scoring = TRUE,
+        save_pred = TRUE,
       )
     )
 })
 
 
-### 
+###
 
+bo_ci <-
+  int_pctl(bo_res, times = 2000, metrics = reg_mtr, alpha = 0.1) %>%
+  select(-.metric, -.config)
 bo_mtr <- collect_metrics(bo_res)
 bo_gp_files <- list.files(tempdir(), pattern = "gp", full.names = TRUE)
 bo_tile <- map_dfr(bo_gp_files, reproduce_gp_surface)
 
-### 
+###
 
 old_bo_points <- new_bo_points <- NULL
 for (i in 1:max(bo_tile$iter)) {
@@ -250,14 +255,14 @@ for (i in 1:max(bo_tile$iter)) {
   new_bo_points <- bind_rows(new_bo_points, curr_iter_points)
 }
 
-save(bo_mtr, bo_tile, bo_time, init_grid, old_bo_points, new_bo_points, 
+save(bo_mtr, bo_ci, bo_tile, bo_time, init_grid, old_bo_points, new_bo_points,
      file = glue("{stub}_bo.RData"))
 
 # ------------------------------------------------------------------------------
 cli::cli_rule("Simulated annealing")
 
 sa_time <- system.time({
-  set.seed(381) 
+  set.seed(381)
   sa_res <-
     svm_wflow %>%
     tune_sim_anneal(
@@ -270,11 +275,15 @@ sa_time <- system.time({
         no_improve = Inf,
         verbose_iter = TRUE,
         verbose = FALSE,
-        save_history = TRUE
+        save_history = TRUE,
+        save_pred = TRUE
       )
     )
 })
 
+sa_ci <-
+  int_pctl(sa_res, times = 2000, metrics = reg_mtr, alpha = 0.1) %>%
+  select(-.metric, -.config)
 sa_mtr <- collect_metrics(sa_res)
 load(file.path(tempdir(), "sa_history.RData"))
 sa_history <- result_history
@@ -282,38 +291,50 @@ sa_history <- result_history
 # ------------------------------------------------------------------------------
 # Items to save for the shiny app
 
+sa_init <-
+  sa_history %>%
+  filter(.iter == 0) %>%
+  rename(RMSE = mean)
+best_init <-
+  sa_init %>%
+  slice_min(RMSE) %>%
+  select(.iter, cost, scale_factor)
+poor_init <-
+  anti_join(sa_init, best_init, by = c(".iter", "cost", "scale_factor")) %>%
+  select(.iter, cost, scale_factor)
+
 # loop over path and descriptions
 
 paths <- iter_best <- iter_label <- iter_descr <- vector(mode = "list", length = 50)
 
 for (i in 1:50) {
-  current_path <- 
-    resolve_sa_path(sa_history, i) %>% 
+  current_path <-
+    resolve_sa_path(sa_history, i) %>%
     anti_join(poor_init, by = c(".iter", "cost", "scale_factor"))
   paths[[i]] <- current_path
-  
-  last_best <- 
-    sa_history %>% 
-    filter(results == "new best" & .iter < i) %>%  
+
+  last_best <-
+    sa_history %>%
+    filter(results == "new best" & .iter < i) %>%
     slice_max(.iter)
   iter_best[[i]] <- last_best
 
-  
+
   iter_descr[[i]] <- describe_sa_result(current_path)
-  
+
   last_best_iter <-
-    last_best %>% 
+    last_best %>%
     pluck(".iter")
-  
+
   res <- unique(sa_history$results[sa_history$.iter == i])
   if (res == "restart from best") {
     res <- paste(res, "at iteration", last_best_iter)
   }
-  
+
   iter_label[[i]] <- paste0("iteration ", i, ": ", res)
 }
 
-save(sa_mtr, sa_history, sa_time, init_grid, paths, iter_best, iter_label, 
+save(sa_mtr, sa_ci, sa_history, sa_time, init_grid, paths, iter_best, iter_label,
      iter_descr, file = glue("{stub}_sa.RData"))
 
 # ------------------------------------------------------------------------------

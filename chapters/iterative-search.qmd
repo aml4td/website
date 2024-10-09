@@ -18,6 +18,7 @@ library(tidymodels)
 library(finetune)
 library(patchwork)
 library(future)
+library(bestNormalize)
 
 # ------------------------------------------------------------------------------
 
@@ -34,6 +35,290 @@ set_options()
 num_workers <- parallel::detectCores()
 ```
 
+General process
+
+what are good and bad characteristics for optimizers
+
+summarize next sections
+
+
+## Example: Predicting Barley Amounts using Support Vector Machines {#sec-barley-svm}
+
+```{r}
+#| label: data-import
+#| include: false
+source("../R/setup_chemometrics.R")
+```
+
+Data introduced in @sec-barley. 
+
+@fig-barley-linear-bakeoff shows results of tuning different linear embedding methods that were coupled with an ordinary logistic regression model. 
+
+introduce svm regression and its tuning parameters. Two versions: a two-dimensional problem and a 5 dimensional problem. 
+
+why use this for svms?
+
+```{r}
+#| label: svm-spec
+#| include: false
+rec <-
+  recipe(barley ~ ., data = barley_train) %>%
+  step_orderNorm(all_predictors()) %>% 
+  step_pca(all_predictors(), num_comp = tune()) %>%
+  step_normalize(all_predictors())
+
+svm_spec <-
+  svm_poly(cost = tune(), degree = tune(), scale_factor = tune(), margin = tune()) %>%
+  set_mode("regression")
+
+svm_wflow <- workflow(rec, svm_spec)
+
+svm_param <-
+  svm_wflow %>%
+  extract_parameter_set_dials() %>%
+  update(
+    num_comp = num_comp(c(1, 200)),
+    cost = cost(c(-10, 10)),
+    degree = degree_int(c(1, 8)),
+    scale_factor = scale_factor(c(-10, -1/10))
+  )
+
+reg_mtr <- metric_set(rmse)
+```
+
+```{r}
+#| label: fig-svm-grid
+#| echo: false
+#| fig-width: 5
+#| fig-height: 5
+#| out-width: 50%
+#| fig-cap: "A visualization of model performance when only the SVM cost and scaling factor parameters are optimized. It shows the combination with the smallest RMSE and a ridge of candidate values with nearly equivalent performance."
+
+load("../RData/two_param_iter_large.RData")
+x_rng <- 10^extendrange(c(-10, -1/10))
+y_rng <- 2^extendrange(c(-10, 10))
+
+log10_labs <- trans_format("log10", math_format(10^.x, function(x) format(x, digits = 3)))
+log2_labs <- trans_format("log2", math_format(2^.x, function(x) format(x, digits = 3)))
+
+regular_mtr %>%
+  rename(RMSE = mean) %>% 
+  ggplot(aes(scale_factor, cost)) +
+  geom_tile(aes(fill = RMSE)) +
+  scale_x_log10(limits = x_rng, labels = log10_labs, expand = expansion(add = c(-1/5, -1/5))) +
+  scale_y_continuous(limits = y_rng, trans = "log2", labels = log2_labs,
+                     expand = expansion(add = c(-1/2, -1/2))) +
+  theme_bw() +
+  labs(x = "Scaling Factor", y = "Cost") +
+  coord_fixed(ratio = 1/2) +
+  scale_fill_distiller(palette = "Blues", type = "seq", 
+                       direction = -1, transform = "identity") +
+  geom_point(data = regular_mtr %>% slice_min(mean), col = "yellow") + 
+  geom_line(
+    data = regular_mtr %>% slice_min(mean, n = 18),
+    stat = "smooth",
+    col = "yellow",
+    method = lm,
+    se = FALSE,
+    formula = y ~ x,
+    alpha = 3/4
+  )
+```
+
+## Bayesian Optimization {#sec-bayes-opt}
+
+
+## Simulated Annealing  {#sec-sim-anneal}
+
+
+## Genetic Algorithms  {#sec-genetic-algo}
+
+## Tuning Preprocessors and Models
+
+
+```{r}
+#| label: svm-initial
+#| include: false
+#| cache: true
+
+init_grid <- grid_space_filling(svm_param, size = 5)
+
+set.seed(123)
+initial_res <-
+  svm_wflow %>%
+  tune_grid(
+    resamples = barley_rs,
+    grid = 5,
+    metrics = reg_mtr,
+    control = control_grid(save_pred = TRUE)
+  )
+initial_ci <- int_pctl(initial_res, times = 100, alpha = 0.1)
+```
+
+```{r}
+initial_ci %>% select(.lower, .upper, .estimate, .config) %>% 
+  full_join(collect_metrics(initial_res), by = ".config") %>% 
+  arrange(mean) %>% 
+  mutate(
+    ci = map2_chr(.lower, .upper, ~ cli::format_inline("({sprintf('%3.1f', .x)}, {sprintf('%3.1f', .y)})")),
+    `Cost (log-2)` = log2(cost),
+    `Scale (log-10)` = log10(scale_factor)
+  ) %>% 
+  select(`Cost (log-2)`, `Scale (log-10)`, RMSE = mean, `90% Interval` = ci)
+```
+
+```{r}
+#| label: svm-bo
+#| include: false
+#| cache: true
+set.seed(337)
+bo_res <-
+  svm_wflow %>%
+  tune_bayes(
+    resamples = barley_rs,
+    initial = initial_res,
+    iter = 50,
+    param_info = svm_param,
+    metrics = reg_mtr,
+    control = control_bayes(
+      save_pred = TRUE,
+      no_improve = Inf,
+      verbose_iter = FALSE,
+      verbose = FALSE,
+      save_workflow = TRUE
+    )
+  )
+
+# ------------------------------------------------------------------------------
+
+bo_met <- collect_metrics(bo_res)
+bo_best <- integer(0)
+bo_rmse <- bo_met %>% filter(.iter == 0) %>% slice_min(mean) %>% pluck("mean")
+for (i in 1:max(bo_met$.iter)) {
+  curr_rmse <- bo_met %>% filter(.iter == i) %>% pluck("mean")
+  if (curr_rmse < bo_rmse) {
+    bo_rmse <- curr_rmse
+    bo_best <- c(bo_best, i)
+  }
+}
+
+# ------------------------------------------------------------------------------
+
+bo_ci <- int_pctl(bo_res, times = 100, alpha = 0.1)
+bo_met <- collect_metrics(bo_res)
+bo_best_res <- show_best(bo_res, metric = "rmse", n = 1)
+bo_ci_best_res <- bo_ci[bo_ci$.iter == bo_best_res$.iter, ]
+```
+
+
+```{r}
+#| label: svm-sa
+#| include: false
+#| cache: true
+
+set.seed(953)
+sa_res <-
+  svm_wflow %>%
+  tune_sim_anneal(
+    resamples = barley_rs,
+    initial = initial_res,
+    iter = 50,
+    param_info = svm_param,
+    metrics = reg_mtr,
+    control = control_sim_anneal(
+      save_pred = TRUE,
+      no_improve = Inf,
+      verbose_iter = FALSE,
+      verbose = FALSE,
+      save_workflow = TRUE
+    )
+  )
+
+# ------------------------------------------------------------------------------
+
+sa_met <- collect_metrics(sa_res)
+sa_best <- integer(0)
+sa_rmse <- sa_met %>% filter(.iter == 0) %>% slice_min(mean) %>% pluck("mean")
+for (i in 1:max(sa_met$.iter)) {
+  curr_rmse <- sa_met %>% filter(.iter == i) %>% pluck("mean")
+  if (curr_rmse < sa_rmse) {
+    sa_rmse <- curr_rmse
+    sa_best <- c(sa_best, i)
+  }
+}
+
+# ------------------------------------------------------------------------------
+
+sa_ci <- int_pctl(sa_res, times = 100, alpha = 0.1)
+sa_met <- collect_metrics(sa_res)
+sa_best_res <- show_best(sa_res, metric = "rmse", n = 1)
+sa_ci_best_res <- sa_ci[sa_ci$.iter == sa_best_res$.iter, ]
+```
+
+
+The best results used a log<sub>2</sub> cost value of `r signif(log2(bo_best_res$cost), 3)` and a log<sub>10</sub> scaling factor of `r signif(log10(bo_best_res$scale_factor), 2)` (at iteration `r bo_best_res$.iter`). The corresponding validation set RMSE was `r round(bo_best_res$mean, 2)`% with 90% confidence interval of (`r round(bo_ci_best_res$.lower, 2)`%, `r round(bo_ci_best_res$.upper, 2)`%).
+
+```{r}
+#| label: fig-svm-bo-rmse
+#| echo: false
+#| fig-width: 6
+#| fig-height: 4
+#| out-width: 70%
+#| fig-cap: "rmse."
+#| warning: false
+
+bo_ci_plot <- bo_ci %>% filter(.estimate < 20)
+sa_ci_plot <- sa_ci %>% filter(.estimate < 20)
+rmse_rng <- extendrange(c(bo_ci_plot$.lower, bo_ci_plot$.upper, 
+                          sa_ci_plot$.lower, sa_ci_plot$.upper))
+
+bo_best <- integer(0)
+bo_rmse <- bo_met %>% filter(.iter == 0) %>% slice_min(mean) %>% pluck("mean")
+for (i in 1:max(bo_met$.iter)) {
+  curr_rmse <- bo_met %>% filter(.iter == i) %>% pluck("mean")
+  if (curr_rmse < bo_rmse) {
+    bo_rmse <- curr_rmse
+    bo_best <- c(bo_best, i)
+  }
+}
+bo_ci %>% 
+  ggplot(aes(.iter)) + 
+  geom_vline(xintercept = bo_best, col = "green", lty = 2) +
+  geom_point(aes(y = .estimate)) +
+  geom_errorbar(
+    data = bo_ci_plot,
+    aes(ymin = .lower, ymax = .upper), width = 1/2
+  ) +
+  labs(x = "Iteration", y = "RMSE") + 
+  ylim(rmse_rng)
+```
+
+
+
+
+The best results used a log<sub>2</sub> cost value of `r signif(log2(sa_best_res$cost), 3)` and a log<sub>10</sub> scaling factor of `r signif(log10(sa_best_res$scale_factor), 2)` (at iteration `r sa_best_res$.iter`). The corresponding validation set RMSE was `r round(sa_best_res$mean, 2)`% with 90% confidence interval of (`r round(sa_ci_best_res$.lower, 2)`%, `r round(sa_ci_best_res$.upper, 2)`%).
+
+
+```{r}
+#| label: fig-svm-sa-rmse
+#| echo: false
+#| fig-width: 6
+#| fig-height: 4
+#| out-width: 70%
+#| fig-cap: "rmse."
+#| warning: false
+
+sa_ci %>% 
+  ggplot(aes(.iter)) + 
+  geom_vline(xintercept = sa_best, col = "green", lty = 2) +
+  geom_point(data = sa_ci, aes(y = .estimate)) +
+  geom_errorbar(
+    data = sa_ci_plot,
+    aes(ymin = .lower, ymax = .upper), width = 1/2
+  ) +
+  labs(x = "Iteration", y = "RMSE") +
+  ylim(rmse_rng)
+```
 
 ## Chapter References {.unnumbered}
 
