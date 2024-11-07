@@ -19,10 +19,7 @@ library(finetune)
 library(patchwork)
 library(future)
 library(bestNormalize)
-
-# ------------------------------------------------------------------------------
-
-
+library(kableExtra)
 
 # ------------------------------------------------------------------------------
 # Set Options
@@ -35,12 +32,19 @@ set_options()
 num_workers <- parallel::detectCores()
 ```
 
-General process
+Grid search is a static procedure; we predetermine the candidates to be evaluated before beginning. How can we adaptively optimize tuning parameters in a sequential manner? Perhaps more importantly, _when_ is this a good approach? 
 
-what are good and bad characteristics for optimizers
+We’ve seen previously that a plateau of good performance in the parameter space is possible. This is often the case but will not always be true. If the optimal performance range is small, we must create a large space-filling design to find it. When there are many tuning parameters, the computational expense can be unreasonable. An even worse situation is one where the previously described speed-up techniques (such as the submodel trick from @sec-submodels) are not applicable. Racing can be very efficient, but if the training set is very large, it may be that a validation set is more appropriate than multiple resamples; racing cannot be used in this situation. Finally, there are practical considerations when the data set is very large. Most parallel processing techniques require the data to be in memory for each parallel worker, rendering that technique moot. 
 
-summarize next sections
+Generally, we are not often constrained by these issues _for models used for tabular data_. However, there are a few models that might be better optimized sequentially. The first two that come to mind are large neural networks^[Sections [-@sec-cls-svm] and [-@sec-reg-svm]]. and support vector machines^[Sections [-@sec-cls-nnet] and [-@sec-reg-nnet]] (SVMs). For the former, as the number of layers increases, so does the number of tuning parameters. Neural networks also have many important tuning parameters associated with the model’s training, such as the learning rate, regularization parameters, etc. These models also require more preprocessing than others; they are suspectable to uninformative predictors, missing data, and collinearity. Depending on the data set, there can be many pre-model tuning parameters. 
 
+Support vector machines are models with fewer parameters than neural networks but with similar pre-processing requirements. Unfortunately, the tuning parameter space can have large areas of poor performance with "islands" where the model works well. The location of these can change from data set to data set. We’ll see an example of this shortly in a small, two-parameter example. 
+
+These two models, in particular, are more likely to benefit from an optimization method that chooses candidates as the process evolves. 
+
+In theory, many iterative optimization procedures can be used. Multiple centuries have focused on nonlinear optimization methods, principally gradient descent. However, a gradient-based approach is a poor choice for this scenario. They typically require many function evaluations and a relatively smooth objective function (in the tuning parameter space) to converge. Here, a "function evaluation" means estimating performance for a given candidate. For expensive models, possibly resampled, the time to obtain enough results to compute gradients and their search path is infeasible.  
+
+Derivative-free techniques can be helpful here, and there are many for nonlinear optimizations. Traditional examples are genetic algorithms, simulated annealing, particle swarm optimization, etc. We’ll consider the first two of these in Sections [-@sec-sim-anneal] and [-@sec-genetic-algo]. Currently, the most well-known iterative tool for optimizing models is Bayesian optimization. This will be examined in @sec-bayes-opt. 
 
 ## Example: Predicting Barley Amounts using Support Vector Machines {#sec-barley-svm}
 
@@ -50,13 +54,25 @@ summarize next sections
 source("../R/setup_chemometrics.R")
 ```
 
-Data introduced in @sec-barley. 
+We’ll return to the data previously seen in @sec-barley where we want to predict the percentage of barley oil in a mixture. Recall that the predictors are extremely correlated with one another. In @sec-embeddings, we considered embedding methods like PCA to preprocess the data and these models were able to achieve RMSE values of about 6% (shown in @fig-barley-linear-bakeoff). 
 
-@fig-barley-linear-bakeoff shows results of tuning different linear embedding methods that were coupled with an ordinary logistic regression model. 
+In this chapter, we’ll predict these data in two different scenarios. First, we’ll use them as a “toy problem” where only two support vector machine tuning parameters are optimized. This is a little unrealistic, but it allows us to observe how iterative search methods work in a 2D space. Second, in @sec-bayes-opt-nnet, we’ll get serious and optimize a larger group of parameters for neural networks simultaneously with three parameters of a specialized signal processing technique. 
 
-introduce svm regression and its tuning parameters. Two versions: a two-dimensional problem and a 5 dimensional problem. 
+Let's start with the toy example that uses an SVM regression model. This highly flexible nonlinear model can represent the predictor data in higher dimensions using a _kernel transformation_. This function combines numeric predictor vectors from two data points using a dot product. There are many different types of kernel functions, but for a _polynomial_ kernel, it is: 
 
-why use this for svms?
+$$
+k(\boldsymbol{x}_1, \boldsymbol{x}_2) = (a\boldsymbol{x}_1'\boldsymbol{x}_2 + b)^p
+$$ {#eq-kernel-poly}
+
+where $a$ is called the scaling factor, $b$ is a constant offset value, and $p$ is the polynomial degree. The dot product measures both angle and distance. Note that for the kernel function to be valid, the two vectors must have elements with consistent units (i.e., they have been standardized). 
+
+The kernel function operates much like a polynomial basis expansion; it projects a data point into a much larger, nonlinear space. The idea is that a more complex representation of the predictors might enable the model to make better predictions. 
+
+For our toy example, we'll take the `r nrow(barley_train) - 1` predictors, project them to a smaller space of 10 principal components, then standardize those features to have the same mean and standard deviation. A quartic polynomial is used with zero offset. The scale parameter will be tuned. It helps define how much influence the dot product has in the polynomial expansion. 
+
+The most commonly tuned SVM parameter is independent of the different kernel functions: the _cost value_. This dictates how much a poorly predicted model should penalize the performance metric (when evaluated on the training set). Higher cost values will encourage the SVM to become increasingly more complex. We've previously seen the effect of modulating the cost value in @fig-two-class-overfit. For small costs, the SVM classification model did not try too hard to classify samples correctly. When increased to an extreme, it significantly overfit the training set points.
+
+As before, the RMSE will be used with the validation set for external validation of models. Let's define a wide  space for our two tuning parameters: cost will vary from 2<sup>-10</sup> to 2<sup>10</sup> and the scale factor^[Why are the two parameters based on different bases? It’s mostly a convention. Both parameters have valid values that can range across many orders of magnitude. The change in cost tends to occur more slowly than the scaling factor, so a smaller base of 2 is often used.] is allowed to range from 10<sup>-10</sup> to 10<sup>-0.1</sup>. @fig-svm-grid visualizes the RMSE across these ranges. The lower left diagonal area is a virtual "dead zone" with very large RMSE values that don't appear to change much. There is also a diagonal wedge of good performance. The figure shows the location of the smallest RMSE value and a diagonal ridge of values with nearly equal results. Any points on this line would produce good models (at least for this toy example). Note that there is a small locale of excessively large RMSE values in the upper right. Going too far in this direction is a bad idea.  
 
 ```{r}
 #| label: svm-spec
@@ -101,19 +117,23 @@ y_rng <- 2^extendrange(c(-10, 10))
 log10_labs <- trans_format("log10", math_format(10^.x, function(x) format(x, digits = 3)))
 log2_labs <- trans_format("log2", math_format(2^.x, function(x) format(x, digits = 3)))
 
+num_cuts <- 50
+rd_or <- colorRampPalette(rev(RColorBrewer::brewer.pal(9, "OrRd")))(num_cuts)
+
 regular_mtr %>%
-  rename(RMSE = mean) %>% 
+  mutate(RMSE = cut(mean, breaks = seq(5, 31, length = num_cuts))) %>% 
   ggplot(aes(scale_factor, cost)) +
   geom_tile(aes(fill = RMSE)) +
-  scale_x_log10(limits = x_rng, labels = log10_labs, expand = expansion(add = c(-1/5, -1/5))) +
+  scale_x_log10(limits = x_rng,
+                labels = log10_labs,
+                expand = expansion(add = c(-1 / 5, -1 / 5))) +
   scale_y_continuous(limits = y_rng, trans = "log2", labels = log2_labs,
                      expand = expansion(add = c(-1/2, -1/2))) +
   theme_bw() +
   labs(x = "Scaling Factor", y = "Cost") +
   coord_fixed(ratio = 1/2) +
-  scale_fill_distiller(palette = "Blues", type = "seq", 
-                       direction = -1, transform = "identity") +
-  geom_point(data = regular_mtr %>% slice_min(mean), col = "yellow") + 
+  scale_fill_manual(values = rd_or) +
+  geom_point(data = regular_mtr %>% slice_min(mean), col = "yellow", cex = 2) + 
   geom_line(
     data = regular_mtr %>% slice_min(mean, n = 18),
     stat = "smooth",
@@ -121,142 +141,152 @@ regular_mtr %>%
     method = lm,
     se = FALSE,
     formula = y ~ x,
-    alpha = 3/4
-  )
+    alpha = 1
+  ) +
+  theme(legend.position = "none")
 ```
 
-## Bayesian Optimization {#sec-bayes-opt}
-
+The next two sections will discuss how two traditional global search methods, simulated annealing and genetic algorithms, can be used to search the parameter space. After this, the focus is on Bayesian optimization. 
 
 ## Simulated Annealing  {#sec-sim-anneal}
 
-
 ## Genetic Algorithms  {#sec-genetic-algo}
 
-## Tuning Preprocessors and Models
+## Bayesian Optimization {#sec-bayes-opt}
 
+## Tuning a Neural Network {#sec-bayes-opt-nnet}
+
+We’ll return to the data previously seen in @sec-barley where we want to predict the percentage of barley oil in a mixture. Recall that the predictors are extremely correlated with one another. In @sec-embeddings, we considered embedding methods like PCA to preprocess the data. 
+
+In this chapter, we’ll take a more sophisticated approach to preprocessing these data using signal processing techniques, specifically the **Savitzky-Golay** method. This technique incorporates two main goals: to smooth the data from location to location (i.e., across the x-axis in @fig-barley-data(b)) and to difference the data. Smoothing attempts to reduce measurement noise without diminishing the data patterns that could predict the outcome. Differencing can remove the correlation between locations and might also mitigate other issues, such as systematic background noise. 
+
+For smoothing, the procedure uses a moving window across a sample’s location and, within each window, uses a polynomial basis expansion to produce a smoother representation of the data. The window width and the polynomial degree are both tuning parameters. Note that the polynomial degree cannot be larger than the window width. 
+
+Differencing has a single tuning parameter: the difference order. A zero-order difference leaves the data as-is (After smoothing). A first-order difference is the smoothed value minus the smoothed value for the next location (and so on). 
+
+@fig-savitzky-golay shows an example of a small set of locations. The top row shows the effect of smoothing when differencing is not used. For a linear smoother (i.e., a polynomial degree of one), the process can over-smooth the data such that the nonlinear portions of the raw data lose significant amounts of information. This issue goes away as the polynomial order is increased. However, the higher degree polynomial nearly interpolates between data points and may not be smoothing the data. 
+
+The bottom panel shows the data when a first-order difference is used. The pattern is completely different since the data now represent the rate of change in the outcome rather than the absolute measurement values. Again, larger window sizes oversmooth the data, and the highest degree of polynomial provides minimal smoothing. 
+
+We’ll want to optimize these preprocessing parameters simultaneously with the parameters for the supervised model. 
 
 ```{r}
-#| label: svm-initial
-#| include: false
-#| cache: true
+#| label: fig-savitzky-golay
+#| echo: false
+#| fig-width: 8.5
+#| fig-height: 6
+#| out-width: 100%
+#| warning: false
+#| fig-cap: "Demonstrations of the Savitzky-Golay preprodcessing method for a small region for one specific sample."
 
-init_grid <- grid_space_filling(svm_param, size = 5)
+load("../RData/savitzky_golay_demo.RData")
 
-set.seed(123)
-initial_res <-
-  svm_wflow %>%
-  tune_grid(
-    resamples = barley_rs,
-    grid = 5,
-    metrics = reg_mtr,
-    control = control_grid(save_pred = TRUE)
-  )
-initial_ci <- int_pctl(initial_res, times = 100, alpha = 0.1)
+smoothed_p <-
+  smoothed_plot_data %>%
+  mutate(.location = .location + (`window size`/2)) %>%
+  ggplot(aes(.location, .measure)) +
+  geom_point(data = raw_plot_data, cex = 1/2) +
+  geom_path(aes(col = window), alpha = 3 / 4) +
+  facet_wrap(~ `polynomial degree`, labeller = label_both) +
+  lims(y = c(0.595, 0.606), x = c(505, 544)) +
+  labs(y = "Original Value", x = NULL) +
+  theme(legend.position = "top")
+
+diff_p <- diff_plot_data %>%
+  mutate(.location = .location + (`window size`/2)) %>%
+  ggplot(aes(.location, .measure)) +
+  geom_hline(yintercept = 0, lty = 2, alpha = 1 / 2) +
+  geom_point(data = raw_diff_plot_data, cex = 1/2) +
+  geom_path(aes(col = window), alpha = 3 / 4) +
+  facet_wrap(~ `polynomial degree`, labeller = label_both) +
+  lims(y = c(-0.0012, 0.0014), x = c(505, 544)) +
+  labs(y = "1st Difference", x = "Location") +
+  theme(legend.position = "none")
+
+smoothed_p / diff_p
 ```
 
+
 ```{r}
-initial_ci %>% select(.lower, .upper, .estimate, .config) %>% 
-  full_join(collect_metrics(initial_res), by = ".config") %>% 
-  arrange(mean) %>% 
+#| label: collect-iterative
+#| include: false
+load("../RData/barley_iterative.RData")
+
+iters <- max(mlp_sfd_bo_ci$.iter)
+rmse_rng <- extendrange(c(mlp_sfd_bo_ci$.lower, mlp_sfd_bo_ci$.upper, 
+                          mlp_sfd_sa_ci$.lower, mlp_sfd_sa_ci$.upper))
+
+mlp_sfd_bo_best_ci <- 
+  mlp_sfd_bo_ci %>% 
+  filter(.iter == max(mlp_sfd_bo_best))
+
+mlp_sfd_bo_ci$is_best <- "no"
+mlp_sfd_bo_ci$is_best[mlp_sfd_bo_ci$.iter %in% mlp_sfd_bo_best] <- "yes"
+
+mlp_sfd_sa_best_ci <- 
+  mlp_sfd_sa_ci %>% 
+  filter(.iter == max(mlp_sfd_sa_best))
+
+mlp_sfd_sa_ci$is_best <- "no"
+mlp_sfd_sa_ci$is_best[mlp_sfd_sa_ci$.iter %in% mlp_sfd_sa_best] <- "yes"
+
+restarts <- result_history$.iter[result_history$results == "restart from best"]
+```
+
+::: {#tbl-nnet-initial}
+
+
+```{r}
+#| label: tbl-nnet-initial
+#| echo: false
+mlp_sfd_bo_ci %>% 
+  filter(.iter == 0) %>% 
   mutate(
-    ci = map2_chr(.lower, .upper, ~ cli::format_inline("({sprintf('%3.1f', .x)}, {sprintf('%3.1f', .y)})")),
-    `Cost (log-2)` = log2(cost),
-    `Scale (log-10)` = log10(scale_factor)
+    `window size` = 2 * window_side + 1,
+    mixture = mixture * 100,
+    `penalty (log-10)` = log10(penalty),
+    `learn rate (log-10)` = log10(learn_rate),
+    activation = gsub("_", " ", activation),
+    rate_schedule = gsub("(decay_time)|(decay_expo)", "decay", rate_schedule)
+    ) %>% 
+  arrange(.estimate) %>% 
+  select(`RMSE (%)` = .estimate, `window size`, differentiation_order, degree,
+         hidden_units, `penalty (log-10)`, activation, `learn rate (log-10)`,
+         rate_schedule, stop_iter, mixture) %>% 
+  kable(
+    digits = 2,
+    col.names  = c(
+     "RMSE (%)", "Window", "Diff. Order", "Degree", "Units", "Penalty (log-10)", 
+     "Activation", "Learn Rate (log-10)", "Rate Schedule", "Stop Iter.", 
+     "L1 Mixture"
+    )
   ) %>% 
-  select(`Cost (log-2)`, `Scale (log-10)`, RMSE = mean, `90% Interval` = ci)
+  kable_styling(bootstrap_options = "responsive", full_width = FALSE)
 ```
 
-```{r}
-#| label: svm-bo
-#| include: false
-#| cache: true
-set.seed(337)
-bo_res <-
-  svm_wflow %>%
-  tune_bayes(
-    resamples = barley_rs,
-    initial = initial_res,
-    iter = 50,
-    param_info = svm_param,
-    metrics = reg_mtr,
-    control = control_bayes(
-      save_pred = TRUE,
-      no_improve = Inf,
-      verbose_iter = FALSE,
-      verbose = FALSE,
-      save_workflow = TRUE
-    )
-  )
-
-# ------------------------------------------------------------------------------
-
-bo_met <- collect_metrics(bo_res)
-bo_best <- integer(0)
-bo_rmse <- bo_met %>% filter(.iter == 0) %>% slice_min(mean) %>% pluck("mean")
-for (i in 1:max(bo_met$.iter)) {
-  curr_rmse <- bo_met %>% filter(.iter == i) %>% pluck("mean")
-  if (curr_rmse < bo_rmse) {
-    bo_rmse <- curr_rmse
-    bo_best <- c(bo_best, i)
-  }
-}
-
-# ------------------------------------------------------------------------------
-
-bo_ci <- int_pctl(bo_res, times = 100, alpha = 0.1)
-bo_met <- collect_metrics(bo_res)
-bo_best_res <- show_best(bo_res, metric = "rmse", n = 1)
-bo_ci_best_res <- bo_ci[bo_ci$.iter == bo_best_res$.iter, ]
-```
+The initial set of candidates used for iterative search methods.
+ 
+:::
 
 
-```{r}
-#| label: svm-sa
-#| include: false
-#| cache: true
-
-set.seed(953)
-sa_res <-
-  svm_wflow %>%
-  tune_sim_anneal(
-    resamples = barley_rs,
-    initial = initial_res,
-    iter = 50,
-    param_info = svm_param,
-    metrics = reg_mtr,
-    control = control_sim_anneal(
-      save_pred = TRUE,
-      no_improve = Inf,
-      verbose_iter = FALSE,
-      verbose = FALSE,
-      save_workflow = TRUE
-    )
-  )
-
-# ------------------------------------------------------------------------------
-
-sa_met <- collect_metrics(sa_res)
-sa_best <- integer(0)
-sa_rmse <- sa_met %>% filter(.iter == 0) %>% slice_min(mean) %>% pluck("mean")
-for (i in 1:max(sa_met$.iter)) {
-  curr_rmse <- sa_met %>% filter(.iter == i) %>% pluck("mean")
-  if (curr_rmse < sa_rmse) {
-    sa_rmse <- curr_rmse
-    sa_best <- c(sa_best, i)
-  }
-}
-
-# ------------------------------------------------------------------------------
-
-sa_ci <- int_pctl(sa_res, times = 100, alpha = 0.1)
-sa_met <- collect_metrics(sa_res)
-sa_best_res <- show_best(sa_res, metric = "rmse", n = 1)
-sa_ci_best_res <- sa_ci[sa_ci$.iter == sa_best_res$.iter, ]
-```
 
 
-The best results used a log<sub>2</sub> cost value of `r signif(log2(bo_best_res$cost), 3)` and a log<sub>10</sub> scaling factor of `r signif(log10(bo_best_res$scale_factor), 2)` (at iteration `r bo_best_res$.iter`). The corresponding validation set RMSE was `r round(bo_best_res$mean, 2)`% with 90% confidence interval of (`r round(bo_ci_best_res$.lower, 2)`%, `r round(bo_ci_best_res$.upper, 2)`%).
+The best results occurred at iteration `r mlp_sfd_bo_best`: 
+
+ - `r cli::format_inline("{mlp_sfd_bo_best_ci$hidden_units} hidden unit{?s}")`.
+ - log<sub>10</sub> penalty  of `r signif(log10(mlp_sfd_bo_best_ci$penalty), 3)`. 
+ - log<sub>10</sub> learning rate of `r signif(log10(mlp_sfd_bo_best_ci$learn_rate), 2)`. 
+ - a `r mlp_sfd_bo_best_ci$rate_schedule` learning rate schedule.
+ - stopping training after `r cli::format_inline("{mlp_sfd_bo_best_ci$stop_iter} iteration{?s}")`. 
+ - regularization than is `r round(mlp_sfd_bo_best_ci$mixture * 100, 1)`% L<sub>1</sub>.
+ - a difference order of `r mlp_sfd_bo_best_ci$differentiation_order`.
+ - a polynomial degree of `r mlp_sfd_bo_best_ci$degree`.
+ - a smoothing window size of `r 1 + 2 * mlp_sfd_bo_best_ci$window_side`.
+ 
+The corresponding validation set RMSE was `r round(mlp_sfd_bo_best_ci$.estimate, 2)`% with 90% confidence interval of (`r round(mlp_sfd_bo_best_ci$.lower, 2)`%, `r round(mlp_sfd_bo_best_ci$.upper, 2)`%).
+
+The BO took approximately `r prettyunits::pretty_sec(mlp_bo_time[3] / iters)` per candidate. 
+
 
 ```{r}
 #| label: fig-svm-bo-rmse
@@ -264,39 +294,36 @@ The best results used a log<sub>2</sub> cost value of `r signif(log2(bo_best_res
 #| fig-width: 6
 #| fig-height: 4
 #| out-width: 70%
-#| fig-cap: "rmse."
+#| fig-cap: "The progress of Bayesian optimization. The validation set RMSE is shown on the y-axis with 90% confidence intervals. Orange points indicate iterations where a new optimal value was found. "
 #| warning: false
 
-bo_ci_plot <- bo_ci %>% filter(.estimate < 20)
-sa_ci_plot <- sa_ci %>% filter(.estimate < 20)
-rmse_rng <- extendrange(c(bo_ci_plot$.lower, bo_ci_plot$.upper, 
-                          sa_ci_plot$.lower, sa_ci_plot$.upper))
-
-bo_best <- integer(0)
-bo_rmse <- bo_met %>% filter(.iter == 0) %>% slice_min(mean) %>% pluck("mean")
-for (i in 1:max(bo_met$.iter)) {
-  curr_rmse <- bo_met %>% filter(.iter == i) %>% pluck("mean")
-  if (curr_rmse < bo_rmse) {
-    bo_rmse <- curr_rmse
-    bo_best <- c(bo_best, i)
-  }
-}
-bo_ci %>% 
-  ggplot(aes(.iter)) + 
-  geom_vline(xintercept = bo_best, col = "green", lty = 2) +
-  geom_point(aes(y = .estimate)) +
+mlp_sfd_bo_ci %>% 
+  ggplot(aes(.iter, col = is_best)) + 
+  geom_point(aes(y = .estimate), show.legend = FALSE, cex = 1 / 2) +
   geom_errorbar(
-    data = bo_ci_plot,
-    aes(ymin = .lower, ymax = .upper), width = 1/2
+    aes(ymin = .lower, ymax = .upper), 
+    width = 1/2, 
+    show.legend = FALSE
   ) +
-  labs(x = "Iteration", y = "RMSE") + 
-  ylim(rmse_rng)
+  labs(x = "Iteration", y = "RMSE") +
+  ylim(rmse_rng) +
+  scale_color_manual(values = c("black", "#FF7F00"))
 ```
 
+Simulated annealing arrived at the following candidate set (at iteration `r mlp_sfd_sa_best`): 
 
+ - `r cli::format_inline("{mlp_sfd_sa_best_ci$hidden_units} hidden unit{?s}")`.
+ - log<sub>10</sub> penalty  of `r signif(log10(mlp_sfd_sa_best_ci$penalty), 3)`. 
+ - log<sub>10</sub> learning rate of `r signif(log10(mlp_sfd_sa_best_ci$learn_rate), 2)`. 
+ - a `r mlp_sfd_sa_best_ci$rate_schedule` learning rate schedule.
+ - stopping training after `r cli::format_inline("{mlp_sfd_sa_best_ci$stop_iter} iteration{?s}")`. 
+ - regularization than is `r round(mlp_sfd_sa_best_ci$mixture * 100, 1)`% L<sub>1</sub>.
+ - a difference order of `r mlp_sfd_sa_best_ci$differentiation_order` 
+ - a polynomial degree of `r mlp_sfd_sa_best_ci$degree`.
+ - a smoothing window size of `r 1 + 2 * mlp_sfd_sa_best_ci$window_side`.
+ 
+The corresponding validation set RMSE was `r round(mlp_sfd_sa_best_ci$.estimate, 2)`% with 90% confidence interval of (`r round(mlp_sfd_sa_best_ci$.lower, 2)`%, `r round(mlp_sfd_sa_best_ci$.upper, 2)`%).
 
-
-The best results used a log<sub>2</sub> cost value of `r signif(log2(sa_best_res$cost), 3)` and a log<sub>10</sub> scaling factor of `r signif(log10(sa_best_res$scale_factor), 2)` (at iteration `r sa_best_res$.iter`). The corresponding validation set RMSE was `r round(sa_best_res$mean, 2)`% with 90% confidence interval of (`r round(sa_ci_best_res$.lower, 2)`%, `r round(sa_ci_best_res$.upper, 2)`%).
 
 
 ```{r}
@@ -305,19 +332,52 @@ The best results used a log<sub>2</sub> cost value of `r signif(log2(sa_best_res
 #| fig-width: 6
 #| fig-height: 4
 #| out-width: 70%
-#| fig-cap: "rmse."
+#| fig-cap: "Validation set RMSE results for the optimization via simulated annealing. The validation set RMSE is shown on the y-axis with 90% confidence intervals. Orange points indicate iterations where a new optimal value was found and vertical lines indicate where the algorithm restarted from the previous best candidate."
 #| warning: false
 
-sa_ci %>% 
-  ggplot(aes(.iter)) + 
-  geom_vline(xintercept = sa_best, col = "green", lty = 2) +
-  geom_point(data = sa_ci, aes(y = .estimate)) +
+mlp_sfd_sa_ci %>% 
+  ggplot(aes(.iter, col = is_best)) + 
+    geom_vline(xintercept = restarts, col = "darkred", lty = 3) +
+  geom_point(aes(y = .estimate), show.legend = FALSE, cex = 1 / 2) +
   geom_errorbar(
-    data = sa_ci_plot,
-    aes(ymin = .lower, ymax = .upper), width = 1/2
+    aes(ymin = .lower, ymax = .upper), 
+    width = 1/2, 
+    show.legend = FALSE
   ) +
   labs(x = "Iteration", y = "RMSE") +
-  ylim(rmse_rng)
+  ylim(rmse_rng) +
+  scale_color_manual(values = c("black", "#FF7F00"))
+```
+
+Simulated annealing took `r prettyunits::pretty_sec(mlp_sa_time[3] / iters)` per candidate. 
+
+
+```{r}
+#| label: fig-svm-sa-parameters
+#| echo: false
+#| fig-width: 6
+#| fig-height: 5
+#| out-width: 80%
+#| fig-cap: "Plots for the progress of SA for each tuning parameter."
+#| warning: false
+
+mlp_sfd_sa_ci %>% 
+  mutate(
+    `penalty (log-10)` = log10(penalty),
+    `learning rate (log-10)` = log10(learn_rate),
+  ) %>% 
+  select(-.metric, -.estimator, -.estimate, -.lower, -learn_rate,
+         -.upper, -.config, -is_best, -method, -penalty) %>% 
+  pivot_longer(
+    cols = c(hidden_units, `penalty (log-10)`, `learning rate (log-10)`, 
+             stop_iter, mixture, differentiation_order, degree, window_side),
+    names_to = "Parameter", 
+    values_to = "Value"
+  ) %>% 
+  ggplot(aes(.iter, Value, col = activation, pch = rate_schedule)) + 
+  geom_point() + 
+  facet_wrap(~ Parameter, scales = "free_y") +
+  theme(legend.position = "top")
 ```
 
 ## Chapter References {.unnumbered}
