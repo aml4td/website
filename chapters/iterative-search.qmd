@@ -68,7 +68,7 @@ where $a$ is called the scaling factor, $b$ is a constant offset value, and $p$ 
 
 The kernel function operates much like a polynomial basis expansion; it projects a data point into a much larger, nonlinear space. The idea is that a more complex representation of the predictors might enable the model to make better predictions. 
 
-For our toy example, we'll take the `r nrow(barley_train) - 1` predictors, project them to a smaller space of 10 principal components, then standardize those features to have the same mean and standard deviation. A quartic polynomial is used with zero offset. The scale parameter will be tuned. It helps define how much influence the dot product has in the polynomial expansion. 
+For our toy example, we'll take the `r ncol(barley_train) - 1` predictors, project them to a smaller space of 10 principal components, then standardize those features to have the same mean and standard deviation. A quartic polynomial is used with zero offset. The scale parameter will be tuned. It helps define how much influence the dot product has in the polynomial expansion. 
 
 The most commonly tuned SVM parameter is independent of the different kernel functions: the _cost value_. This dictates how much a poorly predicted model should penalize the performance metric (when evaluated on the training set). Higher cost values will encourage the SVM to become increasingly more complex. We've previously seen the effect of modulating the cost value in @fig-two-class-overfit. For small costs, the SVM classification model did not try too hard to classify samples correctly. When increased to an extreme, it significantly overfit the training set points.
 
@@ -124,15 +124,6 @@ regular_mtr %>%
   mutate(RMSE = cut(mean, breaks = seq(5, 31, length = num_cuts))) %>% 
   ggplot(aes(scale_factor, cost)) +
   geom_tile(aes(fill = RMSE)) +
-  scale_x_log10(limits = x_rng,
-                labels = log10_labs,
-                expand = expansion(add = c(-1 / 5, -1 / 5))) +
-  scale_y_continuous(limits = y_rng, trans = "log2", labels = log2_labs,
-                     expand = expansion(add = c(-1/2, -1/2))) +
-  theme_bw() +
-  labs(x = "Scaling Factor", y = "Cost") +
-  coord_fixed(ratio = 1/2) +
-  scale_fill_manual(values = rd_or) +
   geom_point(data = regular_mtr %>% slice_min(mean), col = "yellow", cex = 2) + 
   geom_line(
     data = regular_mtr %>% slice_min(mean, n = 18),
@@ -143,6 +134,15 @@ regular_mtr %>%
     formula = y ~ x,
     alpha = 1
   ) +
+  scale_x_log10(limits = x_rng,
+                labels = log10_labs,
+                expand = expansion(add = c(-1 / 5, -1 / 5))) +
+  scale_y_continuous(limits = y_rng, trans = "log2", labels = log2_labs,
+                     expand = expansion(add = c(-1/2, -1/2))) +
+  scale_fill_manual(values = rd_or) +  
+  labs(x = "Scaling Factor", y = "Cost") +
+  coord_fixed(ratio = 1/2) +
+  theme_bw() +
   theme(legend.position = "none")
 ```
 
@@ -173,26 +173,9 @@ library(dplyr)
 library(purrr)
 library(scales)
 
-light_bg <- "#fcfefe" # from aml4td.scss
-grid_theme <- bs_theme(
-  bg = light_bg, fg = "#595959"
-)
+source("https://raw.githubusercontent.com/aml4td/website/main/R/shiny-setup.R")
 
-theme_light_bl<- function(...) {
-  
-  ret <- ggplot2::theme_bw(...)
-  
-  col_rect <- ggplot2::element_rect(fill = light_bg, colour = light_bg)
-  ret$panel.background  <- col_rect
-  ret$plot.background   <- col_rect
-  ret$legend.background <- col_rect
-  ret$legend.key        <- col_rect
-  
-  ret$legend.position <- "top"
-  
-  ret
-}
-
+# TODO add these apps to their own R files on GH
 ui <- page_fillable(
   theme = bs_theme(bg = "#fcfefe", fg = "#595959"),
   sliderInput(
@@ -246,7 +229,7 @@ server <- function(input, output) {
     regular_mtr %>%
     mutate(RMSE = cut(mean, breaks = seq(5, 31, length = num_cuts))) %>% 
     ggplot(aes(scale_factor, cost, col = RMSE)) +
-    geom_point(data = sa_init, cex = 5, pch = 1, col = "black") +
+    geom_point(data = sa_init, cex = 3, pch = 1, col = "black") +
     geom_line(
       data = regular_mtr %>% slice_min(mean, n = 18),
       stat = "smooth",
@@ -257,12 +240,14 @@ server <- function(input, output) {
       alpha = 1 / 8,
       linewidth = 2
     ) + 
-    scale_x_log10(limits = x_rng, , labels = log10_labs) +
-    scale_y_continuous(limits = y_rng, trans = "log2", labels = log2_labs) +
-    theme_bw() +
-    labs(x = "Scaling Factor", y = "Cost") +
-    coord_fixed(ratio = 1/2) +
+    scale_x_log10(limits = x_rng,
+                  labels = log10_labs,
+                  expand = expansion(add = c(-1 / 5, -1 / 5))) +
+    scale_y_continuous(limits = y_rng, trans = "log2", labels = log2_labs,
+                       expand = expansion(add = c(-1/2, -1/2))) +
     scale_color_manual(values = rd_or, drop = FALSE) +
+    coord_fixed(ratio = 1/2) +
+    theme_bw() +
     theme(legend.position = "none")
   
   # ------------------------------------------------------------------------------
@@ -270,7 +255,6 @@ server <- function(input, output) {
   output$path <-
     renderPlot({
       
-      # TODO pre-compute these
       current_path <- 
         paths[[input$iter]] %>% 
         mutate(mean = RMSE,
@@ -291,12 +275,11 @@ server <- function(input, output) {
         geom_point(
           data = current_path %>% filter(.iter > 0),
           aes(scale_factor, cost, col = RMSE),
-          cex = 3
+          cex = 2
         ) +
         geom_point(data = last_best, cex = 4, col = "black", pch = 8) +
-        labs(title = lab)
+        labs(x = "Scaling Factor", y = "Cost", title = lab) 
         
-      
       print(current_plot)
       
     }, res = 100)
@@ -318,7 +301,6 @@ app <- shinyApp(ui, server)
 An example of how simulated annealing can investigate the tuning parameter space. The open circles represent a small initial grid. The thick diagonal grey light is a ridge where the model has the smallest RMSE. The asterisk denotes the current best candidate.
 
 :::
-
 
 :::
 
@@ -354,25 +336,7 @@ library(dplyr)
 library(purrr)
 library(scales)
 
-light_bg <- "#fcfefe" # from aml4td.scss
-grid_theme <- bs_theme(
-  bg = light_bg, fg = "#595959"
-)
-
-theme_light_bl<- function(...) {
-  
-  ret <- ggplot2::theme_bw(...)
-  
-  col_rect <- ggplot2::element_rect(fill = light_bg, colour = light_bg)
-  ret$panel.background  <- col_rect
-  ret$plot.background   <- col_rect
-  ret$legend.background <- col_rect
-  ret$legend.key        <- col_rect
-  
-  ret$legend.position <- "top"
-  
-  ret
-}
+source("https://raw.githubusercontent.com/aml4td/website/main/R/shiny-setup.R")
 
 ui <- page_fillable(
   theme = bs_theme(bg = "#fcfefe", fg = "#595959"),
@@ -424,8 +388,6 @@ server <- function(input, output) {
       p <- 
         ga_history %>%
         ggplot(aes(scale_factor, cost)) +
-        geom_point(data = current_gen, aes(col = RMSE), alpha = 3/4, cex = 2, 
-                   show.legend = FALSE) +
         geom_line(
           data = regular_mtr %>% slice_min(mean, n = 18),
           stat = "smooth",
@@ -435,7 +397,10 @@ server <- function(input, output) {
           formula = y ~ x,
           alpha = 1 / 8,
           linewidth = 2
-        )  +
+        ) +
+        geom_point(data = current_gen, aes(col = RMSE), alpha = 2/4, cex = 2, 
+                   show.legend = FALSE) +
+        geom_point(data = last_best, cex = 4, col = "black", pch = 8) +
         labs(x = "Scaling Factor", y = "Cost") +
         scale_x_log10(limits = x_rng,
                       labels = log10_labs,
@@ -460,7 +425,6 @@ app <- shinyApp(ui, server)
 Several generations of a genetic algorithm that search tuning parameter space. The thick diagonal grey light is a ridge where the model has the smallest RMSE. The asterisk denotes the current best candidate.
 
 :::
-
 
 :::
 
@@ -497,25 +461,7 @@ library(dplyr)
 library(purrr)
 library(scales)
 
-light_bg <- "#fcfefe" # from aml4td.scss
-grid_theme <- bs_theme(
-  bg = light_bg, fg = "#595959"
-)
-
-theme_light_bl<- function(...) {
-  
-  ret <- ggplot2::theme_bw(...)
-  
-  col_rect <- ggplot2::element_rect(fill = light_bg, colour = light_bg)
-  ret$panel.background  <- col_rect
-  ret$plot.background   <- col_rect
-  ret$legend.background <- col_rect
-  ret$legend.key        <- col_rect
-  
-  ret$legend.position <- "top"
-  
-  ret
-}
+source("https://raw.githubusercontent.com/aml4td/website/main/R/shiny-setup.R")
 
 ui <- page_fillable(
   theme = bs_theme(bg = "#fcfefe", fg = "#595959"),
@@ -562,7 +508,7 @@ server <- function(input, output) {
   initial_plot <- 
     regular_mtr %>%
     ggplot(aes(scale_factor, cost)) +
-    geom_point(data = init_grid, cex = 5, pch = 1) +
+    geom_point(data = init_grid, cex = 3, pch = 1) +
     scale_x_log10(limits = x_rng,
                   labels = log10_labs,
                   expand = expansion(add = c(-1 / 5, -1 / 5))) +
@@ -611,8 +557,6 @@ server <- function(input, output) {
       hist_alpha <- 2 * hist_alpha
       
       col_dir <- if_else(input$objective == ".mean", -1, 1)
-      # col_tr <- if_else(input$objective == ".mean", "log", "identity")
-      # col_dir <- -1
       col_tr <- "identity"
 
       current_plot <- 
@@ -650,7 +594,6 @@ An illustration of Bayesian optimization. The open circles represent a small ini
 
 :::
 
-
 :::
 
 ::: {.column width="15%"}
@@ -659,7 +602,7 @@ An illustration of Bayesian optimization. The open circles represent a small ini
 :::: 
 
 
-## Tuning a Neural Network {#sec-bayes-opt-nnet}
+## Example: Tuning a Neural Network {#sec-bayes-opt-nnet}
 
 We’ll return to the data previously seen in @sec-barley where we want to predict the percentage of barley oil in a mixture. Recall that the predictors are extremely correlated with one another. In @sec-embeddings, we considered embedding methods like PCA to preprocess the data. 
 
