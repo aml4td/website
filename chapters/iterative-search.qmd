@@ -150,9 +150,514 @@ The next two sections will discuss how two traditional global search methods, si
 
 ## Simulated Annealing  {#sec-sim-anneal}
 
+:::: {.columns}
+
+::: {.column width="15%"}
+:::
+
+::: {.column width="70%"}
+
+::: {#fig-sa-example}
+
+::: {.figure-content}
+
+```{shinylive-r}
+#| label: fig-sa-example
+#| viewerHeight: 600
+#| viewerWidth: "100%"
+#| standalone: true
+library(shiny)
+library(bslib)
+library(ggplot2)
+library(dplyr)
+library(purrr)
+library(scales)
+
+light_bg <- "#fcfefe" # from aml4td.scss
+grid_theme <- bs_theme(
+  bg = light_bg, fg = "#595959"
+)
+
+theme_light_bl<- function(...) {
+  
+  ret <- ggplot2::theme_bw(...)
+  
+  col_rect <- ggplot2::element_rect(fill = light_bg, colour = light_bg)
+  ret$panel.background  <- col_rect
+  ret$plot.background   <- col_rect
+  ret$legend.background <- col_rect
+  ret$legend.key        <- col_rect
+  
+  ret$legend.position <- "top"
+  
+  ret
+}
+
+ui <- page_fillable(
+  theme = bs_theme(bg = "#fcfefe", fg = "#595959"),
+  sliderInput(
+    "iter",
+    label = "Iteration",
+    min = 1L,
+    max = 50L,
+    step = 1L,
+    value = 1L,
+    width = "100%"
+  ),
+  as_fill_carrier(plotOutput("path")),
+  renderText("notes")
+)
+
+server <- function(input, output) {
+  
+  load(url("https://raw.githubusercontent.com/aml4td/website/main/RData/two_param_iter_sa.RData"))
+  load(url("https://raw.githubusercontent.com/aml4td/website/main/RData/two_param_iter_large.RData"))
+  
+  num_cuts <- 50
+  rd_or <- colorRampPalette(rev(RColorBrewer::brewer.pal(9, "OrRd")))(num_cuts)
+  
+  # ------------------------------------------------------------------------------
+  
+  x_rng <- 10^extendrange(c(-10, -1/10))
+  y_rng <- 2^extendrange(c(-10, 10))
+  
+  log10_labs <- trans_format("log10", math_format(10^.x, function(x) format(x, digits = 3)))
+  log2_labs <- trans_format("log2", math_format(2^.x, function(x) format(x, digits = 3)))
+
+  # ------------------------------------------------------------------------------
+  
+  sa_history <- 
+    sa_history %>% 
+    mutate(RMSE = cut(mean, breaks = seq(5, 31, length = num_cuts)))
+  
+  # TODO pre-compute these
+  sa_init <- 
+    sa_history %>% 
+    filter(.iter == 0)
+  best_init <- 
+    sa_init %>% 
+    slice_min(mean) %>% 
+    select(.iter, cost, scale_factor, RMSE)
+  poor_init <- 
+    anti_join(sa_init, best_init, by = c(".iter", "cost", "scale_factor")) %>% 
+    select(.iter, cost, scale_factor)
+  
+  initial_plot <- 
+    regular_mtr %>%
+    mutate(RMSE = cut(mean, breaks = seq(5, 31, length = num_cuts))) %>% 
+    ggplot(aes(scale_factor, cost, col = RMSE)) +
+    geom_point(data = sa_init, cex = 5, pch = 1, col = "black") +
+    geom_line(
+      data = regular_mtr %>% slice_min(mean, n = 18),
+      stat = "smooth",
+      col = "black",
+      method = lm,
+      se = FALSE,
+      formula = y ~ x,
+      alpha = 1 / 8,
+      linewidth = 2
+    ) + 
+    scale_x_log10(limits = x_rng, , labels = log10_labs) +
+    scale_y_continuous(limits = y_rng, trans = "log2", labels = log2_labs) +
+    theme_bw() +
+    labs(x = "Scaling Factor", y = "Cost") +
+    coord_fixed(ratio = 1/2) +
+    scale_color_manual(values = rd_or, drop = FALSE) +
+    theme(legend.position = "none")
+  
+  # ------------------------------------------------------------------------------
+  
+  output$path <-
+    renderPlot({
+      
+      # TODO pre-compute these
+      current_path <- 
+        paths[[input$iter]] %>% 
+        mutate(mean = RMSE,
+               RMSE = cut(RMSE, breaks = seq(5, 31, length = num_cuts)))
+      last_best <- 
+        iter_best[[input$iter]] %>% 
+        mutate(RMSE = cut(mean, breaks = seq(5, 31, length = num_cuts)))
+      
+      last_best_iter <-
+        last_best %>% 
+        pluck(".iter")
+
+      lab <- iter_label[[input$iter]]
+      
+      current_plot <- 
+        initial_plot +
+        geom_path(data = current_path, col = "black", alpha = 1 / 5) +
+        geom_point(
+          data = current_path %>% filter(.iter > 0),
+          aes(scale_factor, cost, col = RMSE),
+          cex = 3
+        ) +
+        geom_point(data = last_best, cex = 4, col = "black", pch = 8) +
+        labs(title = lab)
+        
+      
+      print(current_plot)
+      
+    }, res = 100)
+  
+  output$notes <-
+    renderText({
+      current_path <- 
+        resolve_sa_path(sa_history, input$iter) %>% 
+        anti_join(poor_init, by = c(".iter", "cost", "scale_factor"))
+      describe_result(current_path)
+    })
+}
+
+app <- shinyApp(ui, server)
+```
+
+:::
+
+An example of how simulated annealing can investigate the tuning parameter space. The open circles represent a small initial grid. The thick diagonal grey light is a ridge where the model has the smallest RMSE. The asterisk denotes the current best candidate.
+
+:::
+
+
+:::
+
+::: {.column width="15%"}
+:::
+
+:::: 
+
+
 ## Genetic Algorithms  {#sec-genetic-algo}
 
+
+:::: {.columns}
+
+::: {.column width="15%"}
+:::
+
+::: {.column width="70%"}
+
+::: {#fig-ga-example}
+
+::: {.figure-content}
+
+```{shinylive-r}
+#| label: fig-ga-example
+#| viewerHeight: 600
+#| viewerWidth: "100%"
+#| standalone: true
+library(shiny)
+library(bslib)
+library(ggplot2)
+library(dplyr)
+library(purrr)
+library(scales)
+
+light_bg <- "#fcfefe" # from aml4td.scss
+grid_theme <- bs_theme(
+  bg = light_bg, fg = "#595959"
+)
+
+theme_light_bl<- function(...) {
+  
+  ret <- ggplot2::theme_bw(...)
+  
+  col_rect <- ggplot2::element_rect(fill = light_bg, colour = light_bg)
+  ret$panel.background  <- col_rect
+  ret$plot.background   <- col_rect
+  ret$legend.background <- col_rect
+  ret$legend.key        <- col_rect
+  
+  ret$legend.position <- "top"
+  
+  ret
+}
+
+ui <- page_fillable(
+  theme = bs_theme(bg = "#fcfefe", fg = "#595959"),
+  sliderInput(
+    "gen",
+    label = "Generation",
+    min = 1L,
+    max = 10L,
+    step = 1L,
+    value = 1L,
+    width = "100%"
+  ),
+  as_fill_carrier(plotOutput("generations"))
+)
+
+server <- function(input, output) {
+  
+  num_cuts <- 50
+  rd_or <- colorRampPalette(rev(RColorBrewer::brewer.pal(9, "OrRd")))(num_cuts)
+  
+  load(url("https://raw.githubusercontent.com/aml4td/website/main/RData/two_param_iter_ga.RData"))
+  load(url("https://raw.githubusercontent.com/aml4td/website/main/RData/two_param_iter_large.RData"))
+
+  ga_history$mean <- ga_history$fitness
+  ga_history <- 
+    ga_history %>% 
+    mutate(RMSE = cut(mean, breaks = seq(5, 31, length = num_cuts)))
+
+  # ------------------------------------------------------------------------------
+  
+  x_rng <- 10^extendrange(c(-10, -1/10))
+  y_rng <- 2^extendrange(c(-10, 10))
+  
+  log10_labs <- trans_format("log10", math_format(10^.x, function(x) format(x, digits = 3)))
+  log2_labs <- trans_format("log2", math_format(2^.x, function(x) format(x, digits = 3)))
+  
+  # ------------------------------------------------------------------------------
+  
+  output$generations <-
+    renderPlot({
+      
+      last_best <- 
+        ga_history %>%
+        filter(generation <= input$gen) %>% 
+        slice_min(mean)
+      
+      current_gen <- ga_history %>% filter(generation == input$gen) 
+      
+      p <- 
+        ga_history %>%
+        ggplot(aes(scale_factor, cost)) +
+        geom_point(data = current_gen, aes(col = RMSE), alpha = 3/4, cex = 2, 
+                   show.legend = FALSE) +
+        geom_line(
+          data = regular_mtr %>% slice_min(mean, n = 18),
+          stat = "smooth",
+          col = "black",
+          method = lm,
+          se = FALSE,
+          formula = y ~ x,
+          alpha = 1 / 8,
+          linewidth = 2
+        )  +
+        labs(x = "Scaling Factor", y = "Cost") +
+        scale_x_log10(limits = x_rng,
+                      labels = log10_labs,
+                      expand = expansion(add = c(-1 / 5, -1 / 5))) +
+        scale_y_continuous(limits = y_rng, trans = "log2", labels = log2_labs,
+                           expand = expansion(add = c(-1/2, -1/2))) +
+        scale_color_manual(values = rd_or, drop = FALSE) +
+        coord_fixed(ratio = 1/2) +
+        theme_bw() +
+        theme(legend.location = "none")
+      
+      print(p)
+      
+    }, res = 100)
+}
+
+app <- shinyApp(ui, server)
+```
+
+:::
+
+Several generations of a genetic algorithm that search tuning parameter space. The thick diagonal grey light is a ridge where the model has the smallest RMSE. The asterisk denotes the current best candidate.
+
+:::
+
+
+:::
+
+::: {.column width="15%"}
+:::
+
+:::: 
+
+
+
+
 ## Bayesian Optimization {#sec-bayes-opt}
+
+:::: {.columns}
+
+::: {.column width="15%"}
+:::
+
+::: {.column width="70%"}
+
+::: {#fig-bo-example}
+
+::: {.figure-content}
+
+```{shinylive-r}
+#| label: fig-bo-example
+#| viewerHeight: 630
+#| viewerWidth: "100%"
+#| standalone: true
+library(shiny)
+library(bslib)
+library(ggplot2)
+library(dplyr)
+library(purrr)
+library(scales)
+
+light_bg <- "#fcfefe" # from aml4td.scss
+grid_theme <- bs_theme(
+  bg = light_bg, fg = "#595959"
+)
+
+theme_light_bl<- function(...) {
+  
+  ret <- ggplot2::theme_bw(...)
+  
+  col_rect <- ggplot2::element_rect(fill = light_bg, colour = light_bg)
+  ret$panel.background  <- col_rect
+  ret$plot.background   <- col_rect
+  ret$legend.background <- col_rect
+  ret$legend.key        <- col_rect
+  
+  ret$legend.position <- "top"
+  
+  ret
+}
+
+ui <- page_fillable(
+  theme = bs_theme(bg = "#fcfefe", fg = "#595959"),
+  sliderInput(
+    "iter",
+    label = "Iteration",
+    min = 1L,
+    max = 50L,
+    step = 1L,
+    value = 1L,
+    width = "100%"
+  ),
+  radioButtons(
+    inputId = "objective",
+    label = "Objective Function",
+    inline = TRUE,
+    choices = list("Exp. Improivement" = "objective", "Mean" = ".mean", 
+                   "Std. Dev" = ".sd")
+  ),
+  as_fill_carrier(plotOutput("path"))
+)
+
+server <- function(input, output) {
+  
+  load(url("https://raw.githubusercontent.com/aml4td/website/main/RData/two_param_iter_bo.RData"))
+  load(url("https://raw.githubusercontent.com/aml4td/website/main/RData/two_param_iter_large.RData"))
+  
+  # ------------------------------------------------------------------------------
+  
+  x_rng <- 10^extendrange(c(-10, -1/10))
+  y_rng <- 2^extendrange(c(-10, 10))
+  
+  log10_labs <- trans_format("log10", math_format(10^.x, function(x) format(x, digits = 3)))
+  log2_labs <- trans_format("log2", math_format(2^.x, function(x) format(x, digits = 3)))
+  
+  # ------------------------------------------------------------------------------
+  
+  best_init <- 
+    bo_mtr %>% 
+    filter(.iter == 0) %>% 
+    slice_min(mean) %>% 
+    select(cost, scale_factor, .iter)
+  
+  initial_plot <- 
+    regular_mtr %>%
+    ggplot(aes(scale_factor, cost)) +
+    geom_point(data = init_grid, cex = 5, pch = 1) +
+    scale_x_log10(limits = x_rng,
+                  labels = log10_labs,
+                  expand = expansion(add = c(-1 / 5, -1 / 5))) +
+    scale_y_continuous(limits = y_rng, trans = "log2", labels = log2_labs,
+                       expand = expansion(add = c(-1/2, -1/2))) +
+    theme_bw() +
+    labs(x = "Scaling Factor", y = "Cost") +
+    coord_fixed(ratio = 1/2)
+  
+  bo_tile <- tidyr::pivot_longer(
+    bo_tile,
+    cols = c(.mean, .sd, objective),
+    names_to = "metric",
+    values_to = "value"
+  )
+  
+  # ------------------------------------------------------------------------------
+  
+  output$path <-
+    renderPlot({
+      
+      tile <- bo_tile %>% filter(.iter == input$iter & metric == input$objective)
+      last_best <- bo_mtr %>% filter(.iter < input$iter) %>% slice_min(mean)
+      path <- 
+        bo_mtr %>% 
+        filter(.iter <= input$iter & .iter > 0) %>% 
+        select(cost, scale_factor, .iter) %>% 
+        bind_rows(best_init) %>% 
+        arrange(.iter)
+
+      # TODO convert to discrete colors via cut
+      rc_pal <- switch(
+        input$objective,
+        "objective" = "Greens",
+        ".mean" = "OrRd",
+        ".sd" = "Blues"
+      )
+      
+      hist_alpha <- 
+        case_when(
+          input$iter < 5 ~ 1/2, 
+          input$iter >= 5 & input$iter < 10 ~ 1/3,  
+          input$iter >= 10 & input$iter < 20 ~ 1/4, 
+          input$iter >= 20 & input$iter < 30 ~ 1/5, 
+          TRUE ~ 1 / 10)
+      hist_alpha <- 2 * hist_alpha
+      
+      col_dir <- if_else(input$objective == ".mean", -1, 1)
+      # col_tr <- if_else(input$objective == ".mean", "log", "identity")
+      # col_dir <- -1
+      col_tr <- "identity"
+
+      current_plot <- 
+        initial_plot + 
+        geom_tile(data = tile, aes(fill = value), alpha = 1 / 2) +
+        geom_line(
+          data = regular_mtr %>% slice_min(mean, n = 18),
+          stat = "smooth",
+          col = "black",
+          method = lm,
+          se = FALSE,
+          formula = y ~ x,
+          alpha = 1 / 8,
+          linewidth = 2
+        ) +
+        geom_path(data = path, col = "black", alpha = hist_alpha, lty = 3) +
+        geom_point(data = new_bo_points %>% filter(iter == input$iter), 
+                   col = "black", pch = 16, cex = 4) +
+        geom_point(data = last_best, cex = 4, col = "black", pch = 8) + 
+        scale_fill_distiller(palette = rc_pal, type = "seq", 
+                             direction = col_dir, transform = col_tr) +
+        theme(legend.title = element_blank(), legend.text = element_blank())
+      print(current_plot)
+      
+    }, res = 100)
+
+}
+
+app <- shinyApp(ui, server)
+```
+
+:::
+
+An illustration of Bayesian optimization. The open circles represent a small initial grid. The thick diagonal grey light is a ridge where the model has the smallest RMSE. The asterisk denotes the current best candidate.
+
+:::
+
+
+:::
+
+::: {.column width="15%"}
+:::
+
+:::: 
+
 
 ## Tuning a Neural Network {#sec-bayes-opt-nnet}
 
