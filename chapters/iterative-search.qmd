@@ -42,7 +42,8 @@ Support vector machines are models with fewer parameters than neural networks bu
 
 These two models, in particular, are more likely to benefit from an optimization method that chooses candidates as the process evolves. 
 
-In theory, many iterative optimization procedures can be used. Multiple centuries have focused on nonlinear optimization methods, principally gradient descent. However, a gradient-based approach is a poor choice for this scenario. They typically require many function evaluations and a relatively smooth objective function (in the tuning parameter space) to converge. Here, a "function evaluation" means estimating performance for a given candidate. For expensive models, possibly resampled, the time to obtain enough results to compute gradients and their search path is infeasible.  
+In theory, any iterative optimization procedures can be used. In general, gradients, such as steepest descent or Newton’s method, are the most commonly used technique for nonlinear optimization. These tools are suboptimal when it comes to parameter tuning but play important parts in other areas of machine learning and will be discussed later. For that reason, let’s take a segue and discuss them. 
+
 
 Derivative-free techniques can be helpful here, and there are many for nonlinear optimizations. Traditional examples are genetic algorithms, simulated annealing, particle swarm optimization, etc. We’ll consider the first two of these in Sections [-@sec-sim-anneal] and [-@sec-genetic-algo]. Currently, the most well-known iterative tool for optimizing models is Bayesian optimization. This will be examined in @sec-bayes-opt. 
 
@@ -56,7 +57,7 @@ source("../R/setup_chemometrics.R")
 
 We’ll return to the data previously seen in @sec-barley where we want to predict the percentage of barley oil in a mixture. Recall that the predictors are extremely correlated with one another. In @sec-embeddings, we considered embedding methods like PCA to preprocess the data and these models were able to achieve RMSE values of about 6% (shown in @fig-barley-linear-bakeoff). 
 
-In this chapter, we’ll predict these data in two different scenarios. First, we’ll use them as a “toy problem” where only two support vector machine tuning parameters are optimized. This is a little unrealistic, but it allows us to observe how iterative search methods work in a 2D space. Second, in @sec-bayes-opt-nnet, we’ll get serious and optimize a larger group of parameters for neural networks simultaneously with three parameters of a specialized signal processing technique. 
+In this chapter, we’ll predict these data in two different scenarios. First, we’ll use them as a “toy problem" where only two support vector machine tuning parameters are optimized. This is a little unrealistic, but it allows us to observe how iterative search methods work in a 2D space. Second, in @sec-bayes-opt-nnet, we’ll get serious and optimize a larger group of parameters for neural networks simultaneously with three parameters of a specialized signal processing technique. 
 
 Let's start with the toy example that uses an SVM regression model. This highly flexible nonlinear model can represent the predictor data in higher dimensions using a _kernel transformation_. This function combines numeric predictor vectors from two data points using a dot product. There are many different types of kernel functions, but for a _polynomial_ kernel, it is: 
 
@@ -72,7 +73,7 @@ For our toy example, we'll take the `r ncol(barley_train) - 1` predictors, proje
 
 The most commonly tuned SVM parameter is independent of the different kernel functions: the _cost value_. This dictates how much a poorly predicted model should penalize the performance metric (when evaluated on the training set). Higher cost values will encourage the SVM to become increasingly more complex. We've previously seen the effect of modulating the cost value in @fig-two-class-overfit. For small costs, the SVM classification model did not try too hard to classify samples correctly. When increased to an extreme, it significantly overfit the training set points.
 
-As before, the RMSE will be used with the validation set for external validation of models. Let's define a wide  space for our two tuning parameters: cost will vary from 2<sup>-10</sup> to 2<sup>10</sup> and the scale factor^[Why are the two parameters based on different bases? It’s mostly a convention. Both parameters have valid values that can range across many orders of magnitude. The change in cost tends to occur more slowly than the scaling factor, so a smaller base of 2 is often used.] is allowed to range from 10<sup>-10</sup> to 10<sup>-0.1</sup>. @fig-svm-grid visualizes the RMSE across these ranges. The lower left diagonal area is a virtual "dead zone" with very large RMSE values that don't appear to change much. There is also a diagonal wedge of good performance. The figure shows the location of the smallest RMSE value and a diagonal ridge of values with nearly equal results. Any points on this line would produce good models (at least for this toy example). Note that there is a small locale of excessively large RMSE values in the upper right. Going too far in this direction is a bad idea.  
+As before, the RMSE will be used with the validation set for external validation of models. Let's define a wide  space for our two tuning parameters: cost will vary from 2<sup>-10</sup> to 2<sup>10</sup> and the scale factor^[Why are the two parameters based on different bases? It’s mostly a convention. Both parameters have valid values that can range across many orders of magnitude. The change in cost tends to occur more slowly than the scaling factor, so a smaller base of 2 is often used.] is allowed to range from 10<sup>-10</sup> to 10<sup>-0.1</sup>. @fig-svm-grid visualizes the RMSE across these ranges^[These are not simulated data, so this surface is an approximation of the true RMSE via the validation set using a very large regular grid. The RMSE results are estimates and would change if we used different random numbers for data splitting.]. The lower left diagonal area is a virtual "dead zone" with very large RMSE values that don't appear to change much. There is also a diagonal wedge of good performance. The figure shows the location of the smallest RMSE value and a diagonal ridge of values with nearly equal results. Any points on this line would produce good models (at least for this toy example). Note that there is a small locale of excessively large RMSE values in the upper right. Going too far in this direction is a bad idea.  
 
 ```{r}
 #| label: svm-spec
@@ -148,7 +149,136 @@ regular_mtr %>%
 
 The next two sections will discuss how two traditional global search methods, simulated annealing and genetic algorithms, can be used to search the parameter space. After this, the focus is on Bayesian optimization. 
 
+
+## Sidebar: Gradient-Based Optimization
+
+To formalize the idea of optimization, we have some objective functions that we are trying to optimize. This can also be called a loss function (specifically to be minimized). In either case, this value is signified by $f()$. The parameters that modify $f()$ are denoted as $\theta$, which is $p \times 1$ in dimension and is assumed to be real numbers. We'll also assume that $f()$ is smooth and generally differentiable and, without losing generality, assume that smaller values are better. 
+
+For derivatives, we’ll denote the first derivative ($f'(\theta)$), for simplicity, as $g(\theta)$.
+
+If we start as some point $\theta_0$, we compute the gradient at that point and use it as a $p$ dimensional directional vector. To get to our next parameter value, basic gradient descent uses the update 
+
+$$
+\theta_{i+1} = \theta_i - \alpha\:g(\theta_i)
+$$
+
+The value $\alpha$ defines how far we should travel in our new direction. This can be a constant value or a secondary procedure could be used called a line search that increases the value of $\alpha$ until the objective function worsens^[We’ve seen $\alpha$ before when it was called the learning rate (and will revisit it later in this chapter).].
+
+We proceed to iterate this process until some measure of convergence is achieved. For example, the optimization could be halted if the objective function does not improve more than a very small value. 
+
+This gradient descent algorithm is extremely basic. There are far more complex versions, the most well-known of which is the Newton-Raphson method (a.k.a. Newton’s Method) that incorporates second derivatives in the updating formula. 
+
+We often know when gradient-based optimization will work well. If we know the equation for the objective function, we can determine its properties, such as whether it is a convex function, and theory can tell us if a global optimum can be found with these tools. For example, squared error loss $f(\theta) = (y-\hat{y})^2$, is convex when  the relationship for the predicted value $\hat{y}$ is a well-behaved function of estimates $\hat{\theta}$ (such as in linear regression). 
+
+What's not to like? There are additional considerations when it comes to optimizations for predictive models. First, since data are not deterministic, the loss function is not only a random variable but can be excessively noisy. This noise can have a detrimental effect on how well the optimization proceeds. 
+
+Second, our objective function is usually a performance metric (such as RMSE) and not all metrics are mathematically well-behaved (or smooth or convex). In the case of deep neural networks, the model equations can lead to a non-convex optimization even when the objective function itself is simple (e.g., squared error loss).  In this case, we must worry that our optimized parameters correspond to a local optimum, not a global one. This can occur because traditional gradient methods are _greedy_; they proceed in a direction that is always optimal for the current estimates of $\theta$. This makes a lot of sense and is mostly effective. However, with complex or non-standard objective functions, the optimization can get stuck in a local optimum.
+
+There are additional complications related to model tuning. In this case, the $\theta$ values are the tuning parameters. These might not be real numbers. For example, the number of spline terms is a whole number, and the updating equation might yield a fractional value for the number of terms. Still other parameters are qualitative in nature, such as the type of activation function in a neural network. 
+
+During model tuning, we know not to repredict the training set (due to overfitting). Procedures such as resampling make the evaluation of $f()$ computationally expensive since multiple models should be trained. Unless we use symbolic gradient equations, the numerical process of approximating the gradient vector $g(\theta)$ can require a large number of function evaluations. 
+
+Later, we’ll discuss stochastic gradient descent. This variation is often used to train very complex networks when there is a large amount of training data. 
+
+Until then, the next three chapters will describe different stochastic optimization methods that are well-suited for parameter tuning since they can sidestep some of the issues described above. 
+
 ## Simulated Annealing  {#sec-sim-anneal}
+
+```{r}
+#| label: sa-example-calcs
+#| echo: false
+load(url("https://raw.githubusercontent.com/aml4td/website/main/RData/two_param_iter_sa.RData"))
+
+sa_history <- 
+  sa_history %>% 
+  mutate(
+    log_cost = signif(log2(cost), digits = 3),
+    log_scale = signif(log10(scale_factor), digits = 3),
+    RMSE = sprintf("%3.2f", mean)
+  )
+
+best_iters <- which(sa_history$results == "new best")
+restart_iters <- which(sa_history$results == "restart from best")
+  
+best_initial <- 
+  sa_history %>% 
+  filter(.iter == 0) %>% 
+  slice_min(mean)
+
+best_overall <- 
+  sa_history %>% 
+  slice_min(mean)
+
+iter_1 <- 
+  sa_history %>% 
+  filter(.iter == 1) 
+
+sa_0 <- cli::format_inline("({best_initial$log_cost}, {best_initial$log_scale})")
+sa_1 <- cli::format_inline("({iter_1$log_cost}, {iter_1$log_scale})")
+```
+
+Non-greedy search methods are not constrained to always go in the absolute best direction. One such method is simulated annealing_ (SA). It is a controlled random search that moves in random directions but with some amount of control over the path. It can also incorporate restarts, where we return to the last known best value and go in a different direction. 
+
+Given a starting value, SA chooses a random permutation of the current solution, often residing within some local neighborhood.  The objective function is evaluated here and compared to the previous value. If it is an improvement, the process continues. If it is not, there are two options: 
+
+ - We can accept the current value as “suboptimal" and base our next permutation on it, or
+ - discard the current solution as if it did not occur. The next candidate point is a permutation of the last “acceptable" point. 
+
+For our SVM example, suppose we start with a candidate where ($log_2 (cost)$, $log_{10} (scale)$) was (-10, -0.1) and had an associated RMSE value of 6.10%. A permutation of this values is created, say (-7.11, -0.225) and its RMSE was measured to be 5.97%. This is smaller and we would repeat the process to create and evaluate a third point.
+
+However, suppose that our new RMSE was 7.00%, meaning that the new candidate did worse than our initial one.  
+
+Using the prior and current estimates of the objective function, simulated annealing uses their difference to compute the probability of accepting a suboptimal candidate. First, the probability depends on the difference. Candidates slightly worse than the current values should have a higher acceptance probability than candidates with very poor results. Second, regardless of the difference in values, the probability should decrease as we continue the optimization. The canonical format of this probability, assuming that smaller values are better, is 
+
+$$
+Pr[accept] = \exp\left[-i\bigl(f(\theta_{i}) - f(\theta_{i-1})\bigr)\right]
+$$
+where $i$ is the iteration number. To compare 6.1% versus 7.0%, the acceptance probability is `r round(exp(-(7-6.10)) * 100, 1)`%. To make the determination, a random uniform number is generated and is used to decide. If this difference were to occur at a later iteration, say $i = 5$, the probability would drop to `r round(exp(-5*(7-6.10)) * 100, 1)`%.
+
+One small matter is related to the scale of the objective function. The difference in the exponent is very sensitive to scale. For example, if we were to use the proportions 0.61 and 0.70, the probability would change from `r round(exp(-(7-6.10)) * 100, 1)`% to `r round(exp(-(.7-.610)) * 100, 1)`%. One way to mitigate this issue is to use a normalized difference by dividing the raw difference by the previous objective function (i.e., (0.70-0.61) / 0.70). This is the approach used in the SA analyses here. 
+
+TODO how do we make candidates
+
+This process is continued until either a pre-defined limit is reached or if there is no improvement by a certain number of iterations. The best result found at any time in the optimization is used as the final value. Also, as previously mentioned, a restart rule can stop simulated annealing from delving too far into suboptimal regions if no best results have occurred within some period of time. 
+
+To illustrate, a very small initial space-filling design with three candidates was generated and evaluated. The results are in @tbl-svm-initial^[These values will be also used as the initial substrate for Bayesian optimization.]. To start the SA search, we will start with the candidate with the smallest RMSE and proceed for 50 iterations without a rule for early stopping. A restart to the last known best results was enforced after eight suboptimal iterations. 
+
+:::: {.columns}
+
+::: {.column width="35%"}
+:::
+
+::: {.column width="30%"}
+
+::: {#tbl-svm-initial}
+
+
+```{r}
+#| label: tbl-svm-initial
+#| echo: false
+sa_history %>% 
+  filter(.iter == 0) %>% 
+  arrange(mean) %>% 
+  select(RMSE, log_cost, log_scale) %>% 
+  kable(
+    digits = 1,
+    col.names  = c("RMSE (%)", "Cost (log-2)", "Scale (log-10)")
+  ) %>% 
+  kable_styling(bootstrap_options = "responsive", full_width = FALSE)
+```
+
+The initial set of candidates used for iterative search with the toy example from @fig-svm-grid. One candidate does poorly while the other two have relatively similar results. 
+
+:::
+
+:::
+
+::: {.column width="35%"}
+:::
+
+:::: 
+ 
+@fig-sa-example contains an animation of the results of the SA search. In the figure, the initial points are represented by open circles, and a grey diagonal line reminds readers that a ridge of values exists that corresponds to the best RMSE results. 
 
 :::: {.columns}
 
@@ -308,6 +438,13 @@ An example of how simulated annealing can investigate the tuning parameter space
 :::
 
 :::: 
+
+During the search, there were `r cli::format_inline("{length(best_iters)} iteration{?s}")` where a new global best result was discovered (iterations `r cli::format_inline("{best_iters}")`). There were also `r cli::format_inline("{length(restart_iters)} restart{?s}")`  restarts at iterations `r cli::format_inline("{restart_iters}")`. In the end, the best results occurred with a cost value of 2<sup>`r best_overall$log_cost`</sup> and a scale factor of 10<sup>`r round(best_overall$log_scale, 2)`</sup>. The corresponding validation set RMSE was `r round(best_overall$mean, 2)`%.
+
+good things about sa: any data type, no extra evaluations, not likely to get stuck locally
+
+bad things: 1 sample at a time, better for fine tuning, limited parallelism
+
 
 
 ## Genetic Algorithms  {#sec-genetic-algo}
@@ -569,7 +706,7 @@ server <- function(input, output) {
           method = lm,
           se = FALSE,
           formula = y ~ x,
-          alpha = 1 / 8,
+          alpha = 1 / 4,
           linewidth = 2
         ) +
         geom_path(data = path, col = "black", alpha = hist_alpha, lty = 3) +
@@ -648,7 +785,7 @@ diff_p <- diff_plot_data %>%
   geom_path(aes(col = window), alpha = 3 / 4) +
   facet_wrap(~ `polynomial degree`, labeller = label_both) +
   lims(y = c(-0.0012, 0.0014), x = c(505, 544)) +
-  labs(y = "1st Difference", x = "Location") +
+  labs(y = "1st Difference", x = "Wavelength (nm)") +
   theme(legend.position = "none")
 
 smoothed_p / diff_p
