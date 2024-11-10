@@ -343,7 +343,7 @@ cli::cli_rule("Genetic algorithm")
 min_vals <- map_dbl(svm_param$object, ~ .x$range[[1]])
 max_vals <- map_dbl(svm_param$object, ~ .x$range[[2]])
 
-pop_size <- 50
+pop_size <- 10
 grid_ga <- grid_space_filling(svm_param, size = pop_size, original = FALSE)
 grid_ga$cost <- log2(grid_ga$cost)
 grid_ga$scale_factor <- log10(grid_ga$scale_factor)
@@ -380,6 +380,8 @@ save(ga_history, ga_time, ga_res, file = glue("{stub}_ga.RData"))
 cli::cli_rule("Reproducability")
 
 sessioninfo::session_info()
+
+# ------------------------------------------------------------------------------
 
 if (!interactive()) {
   q("no")
