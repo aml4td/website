@@ -73,7 +73,7 @@ For our toy example, we'll take the `r ncol(barley_train) - 1` predictors, proje
 
 The most commonly tuned SVM parameter is independent of the different kernel functions: the _cost value_. This dictates how much a poorly predicted model should penalize the performance metric (when evaluated on the training set). Higher cost values will encourage the SVM to become increasingly more complex. We've previously seen the effect of modulating the cost value in @fig-two-class-overfit. For small costs, the SVM classification model did not try too hard to classify samples correctly. When increased to an extreme, it significantly overfit the training set points.
 
-As before, the RMSE will be used with the validation set for external validation of models. Let's define a wide  space for our two tuning parameters: cost will vary from 2<sup>-10</sup> to 2<sup>10</sup> and the scale factor^[Why are the two parameters based on different bases? It’s mostly a convention. Both parameters have valid values that can range across many orders of magnitude. The change in cost tends to occur more slowly than the scaling factor, so a smaller base of 2 is often used.] is allowed to range from 10<sup>-10</sup> to 10<sup>-0.1</sup>. @fig-svm-grid visualizes the RMSE across these ranges^[These are not simulated data, so this surface is an approximation of the true RMSE via the validation set using a very large regular grid. The RMSE results are estimates and would change if we used different random numbers for data splitting.]. The lower left diagonal area is a virtual "dead zone" with very large RMSE values that don't appear to change much. There is also a diagonal wedge of good performance. The figure shows the location of the smallest RMSE value and a diagonal ridge of values with nearly equal results. Any points on this line would produce good models (at least for this toy example). Note that there is a small locale of excessively large RMSE values in the upper right. Going too far in this direction is a bad idea.  
+As before, the RMSE will be used with the validation set for external validation of models. Let's define a wide  space for our two tuning parameters: cost will vary from 2<sup>-10</sup> to 2<sup>10</sup> and the scale factor^[Why do these two parameters use different bases? It’s mostly a convention. Both parameters have valid values that can range across many orders of magnitude. The change in cost tends to occur more slowly than the scaling factor, so a smaller base of 2 is often used.] is allowed to range from 10<sup>-10</sup> to 10<sup>-0.1</sup>. @fig-svm-grid visualizes the RMSE across these ranges^[These are not simulated data, so this surface is an approximation of the true RMSE via the validation set using a very large regular grid. The RMSE results are estimates and would change if we used different random numbers for data splitting.]. The lower left diagonal area is a virtual "dead zone" with very large RMSE values that don't appear to change much. There is also a diagonal wedge of good performance. The figure shows the location of the smallest RMSE value and a diagonal ridge of values with nearly equal results. Any points on this line would produce good models (at least for this toy example). Note that there is a small locale of excessively large RMSE values in the upper right. Going too far in this direction is a bad idea.  
 
 ```{r}
 #| label: svm-spec
@@ -476,6 +476,8 @@ sa_history %>%
     col.names  = c("RMSE (%)", "Cost (log-2)", "Scale (log-10)")
   ) %>% 
   kable_styling(bootstrap_options = "responsive", full_width = FALSE)
+
+load(url("https://raw.githubusercontent.com/aml4td/website/main/RData/two_param_iter_initial.RData"))
 ```
 
 The initial set of candidates used for iterative search with the toy example from @fig-svm-grid. One candidate does poorly while the other two have relatively similar results. 
@@ -656,10 +658,29 @@ good things about sa: any data type, no extra evaluations, not likely to get stu
 
 bad things: 1 sample at a time, better for fine tuning, limited parallelism
 
-
+This optimization took `r prettyunits::pretty_sec((initial_time[3] + sa_time[3]) / nrow(sa_history))` per candidate to execute. 
 
 ## Genetic Algorithms  {#sec-genetic-algo}
 
+
+```{r}
+#| label: ga-descr
+#| echo: false
+
+load(url("https://raw.githubusercontent.com/aml4td/website/main/RData/two_param_iter_ga.RData"))
+
+ga_history <- ga_history %>% filter(generation <= 5)
+  
+best_by_gen <- 
+  ga_history %>% 
+  slice_min(fitness, by = c(generation))
+
+is_same_as_gen_1 <- best_by_gen$fitness == best_by_gen$fitness[1]
+same_as_gen_1 <- sum(is_same_as_gen_1) - 1
+
+other_best <- round(unique(best_by_gen$fitness[!is_same_as_gen_1]), 3)
+other_best <- paste0(other_best, "%")
+```
 
 :::: {.columns}
 
@@ -692,7 +713,7 @@ ui <- page_fillable(
     "gen",
     label = "Generation",
     min = 1L,
-    max = 10L,
+    max = 5L,
     step = 1L,
     value = 1L,
     width = "100%"
@@ -708,6 +729,7 @@ server <- function(input, output) {
   load(url("https://raw.githubusercontent.com/aml4td/website/main/RData/two_param_iter_ga.RData"))
   load(url("https://raw.githubusercontent.com/aml4td/website/main/RData/two_param_iter_large.RData"))
 
+  ga_history <- ga_history %>% filter(generation <= 5)
   ga_history$mean <- ga_history$fitness
   ga_history <- 
     ga_history %>% 
@@ -781,10 +803,21 @@ Several generations of a genetic algorithm that search tuning parameter space. T
 
 :::: 
 
+A space-filling design was used to ensure that the initial population was diverse. Fortuitously, one design point was very close to the ridge, with an RMSE of `r round(best_by_gen$fitness[1], 2)`%. This candidate continued to be the best for `r cli::format_inline("{same_as_gen_1} generation{?s}")`.  After this, there `r cli::format_inline("{?was/were} {length(other_best)} generations with better candidate{?s}")` (with almost identical performance): `r cli::format_inline("{other_best}")`. 
 
+The genetic algorithm can parallelize over the populations in each generation. In parallel, this optimization took `r prettyunits::pretty_sec(ga_time[3] / nrow(ga_history))` per candidate (on average). 
 
 
 ## Bayesian Optimization {#sec-bayes-opt}
+
+
+```{r}
+#| label: bo-example-calcs
+#| echo: false
+load(url("https://raw.githubusercontent.com/aml4td/website/main/RData/two_param_iter_bo.RData"))
+
+
+```
 
 :::: {.columns}
 
@@ -950,6 +983,9 @@ An illustration of Bayesian optimization. The open circles represent a small ini
 :::: 
 
 
+For this optimization, the time to compute each candidate was `r prettyunits::pretty_sec((initial_time[3] + bo_time[3])/nrow(bo_mtr))`.
+
+
 ## Example: Tuning a Neural Network {#sec-bayes-opt-nnet}
 
 We’ll return to the data previously seen in @sec-barley where we want to predict the percentage of barley oil in a mixture. Recall that the predictors are extremely correlated with one another. In @sec-embeddings, we considered embedding methods like PCA to preprocess the data. 
@@ -1069,16 +1105,34 @@ The initial set of candidates used for iterative search methods.
 
 The best results occurred at iteration `r mlp_sfd_bo_best`: 
 
+:::: {.columns}
+
+::: {.column width="10%"}
+
+:::
+
+::: {.column width="40%"}
+ - difference order of `r mlp_sfd_bo_best_ci$differentiation_order`.
+ - smoothing polynomial degree of `r mlp_sfd_bo_best_ci$degree`.
+ - smoothing window size of `r 1 + 2 * mlp_sfd_bo_best_ci$window_side`.
  - `r cli::format_inline("{mlp_sfd_bo_best_ci$hidden_units} hidden unit{?s}")`.
+ - `r mlp_sfd_bo_best_ci$activation` activation
+:::
+
+::: {.column width="40%"}
  - log<sub>10</sub> penalty  of `r signif(log10(mlp_sfd_bo_best_ci$penalty), 3)`. 
+ - regularization that is `r round(mlp_sfd_bo_best_ci$mixture * 100, 1)`% L<sub>1</sub>. 
  - log<sub>10</sub> learning rate of `r signif(log10(mlp_sfd_bo_best_ci$learn_rate), 2)`. 
- - a `r mlp_sfd_bo_best_ci$rate_schedule` learning rate schedule.
- - stopping training after `r cli::format_inline("{mlp_sfd_bo_best_ci$stop_iter} iteration{?s}")`. 
- - regularization than is `r round(mlp_sfd_bo_best_ci$mixture * 100, 1)`% L<sub>1</sub>.
- - a difference order of `r mlp_sfd_bo_best_ci$differentiation_order`.
- - a polynomial degree of `r mlp_sfd_bo_best_ci$degree`.
- - a smoothing window size of `r 1 + 2 * mlp_sfd_bo_best_ci$window_side`.
- 
+ - `r mlp_sfd_bo_best_ci$rate_schedule` learning rate schedule.
+ - stopping training after `r cli::format_inline("{mlp_sfd_bo_best_ci$stop_iter} bad iteration{?s}")`. 
+:::
+
+::: {.column width="10%"}
+
+:::
+
+::::
+
 The corresponding validation set RMSE was `r round(mlp_sfd_bo_best_ci$.estimate, 2)`% with 90% confidence interval of (`r round(mlp_sfd_bo_best_ci$.lower, 2)`%, `r round(mlp_sfd_bo_best_ci$.upper, 2)`%).
 
 The BO took approximately `r prettyunits::pretty_sec(mlp_bo_time[3] / iters)` per candidate. 
@@ -1108,16 +1162,35 @@ mlp_sfd_bo_ci %>%
 
 Simulated annealing arrived at the following candidate set (at iteration `r mlp_sfd_sa_best`): 
 
+:::: {.columns}
+
+::: {.column width="10%"}
+
+:::
+
+::: {.column width="40%"}
+ - difference order of `r mlp_sfd_sa_best_ci$differentiation_order`.
+ - smoothing polynomial degree of `r mlp_sfd_sa_best_ci$degree`.
+ - smoothing window size of `r 1 + 2 * mlp_sfd_sa_best_ci$window_side`.
  - `r cli::format_inline("{mlp_sfd_sa_best_ci$hidden_units} hidden unit{?s}")`.
+ - `r mlp_sfd_sa_best_ci$activation` activation
+
+:::
+
+::: {.column width="40%"}
  - log<sub>10</sub> penalty  of `r signif(log10(mlp_sfd_sa_best_ci$penalty), 3)`. 
+ - regularization that is `r round(mlp_sfd_sa_best_ci$mixture * 100, 1)`% L<sub>1</sub>. 
  - log<sub>10</sub> learning rate of `r signif(log10(mlp_sfd_sa_best_ci$learn_rate), 2)`. 
- - a `r mlp_sfd_sa_best_ci$rate_schedule` learning rate schedule.
- - stopping training after `r cli::format_inline("{mlp_sfd_sa_best_ci$stop_iter} iteration{?s}")`. 
- - regularization than is `r round(mlp_sfd_sa_best_ci$mixture * 100, 1)`% L<sub>1</sub>.
- - a difference order of `r mlp_sfd_sa_best_ci$differentiation_order` 
- - a polynomial degree of `r mlp_sfd_sa_best_ci$degree`.
- - a smoothing window size of `r 1 + 2 * mlp_sfd_sa_best_ci$window_side`.
- 
+ - `r mlp_sfd_sa_best_ci$rate_schedule` learning rate schedule.
+ - stopping training after `r cli::format_inline("{mlp_sfd_sa_best_ci$stop_iter} bad iteration{?s}")`. 
+:::
+
+::: {.column width="10%"}
+
+:::
+
+::::
+
 The corresponding validation set RMSE was `r round(mlp_sfd_sa_best_ci$.estimate, 2)`% with 90% confidence interval of (`r round(mlp_sfd_sa_best_ci$.lower, 2)`%, `r round(mlp_sfd_sa_best_ci$.upper, 2)`%).
 
 
@@ -1145,36 +1218,8 @@ mlp_sfd_sa_ci %>%
   scale_color_manual(values = c("black", "#FF7F00"))
 ```
 
-Simulated annealing took `r prettyunits::pretty_sec(mlp_sa_time[3] / iters)` per candidate. 
+Simulated annealing took `r prettyunits::pretty_sec(mlp_sa_time[3] / iters)` (on average) for each candidate.
 
-
-```{r}
-#| label: fig-svm-sa-parameters
-#| echo: false
-#| fig-width: 6
-#| fig-height: 5
-#| out-width: 80%
-#| fig-cap: "Plots for the progress of SA for each tuning parameter."
-#| warning: false
-
-mlp_sfd_sa_ci %>% 
-  mutate(
-    `penalty (log-10)` = log10(penalty),
-    `learning rate (log-10)` = log10(learn_rate),
-  ) %>% 
-  select(-.metric, -.estimator, -.estimate, -.lower, -learn_rate,
-         -.upper, -.config, -is_best, -method, -penalty) %>% 
-  pivot_longer(
-    cols = c(hidden_units, `penalty (log-10)`, `learning rate (log-10)`, 
-             stop_iter, mixture, differentiation_order, degree, window_side),
-    names_to = "Parameter", 
-    values_to = "Value"
-  ) %>% 
-  ggplot(aes(.iter, Value, col = activation, pch = rate_schedule)) + 
-  geom_point() + 
-  facet_wrap(~ Parameter, scales = "free_y") +
-  theme(legend.position = "top")
-```
 
 ## Chapter References {.unnumbered}
 
