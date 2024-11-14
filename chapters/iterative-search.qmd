@@ -57,7 +57,7 @@ source("../R/setup_chemometrics.R")
 
 We’ll return to the data previously seen in @sec-barley where we want to predict the percentage of barley oil in a mixture. Recall that the predictors are extremely correlated with one another. In @sec-embeddings, we considered embedding methods like PCA to preprocess the data and these models were able to achieve RMSE values of about 6% (shown in @fig-barley-linear-bakeoff). 
 
-In this chapter, we’ll predict these data in two different scenarios. First, we’ll use them as a “toy problem" where only two support vector machine tuning parameters are optimized. This is a little unrealistic, but it allows us to observe how iterative search methods work in a 2D space. Second, in @sec-bayes-opt-nnet, we’ll get serious and optimize a larger group of parameters for neural networks simultaneously with three parameters of a specialized signal processing technique. 
+In this chapter, we’ll predict these data in two different scenarios. First, we’ll use them as a "toy problem" where only two support vector machine tuning parameters are optimized. This is a little unrealistic, but it allows us to observe how iterative search methods work in a 2D space. Second, in @sec-bayes-opt-nnet, we’ll get serious and optimize a larger group of parameters for neural networks simultaneously with three parameters of a specialized signal processing technique. 
 
 Let's start with the toy example that uses an SVM regression model. This highly flexible nonlinear model can represent the predictor data in higher dimensions using a _kernel transformation_. This function combines numeric predictor vectors from two data points using a dot product. There are many different types of kernel functions, but for a _polynomial_ kernel, it is: 
 
@@ -430,10 +430,10 @@ sa_1 <- cli::format_inline("({iter_1$log_cost}, {iter_1$log_scale})")
 
 Non-greedy search methods are not constrained to always go in the absolute best direction. One such method is simulated annealing_ (SA). It is a controlled random search that moves in random directions but with some amount of control over the path. It can also incorporate restarts, where we return to the last known best value and go in a different direction. 
 
-Given a starting value, SA chooses a random permutation of the current solution, often residing within some local neighborhood.  The objective function is evaluated here and compared to the previous value. If it is an improvement, the process continues. If it is not, there are two options: 
+Given a starting value, SA creates a random permutation of the current candidate solution, often residing within some local neighborhood of the current value.  The objective function is evaluated and compared to the previous value. If the new candidate produces an improvement, the process continues. If it is not, there are two options: 
 
- - We can accept the current value as “suboptimal" and base our next permutation on it, or
- - discard the current solution as if it did not occur. The next candidate point is a permutation of the last “acceptable" point. 
+ - We can accept the current value as "suboptimal" and base our next permutation on it, or
+ - discard the current solution as if it did not occur. The next candidate point is a permutation of the last "acceptable" point. 
 
 For our SVM example, suppose we start with a candidate where ($log_2 (cost)$, $log_{10} (scale)$) was (-10, -0.1) and had an associated RMSE value of 6.10%. A permutation of this values is created, say (-7.11, -0.225) and its RMSE was measured to be 5.97%. This is smaller and we would repeat the process to create and evaluate a third point.
 
@@ -444,15 +444,16 @@ Using the prior and current estimates of the objective function, simulated annea
 $$
 Pr[accept] = \exp\left[-i\bigl(f(\theta_{i}) - f(\theta_{i-1})\bigr)\right]
 $$
+
 where $i$ is the iteration number. To compare 6.1% versus 7.0%, the acceptance probability is `r round(exp(-(7-6.10)) * 100, 1)`%. To make the determination, a random uniform number is generated and is used to decide. If this difference were to occur at a later iteration, say $i = 5$, the probability would drop to `r round(exp(-5*(7-6.10)) * 100, 1)`%.
 
 One small matter is related to the scale of the objective function. The difference in the exponent is very sensitive to scale. For example, if we were to use the proportions 0.61 and 0.70, the probability would change from `r round(exp(-(7-6.10)) * 100, 1)`% to `r round(exp(-(.7-.610)) * 100, 1)`%. One way to mitigate this issue is to use a normalized difference by dividing the raw difference by the previous objective function (i.e., (0.70-0.61) / 0.70). This is the approach used in the SA analyses here. 
 
-TODO how do we make candidates
-
 This process is continued until either a pre-defined limit is reached or if there is no improvement by a certain number of iterations. The best result found at any time in the optimization is used as the final value. Also, as previously mentioned, a restart rule can stop simulated annealing from delving too far into suboptimal regions if no best results have occurred within some period of time. 
 
-To illustrate, a very small initial space-filling design with three candidates was generated and evaluated. The results are in @tbl-svm-initial^[These values will be also used as the initial substrate for Bayesian optimization.]. To start the SA search, we will start with the candidate with the smallest RMSE and proceed for 50 iterations without a rule for early stopping. A restart to the last known best results was enforced after eight suboptimal iterations. 
+How should the candidates be perturbed for the next iteration? When the tuning parameters are all numeric, we can create a random direction and angle from the current values. A similar process can be used for integers by "flooring" them to the nearest whole number. For qualitative tuning parameters, a random subset of parameters is chosen to change to a different value chosen at random. The amount of change should be large enough to search the parameters space and potentially get out of a local optimum.
+
+To illustrate, a very small initial space-filling design with three candidates was generated and evaluated. The results are in @tbl-svm-initial. To start the SA search^[These values will be also used as the initial substrate for Bayesian optimization.], we will start with the candidate with the smallest RMSE and proceed for 50 iterations without a rule for early stopping. A restart to the last known best results was enforced after eight suboptimal iterations. 
 
 :::: {.columns}
 
@@ -654,13 +655,20 @@ An example of how simulated annealing can investigate the tuning parameter space
 
 During the search, there were `r cli::format_inline("{length(best_iters)} iteration{?s}")` where a new global best result was discovered (iterations `r cli::format_inline("{best_iters}")`). There were also `r cli::format_inline("{length(restart_iters)} restart{?s}")`  restarts at iterations `r cli::format_inline("{restart_iters}")`. In the end, the best results occurred with a cost value of 2<sup>`r best_overall$log_cost`</sup> and a scale factor of 10<sup>`r round(best_overall$log_scale, 2)`</sup>. The corresponding validation set RMSE was `r round(best_overall$mean, 2)`%.
 
-good things about sa: any data type, no extra evaluations, not likely to get stuck locally
+Simulated annealing has some attractive qualities. First, the process of creating a new candidate works for any type of parameter (e.g., real, integer, or qualitative). This isn’t the case for the two other iterative methods we’ll discuss. Also, the perturbation process is very fast; there is very little computational overhead between acquiring the next objective function value. 
 
-bad things: 1 sample at a time, better for fine tuning, limited parallelism
+There are a few downsides to this method. Compared to the others, SA makes small incremental changes. If we start far away from the optimum, many iterations might be required to reach it.  One way to mitigate this issue is to do a small space-filling design and start from the best point. In fact, applying SA search after a grid search (perhaps using racing) can be a good way to verify that the grid search was effective. 
 
+Another disadvantage is that a single candidate is processed at a time. If the training set size is not excessive, we could parallel process the multiple candidates simultaneously. We could make a batch of perturbations and pick the best value to keep or apply the probabilistic process of accepting a poor value. 
 This optimization took `r prettyunits::pretty_sec((initial_time[3] + sa_time[3]) / nrow(sa_history))` per candidate to execute. 
 
 ## Genetic Algorithms  {#sec-genetic-algo}
+
+Genetic algorithms (GAs) are an optimization method that mimics the process of natural selection. Our application of GAs is non-standard; a standard GA search will use hundreds to millions of objective function evaluations. We will use a small search due to practical considerations. Despite this, genetic algorithms can often find a solution near the optimal value fairly quickly and, as previously stated, there is often a region of acceptable candidates. Finally, they are very unlikely to become stuck in a locally optimal space. 
+
+Instead of search iterations, genetic algorithms are counted via _generations_. A generation is a group of candidate values that are evaluated at the same time (as a batch). Once their corresponding performance metrics are computed, a small set of the best candidates is selected and used to create the next generation via reproduction. Reproduction would entail combining a pair of candidates by switching information (a sort of chromosome), and then random mutations can be applied. Once the next generation is created, the process continues for some pre-defined time limit or maximum number of generations. 
+
+To configure the generations, we generally start by choosing the size. Normally, the minimum generation size is around 50 candidates. This may be infeasible depending on the computational cost of the model and the characteristics of the training set, such as size. We can use fewer points in the generation, but the risk is that we will never sample any acceptable results. In that case, combining the best results only results in more mediocre candidates. Increasing the mutation rate (described below) may help avoid this problem. For the first iteration, random sampling of the space is often used. Unsurprisingly, we strongly recommend that a space-filling design is a better tool to create the initial candidate set. 
 
 
 ```{r}
