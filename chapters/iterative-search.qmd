@@ -408,8 +408,8 @@ sa_history <-
     RMSE = sprintf("%3.2f", mean)
   )
 
-best_iters <- which(sa_history$results == "new best")
-restart_iters <- which(sa_history$results == "restart from best")
+best_iters <- sa_history$.iter[sa_history$results == "new best"]
+restart_iters <- sa_history$.iter[sa_history$results == "restart from best"]
   
 best_initial <- 
   sa_history %>% 
@@ -428,18 +428,23 @@ sa_0 <- cli::format_inline("({best_initial$log_cost}, {best_initial$log_scale})"
 sa_1 <- cli::format_inline("({iter_1$log_cost}, {iter_1$log_scale})")
 ```
 
-Non-greedy search methods are not constrained to always go in the absolute best direction. One such method is simulated annealing_ (SA). It is a controlled random search that moves in random directions but with some amount of control over the path. It can also incorporate restarts, where we return to the last known best value and go in a different direction. 
+Non-greedy search methods are not constrained to always go in the absolute best direction. One such method is _simulated annealing_ (SA). It is a controlled random search that moves in random directions but with some amount of control over the path. It can also incorporate restarts if the search moves into clearly poor regions.
 
-Given a starting value, SA creates a random permutation of the current candidate solution, often residing within some local neighborhood of the current value.  The objective function is evaluated and compared to the previous value. If the new candidate produces an improvement, the process continues. If it is not, there are two options: 
+Given a starting value, SA creates a random perturbation of the current candidate solution, often residing within some local neighborhood of the current value.  The objective function is evaluated and compared to the previous value. If the new candidate produces an improvement, the process continues. If it is not, there are two options: 
 
- - We can accept the current value as "suboptimal" and base our next permutation on it, or
- - discard the current solution as if it did not occur. The next candidate point is a permutation of the last "acceptable" point. 
+ - We can accept the current value as "suboptimal" and base our next perturbation on it, or
+ - discard the current solution as if it did not occur. The next candidate point is a perturbation of the last "acceptable" point. 
 
-For our SVM example, suppose we start with a candidate where ($log_2 (cost)$, $log_{10} (scale)$) was (-10, -0.1) and had an associated RMSE value of 6.10%. A permutation of this values is created, say (-7.11, -0.225) and its RMSE was measured to be 5.97%. This is smaller and we would repeat the process to create and evaluate a third point.
+For our SVM example, suppose we start with a candidate where ($log_2 (cost)$, $log_{10} (scale)$) was (-10, -0.1) and had an associated RMSE value of 6.10%. A perturbation of this values is created, say (-7.11, -0.225). Suppose that the corresponding RMSE was measured at 5.97%. Since the new candidate has a better performance metric it is automatically accepted and is used to create the next parameter. 
 
 However, suppose that our new RMSE was 7.00%, meaning that the new candidate did worse than our initial one.  
 
-Using the prior and current estimates of the objective function, simulated annealing uses their difference to compute the probability of accepting a suboptimal candidate. First, the probability depends on the difference. Candidates slightly worse than the current values should have a higher acceptance probability than candidates with very poor results. Second, regardless of the difference in values, the probability should decrease as we continue the optimization. The canonical format of this probability, assuming that smaller values are better, is 
+Simulated annealing generates a probability threshold for accepting the worse solution. Most often, the probability depends on two quantities: 
+
+* The difference in prior and current estimates of the objective function. If the new candidate is nearly as good as the current one, the probability of acceptance should be larger than that of a severely unsatisfactory candidate. 
+* The probability of acceptance should decrease over search iterations. An exponentially decaying function, called a “cooling schedule,” often used.
+
+An often used equation for the probability, assuming that smaller values are better, is 
 
 $$
 Pr[accept] = \exp\left[-i\bigl(f(\theta_{i}) - f(\theta_{i-1})\bigr)\right]
@@ -447,11 +452,11 @@ $$
 
 where $i$ is the iteration number. To compare 6.1% versus 7.0%, the acceptance probability is `r round(exp(-(7-6.10)) * 100, 1)`%. To make the determination, a random uniform number is generated and is used to decide. If this difference were to occur at a later iteration, say $i = 5$, the probability would drop to `r round(exp(-5*(7-6.10)) * 100, 1)`%.
 
-One small matter is related to the scale of the objective function. The difference in the exponent is very sensitive to scale. For example, if we were to use the proportions 0.61 and 0.70, the probability would change from `r round(exp(-(7-6.10)) * 100, 1)`% to `r round(exp(-(.7-.610)) * 100, 1)`%. One way to mitigate this issue is to use a normalized difference by dividing the raw difference by the previous objective function (i.e., (0.70-0.61) / 0.70). This is the approach used in the SA analyses here. 
+One small matter is related to the scale of the objective function. The difference in the exponent is very sensitive to scale. For example, instead of percentages, if we were to use the proportions 0.61 and 0.70, the probability would change from `r round(exp(-(7-6.10)) * 100, 1)`% to `r round(exp(-(.7-.610)) * 100, 1)`%. One way to mitigate this issue is to use a normalized difference by dividing the raw difference by the previous objective function (i.e., (0.70-0.61) / 0.70). This is the approach used in the SA analyses here. 
 
-This process is continued until either a pre-defined limit is reached or if there is no improvement by a certain number of iterations. The best result found at any time in the optimization is used as the final value. Also, as previously mentioned, a restart rule can stop simulated annealing from delving too far into suboptimal regions if no best results have occurred within some period of time. 
+This process is continued until either a pre-defined limit is reached or if there is no improvement by a certain number of iterations. The best result found at any time in the optimization is used as the final value; there is no real notion of "convergance" for this method. Also, as previously mentioned, a restart rule can stop simulated annealing from delving too far into suboptimal regions if no best results have occurred within some period of time. When the processes is restarted, can be continue from either the last best candidate point from previous iterations or at a random point in the parameter space. 
 
-How should the candidates be perturbed for the next iteration? When the tuning parameters are all numeric, we can create a random direction and angle from the current values. A similar process can be used for integers by "flooring" them to the nearest whole number. For qualitative tuning parameters, a random subset of parameters is chosen to change to a different value chosen at random. The amount of change should be large enough to search the parameters space and potentially get out of a local optimum.
+How should the candidates be perturbed from iteration to iteration? When the tuning parameters are all numeric, we can create a random distance and angle from the current values. A similar process can be used for integers by "flooring" them to the nearest whole number. For qualitative tuning parameters, a random subset of parameters is chosen to change to a different value chosen at random. The amount of change should be large enough to search the parameters space and potentially get out of a local optimum.
 
 To illustrate, a very small initial space-filling design with three candidates was generated and evaluated. The results are in @tbl-svm-initial. To start the SA search^[These values will be also used as the initial substrate for Bayesian optimization.], we will start with the candidate with the smallest RMSE and proceed for 50 iterations without a rule for early stopping. A restart to the last known best results was enforced after eight suboptimal iterations. 
 
@@ -653,11 +658,11 @@ An example of how simulated annealing can investigate the tuning parameter space
 
 :::: 
 
-During the search, there were `r cli::format_inline("{length(best_iters)} iteration{?s}")` where a new global best result was discovered (iterations `r cli::format_inline("{best_iters}")`). There were also `r cli::format_inline("{length(restart_iters)} restart{?s}")`  restarts at iterations `r cli::format_inline("{restart_iters}")`. In the end, the best results occurred with a cost value of 2<sup>`r best_overall$log_cost`</sup> and a scale factor of 10<sup>`r round(best_overall$log_scale, 2)`</sup>. The corresponding validation set RMSE was `r round(best_overall$mean, 2)`%.
+During the search, there were `r cli::format_inline("{length(best_iters)} iteration{?s}")` where a new global best result was discovered (iterations `r cli::format_inline("{best_iters}")`). There were also `r cli::format_inline("{length(restart_iters)} restart{?s}")`  restarts at iterations `r cli::format_inline("{restart_iters}")`. In the end, the best results occurred with a cost value of 2<sup>`r best_overall$log_cost`</sup> and a scale factor of 10<sup>`r round(best_overall$log_scale, 2)`</sup>. The corresponding validation set RMSE was `r round(best_overall$mean, 2)`%. With this random seed, the search gets near the ridge of best performance but only lingers there for short times. It does spend a fair amount of time meandering in regions of poor performance. 
 
-Simulated annealing has some attractive qualities. First, the process of creating a new candidate works for any type of parameter (e.g., real, integer, or qualitative). This isn’t the case for the two other iterative methods we’ll discuss. Also, the perturbation process is very fast; there is very little computational overhead between acquiring the next objective function value. 
+Simulated annealing has some attractive qualities. First, the process of creating a new candidate works for any type of parameter (e.g., real, integer, or qualitative). This isn’t the case for the two other iterative methods we’ll discuss. Also, the perturbation process is very fast; there is very little computational overhead between acquiring the next objective function value. Also, since we are effectively simulating new candidate sets, we can potentially apply constraints to parameters or groups of parameters. For example, if a tuning parameter could only be odd integers, this would not be a significant problem for simulated annealing. 
 
-There are a few downsides to this method. Compared to the others, SA makes small incremental changes. If we start far away from the optimum, many iterations might be required to reach it.  One way to mitigate this issue is to do a small space-filling design and start from the best point. In fact, applying SA search after a grid search (perhaps using racing) can be a good way to verify that the grid search was effective. 
+There are a few downsides to this method. Compared to the other search methods, SA makes small incremental changes. If we start far away from the optimum, many iterations might be required to reach it.  One way to mitigate this issue is to do a small space-filling design and start from the best point (as we did). In fact, applying SA search after a grid search (perhaps using racing) can be a good way to verify that the grid search was effective. 
 
 Another disadvantage is that a single candidate is processed at a time. If the training set size is not excessive, we could parallel process the multiple candidates simultaneously. We could make a batch of perturbations and pick the best value to keep or apply the probabilistic process of accepting a poor value. 
 This optimization took `r prettyunits::pretty_sec((initial_time[3] + sa_time[3]) / nrow(sa_history))` per candidate to execute. 
