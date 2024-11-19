@@ -20,6 +20,7 @@ library(patchwork)
 library(future)
 library(bestNormalize)
 library(kableExtra)
+library(GA)
 
 # ------------------------------------------------------------------------------
 # Set Options
@@ -442,7 +443,7 @@ However, suppose that our new RMSE was 7.00%, meaning that the new candidate did
 Simulated annealing generates a probability threshold for accepting the worse solution. Most often, the probability depends on two quantities: 
 
 * The difference in prior and current estimates of the objective function. If the new candidate is nearly as good as the current one, the probability of acceptance should be larger than that of a severely unsatisfactory candidate. 
-* The probability of acceptance should decrease over search iterations. An exponentially decaying function, called a “cooling schedule,” often used.
+* The probability of acceptance should decrease over search iterations. An exponentially decaying function, called a "cooling schedule," often used.
 
 An often used equation for the probability, assuming that smaller values are better, is 
 
@@ -457,6 +458,8 @@ One small matter is related to the scale of the objective function. The differen
 This process is continued until either a pre-defined limit is reached or if there is no improvement by a certain number of iterations. The best result found at any time in the optimization is used as the final value; there is no real notion of "convergance" for this method. Also, as previously mentioned, a restart rule can stop simulated annealing from delving too far into suboptimal regions if no best results have occurred within some period of time. When the processes is restarted, can be continue from either the last best candidate point from previous iterations or at a random point in the parameter space. 
 
 How should the candidates be perturbed from iteration to iteration? When the tuning parameters are all numeric, we can create a random distance and angle from the current values. A similar process can be used for integers by "flooring" them to the nearest whole number. For qualitative tuning parameters, a random subset of parameters is chosen to change to a different value chosen at random. The amount of change should be large enough to search the parameters space and potentially get out of a local optimum.
+
+It is also important to turn the parameters in their potentially transformed space. This ensures that the entire range of the parameter values is treated equally. For example, we’ve been working with the values on their log (base 2) scale for the SVM cost parameter. When perturbing the values, we make sure to change them in the log space. This is true of the other search methods described in this chapter. 
 
 To illustrate, a very small initial space-filling design with three candidates was generated and evaluated. The results are in @tbl-svm-initial. To start the SA search^[These values will be also used as the initial substrate for Bayesian optimization.], we will start with the candidate with the smallest RMSE and proceed for 50 iterations without a rule for early stopping. A restart to the last known best results was enforced after eight suboptimal iterations. 
 
@@ -669,11 +672,41 @@ This optimization took `r prettyunits::pretty_sec((initial_time[3] + sa_time[3])
 
 ## Genetic Algorithms  {#sec-genetic-algo}
 
-Genetic algorithms (GAs) are an optimization method that mimics the process of natural selection. Our application of GAs is non-standard; a standard GA search will use hundreds to millions of objective function evaluations. We will use a small search due to practical considerations. Despite this, genetic algorithms can often find a solution near the optimal value fairly quickly and, as previously stated, there is often a region of acceptable candidates. Finally, they are very unlikely to become stuck in a locally optimal space. 
+Genetic algorithms (GAs) are an optimization method that mimics the process of evolution via natural selection. Our application isn't well suited to GAs; a standard GA search will use hundreds to millions of objective function evaluations. We will use a small search due to practical considerations. Despite this, genetic algorithms can often find a solution near the optimal value fairly quickly and, as previously stated, there is often a region of acceptable candidates. Finally, they are very unlikely to become stuck in a locally optimal space. 
 
-Instead of search iterations, genetic algorithms are counted via _generations_. A generation is a group of candidate values that are evaluated at the same time (as a batch). Once their corresponding performance metrics are computed, a small set of the best candidates is selected and used to create the next generation via reproduction. Reproduction would entail combining a pair of candidates by switching information (a sort of chromosome), and then random mutations can be applied. Once the next generation is created, the process continues for some pre-defined time limit or maximum number of generations. 
+Instead of search iterations, genetic algorithms are counted in _generations_. A generation is a group of candidate values that are evaluated at the same time (as a batch)^[Think of the candidates within a generation as a population of people.]. Once their corresponding performance metrics are computed, a small set of the best candidates is selected and used to create the next generation via _reproduction_. Reproduction would entail combining a pair of candidates by switching information^[Analogous to chromosomes.], and then random mutations can be applied. Once the next generation is created, the process continues for some pre-defined time limit or maximum number of generations. 
 
-To configure the generations, we generally start by choosing the size. Normally, the minimum generation size is around 50 candidates. This may be infeasible depending on the computational cost of the model and the characteristics of the training set, such as size. We can use fewer points in the generation, but the risk is that we will never sample any acceptable results. In that case, combining the best results only results in more mediocre candidates. Increasing the mutation rate (described below) may help avoid this problem. For the first iteration, random sampling of the space is often used. Unsurprisingly, we strongly recommend that a space-filling design is a better tool to create the initial candidate set. 
+How, exactly, does this work? The first step is to pick a numerical representation for each candidate. Let’s consider methods for our main types of data. 
+ 
+First, consider candidates that are real numbers. One option is to keep them as-is (i.e., floating point values). To use them to reproduce, we can make two children from a pair of good-performance candidates via a linear combination. For candidate vectors $\theta_j$, we can use:
+
+$$
+\begin{align}
+\theta^{\:kid}_1 &= \alpha \theta^{\:par}_1 + (1 - \alpha) \theta^{\:par}_2 \notag \\
+\theta^{\:kid}_2 &= (1-\alpha) \theta^{\:par}_1 + \alpha \theta^{\:par}_2 \notag \\
+\end{align}
+$$
+where $\alpha$ is a random standard uniform number. Notice that the two children's candidate values will always be in-between the values of their parents. 
+
+For mutation, a candidate’s values are either locally perturbed or simulated with rate $\pi_m$. For example, we might mutate the log cost value by simulating a random number across the range that defines its search space. 
+
+In the early days of genetic algorithms, binary encodings of numbers were suggested. In this case, each candidate value is encoded as a set of binary integers. For example, consider a log<sub>2</sub> cost value of -2.34. To convert this to binary, we multiply it by 100 (assuming a limit of two decimal places) to convert it to an integer. If we use 8 binary digits to represent 234, we get ``r GA::decimal2binary(234) %>% paste(collapse = "")``. If the candidates could have both positive and negative numbers, we can add an extra bit at the start that is 1 when the value is positive, yielding:  ``r GA::decimal2binary(234) %>% c(0, .) %>% paste(collapse = "")``. 
+
+Cross-over was often used for the reproduction of binary representations. For a single cross-over, a random location between digits was created for each candidate value, and the binary digits were swapped. For example, a representation with five digits might have parents `ABCDE` and `VWXYZ.`  If they were crossed over between the second and third elements, the children would be `ABXYZ` and `VWCDE`. There are reproduction methods that use multiple cross-over points to create a more granular sharing of information. 
+
+One reason that binary representations are no longer favored for numbers is positional bias. If the first bits (`A` and `V`) capture the sign of the value, the sign is more likely to follow the initial bits than the later bits to an offspring. 
+
+For mutating a binary representation, each child’s bit would be flipped at a rate of $\pi_m$. 
+
+After these reproduction and mutation, the values are decoded into real numbers. 
+
+For integers, the same approach can be used as real numbers, but after the usual operations, the decimal values are coerced to integers via rounding. If a binary encoding is used, the same process can be used for integers as real numbers; they are all just bits to the encoding process. 
+
+For qualitative tuning parameters, one (inelegant) approach is to encode them into values on the real line or as integers. From here, we reproduce and mutate them as described above, then convert them back to their non-numeric categories. For example,  for a parameter with values "red,", "blue," and "green", we could map them to bins of `[0, 1/3)`, `[1/3, 2/3)`, and `[2/3, 1]`. This is more palatable when there is a natural ordering of the values but is otherwise a workable but unfortunate approach. Mutation is simple though; at rate $\pi_m$, a value is flipped to a random selection of the possible values.
+
+Now that we know how to make new candidates, we can form new generations. To configure the generations, we generally start by choosing the size. Normally, the minimum generation size is around 50 candidates. This may be infeasible depending on the computational cost of the model and the characteristics of the training set, such as size. We can use fewer points in the generation, but the risk is that we will never sample any acceptable results. In that case, combining the best results only results in more mediocre candidates. Increasing the mutation rate may help avoid this problem. For the first iteration, random sampling of the space is often used. Unsurprisingly, we strongly recommend that a space-filling design is a better tool to create the initial candidate set. 
+
+Finally, there is the choice of which candidates to reproduce at each generation. There are myriad techniques for selecting which candidates are used to make the next generation of candidates. The simplest is to pick two parents by randomly selecting them with probabilities that are proportional to their performance (i.e., the best candidates are chosen most often). There is also the idea of _elitism_ in selection. Depending on the size of the generation, we could retain a few of the best-performing candidates from the previous generation. The performance values of these candidates would not have to be recomputed (saving time), and their information is likely to persist in a few good candidates for the next generation.
 
 
 ```{r}
@@ -694,6 +727,9 @@ same_as_gen_1 <- sum(is_same_as_gen_1) - 1
 other_best <- round(unique(best_by_gen$fitness[!is_same_as_gen_1]), 3)
 other_best <- paste0(other_best, "%")
 ```
+
+To illustrate in two dimensions (similar to @fig-sa-example), a population size of 10 was used and 5 generations were created. These are not good default values but were instead chosen to be at parity with the previous SA search and the optimization method used in the next section. The values of the two tuning parameters were kept as floating point values. The parental selection was conducted using sampling weights proportional to the RMSE values (smaller being better), a mutation rate of 10%, and a single candidate was retained at each generation via elitism.  The computations within a generation where computed in parallel. @fig-ga-example illustrates the results of the search.   
+
 
 :::: {.columns}
 
@@ -816,7 +852,7 @@ Several generations of a genetic algorithm that search tuning parameter space. T
 
 :::: 
 
-A space-filling design was used to ensure that the initial population was diverse. Fortuitously, one design point was very close to the ridge, with an RMSE of `r round(best_by_gen$fitness[1], 2)`%. This candidate continued to be the best for `r cli::format_inline("{same_as_gen_1} generation{?s}")`.  After this, there `r cli::format_inline("{?was/were} {length(other_best)} generations with better candidate{?s}")` (with almost identical performance): `r cli::format_inline("{other_best}")`. 
+A space-filling design was used to ensure that the initial population was diverse. Fortuitously, one design point was very close to the ridge, with an RMSE of `r round(best_by_gen$fitness[1], 2)`%. This candidate continued to be the best for `r cli::format_inline("{same_as_gen_1} generation{?s}")`.  After this, there `r cli::format_inline("{?was/were} {length(other_best)} generations with better candidate{?s}")` (with almost identical performance): `r cli::format_inline("{other_best}")`. We can see that, after three generations, the search is concentrated around the ridge of optimal performance.
 
 The genetic algorithm can parallelize over the populations in each generation. In parallel, this optimization took `r prettyunits::pretty_sec(ga_time[3] / nrow(ga_history))` per candidate (on average). 
 
