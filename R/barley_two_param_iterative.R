@@ -73,7 +73,7 @@ reproduce_gp_surface <- function(file) {
   
   # cli::cli_inform("For iteration {i}, the GP had results for {nrow(x$X)} candidates.")
   
-  pred <- predict(x, large_scaled_grid)
+  pred <- predict(gp_fit, large_scaled_grid)
   grid_predictions <-
     large_grid %>%
     dplyr::mutate(.mean = pred$Y_hat, .sd = sqrt(pred$MSE))
@@ -90,7 +90,7 @@ reproduce_gp_surface <- function(file) {
   
   ret$iter <- i
   ret$.iter <- i
-  ret$num_points <- nrow(x$X)
+  ret$num_points <- nrow(gp_fit$X)
   ret
 }
 
@@ -343,7 +343,7 @@ cli::cli_rule("Genetic algorithm")
 min_vals <- map_dbl(svm_param$object, ~ .x$range[[1]])
 max_vals <- map_dbl(svm_param$object, ~ .x$range[[2]])
 
-pop_size <- 10
+pop_size <- 8
 grid_ga <- grid_space_filling(svm_param, size = pop_size, original = FALSE)
 grid_ga$cost <- log2(grid_ga$cost)
 grid_ga$scale_factor <- log10(grid_ga$scale_factor)
@@ -358,7 +358,7 @@ ga_time <- system.time({
       upper = max_vals,
       popSize = pop_size,
       suggestions = as.matrix(grid_ga),
-      maxiter = 10,
+      maxiter = 7,
       keepBest = TRUE,
       seed = 39,
       wflow = svm_wflow,
