@@ -641,7 +641,8 @@ server <- function(input, output) {
           aes(scale_factor, cost, col = RMSE),
           cex = 2
         ) +
-        geom_point(data = last_best, cex = 4, col = "black", pch = 8) +
+        geom_point(data = last_best, cex = 4, aes(col = RMSE), pch = 8,
+                   show.legend = FALSE) +
         labs(x = "Scaling Factor", y = "Cost", title = lab) 
         
       print(current_plot)
@@ -790,7 +791,6 @@ server <- function(input, output) {
   load(url("https://raw.githubusercontent.com/aml4td/website/main/RData/two_param_iter_ga.RData"))
   load(url("https://raw.githubusercontent.com/aml4td/website/main/RData/two_param_iter_large.RData"))
 
-  ga_history <- ga_history %>% filter(generation <= 5)
   ga_history$mean <- ga_history$fitness
   ga_history <- 
     ga_history %>% 
@@ -831,7 +831,8 @@ server <- function(input, output) {
         ) +
         geom_point(data = current_gen, aes(col = RMSE), alpha = 2/4, cex = 2, 
                    show.legend = FALSE) +
-        geom_point(data = last_best, cex = 4, col = "black", pch = 8) +
+        geom_point(data = last_best, cex = 4, aes(col = RMSE), pch = 8,
+                   show.legend = FALSE) +
         labs(x = "Scaling Factor", y = "Cost") +
         scale_x_log10(limits = x_rng,
                       labels = log10_labs,
@@ -880,7 +881,60 @@ It is often tied to a particular Bayesian predictive model: the Gaussian process
 
 ### Why are Bayesian models good for optimization
 
-As previously said, the Bayesian model will predict which candidate vector should be sampled next. The outcome used in the model is our performance metric of interest. For the barley data, we’ve used RMSE as our primary metric. A Bayesian model could take a new, hypothetical candidate value and predict the expected RMSE. However, that is *not* what Bayesian optimization does. 
+As previously said, the Bayesian model will predict which candidate vector should be sampled next. The outcome used in the model is our performance metric of interest. For the barley data, we’ve used RMSE as our primary metric. A Bayesian model could take a new, hypothetical candidate value and predict the expected RMSE. 
+
+
+```{r}
+#| label: fig-two-candidates-dist
+#| include: false
+
+set.seed(28383)
+num_points <- 5000
+exerc_data <- 
+  tibble(RMSE = c(rnorm(num_points, 5.75, 1/4), rnorm(num_points, 5.5, 3/4)),
+         `Candidate:` = rep(paste("#", 1:2), each = num_points))
+```
+
+Since the product of a Bayesian model is a posterior (predictive) distribution, we can obtain the distribution of the performance metric for a potential new candidate. However, we often summarize this predictive distribution with the mean and standard deviation. Fig X shows two hypothetical candidates and their respective predictive distributions. The first candidate has a slightly better predicted RMSE (on average). The area of the distribution to the right of the vertical line corresponds reflects the probability of being worse than the current solution which, for this candidate, is `r round(mean(exerc_data$RMSE[exerc_data$`Candidate:` == "# 1"] >= 6) * 100, 1)`%.
+
+```{r}
+#| label: fig-two-candidates
+#| echo: false
+#| out-width: 55%
+#| fig-width: 6
+#| fig-height: 4
+#| fig-cap: An example of a choice between two candidates where performance is gauged by RMSE. One candidate has slightly better predicted mean performance and another where the mean RMSE is predicted to be much lower but with high uncertainty. 
+
+exerc_data %>% 
+  ggplot(aes(RMSE, col = `Candidate:`)) + 
+  geom_line(stat = "density", adjust = 1.5, trim = TRUE, linewidth = 1) +
+  geom_vline(mapping = aes(xintercept = 6), lty = 2) +
+  theme(legend.position = "top") +
+  annotate("text", x = 6.5, y = 1.25, label = "Current\nbest") + 
+  labs(y = NULL)
+```
+
+The second candidate has a mean RMSE that is predicted to be twice as good as the first but has considerably large uncertainty. On average, this is a better choice but there is more area to the right of the vertical line with a probability of worse results of `r round(mean(exerc_data$RMSE[exerc_data$`Candidate:` == "# 2"] >= 6) * 100, 1)`%. 
+
+Which choice is better? The first is a safer bet and the second offers higher risk and higher reward. Which candidate to pick is often driven by out state of mind. However, we should definitely consider _why_ the variance is so large for the second candidate. 
+
+We’ve previously discussed the variance-bias tradeoff and demonstrated that large uncertainty in the performance metric can often be explained by _model variance_. Recall that models might vary due to predictive instability caused by a model that is far more complex than is required, such as the polynomial example in @sec-variance-bias. 
+
+There is another reason that the noise in our performance statistic can be large. During tuning, we are focused on exploring the overall parameter space and, as such, we can view this process from a spatial sampling point of view. Back in @ sec-spatial-splitting, we described _spatial autocorrelation_, where objects are more similar to closer objects than to objects further away. If our Bayesian model reflects spatial variability, the increased uncertainty can be attributed to how each candidate relates spatially to the existing set. If this were the case for the results in @fig-two-candidates, it implies that the first candidate is closer to the current sample of tuning parameter candidates. Conversely, the large uncertainty for the second candidate suggests that it is placed far away from aby exciting results. 
+
+This example demonstrates different philosophies for a search: _exploitation_ and _extrapolation_. 
+
+- Exploitation expresses that we would rather keep the search near existing data and capitalize on their results to find a solution closer to the things that we know. 
+
+- Extrapolation is the notion that we should more aggressively explore new spaces to find novel candidates to improve the model. 
+
+The value of a Bayesian model in parameter tuning is that these two concepts can be weighted differently because the Bayesian model can predict the mean and variance of performance for a potential new candidate. 
+
+Let’s assume that our surrogate Bayesian model does significantly account for spatial effects. The next section describes the overall process of how we use it to optimize the model. 
+
+
+### How does BO work
+
 
 In lieu of directly predicting the performance value, a different type of objective function, called an acquisition function, is used. Acquisition functions combine the predicted mean and variance of the performance statistic into a surrogate objective. Recall that the output of a Bayesian model is a predictive distribution rather than a single-point estimate of the outcome. 
 
@@ -889,9 +943,8 @@ To illustrate, we’ll consider the most well-known acquisition function: the ex
 $$
 EI(\theta; Q_{opt}) = \delta(\theta) \Phi\left(\frac{\delta(\theta)}{\sigma(\theta)}\right) + \sigma(\theta) \phi\left(\frac{\delta(\theta)}{\sigma(\theta)}\right)
 $$
-where $\delta(\theta) = \mu(\theta) - Q_{opt}$ is the predicted (mean) improvement above and beyond the current best value,  $\Phi(\cdot)$ is the cumulative standard normal and $\phi(\cdot)$ is the standard normal density.
 
-### How does BO work
+where $\delta(\theta) = \mu(\theta) - Q_{opt}$ is the predicted (mean) improvement above and beyond the current best value,  $\Phi(\cdot)$ is the cumulative standard normal and $\phi(\cdot)$ is the standard normal density.
 
 ### Gaussian Process models
 
