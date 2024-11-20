@@ -129,15 +129,16 @@ regular_mtr %>%
   mutate(RMSE = cut(mean, breaks = seq(5, 31, length = num_cuts))) %>% 
   ggplot(aes(scale_factor, cost)) +
   geom_tile(aes(fill = RMSE)) +
-  geom_point(data = regular_mtr %>% slice_min(mean), col = "yellow", cex = 2) + 
+  geom_point(data = regular_mtr %>% slice_min(mean), col = "grey", cex = 3) + 
   geom_line(
     data = regular_mtr %>% slice_min(mean, n = 18),
     stat = "smooth",
-    col = "yellow",
+    col = "grey",
     method = lm,
     se = FALSE,
     formula = y ~ x,
-    alpha = 1
+    alpha = 1,
+    linewidth = 1
   ) +
   scale_x_log10(limits = x_rng,
                 labels = log10_labs,
@@ -379,7 +380,7 @@ An example of simple gradient descent for the function $f(\theta) = \theta\: cos
 
 :::: 
 
-The figure let's you select the starting value, the value of $\alpha$ and how many iterations to used. Consider a few configurations:
+The figure enables different values of the starting value, the value of $\alpha$, and how many iterations to used. Consider a few configurations:
 
 - Starting at $\theta = 3$, a learning rate of $\alpha = 2.0$ is inappropriate. The search initially moves towards the global minimum but then reverses course _past_ the best value and becomes trapped around one of the local optima. 
 
@@ -440,7 +441,7 @@ sa_0 <- cli::format_inline("({best_initial$log_cost}, {best_initial$log_scale})"
 sa_1 <- cli::format_inline("({iter_1$log_cost}, {iter_1$log_scale})")
 ```
 
-Non-greedy search methods are not constrained to always go in the absolute best direction. One such method is _simulated annealing_ (SA). It is a controlled random search that moves in random directions but with some amount of control over the path. It can also incorporate restarts if the search moves into clearly poor regions.
+Non-greedy search methods are not constrained to always proceed in the absolute best direction (as defined by the gradient). One such method is _simulated annealing_ (SA). It is a controlled random search that moves in random directions but with some amount of control over the path. It can also incorporate restarts if the search moves into clearly poor regions.
 
 Given a starting value, SA creates a random perturbation of the current candidate solution, often residing within some local neighborhood of the current value.  The objective function is evaluated and compared to the previous value. If the new candidate produces an improvement, the process continues. If it is not, there are two options: 
 
@@ -459,7 +460,7 @@ Simulated annealing generates a probability threshold for accepting the worse so
 An often used equation for the probability, assuming that smaller values are better, is 
 
 $$
-Pr[accept] = \exp\left[-i\bigl(f(\theta_{i}) - f(\theta_{i-1})\bigr)\right]
+Pr[accept] = \exp\Bigl[-i\bigl(f(\theta_{i}) - f(\theta_{i-1})\bigr)\Bigr]
 $$
 
 where $i$ is the iteration number. To compare 6.1% versus 7.0%, the acceptance probability is `r round(exp(-(7-6.10)) * 100, 1)`%. To make the determination, a random uniform number is generated and is used to decide. If this difference were to occur at a later iteration, say $i = 5$, the probability would drop to `r round(exp(-5*(7-6.10)) * 100, 1)`%.
@@ -726,7 +727,7 @@ Finally, there is the choice of which candidates to reproduce at each generation
 
 load(url("https://raw.githubusercontent.com/aml4td/website/main/RData/two_param_iter_ga.RData"))
 
-ga_history <- ga_history %>% filter(generation <= 5)
+ga_history <- ga_history %>% filter(generation <= 7)
   
 best_by_gen <- 
   ga_history %>% 
@@ -739,7 +740,7 @@ other_best <- round(unique(best_by_gen$fitness[!is_same_as_gen_1]), 3)
 other_best <- paste0(other_best, "%")
 ```
 
-To illustrate in two dimensions (similar to @fig-sa-example), a population size of 10 was used and 5 generations were created. These are not good default values but were instead chosen to be at parity with the previous SA search and the optimization method used in the next section. The values of the two tuning parameters were kept as floating point values. The parental selection was conducted using sampling weights proportional to the RMSE values (smaller being better), a mutation rate of 10%, and a single candidate was retained at each generation via elitism.  The computations within a generation where computed in parallel. In parallel, this optimization took `r prettyunits::pretty_sec(ga_time[3] / nrow(ga_history))` per candidate (on average).  @fig-ga-example illustrates the results of the search.   
+To illustrate genetic algorithms in two dimensions, a population size of 10 was used and 5 generations were created for the toy example. These are not good default values but were instead chosen to be at parity with the previous SA search and the optimization method used in the next section. The values of the two tuning parameters were kept as floating point values. The parental selection was conducted using sampling weights proportional to the RMSE values (smaller being better), a mutation rate of 10%, and a single candidate was retained at each generation via elitism.  The computations within a generation where computed in parallel. In parallel, this optimization took `r prettyunits::pretty_sec(ga_time[3] / nrow(ga_history))` per candidate (on average).  @fig-ga-example illustrates the results of the search.   
 
 
 :::: {.columns}
@@ -773,7 +774,7 @@ ui <- page_fillable(
     "gen",
     label = "Generation",
     min = 1L,
-    max = 5L,
+    max = 7L,
     step = 1L,
     value = 1L,
     width = "100%"
@@ -868,6 +869,32 @@ A space-filling design was used to ensure that the initial population was divers
 This small toy example is somewhat problematic for demonstrating genetic algorithms. The example’s low dimensionality and the relatively low computational expense per candidate might deceive one into believing that genetic algorithms could be the answer to most of our problems.  Genetic algorithms are versatile and powerful tools for global optimization. Like simulated annealing, there is very little overhead between generations. However, in most real applications, there are more than two parameter dimensions. This means that larger populations are required and, most likely, many more generations. If the data size is not massive, we've seen that parallel processing can help. On the whole, GAs would probably not be our first choice for tuning models.
 
 ## Bayesian Optimization {#sec-bayes-opt}
+
+Bayesian optimization (BO) is a search procedure that uses an overarching statistical model to predict the next set of candidate values, given past performance. It is currently the most used iterative search routine for optimizing models. 
+
+It is often tied to a particular Bayesian predictive model: the Gaussian process (GP) regression model. However, before diving into the details of that model, we can discuss what a Bayesian model is and why it is required for this optimization process. 
+
+
+### What Makes a Model Bayesian?
+
+
+### Why are Bayesian models good for optimization
+
+As previously said, the Bayesian model will predict which candidate vector should be sampled next. The outcome used in the model is our performance metric of interest. For the barley data, we’ve used RMSE as our primary metric. A Bayesian model could take a new, hypothetical candidate value and predict the expected RMSE. However, that is *not* what Bayesian optimization does. 
+
+In lieu of directly predicting the performance value, a different type of objective function, called an acquisition function, is used. Acquisition functions combine the predicted mean and variance of the performance statistic into a surrogate objective. Recall that the output of a Bayesian model is a predictive distribution rather than a single-point estimate of the outcome. 
+
+To illustrate, we’ll consider the most well-known acquisition function: the expected improvement. 
+
+$$
+EI(\theta; Q_{opt}) = \delta(\theta) \Phi\left(\frac{\delta(\theta)}{\sigma(\theta)}\right) + \sigma(\theta) \phi\left(\frac{\delta(\theta)}{\sigma(\theta)}\right)
+$$
+where $\delta(\theta) = \mu(\theta) - Q_{opt}$ is the predicted (mean) improvement above and beyond the current best value,  $\Phi(\cdot)$ is the cumulative standard normal and $\phi(\cdot)$ is the standard normal density.
+
+### How does BO work
+
+### Gaussian Process models
+
 
 
 ```{r}
