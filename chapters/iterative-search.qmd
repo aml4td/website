@@ -875,14 +875,24 @@ Bayesian optimization (BO) is a search procedure that uses an overarching statis
 
 It is often tied to a particular Bayesian predictive model: the Gaussian process (GP) regression model. However, before diving into the details of that model, we can discuss what a Bayesian model is and why it is required for this optimization process. 
 
-
 ### What Makes a Model Bayesian?
+
+```{r}
+#| label: include-forested
+#| include: false
+load("../RData/forested_data.RData")
+```
+
+Let’s look at a very simple example. For the forestry data last seen in @sec-spatial-resampling, the outcome is categorical with values “yes” and “no” for the question “Is this location forested?” We might use the training data set to estimate the rate ($\pi$) that the event occurs. The simplest statistic is the sample proportion: the number of events divided by the number of total data points: ($\hat{\pi}$ = `r signif(mean(forested_train$class == "Yes"), 3)`). 
+
+To estimate this rate using maximum likelihood estimation, we treat the data as fixed and would probably assume that the data follow a binomial distribution with theoretical probability $\pi$. From there we can solve equations that find values of $\pi$ that correspond to the largest likelihood value. It turns out that the sample proportion is also the maximum likelihood estimate. From this, the distribution is fully specified and we can compute quantities like p-values, confidence intervals etc. 
+
+Once we solve the equations, there are single "best" values for the parameters. These are the maximum likelihood estimates and with them comes a full specification of the sampling distributions of the model parameters. With the sampling distributions, tools like hypothesis testing. standard errors, and confidence intervals can be used to help describe the data or answer specific questions.
 
 
 ### Why are Bayesian models good for optimization?
 
 As previously said, the Bayesian model will predict which candidate vector should be sampled next. The outcome used in the model is our performance metric of interest. For the barley data, we’ve used RMSE as our primary metric. A Bayesian model could take a new, hypothetical candidate value and predict the expected RMSE. 
-
 
 ```{r}
 #| label: fig-two-candidates-dist
@@ -940,19 +950,141 @@ Let’s assume that our surrogate Bayesian model does significantly account for 
 
 ### How does BO work
 
+The search routine starts with a set of $s_0$ candidates with corresponding performance statistics. Using these data, the metric is used as the model outcome and the candidate values as predictors. This surrogate model is used to make predictions of the mean and standard deviation of the metric at new candidate values. A new objective function, called an acquisition function, combines the mean and standard into a single value. The next candidate value to evaluate is the one that optimizes the acquisition function (and then repeat this process). 
 
-In lieu of directly predicting the performance value, a different type of objective function, called an acquisition function, is used. Acquisition functions combine the predicted mean and variance of the performance statistic into a surrogate objective. Recall that the output of a Bayesian model is a predictive distribution rather than a single-point estimate of the outcome. 
-
-To illustrate, we’ll consider the most well-known acquisition function: the expected improvement. 
+One of the most well-known acquisition function is based on the notion of expected improvement. If the current best metric value is denoted as $\hat{Q}_{opt}$, the expected impriovement is the positive part of $\hat{\delta}(\theta) = Q_{opt} - \mu(\theta)$, where $\hat{\mu}(\theta)$ is the mean of the posterior prediction (assuming that smaller metrics are better). REFERNCE found that, probabilisticly, the expected improvement is 
 
 $$
-EI(\theta; Q_{opt}) = \delta(\theta) \Phi\left(\frac{\delta(\theta)}{\sigma(\theta)}\right) + \sigma(\theta) \phi\left(\frac{\delta(\theta)}{\sigma(\theta)}\right)
+EI(\theta; Q_{opt}) = \hat{\delta}(\theta) \Phi\left(\frac{\hat{\delta}(\theta)}{\hat{\sigma}(\theta)}\right) + \hat{\sigma}(\theta) \phi\left(\frac{\hat{\delta}(\theta)}{\hat{\sigma}(\theta)}\right)
 $$
 
-where $\delta(\theta) = \mu(\theta) - Q_{opt}$ is the predicted (mean) improvement above and beyond the current best value,  $\Phi(\cdot)$ is the cumulative standard normal and $\phi(\cdot)$ is the standard normal density.
+where $\Phi(\cdot)$ is the cumulative standard normal and $\phi(\cdot)$ is the standard normal density.
+
+
+
+:::: {.columns}
+
+::: {.column width="5%"}
+:::
+
+::: {.column width="90%"}
+
+::: {#fig-bayes-opt}
+
+::: {.figure-content}
+
+```{shinylive-r}
+#| label: fig-bayes-opt
+#| viewerHeight: 600
+#| viewerWidth: "100%"
+#| standalone: true
+library(shiny)
+library(bslib)
+library(ggplot2)
+library(dplyr)
+
+load("../RData/bayesian_opt_1d.RData")
+# source("https://raw.githubusercontent.com/aml4td/website/main/R/shiny-setup.R")
+light_bg <- "#fcfefe" # from aml4td.scss
+grid_theme <- bs_theme(
+  bg = light_bg, fg = "#595959"
+)
+
+theme_light_bl<- function(...) {
+  
+  ret <- ggplot2::theme_bw(...)
+  
+  col_rect <- ggplot2::element_rect(fill = light_bg, colour = light_bg)
+  ret$panel.background  <- col_rect
+  ret$plot.background   <- col_rect
+  ret$legend.background <- col_rect
+  ret$legend.key        <- col_rect
+  
+  ret$legend.position <- "top"
+  
+  ret
+}
+
+ui <- page_fillable(
+  theme = bs_theme(bg = "#fcfefe", fg = "#595959"),
+  sliderInput(
+    "gen",
+    label = "Iterations",
+    min = 1L,
+    max = 15L,
+    step = 1L,
+    value = 1L,
+    width = "100%"
+  ),
+  as_fill_carrier(plotOutput("iterations"))
+)
+
+
+server <- function(input, output) {
+  
+  y_rng <- extendrange(true_curve$y)
+  p_base <- 
+    ggplot(true_curve, aes(x = x)) +
+    geom_line(aes(y = y), alpha = 1 / 10, linewidth = 1) +
+    labs(x = "Parameter", y = "Objective Function") +
+    lims(y = y_rng) +
+    theme_bw()
+  
+  output$iterations <-
+    renderPlot({
+      
+      plot_data <- obs_dat[obs_dat$iteration < input$iteration, ]
+      next_data <- obs_dat[obs_dat$iteration == input$iteration, ]
+      plot_curve <- gp_pred[[input$iteration]]
+      plot_curve$`Std Dev` <- plot_curve$.sd
+      
+      p <- 
+        p_base +
+        geom_line(data = plot_curve, aes(y = .mean, col = `Std Dev`), 
+                  alpha = 1, linewidth = 1.2) +
+        geom_point(data = plot_data, aes(y = y), cex = 2) +
+        geom_vline(xintercept = next_data$x, col = "red", lty = 2) +
+        scale_colour_viridis_c(option = "mako", direction = -1) +
+        theme(
+          plot.margin = margin(t = 0.0, r = 5.5, b = 5.5, l = 5.5, unit = "pt")
+        )
+      
+      p_ei <- 
+        ggplot(plot_curve, aes(x = x, y = objective)) + 
+        geom_line() +
+        geom_vline(xintercept = next_data$x, col = "red", lty = 2) + 
+        lims(y = 0:1) + 
+        labs(y = "Expected Imp.", x = NULL) + 
+        theme_bw() +
+        theme(
+          axis.text.x = element_blank(), axis.ticks.x = element_blank(),
+          plot.margin = margin(t = 5.5, r = 5.5, b = 0.0, l = 5.5, unit = "pt")
+        ) 
+  
+      
+      print((p_ei / p) + plot_layout(heights = c(2, 3)))
+      
+    }, res = 100)
+}
+
+app <- shinyApp(ui, server)
+app
+```
+
+:::
+
+An example of Bayesian optimization for the function $f(\theta) = \theta\: cos(\theta/2)$.
+
+:::
+
+:::
+
+::: {.column width="5%"}
+:::
+
+:::: 
 
 ### Gaussian Process models
-
 
 
 ```{r}
