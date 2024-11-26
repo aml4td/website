@@ -164,7 +164,7 @@ If we start with an initial guess, $\theta_0$, and compute the gradient at this 
 
 $$
 \theta_{i+1} = \theta_i - \alpha\:g(\theta_i)
-$$
+$$ {#eq-gd-step}
 
 The value $\alpha$ defines how far we should travel in our new direction. This can be a constant value^[We’ve seen $\alpha$ before when it was called the learning rate (and will revisit it later in this chapter).] or a secondary procedure, called a line search, can be used to increase the value of $\alpha$ until the objective function worsens.
 
@@ -875,20 +875,76 @@ Bayesian optimization (BO) is a search procedure that uses an overarching statis
 
 It is often tied to a particular Bayesian predictive model: the Gaussian process (GP) regression model. However, before diving into the details of that model, we can discuss what a Bayesian model is and why it is required for this optimization process. 
 
-### What Makes a Model Bayesian?
+### What Makes a Model Bayesian? {#sec-bayesian-intro}
 
 ```{r}
 #| label: include-forested
 #| include: false
 load("../RData/forested_data.RData")
+
+beta_bin_estimate <- function(num_events, total, alpha = 1, beta = 1) {
+  (num_events + alpha) / (alpha + beta + total) * 100
+}
+
+n_y <- sum(forested_train$class == "Yes")
+n_tr <- nrow(forested_train)
+p_mle <- mean(forested_train$class == "Yes") * 100
 ```
 
-Let’s look at a very simple example. For the forestry data last seen in @sec-spatial-resampling, the outcome is categorical with values “yes” and “no” for the question “Is this location forested?” We might use the training data set to estimate the rate ($\pi$) that the event occurs. The simplest statistic is the sample proportion: the number of events divided by the number of total data points: ($\hat{\pi}$ = `r signif(mean(forested_train$class == "Yes"), 3)`). 
+Let’s look at a very simple example. For the forestry data last seen in @sec-spatial-resampling, the outcome is categorical with values “yes” and “no” for the question “Is this location forested?” We might use the training data set to estimate the rate ($\pi$) that the event occurs. The simplest statistic is the sample proportion: the number of events divided by the number of total data points: ($\hat{\pi}$ = `r round(p_mle, 3)`%). 
 
 To estimate this rate using maximum likelihood estimation, we treat the data as fixed and would probably assume that the data follow a binomial distribution with theoretical probability $\pi$. From there we can solve equations that find values of $\pi$ that correspond to the largest likelihood value. It turns out that the sample proportion is also the maximum likelihood estimate. From this, the distribution is fully specified and we can compute quantities like p-values, confidence intervals etc. 
 
 Once we solve the equations, there are single "best" values for the parameters. These are the maximum likelihood estimates and with them comes a full specification of the sampling distributions of the model parameters. With the sampling distributions, tools like hypothesis testing. standard errors, and confidence intervals can be used to help describe the data or answer specific questions.
 
+Instead of treating the unknown parameter as a single value that we estimate, Bayesian methods propose that the parameter comes from a _distribution_ of possible values. This distribution reflects our prior understanding or belief about the parameter based on what we know of the situation. For this reason, it is called a _prior_ distribution. If we think that the probability that a location in Washington state is forested, we would choose a distribution with higher probabilities near 1.0. 
+
+For a binomial model, an example of a prior distribution for the probability of an event is the Beta distribution. Beta values range between zero and one. The Beta distribution is very flexible. It is indexed by two parameters: $\alpha$ and $\beta$. @fig-beta-dist shows different versions of the Beta for different values.  If we think that larger probabilities of forestation are more likely, we might choose a Beta prior that has values of $\alpha$  that are larger than $\beta$. This is an example of an informative prior, albeit a weak one. As our prior distribution is more peaked, it reflects that before seeing any data, we have strong beliefs. 
+
+```{r}
+#| label: fig-beta-dist
+#| echo: false
+#| out-width: 70%
+#| fig-width: 6
+#| fig-height: 3
+#| fig-cap: Examples of the Beta distribution for different values of $\alpha$ and $\beta$.
+
+crossing(
+  value = seq(0, 1, length.out = 100),
+  alpha = c(1, 3, 5),
+  beta = c(1, 3, 5)
+) %>% 
+  mutate(
+    density = dbeta(value, alpha, beta),
+    alpha = format(alpha)) %>% 
+  ggplot(aes(value, density, col = alpha)) + 
+  geom_line() +
+  facet_wrap(~beta, labeller = label_both) +
+  labs(x = "Probability of Forestation") +
+  scale_colour_viridis_d(option = "viridis")
+```
+
+What if we have no idea of what the prior should be? In this case, a flat (or nearly flat) prior would equally weight every possible point. In @fig-beta-dist we can see that the combination of $\alpha = \beta = 1$ is a uniform distribution. 
+
+We’ll see how the prior can affect some calculations later in @sec-naive-bayes. In the meantime, let’s see how it comes into play in our simple binomial example. If the training set has $n_{tr}$ points and $n_+$ of them are known to be forested, the ordinary sample proportion estimate is $\hat{p} = n_+ / n_{tr}$. In a Bayesian analysis, the final estimate is a function of both the prior distribution and our observed data. For a Beta prior, the Bayesian estimate is 
+
+$$
+\hat{p}_{BB} = \frac{n_+ +\alpha}{n_{tr} + \alpha + \beta}
+$$ {#eq-beta-bin-mean}
+
+If, before seeing the data, we had chosen $\alpha = 5$ and $\beta = 1$, we estimate that $\hat{p}_{BB} = `r round(beta_bin_estimate(n_y, n_tr, 5, 1), 3)`$%. This is pretty close to our simple estimate because there is so much data in the training set ($n_{tr} = `r n_tr`$) that the influence of the prior is severely diminished. As a counter-example, if our data were $n_y = 1$ and $n_{tr} = 2$, the prior would pull the estimate from 50% to 75%. 
+
+Once we have specified our prior and collected data, the results of a Bayesian analysis is a _posterior_ distribution. In our binomial example, we are lucky that the Beta prior has a special relationship with the binomial distribution; when used together, the posterior has a specific equation called, unsurprisingly, the _beta-binomial distribution_. @eq-beta-bin-mean is the mean of that distribution. In general, it is unusual for the posterior to be so cleanly described. In most cases, it has an unknown form that must be estimated using Monte Carlo methods. We often summarize the prior using statistics like the mean, mode, standard deviation, etc. One strength of Bayesian methods is that we can easily derive complex statistics from them, including the posterior of individual predictions (called posterior predicted distribution). 
+
+::: {.note-box}
+To summarize: 
+
+ - Bayesian models require a prior distribution for all of our model parameters. 
+ - The prior and observed data are combined into a posterior distribution.
+ - Different statistics can be estimated from the posterior, including individual predictions.  
+:::
+
+We’ll encounter even more Bayesian methods as we proceed. Now, let’s get back to how priors can be used for optimizing tuning parameters. 
 
 ### Why are Bayesian models good for optimization?
 
@@ -955,7 +1011,7 @@ One of the most well-known acquisition function is based on the notion of expect
 
 $$
 EI(\theta; Q_{opt}) = \hat{\delta}(\theta) \Phi\left(\frac{\hat{\delta}(\theta)}{\hat{\sigma}(\theta)}\right) + \hat{\sigma}(\theta) \phi\left(\frac{\hat{\delta}(\theta)}{\hat{\sigma}(\theta)}\right)
-$$
+$$ {#eq-exp-improve}
 
 where $\Phi(\cdot)$ is the cumulative standard normal and $\phi(\cdot)$ is the standard normal density.
 
@@ -1107,7 +1163,7 @@ Now that the general optimization process has been outlined, let's focus on the 
 
 GPs are often motivated as special cases of stochastic processes, which are the collection of random variables that are indexed by one or more variables. The most common example of a stochastic process is the stock market. One or more stocks are random variables that, in this case, are indexed by time. A Gaussian process is just a stochastic process whose data are assumed to be multivariate normal. 
 
-Gaussian processes are different from basic multivariable normal distributions. Let's say that we collected the height and weight of 100 students in a specific grade. If we assume height and weight to be multivariate normal, we might that the two-dimensional vector with their data, x, has a population mean vector and a 2$\times$2 covariance matrix, i.e., $\boldsymbol{x} \sim N(\boldsymbol{\mu}, \Sigma)$. In this case, the data are a sample of people at a static time point. 
+Gaussian processes are different from basic multivariable normal distributions. Let's say that we collected the height and weight of 100 students in a specific grade. If we assume height and weight to be multivariate normal, we might that the two-dimensional vector with their data, x, has a population mean vector and a 2 $\times$ 2 covariance matrix, i.e., $\boldsymbol{x} \sim N(\boldsymbol{\mu}, \Sigma)$. In this case, the data are a sample of people at a static time point. 
 
 However, a Gaussian process is a sequence of data, so we have to specify their mean and covariance parameters dynamically; there are mean and covariance _functions_ instead of vectors and matrices. The mean function is often denoted as  $\mu(\boldsymbol{x})$. The most common way of writing the covariance function is $\Sigma(\boldsymbol{x}, \boldsymbol{x}') = \tau^2k(\boldsymbol{x}, \boldsymbol{x}')$ where $k(\cdot, \cdot)$ is a kernel function. 
 
@@ -1137,22 +1193,22 @@ TODO nuggets
 How does this relate to iterative tuning parameter optimization? Suppose that our multivariate random variable is the concatenation of an outcome variable and one or more predictors, our vector of random variable could be thought of as $\boldsymbol{d} = [y, x_1, ..., x_p]$. In a model, we'd like to know what the value of $y$ is for a specific set of $x$ values. Mathematically, this is $Pr[y | \boldsymbol{x}]$ and, since this collection of data is multivariate normal, there are some nice linear algebra equations that can be used to compute this. This ties into Bayesian analysis since Bayes Rule is 
 
 $$
-Pr[y | \boldsymbol{x}] = \frac{Pr[y] Pr[\boldsymbol{x} | y]}{Pr[\boldsymbol{x}]}
-$$
+Pr[y | \boldsymbol{x}] = \frac{Pr[y] Pr[\boldsymbol{x} | y]}{Pr[\boldsymbol{x}]} = \frac{(prior)\times (likelihood)}{(evidence)}
+$$ {#eq-bayes-rule}
 
-The model is Bayesian because we have specified the distributions for the outcome and predictors ($Pr[y]$ and $Pr[\boldsymbol{x}]$, respectively) in a circuitous way. 
+The GP model is Bayesian because we have specified the distributions for the outcome and predictors ($Pr[y]$ and $Pr[\boldsymbol{x}]$, respectively) in a circuitous way. The kernel function is the primary driver of the prior distribution of Gaussian processes. 
 
-_In theory_, each of these is easy to compute with a simple multivariate normal. However, we don't the value of $\tau^2$ nor do we know the values of any kernel parameters used by $k(.,.)$.  
+_In theory_, each of these is easy to compute with a simple multivariate normal. However, we don't the value of $\tau^2$ nor do we know the values of any kernel parameters used by $k(\cdot,\cdot)$.  
 
 Training Gaussian process models can be difficult and the computation cost of training these models increases _cubically_ with the number of data points. In our application, this is the number of tuning parameter candidates with performance statistics. However, after the initial GP model has been trained, there are updating algorithms that can prevent the model from being completely re-estimated from scratch and thus reducing training time. 
 
 TODO qualitative parameters
 
-:::{.callout-note}
+::: {.note-box}
 In summary, Gaussian process models are nonlinear models that can use tuning parameter values to make predictions on future performance statistics. They can predict the mean and variance of performance, the latter being mostly driven by spatial variability.  
 :::
 
-In @fig-bayes-opt we seen how well Bayesian optimization works for a simple one-dimensional function. Let’s apply it in context by using it to optimize our two SVM tuning parameters. 
+In @fig-bayes-opt we've seen how well Bayesian optimization works for a simple one-dimensional function. Let’s apply it in context by using it to optimize our two SVM tuning parameters. 
 
 ### A Two Dimensional Illustration
 
