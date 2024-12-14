@@ -885,27 +885,45 @@ A space-filling design was used to ensure that the initial population was divers
 
 This small toy example is somewhat problematic for demonstrating genetic algorithms. The example’s low parameter dimensionality and the relatively low computational expense per candidate might deceive one into believing that genetic algorithms could be the answer to most of our problems.  Genetic algorithms are versatile and powerful tools for global optimization. Like simulated annealing, there is very little overhead between generations. However, in most real applications, there are more than two parameter dimensions. This means that larger populations are required and, most likely, many more generations. If the data size is not massive, we've seen that parallel processing can help^[If you have access to high-performance computing infrastructure,  the parallel processing can run the individuals in the population in parallel and, within these, any resampling iterations can also be parallelized.]. 
 
-## Bayesian Models {#sec-bayes}
+## Sidebar: Bayesian Models {#sec-bayes}
 
 We've superficially described an application of Bayesian analysis in @sec-effect-encodings. Before discussing Bayesian optimization, we should give a general description of Bayesian analysis, especially since it will appear again several times after this chapter. 
 
-Let's start by framing the problem in terms of linear regression. 
+Many models make probabilistic assumptions about their data or parameters. For example, a linear regression model using ordinary least squares estimation can be constructed by making assumptions regarding the model errors. We can assume that the residuals are independent of one another and follow a Gaussian distribution with zero mean and a constant standard deviation. From there, it follows that the regression parameters ($\beta$ coefficients) also follow Gaussian distributions. 
 
-Many models make probabilistic assumptions about their data or parameters. For example, a linear regression model using ordinary least squares estimation^[This implies that the objective function is the sum of squared error.] can be constructed by making assumptions regarding the model errors. If we assume that the residuals are independent of one another and follow a Gaussian distribution with zero mean and a constant standard deviation. From there, we can determine that the regression parameters ($\beta$ coefficients) also follow Gaussian distributions. If we minimize the sum of the squared errors, ordinary least squares also maximizes the Gaussian log-likelihood.   We treat the data as fixed (i.e., not random variables) and find values for the parameters that maximize log-likelihood. In other words, MLE finds the parameters' most plausible (i.e., "likely") values for the observed data. Let's denote the likelihood as $\ell(z|\theta)$. 
+Based on these assumptions, our objective function becomes the Gaussian log-likelihood function, generally denoted as $\ell(z|\theta)$. We fix the outcome and predictor data and try to find values of $\sigma$ and the $\beta$  parameters that maximize the objective function. This is maximum likelihood estimation. 
 
-The consequence of this probabilistic specification is that the model parameters follow a singular, specific probability distribution.
+::: {.important-box}
+One important point is that each model parameter is treated as a single, non-random value. Our maximum likelihood estimate (MLE) is a point estimate and, based on our assumptions about the residuals, we know the distribution of the MLEs. 
+:::
 
-A Bayesian approach uses a different philosophy regarding our probability assumptions. It does not assume that the model parameters come from a single distribution. It assumes that the unknown parameters are drawn from a prior distribution that reflects what we know about them. The "prior" adjective is important; the modeler should specify it before seeing the observed data. 
+The consequence of this is that we cannot make inferences about the model parameters (since they are considered to be single points). Most of our inference is about the MLEs. This leads to the circuitous explanation of confidence intervals and hypothesis tests. 
 
-For example, recall our model for the time to deliver food. A reasonable prior for the regression parameter associated with distance would have a distribution that has zero probability for values less than zero. We would never think that delivery times decrease with distance. If we worked at the restaurant, we might be able to be more specific based on what we've seen. There might be a basic belief that, all other things are equal, and we might think that every mile further away from the restaurant increases time two-fold. From there, we could find a probability distribution that would fit those assumptions. We'll denote our prior distribution as $\pi(\theta)$. 
+A Bayesian approach uses a different philosophy regarding our probability assumptions. It assumes that the unknown parameters are drawn from a prior distribution that reflects what we know about them. The "prior" adjective is important; the modeler should specify it before seeing the observed data. To be clear, maximum likelihood estimation treats the unknown parameters as random while Bayesian methods have us make probabilistic assumptions about each of them. 
+
+For example, recall our model for the time to deliver food in @eq-log-linear. A reasonable prior for the regression parameter associated with distance would have a distribution that has zero probability for values less than zero. We would never think that (log) delivery times decrease with distance. If we worked at the restaurant, we might be able to be more specific based on what we've seen. There might be a basic belief that, all other things are equal, and we might think that every mile further away from the restaurant increases time two-fold. From there, we could find a probability distribution that would fit those assumptions. We'll denote our prior distribution as $\pi(\theta)$. 
 
 Once we have our prior distributions for our parameters and assumptions regarding our data distributions, we can write down the equations required to estimate our results. Bayes' Rule is a basic probability statement that combines the prior distribution with our likelihood function: 
 
 $$
-\pi(\theta|x) = \frac{\pi(\theta) \ell(z|\theta)} {\pi(x)}
+\pi(\theta|x) = \frac{\pi(\theta) \ell(x|\theta)} {\pi(x)}
 $$ {#eq-bayes-rule-distr}
 
 $\pi(\theta|x)$ is the posterior distribution: the probability distribution of our parameters, given the observed data. This is the endpoint for any Bayesian analysis. 
+
+Another important point is that Bayesian estimation has a much more difficult goal than maximum likelihood estimation.  The latter needs to find point estimates of its parameters while Bayesian estimation has to estimate the entire posterior distribution $\pi(\theta|x)$. In a moment, we’ll look at a simple problem with a simple solution. However, in most other cases, the computational requirements to do Bayesian estimation are considerably higher. That's the bad news.
+
+The good news is that, once we find the posterior distribution, it is incredibly useful. First, we can make direct statements about parameter values. Unlike confidence intervals, Bayesian methods allow us to say things like 
+
+> “We believe that there is a 90% probability that the true value of the parameter is between $L$ and $U$.” 
+
+It also lets us easily make similar statements regarding more complex combinations of parameters (such as ratios, etc).
+
+Finally, we should mention the effect of the prior on the computations. It does pull the likelihood $\ell(x|\theta)$ towards it. For example, suppose that for @eq-log-linear we used a highly restrictive prior for $\beta_1$ that was a uniform distribution between [0.7, 0.9]. In that case, the posterior would be confined to this range^[We’ll see how the prior can affect some calculations later in @sec-naive-bayes. ]. That said, the effect of the prior on the posterior _decreases_ as our training set size _increases_. We saw this in @sec-effect-encodings where two travel agents were contrasted; one with many reservations in the data and another with very few. 
+
+To illustrate, let’s look at a very simple example. 
+
+### A Single Proportion 
 
 ```{r}
 #| label: include-forested
@@ -916,20 +934,35 @@ beta_bin_estimate <- function(num_events, total, alpha = 1, beta = 1) {
   (num_events + alpha) / (alpha + beta + total) * 100
 }
 
+alpha <- 5
+beta <- 3
+
+n_y_small <- 2
+n_tr_small <- 3
+
 n_y <- sum(forested_train$class == "Yes")
 n_tr <- nrow(forested_train)
 p_mle <- mean(forested_train$class == "Yes") * 100
+
+alpha_post <- alpha + n_y
+beta_post <- n_tr - n_y + beta
 ```
 
-Let’s look at a very simple example. For the forestry data last seen in @sec-spatial-resampling, the outcome is categorical with values “yes” and “no” for the question “Is this location forested?” We might use the training data set to estimate the rate ($\pi$) that the event occurs. The simplest statistic is the sample proportion: the number of events divided by the number of total data points: ($\hat{\pi}$ = `r round(p_mle, 3)`%). 
+For the forestry data last seen in @sec-spatial-resampling, the outcome is categorical with values “yes” and “no” for the question “Is this location forested?” We might use the training data set to estimate the rate ($\pi$) that the event occurs. The simplest statistic is the sample proportion: the number of events divided by the number of total data points: ($\hat{\pi}$ = `r round(p_mle, 3)`%). 
 
-To estimate this rate using maximum likelihood estimation, we treat the data as fixed and would probably assume that the data follow a binomial distribution with theoretical probability $\pi$. From there we can solve equations that find values of $\pi$ that correspond to the largest likelihood value. It turns out that the sample proportion is also the maximum likelihood estimate. From this, the distribution is fully specified and we can compute quantities like p-values, confidence intervals etc. 
+To estimate this rate using maximum likelihood estimation, we treat the data as fixed and would probably assume that the data follow a binomial distribution with theoretical probability $\pi$. From there we can solve equations that find a value of $\pi$ that correspond to the largest likelihood. It turns out that the sample proportion is also the maximum likelihood estimate. 
 
-Once we solve the equations, there are single "best" values for the parameters. These are the maximum likelihood estimates and with them comes a full specification of the sampling distributions of the model parameters. With the sampling distributions, tools like hypothesis testing. standard errors, and confidence intervals can be used to help describe the data or answer specific questions.
+Instead of treating the unknown parameter as a single non-rnaomd value, Bayesian methods propose that the parameter comes from a _distribution_ of possible values. This distribution reflects our prior understanding or belief about the parameter based on what we know of the situation. For this reason, it is called a _prior_ distribution. If we think that the probability that a location in Washington state is forested, we would choose a distribution with higher probabilities near 1.0. 
 
-Instead of treating the unknown parameter as a single value that we estimate, Bayesian methods propose that the parameter comes from a _distribution_ of possible values. This distribution reflects our prior understanding or belief about the parameter based on what we know of the situation. For this reason, it is called a _prior_ distribution. If we think that the probability that a location in Washington state is forested, we would choose a distribution with higher probabilities near 1.0. 
+For a binomial model, an example of a prior distribution for the probability of an event is the Beta distribution. The Beta distribution is very flexable and has values range between zero and one. It is indexed by two parameters: $\alpha$ and $\beta$. @fig-beta-dist shows different versions of the Beta for different values.  
 
-For a binomial model, an example of a prior distribution for the probability of an event is the Beta distribution. Beta values range between zero and one. The Beta distribution is very flexible. It is indexed by two parameters: $\alpha$ and $\beta$. @fig-beta-dist shows different versions of the Beta for different values.  If we think that larger probabilities of forestation are more likely, we might choose a Beta prior that has values of $\alpha$  that are larger than $\beta$. This is an example of an informative prior, albeit a weak one. As our prior distribution is more peaked, it reflects that before seeing any data, we have strong beliefs. 
+To settle on a specific prior, we would posit different questions such as:
+
+- “Are there rate values that we would _never_ believe possible?”
+- “What is the most likely value that we would expect and how certain are we of that?” 
+- “Do we think that the distribution of possible values is symmetric?”
+
+From these answers, we would experiment with different values of $\alpha$ and $\beta$ until we find a combination that encapsulates what we believe. If we think that larger probabilities of forestation are more likely, we might choose a Beta prior that has values of $\alpha$  that are larger than $\beta$. This is an example of an informative prior, albeit a weak one. As our prior distribution is more peaked, it reflects that before seeing any data, we have strong beliefs. If we honestly have no idea, we could choose a uniform distribution between zero and one using $\alpha = \beta = 1$.  
 
 ```{r}
 #| label: fig-beta-dist
@@ -954,17 +987,19 @@ crossing(
   scale_colour_viridis_d(option = "viridis")
 ```
 
-What if we have no idea of what the prior should be? In this case, a flat (or nearly flat) prior would equally weight every possible point. In @fig-beta-dist we can see that the combination of $\alpha = \beta = 1$ is a uniform distribution. 
-
-We’ll see how the prior can affect some calculations later in @sec-naive-bayes. In the meantime, let’s see how it comes into play in our simple binomial example. If the training set has $n_{tr}$ points and $n_+$ of them are known to be forested, the ordinary sample proportion estimate is $\hat{p} = n_+ / n_{tr}$. In a Bayesian analysis, the final estimate is a function of both the prior distribution and our observed data. For a Beta prior, the Bayesian estimate is 
+We'll use values of $\alpha = 5$ and $\beta = 3$. If the training set has $n_{tr}$ points and $n_+$ of them are known to be forested, the ordinary sample proportion estimate is $\hat{p} = n_+ / n_{tr}$. In a Bayesian analysis, the final estimate is a function of both the prior distribution and our observed data. For a Beta prior, the Bayesian estimate is 
 
 $$
 \hat{p}_{BB} = \frac{n_+ +\alpha}{n_{tr} + \alpha + \beta}
 $$ {#eq-beta-bin-mean}
 
-If, before seeing the data, we had chosen $\alpha = 5$ and $\beta = 1$, we estimate that $\hat{p}_{BB} = `r round(beta_bin_estimate(n_y, n_tr, 5, 1), 3)`$%. This is pretty close to our simple estimate because there is so much data in the training set ($n_{tr} = `r n_tr`$) that the influence of the prior is severely diminished. As a counter-example, if our data were $n_y = 1$ and $n_{tr} = 2$, the prior would pull the estimate from 50% to 75%. 
+If, before seeing the data, we had chosen $\alpha = 5$ and $\beta = 1$, we estimate that $\hat{p}_{BB} = `r round(beta_bin_estimate(n_y, n_tr, 5, 1), 3)`$%. This is pretty close to our simple estimate because there is so much data in the training set ($n_{tr} = `r n_tr`$) that the influence of the prior is severely diminished. As a counter-example, suppose we took a very small sample that resulted in $n_y = 1$ and $n_{tr} = 3$, the prior would pull the estimate from 33.3% to `r round(beta_bin_estimate(1, 3, 5, 3), 1)`%. 
 
-Once we have specified our prior and collected data, the results of a Bayesian analysis is a _posterior_ distribution. In our binomial example, we are lucky that the Beta prior has a special relationship with the binomial distribution; when used together, the posterior _also_ has a beta distribution. @eq-beta-bin-mean is the mean of that distribution. In general, it is unusual for the posterior to be so cleanly described. In most cases, it has an unknown form that must be estimated using Monte Carlo methods. We often summarize the prior using statistics like the mean, mode, standard deviation, etc. One strength of Bayesian methods is that we can easily derive complex statistics from them, including the posterior of individual predictions (called posterior predicted distribution). 
+Now suppose that for regulatory purposes, we were required to produce an interval estimate for our parameter. From these data and our prior, we could say that the true probability of forestation has a 90% chance of being between `r round(qbeta(0.05, alpha_post, beta_post)*100, 1)`% and `r round(qbeta(0.95, alpha_post, beta_post)*100, 1)`%. 
+
+We did mention that it can be very difficult to compute the posterior distribution. We deliberately chose this situation because, it turns out that if we assume a binomial distribution for our data and a $Beta(\alpha, \beta)$ prior, the posterior is  $Beta(\alpha + n_y, n_{tr} - n_y + \beta)$. More often than not, we will not have a simple analytical solution for the posterior. That said, we’ll see this happen again in @sec-gp.
+
+<br>
 
 ::: {.note-box}
 To summarize: 
@@ -978,7 +1013,7 @@ We’ll encounter even more Bayesian methods in subsequent chapters.
 
 ## Bayesian Optimization {#sec-bayes-opt}
 
-Bayesian optimization (BO) is a search procedure that uses an overarching statistical model to predict the next set of candidate values, given past performance. It is currently the most used iterative search routine for optimizing models. 
+Bayesian optimization (BO)[@gramacy2020surrogates;@garnett2023] is a search procedure that uses an overarching statistical model to predict the next set of candidate values, given past performance. It is currently the most used iterative search routine for optimizing models. 
 
 It is often tied to a particular Bayesian predictive model: the Gaussian process (GP) regression model. However, before diving into the details of that model, we can discuss what a Bayesian model is and why it is required for this optimization process. 
 
@@ -1202,9 +1237,9 @@ Apart from different acquisition functions, many other variations can be used in
 
 Now that the general optimization process has been outlined, let's focus on the most popular Bayesian model for searchm the Gaussian process (GP) model. 
 
-### Gaussian Process models
+### Gaussian Process models {#sec-gp}
 
-GPs are often motivated as special cases of stochastic processes, which are the collection of random variables that are indexed by one or more variables. The most common example of a stochastic process is the stock market. A stock price is a random variable that, in this case, is indexed by time. A Gaussian process is just a stochastic process whose data are assumed to be multivariate normal. 
+GPs [@williams2006gaussian;@garnett2023] are often motivated as special cases of stochastic processes, which are the collection of random variables that are indexed by one or more variables. The most common example of a stochastic process is the stock market. A stock price is a random variable that, in this case, is indexed by time. A Gaussian process is just a stochastic process whose data are assumed to be multivariate normal. 
 
 Gaussian processes are different from basic multivariable normal distributions. Let's say that we collected the heights and weights of 100 students in a specific grade. If we collect the heights and weights into a two-dimensional vector $\boldsymbol{x} = [height, weight]$, we might assume that the data is multivariate normal, with a 2D population mean _vector_ and a 2 $\times$ 2 covariance matrix, i.e., $\boldsymbol{x} \sim N(\boldsymbol{\mu}, \Sigma)$. In this case, the data are a sample of people at a static time point. 
 
@@ -1462,19 +1497,15 @@ one at a time but there are ways of expanding that.
 
 We’ll return to the data previously seen in @sec-barley where we want to predict the percentage of barley oil in a mixture. Recall that the predictors are extremely correlated with one another. In @sec-embeddings, we considered embedding methods like PCA to preprocess the data. 
 
-### Savitzky-Golay Signal Processing {#sec-savitzky-golay}
-
-In this chapter, we’ll take a more sophisticated approach to preprocessing these data using signal processing techniques, specifically the **Savitzky-Golay** method. This technique incorporates two main goals: to smooth the data from location to location (i.e., across the x-axis in @fig-barley-data(b)) and to difference the data. Smoothing attempts to reduce measurement noise without diminishing the data patterns that could predict the outcome. Differencing can remove the correlation between locations and might also mitigate other issues, such as systematic background noise. 
+In this chapter, we’ll take a more sophisticated approach to preprocessing these data using signal processing techniques, specifically the **Savitzky-Golay** method [@Schafer2011;@rinnan2009review]. This technique incorporates two main goals: to smooth the data from location to location (i.e., across the x-axis in @fig-barley-data(b)) and to difference the data. Smoothing attempts to reduce measurement noise without diminishing the data patterns that could predict the outcome. Differencing can remove the correlation between locations and might also mitigate other issues, such as systematic background noise. 
 
 For smoothing, the procedure uses a moving window across a sample’s location and, within each window, uses a polynomial basis expansion to produce a smoother representation of the data. The window width and the polynomial degree are both tuning parameters. Note that the polynomial degree cannot be larger than the window width. 
 
-Differencing has a single tuning parameter: the difference order. A zero-order difference leaves the data as-is (After smoothing). A first-order difference is the smoothed value minus the smoothed value for the next location (and so on). 
+Differencing has a single tuning parameter: the difference order. A zero-order difference leaves the data as-is (after smoothing). A first-order difference is the smoothed value minus the smoothed value for the next location (and so on). Savitzky and Golay's method uses the polynomial estimates to estimate the differences/derivatives, instead of subtracting two columns after smoothing. 
 
 @fig-savitzky-golay shows an example of a small set of locations. The top row shows the effect of smoothing when differencing is not used. For a linear smoother (i.e., a polynomial degree of one), the process can over-smooth the data such that the nonlinear portions of the raw data lose significant amounts of information. This issue goes away as the polynomial order is increased. However, the higher degree polynomial nearly interpolates between data points and may not be smoothing the data. 
 
 The bottom panel shows the data when a first-order difference is used. The pattern is completely different since the data now represent the rate of change in the outcome rather than the absolute measurement values. Again, larger window sizes oversmooth the data, and the highest degree of polynomial provides minimal smoothing. 
-
-We’ll want to optimize these preprocessing parameters simultaneously with the parameters for the supervised model. 
 
 ```{r}
 #| label: fig-savitzky-golay
@@ -1512,7 +1543,19 @@ diff_p <- diff_plot_data %>%
 smoothed_p / diff_p
 ```
 
-### Initial Candidate Set
+
+We’ll want to optimize these preprocessing parameters simultaneously with the parameters for the supervised model. We’ll fit a neural network with a single layer of hidden units. We’ll tune over the following parameters, described at length in @sec-cls-nnet:
+
+- The number of hidden units in the layer. 
+- The type of nonlinear function that connects the input layer and the hidden layer, called the “activation function.”. Possible functions are “tanh”, exponential linear unit  (“ELU”) functions, rectified linear unit (“ReLU”) functions, and log-sigmoidal functions. 
+- The number of epochs of degraded performance before early stopping is enacted. 
+- The total amount of penalization for the model. 
+- The proportion of $L_1$ penalty (a.k.a. Lasso penalization). 
+- The initial learning rate used during gradient descent. 
+- The “scheduling” function to adjust the learning rate over iterations: “constant”, “cyclic”, or “exponential decay”.
+
+In all, there are ten tuning parameters, two of which are qualitative. 
+
 
 ```{r}
 #| label: collect-iterative
@@ -1523,12 +1566,27 @@ iters <- max(mlp_sfd_bo_ci$.iter)
 rmse_rng <- extendrange(c(mlp_sfd_bo_ci$.lower, mlp_sfd_bo_ci$.upper, 
                           mlp_sfd_sa_ci$.lower, mlp_sfd_sa_ci$.upper))
 
+init_rng <- paste0(round(range(mlp_sfd_bo_ci$.estimate[mlp_sfd_bo_ci$.iter == 0]), 1), "%")
+init_rng <- cli::format_inline("{init_rng}")
+
 mlp_sfd_bo_best_ci <- 
   mlp_sfd_bo_ci %>% 
   filter(.iter == max(mlp_sfd_bo_best))
 
 mlp_sfd_bo_ci$is_best <- "no"
 mlp_sfd_bo_ci$is_best[mlp_sfd_bo_ci$.iter %in% mlp_sfd_bo_best] <- "yes"
+
+mlp_sfd_bo_ci <- mlp_sfd_bo_ci %>% arrange(.iter)
+
+bo_best_iter <- bo_best <- Inf
+
+for (i in 1:nrow(mlp_sfd_bo_ci)) {
+  if (mlp_sfd_bo_ci$.estimate[i] < bo_best) {
+    bo_best <- mlp_sfd_bo_ci$.estimate[i]
+    bo_best_iter <- c(bo_best_iter, mlp_sfd_bo_ci$.iter[i])
+  }
+}
+bo_best_iter <- bo_best_iter[bo_best_iter > 0 & is.finite(bo_best_iter)]
 
 mlp_sfd_sa_best_ci <- 
   mlp_sfd_sa_ci %>% 
@@ -1541,7 +1599,10 @@ mthds <- c("Simulated Annealing", "Bayesian Optimization")
 restarts <- result_history$.iter[result_history$results == "restart from best"]
 restarts <- tibble(Method = factor("Simulated Annealing", levels = mthds), 
                    .iter = restarts)
+sa_best <- result_history$.iter[result_history$results == "new best"]
 ```
+
+A space-filling design with `r mlp_sfd_bo_ci %>% filter(.iter == 0) %>% nrow()` candidate points were initially processed to use as the starting point for Bayesian optimization and simulated annealing. @tbl-nnet-initial shows the settings and their corresponding validation set RMSE values, which ranged between `r init_rng`. At least two of the settings show good performance results, especially compared to the RMSE values previously achieved when embeddings and/or SVMs were used.   
 
 ::: {#tbl-nnet-initial}
 
@@ -1578,8 +1639,7 @@ The initial set of candidates used for iterative search methods.
  
 :::
 
-### Iterative Search
-
+Can we improve on these results using iterative optimization? To begin, a simulated annealing search was initialized using the best results in TODO and ran with no early stopping for `r iters` iterations. If a new globally best result was not found within eight iterations, the search restarted from the previously best candidate. `r cli::format_inline("The search was restarted {length(restarts$.iter)} time{?s} at iterations {restarts$.iter}")`. The best candidate was found at iteration `r sa_best` with a RMSE value of `r round(mlp_sfd_sa_best_ci$.estimate, 2)`%, slightly better than the best result found in the initial grid. The 90% confidence interval, (`r round(mlp_sfd_sa_best_ci$.lower, 2)`%, `r round(mlp_sfd_sa_best_ci$.upper, 2)`%), verifies that the new candidate has equivocal performance to the initial best configuration. The top panel of @fig-nnet-sg-iterations shows the RMSE values over iterations and @tbl-nnet-sg-best lists the best candidate value.
 
 ```{r}
 #| label: fig-nnet-sg-iterations
@@ -1610,11 +1670,7 @@ mlp_sfd_sa_ci %>%
   scale_color_manual(values = c("black", "#FF7F00"))
 ```
 
-On average, simulated annealing took `r prettyunits::pretty_sec(mlp_sa_time[3] / iters)`  for each candidate and BO used `r prettyunits::pretty_sec(mlp_bo_time[3] / iters)` (a `r round(mlp_bo_time[3]/mlp_sa_time[3], 1)`-fold difference). 
-
-Simulated annealing arrived at the following candidate set (at iteration `r mlp_sfd_sa_best`): 
-
-The corresponding validation set RMSE was `r round(mlp_sfd_sa_best_ci$.estimate, 2)`% with 90% confidence interval of (`r round(mlp_sfd_sa_best_ci$.lower, 2)`%, `r round(mlp_sfd_sa_best_ci$.upper, 2)`%).
+A Bayesian optimization was also used with a squared exponential kernel for the covariance function and used expected improvement to select candidates at each of the `r iters` iterations. This search found new best results at `r cli::format_inline("{length(bo_best_iter)} iteration{?s}: {bo_best_iter}")`. Like the SA search, the best RMSE was not substantially different than the one found in the initial grid: `r round(mlp_sfd_bo_best_ci$.estimate, 2)`% with 90% confidence interval, (`r round(mlp_sfd_bo_best_ci$.lower, 2)`%, `r round(mlp_sfd_bo_best_ci$.upper, 2)`%). The iterations and final values also be seen in @fig-nnet-sg-iterations and @tbl-nnet-sg-best, respectively. 
 
 
 :::: {.columns}
@@ -1677,6 +1733,9 @@ Results of the two iterative searches for a neural network using Savitzky-Golay 
 
 :::: 
 
+Many of the parameter values for the final candidates from each search are very similar. In particular, it appears that a second-order difference in the predictors was very effective. 
+
+In terms of computing time, simulated annealing took `r prettyunits::pretty_sec(mlp_sa_time[3] / iters)` on average for each candidate and compared to `r prettyunits::pretty_sec(mlp_bo_time[3] / iters)` required for BO (a `r round(mlp_bo_time[3]/mlp_sa_time[3], 1)`-fold difference). 
 
 ## Chapter References {.unnumbered}
 
