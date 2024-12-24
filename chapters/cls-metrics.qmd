@@ -1,0 +1,917 @@
+---
+knitr:
+  opts_chunk:
+    cache.path: "../_cache/cls-metrics/"
+---
+
+# Methods for Characterizing Classification Models {#sec-cls-metrics}
+
+```{r}
+#| label: cls-metrics-setup
+#| include: false
+
+source("../R/_common.R")
+
+# ------------------------------------------------------------------------------
+
+library(tidymodels)
+library(discrim)
+library(probably)
+library(patchwork)
+library(kableExtra)
+
+# ------------------------------------------------------------------------------
+# set options
+
+tidymodels_prefer()
+theme_set(theme_transparent())
+
+set_options()
+```
+
+```{r}
+#| label: data-setup
+#| include: false
+
+load("../RData/mushrooms.RData")
+```
+
+```{r}
+#| label: mushrooms-nb
+#| include: false
+#| warnnig: false
+#| cache: true
+
+cls_mtr <- 
+  metric_set(accuracy, bal_accuracy, detection_prevalence, f_meas, j_index, 
+             kap, mcc, npv, ppv, precision, recall, sensitivity, specificity, 
+             brier_class, mn_log_loss, pr_auc, roc_auc)
+
+nb_res <- 
+  naive_Bayes() %>% 
+  fit_resamples(
+    class ~ ., 
+    resamples = shroom_rs,
+    metrics = cls_mtr, 
+    control = control_resamples(save_pred = TRUE, save_workflow = TRUE)
+  )
+
+nb_fit <- fit_best(nb_res)
+nb_mtr <- collect_metrics(nb_res)
+nb_val_pred <- collect_predictions(nb_res)
+nb_val_roc <- roc_curve(nb_val_pred, class, .pred_edible)
+nb_val_pr <- pr_curve(nb_val_pred, class, .pred_edible)
+nb_val_gain <- gain_curve(nb_val_pred, class, .pred_edible)
+
+nb_test_pred <- augment(nb_fit, shroom_test) %>% dplyr::select(class, starts_with(".pred"))
+nb_cal_pred <- augment(nb_fit, shroom_cal)   %>% dplyr::select(class, starts_with(".pred"))
+```
+
+
+TODO
+
+-   update data description; maybe talk a little about the example data
+-   shinylive for roc/pr/gain
+-   mention bootstrapping and permutations
+-   pi pr p for probability estimates?
+-   desirability and other methods for a combined score?
+
+While there are many criteria for assessing classification performance, this chapter will focus on common metrics for measuring a model's predictive performance. In general, classification models produce two types of predictions. Like regression models, classification models can produce a quantitative prediction, usually as a probability (i.e., the predicted class membership values for any individual sample are between zero and one and sum to one). For many practical applications, like automated spam filtering, a discrete category prediction (spam or not spam) is required for each message. In addition to a continuous prediction, a model's predicted probabilities can be turned into discrete categories, commonly referred to as *hard-class* predictions.
+
+Although classification models produce both types of predictions, the focus is often on the discrete prediction rather than the continuous one. However, the probability estimates for each class can be very useful for gauging the model's confidence about the predicted classification. Returning to the spam e-mail filter example, an e-mail message with a predicted probability of being spam of 51{{< pct >}} would be classified the same as a message with a predicted probability of being spam of 99{{< pct >}}. While both messages would be treated the same by the filter, we would have more confidence that the second message was, in fact, truly spam. As a second example, consider building a model to classify drug candidates by their safety status (i.e., non-toxic, weakly toxic, and strongly toxic; e.g., @Piersma2004). A drug with predicted probabilities in each respective toxicity category of 34{{< pct >}}, 33{{< pct >}}, and 33{{< pct >}}, would be classified the same as a drug with respective predicted probabilities of 98{{< pct >}}, 1{{< pct >}}, and 1{{< pct >}}. However, in this case, we are much more confident that the second drug is non-toxic as compared to the first.
+
+In some applications, the desired outcome is the set of predicted class probabilities, each of which is then used as an input for other calculations. Consider an insurance company that wants to uncover and prosecute fraudulent claims. A classification model could be built using historical claims data to predict the probability of claim fraud. This probability would then be combined with the company's investigation costs and potential monetary loss to determine if pursuing the investigation is in the best financial interest of the insurance company.
+
+As mentioned above, most classification models generate predicted class probabilities. However, some models like neural networks and partial least squares (PLS), when used for classification, produce continuous predictions that do not follow the definition of a probability. The predicted values are not necessarily between zero and one and do not sum to one. For example, a partial least squares classification model (described in more detail in @sec-pls-da) would create 0/1 dummy variables for each class and simultaneously model these values as a function of the predictors. When samples are predicted, the model predictions are not guaranteed to be within zero and one. For classification models like these, a transformation must be used to coerce the predictions into "probability-like" values to be interpreted and used for classification. One such method is the *softmax transformation* [@Bridle1990] which is defined as
+
+$$
+\hat{p}_k^* = \frac{e^{\hat{y}_k}}{{\displaystyle  \sum_{l=1}^Ce^{\hat{y}_l}}}
+$$
+
+where $\hat{y}_k$ is the numeric model prediction for the $k^{th}$ class and $\hat{p}_k^*$ is the transformed value between zero and one. Suppose that an outcome has three classes and that a PLS model predicts values of $\hat{y}_1 = 0.25$, $\hat{y}_2 = 0.76$ and $\hat{y}_3 = -0.1$. The softmax function would transform these values to $\hat{p}_1^* = 0.30$, $\hat{p}_2^* = 0.49$ and $\hat{p}_3^* = 0.21$. To be clear, no probability statement is being created by this transformation, it nearly ensures that the predictions have the same mathematical qualities as probabilities. Another tool for rescaling quantitative scores is described in @sec-calibration
+
+We begin this part of the book by discussing metrics for evaluating classification model performance. The statistics discussed in this chapter and in @sec-reg-metrics are often used as *objective functions*. These are typically used during the optimization of model parameters or other quantities. For example, some classification models are trained to maximize their overall classification accuracy. In other words, these metrics are often used as criteria for the "goodness" of a model. Sometimes, when large values are unacceptable, the metric might be referred to as a *loss function*, where "loss" should be minimized. It is important to really understand what is being measured by the objective function. As will be discussed later in this chapter, some metrics may separate classes well but might measure the exactness of the model’s predicted probabilities
+
+After introducing the example data, metrics that measure performance on hard class predictions are discussed. The next section focuses on probabilistic predictions, and subsequent sections discuss other nuances of assessing how well our classification model fits the observed data.
+
+## Example Data
+
+For this chapter, we once again rely on the two-class simulation system described in @sec-two-class-sim. For this chapter, a training set of `r format(nrow(shroom_cal), big.mark = ",")` data points, validation set of `r format(nrow(shroom_val), big.mark = ",")` data points, and a test set of `format(nrow(shroom_val), big.mark = ",")` data points are used to illustrate various methods.
+
+A random forest model (see @sec-random-forest-reg and @sec-random-forest-cls) was used to model these data. This model constructs a collection of smaller tree-based models (2,000 of them in this case) that are combined into a single ensemble model. @fig-class-prob-dist shows the class probability distributions when the training set is simply re-predicted (left-hand panels) as well as the validation set predictions (right-hand panels). Note that when the data are re-predicted, the predictions are cleanly separated by class. The validation set tells a different story that is much closer to the truth. This, once again, demonstrates the performance evaluation should always be conducted on data that were not used to build the model.
+
+## General Metrics for Class Predictions
+
+```{r}
+#| label: cls-metrics
+#| include: false
+
+nb_conf_mat <-
+  nb_val_pred %>% 
+  conf_mat(class, estimate = .pred_class)
+
+conf_mat_table <- 
+  as_tibble(as.matrix(nb_conf_mat$table)) %>% 
+  pivot_wider(id_cols = c(Prediction), names_from = c(Truth), values_from = n) %>% 
+  mutate(Prediction = gsub("class_", "Class ", Prediction)) %>% 
+  mutate(blank = "  ") %>% 
+  relocate(blank, .after = "Prediction") 
+```
+
+A common method for describing the performance hard class predictions is the *confusion matrix*. This is a simple cross-tabulation of the observed and predicted classes for the data. @tbl-confusion-matrix shows examples when the outcome has two classes. Diagonal cells denote cases where the classes are correctly predicted while the off-diagonals illustrate the number of errors for each possible case.
+
+::::::: columns
+::: {.column width="37%"}
+:::
+
+:::: {.column width="26%"}
+::: {#tbl-confusion-matrix}
+```{r}
+#| label: tbl-confusion-matrix
+#| echo: false
+
+conf_mat_table %>% 
+  kbl(col.names = c("Prediction", "", "Yes", "No")) %>% 
+  add_header_above(c(" " = 2, "Truth" = 2)) %>% 
+  kable_styling(full_width = FALSE)
+```
+
+Confusion matrix for validation set predictions from the random forest model.
+:::
+::::
+
+::: {.column width="37%"}
+:::
+:::::::
+
+The simplest metric is the overall accuracy rate (one minus the error rate).
+
+$$
+accuracy = \frac{1}{n}\sum_{k=1}^Cn_{kk}
+$$
+
+where $n_{ij}$ are the number of counts in the *i* th row and the *j* th column of the confusion matrix, $n$ is the total number of data points, and $C$ is the number of classes. For the random forest model, the accuracy computed on the validation set was `r round(nb_mtr$mean[nb_mtr$.metric == "accuracy"] * 100, 1)`{{< pct >}}.
+
+This reflects the agreement between the observed and predicted classes and has the most straightforward interpretation. However, there are a few disadvantages to using this statistic. First, overall accuracy does not distinguish the *type* of error being made. In spam filtering, the cost of erroneously deleting an important email is likely higher than incorrectly allowing a spam email past a filter. Accuracy may not measure the important model characteristics in situations where the costs are different. @Provost1998p1185 provides a comprehensive discussion of this issue, which is examined further below.
+
+Second, one must consider the natural frequencies of each class. For example, in the United States, pregnant women routinely have blood drawn for Alpha-fetoprotein testing, which attempts to detect genetic problems such as Down syndrome. Suppose the rate of this disorder[^1] In fetuses, it is approximately 1 in 800, or about one-tenth of one percent. A predictive model can achieve almost perfect accuracy by predicting all samples to be negative for Down syndrome.
+
+[^1]: In medical terminology, this rate is referred to as the prevalence of a disease, while in Bayesian statistics, it would be the prior probability of the event.
+
+What benchmark accuracy rate should be used to determine whether a model is performing adequately? The *no-information rate* is the accuracy rate achieved without a model. There are various ways to define this rate. For a data set with $C$ classes, the simplest definition, based on pure randomness, is $1/C$. However, this does not consider the relative frequencies of the classes in the training set. For the Down syndrome example, if 1,000 random samples are collected from the population receiving the test, the expected number of positive samples would be small (perhaps 1 or 2). A model that predicted all samples to be negative for Down syndrome would easily surpass the no-information rate based on random guessing (50{{< pct >}}). An alternate definition of the no-information rate is the percentage of the largest class in the training set; models with accuracy greater than this rate might be considered reasonable. The effect of severe class imbalances and some possible remedies are discussed in @sec-imbalances.
+
+Rather than calculate the overall accuracy and compare it to the no-information rate, other metrics that consider the class distributions of the training set samples can be used. The *Kappa statistic* (also known as Cohen's Kappa) was initially designed to assess the agreement between two raters [@Cohen:1960]. Kappa takes into account the accuracy that would be generated simply by chance. The form of the statistic is
+
+$$
+Kappa = \frac{accuracy - E}{1 - E}
+$$
+
+where $E$ is the expected accuracy based on the marginal totals of the confusion matrix. For two classes, this is:
+
+$$
+E =\frac{1}{n^{2}}\sum_{k=1}^2n_{k1}n_{k2}
+$$
+
+The statistic can take on values between -1 and 1; a value of zero means no agreement between the observed and predicted classes, while a value of one indicates perfect concordance of the model prediction and the observed classes. Negative values indicate that the prediction is in the *opposite* direction of the truth. Still, large negative values seldom occur, if ever, when working with predictive models[^2]. When the class distributions are equivalent, overall accuracy and Kappa are proportional. Kappa values within 0.30 to 0.50 indicate reasonable agreement depending on the context. Suppose the accuracy for a model is high (90{{< pct >}}), but the expected accuracy is also high (85{{< pct >}}); the Kappa statistic would show moderate agreement (Kappa = 1/3) between the observed and predicted classes. For our validation set, the Kappa estimate was `r signif(nb_mtr$mean[nb_mtr$.metric == "kap"], 3)`.
+
+[^2]: This is true since predictive models seek to find a concordant relationship with the truth. A large negative Kappa would imply that there is a relationship between the predictors and the response, and the predictive model would seek to find the relationship in the correct direction.
+
+The Kappa statistic can also evaluate concordance in problems with more than two classes by extending the formula for the expected counts. In this form, any misclassification is equally detrimental. If there is no natural ordering of the classes, then treating all misclassifications equally may be appropriate. However, when there is a natural ordering to the classes (e.g., "low," "medium," and "high"), it may not be appropriate to treat all misclassifications equally. For example, classifying a truly highly toxic compound as non-toxic may be more costly than classifying the same compound as moderately toxic. To penalize misclassification errors based on their distance to the true classification, [@Agresti:2002vi] developed the *weighted Kappa* statistic. @sec-cls-case-study will show an example that uses specific cost values for different types of errors.
+
+Matthews correlation coefficient [@MATTHEWS1975442; @GORODKIN2004367] (MCC) is another metric that can compare the observed and predicted classes. The equation for *C* classes is:
+
+$$
+{\displaystyle {\text{MCC}}={\frac {\displaystyle{\sum_{k=1}^C\sum_{l=1}^C\sum _{m=1}^C(n_{kk}n_{lm}-n_{kl}n_{mk})}}{{\sqrt {{\displaystyle \sum_{k=1}^C\left(\sum _{l=1}^Cn_{kl}\right)\left(\sum _{\substack{k'=1\\k'\neq k}}^C\sum _{l'=1}^Cn_{k'l'}\right)}}}{\sqrt {{\displaystyle\sum_{k=1}^C\left(\sum _{l=1}^Cn_{lk}\right)\left(\sum _{\substack{k'=1\\k'\neq k}}^C\sum _{l'=1}^Cn_{l'k'}\right)}}}}}}
+$$
+
+The statistic mirrors the correlation coefficient for numeric data in that it ranges from -1 to +1 and, like Kappa, has a similar interpretation. The MCC estimate, `r signif(nb_mtr$mean[nb_mtr$.metric == "mcc"], 3)`, is very close to the Kappa estimate.
+
+## Metrics for Two Classes
+
+Consider the case where there are only **two classes**. @tbl-confusion-matrix-two-class shows the confusion matrix for generic classes "event" and "non-event". The top row of the table corresponds to samples predicted to be events. Some are predicted correctly (the true positives, or *TP*) while others are incorrectly predicted (false positives or *FP*). Similarly, the second row contains the predicted negatives with true negatives (*TN*) and false negatives (*FN*).
+
+::::::: columns
+::: {.column width="30%"}
+:::
+
+:::: {.column width="40%"}
+::: {#tbl-confusion-matrix-two-class}
+```{r}
+#| label: tbl-confusion-matrix-two-class
+#| echo: false
+
+tibble::tribble(
+  ~Prediction, ~event, ~`non-event`,
+      "event",   "TP",       "FP",
+  "non-event",   "FN",       "TN"
+  ) %>% 
+  kbl() %>% 
+  add_header_above(c(" " = 1, "Truth" = 2)) %>% 
+  kable_styling(full_width = FALSE) 
+```
+
+A general confusion matrix for outcomes with two classes.
+:::
+::::
+
+::: {.column width="30%"}
+:::
+:::::::
+
+For two classes, there are additional statistics that may be relevant when one class is interpreted as the event of interest (such as Down syndrome in the previous example). The *sensitivity* of the model is the rate that the event of interest is predicted correctly for all samples having the event, or:
+
+$$
+Sensitivity = \frac{\text{correctly predicted events}}{\text{total events}} = \frac{TP}{TP + FN}
+$$
+
+The sensitivity is sometimes considered the *true positive rate* since it measures the accuracy in the event population. Conversely, the *specificity* is defined as the rate that non-event samples are predicted as non-events, or
+
+$$
+Specificity = \frac{\text{correctly predicted non-events}}{\text{total non-events}} = \frac{TN}{TN + FP}
+$$
+
+The *false positive rate* is defined as one minus the specificity. Assuming a fixed level of accuracy for the model, there is typically a trade-off to be made between sensitivity and specificity. Intuitively, increasing the sensitivity of a model is likely to incur a loss of specificity, since more samples are being predicted as events. Potential trade-offs between sensitivity and specificity may be appropriate when there are different penalties associated with each type of error. In spam filtering, there is usually a focus on specificity; most people are willing to accept seeing some spam provided that important emails are not filtered. The *Receiver Operating Characteristic (ROC) curve* is one technique for evaluating this trade-off and is discussed in the next section.
+
+Often, there is interest in having a single measure that reflects the false positive and false negative rates. One took is Youden's *J* Index [@Youden:cs]:
+
+$$
+J = Sensitivity + Specificity - 1
+$$
+
+measures the proportions of correctly predicted samples for both the event and non-event groups. In some contexts, this may be an appropriate method for summarizing the magnitude of both types of errors.
+
+For our data, the sensitivity was `r round(nb_mtr$mean[nb_mtr$.metric == "sensitivity"] * 100, 1)`{{< pct >}} with a specificity of `r round(nb_mtr$mean[nb_mtr$.metric == "specificity"] * 100, 1)`{{< pct >}}.
+
+One often overlooked aspect of sensitivity and specificity is that they are *conditional* measures. Sensitivity is the accuracy rate for only the event population (and specificity for the non-events). With sensitivity and specificity, an obstetrician may be interested in answering the following question:
+
+> Assuming that the fetus does not have Down syndrome, what is the accuracy of the test?
+
+However, this question might not be helpful to a patient since, for any given sample, all that is known is the prediction. A patient may more likely be interested in asking the *unconditional* question:
+
+> Given my test has a positive answer, what are the chances that the fetus has the genetic disorder?
+
+Answering this question depends on three values: the sensitivity and specificity of the diagnostic test and the prevalence of the event in the population. Intuitively, if the event is rare, this should be reflected in the answer. Taking the prevalence into account, the analog to sensitivity is the *positive predicted value* (PPV) and the analog to specificity is the *negative predicted value* (NPV). The formulas for these metrics are:
+
+$$
+\begin{align}
+PPV&= \frac{Sensitivity \times Prevalence}{(Sensitivity \times Prevalence) + ((1 - Specificity) \times (1 - Prevalence))}  \notag \\
+\notag \\
+NPV&= \frac{Specificity \times (1 - Prevalence)}{(Prevalence \times (1 - Sensitivity)) + (Specificity \times (1 - Prevalence))} \notag
+\end{align}
+$$
+
+Clearly, the predictive values are non-trivial combinations of performance and the rate of events. These values make unconditional evaluations of the data[^3]. The positive predicted value answers the question, "What is the probability that this sample is an event?". While the negative predicted value answers the question, "What is the probability that this sample was not an event?".
+
+[^3]: In relation to Bayesian statistics, the sensitivity and specificity are the conditional probabilities, the prevalence is the prior and the positive/negative predicted values are the posterior probabilities
+
+For the simulated validation set, the PPV and NPV were `r round(nb_mtr$mean[nb_mtr$.metric == "ppv"] * 100, 1)`{{< pct >}} and `r round(nb_mtr$mean[nb_mtr$.metric == "npv"] * 100, 1)`{{< pct >}}, respectively, when the validation set event rate of `r round(mean(nb_cal_pred$class == "edible") * 100, 1)`{{< pct >}} is used. @fig-prevalence shows how the prevalence affects these values. As the event rate increases, the PPV also increases, but at a significant cost to NPV. As prevalence decreases, the opposite pattern occurs. The effect of extreme prevalence values represents the fundamental difficulty of fitting models with extreme class imbalances (see @sec-imbalances). It can be very difficult to get both acceptable performance statistics for each class.
+
+```{r}
+#| label: fig-prevalence
+#| echo: false
+#| out-width: 65%
+#| fig-width: 6
+#| fig-height: 4
+#| fig-cap: The effect of prevalence on the postive and negative predictive values using the sensitivity and specificity from the random forest model. 
+
+ppv_fn <- function(sens, spec, prev = 1 / 2) {
+  ( sens * prev ) / ( (sens * prev) + ( (1 - spec) * (1 - prev) ) )
+}
+npv_fn <- function(sens, spec, prev = 1 / 2) {
+  ( spec * (1 - prev) ) / ( ( (1 - sens) * prev) + ( (spec) * (1 - prev) ) )
+}
+
+x <- seq(0, 1, length.out = 100)
+ 
+grid <- 
+  crossing(
+    sens = nb_mtr$mean[nb_mtr$.metric == "sensitivity"], 
+    spec = nb_mtr$mean[nb_mtr$.metric == "specificity"], 
+    prev = x
+  ) %>% 
+  mutate(
+    PPV = pmap_dbl(list(sens, spec, prev), ppv_fn),
+    NPV = pmap_dbl(list(sens, spec, prev), npv_fn)
+  )
+
+grid %>% 
+  pivot_longer(cols = c(PPV, NPV), names_to = "metric: ") %>% 
+  ggplot(aes(x = prev, y = value, col = `metric: `)) +
+  geom_vline(xintercept = mean(nb_cal_pred$class == "edible"), lty = 2) +
+  geom_line() + 
+  labs(x = "Prevalence", y = NULL) +
+  theme(legend.position = "top")
+```
+
+The positive predictive value is a more simplistic function of sensitivity and specificity when the event rate is balanced (50{{< pct >}}). In *this special case*, the positive predicted value would be
+
+$$
+PPV = \frac{Sensitivity}{Sensitivity \times (1 - Specificity)} = \frac{TP}{TP+FP}
+$$
+
+Predictive values are not often used to characterize the model. There are several reasons why, most of which are related to prevalence. First, prevalence is hard to quantify. Our experience is that very few people, even experts, are willing to propose an estimate of this quantity based on prior knowledge. Also, the prevalence is dynamic. For example, the rate of spam emails increases when new schemes are invented but later fall off to baseline levels. For medical diagnosis, the prevalence of diseases can vary greatly depending on the geographic location (e.g. urban versus rural, etc). For example, during the COVID pandemic, disease rates significantly varied over geographic regions; the *global* prevalence was interesting to know, but the infection rate in your local area was probably more important.
+
+Sensitivity and specificity are geared towards a decision-theoretic point of view where the focus is on the two types of errors. Other applications of models have different goals. For example, in information retrieval, the scenario is one where a pool of "documents" are predicted as relevant or not. In this context, a "retrieved" document is one that is predicted as relevant. The primary measures of performance in information retrieval are precision and recall.
+
+Precision is the proportion of the correctly retrieved out of the total retrieved:
+
+$$
+Precision = \frac{\text{relevant and retrieved}}{\text{total retrieved}}=\frac{TP}{TP + FP}
+$$ In the special case when the classes are balanced, this is equal to the positive predictive value (but is not otherwise).
+
+The other measure, recall, is the accuracy of retrieval:
+
+$$
+Recall = \frac{\text{relevant and retrieved}}{\text{total relevant}} = \frac{TP}{TP + FN}
+$$ This is the same as sensitivity.
+
+Additionally, the $F_1$ score is the harmonic mean of precision and recall:
+
+$$
+F_{1}=2\left(\frac{precision \times recall}{precision + recall}\right)
+$$
+
+More generally, the score can be written as
+
+$$
+F_{\beta}=(1+\beta_2)\left(\frac{precision \times recall}{(\beta^2 \times precision) + recall}\right)
+$$
+
+This parameterization allows users to place $\beta$-fold more importance on recall, relative to precision.
+
+For our data, the precision, recall, and $F_1$ were: `r round(nb_mtr$mean[nb_mtr$.metric == "precision"] * 100, 1)`{{< pct >}}, `r round(nb_mtr$mean[nb_mtr$.metric == "recall"] * 100, 1)`{{< pct >}}, and `r signif(nb_mtr$mean[nb_mtr$.metric == "f_meas"], 3)`.
+
+When there are three or more classes, the hard class predictions are made by choosing the class with the largest probability value. For two classes, hard class predictions can be made by thresholding the predicted probability of being an event (or of being relevant). The default threshold is usually 50{{< pct >}}. However, the default threshold may not provide the optimal value for the metric we desire to optimize. The next section first examines performance metrics that do not require thresholding and then proceeds to define metrics that use multiple thresholds.
+
+## Metrics for Class Probabilities
+
+Class probabilities potentially offer more information about model predictions than the simple class value. This section discussed several approaches to using the probabilities to compare models.
+
+```{r}
+#| label: prob-metrics
+#| include: false
+
+# ------------------------------------------------------------------------------
+# Compute the curves to get specific points
+
+get_closest <- function(x, value) {
+  x %>% 
+    mutate(diff = abs(.threshold - value)) %>% 
+    slice_min(diff, n = 1) %>% 
+    dplyr::select(-diff) %>% 
+    mutate(
+      threshold = format(round(.threshold, 2)),
+      threshold = sprintf("%2.2f", .threshold)
+      )
+}
+roc_points <- 
+  bind_rows(
+    get_closest(nb_val_roc, .25), 
+    get_closest(nb_val_roc, .5), 
+    get_closest(nb_val_roc, .75),
+  )
+
+pr_points <- 
+  bind_rows(
+    get_closest(nb_val_pr, .25), 
+    get_closest(nb_val_pr, .5), 
+    get_closest(nb_val_pr, .75),
+  )
+
+gain_point <- 
+  nb_val_gain %>% 
+  mutate(diff = abs(.percent_found - 30)) %>% 
+  slice_min(diff, n = 1)
+
+# ------------------------------------------------------------------------------
+
+set.seed(1)
+rand_log_loss <- 
+  purrr::map_dfr(1:25, ~ mutate(nb_val_pred, class = sample(class)), .id = "rep") %>% 
+  group_by(rep) %>%  
+  mn_log_loss(class, .pred_edible) %>% 
+  summarize(mean = mean(.estimate)) %>% 
+  pluck("mean")
+```
+
+When an outcome has three or more classes, it is common to assume that these data follow a multinomial distribution (a generalization of the binomial distribution). One metric that can be used to measure how well a model performs is the *log-loss*, otherwise known as the negative log-likelihood. For the multinomial distribution, this equation is:
+
+$$
+loss = -\frac{1}{N}\sum_{i=1}^N\sum_{k=1}^Cy_{ik}\log(\hat{p}_{ik})
+$$
+
+The same equation is appropriate for binomial data (i.e., outcomes with two classes). In this formulation, we want to minimize the loss. One issue with this metric is that it is difficult to interpret[^4]. It is also not a measure of *error*; the likelihood measures how well the estimated probabilities are consistent with the data.
+
+[^4]: This will not be the case for regression models where the log-loss corresponds to the sums of squares error.
+
+For our random forest model, the log-loss for the validation set was `r signif(nb_mtr$mean[nb_mtr$.metric == "mn_log_loss"], 3)`. It is difficult to know if this corresponds to good performance or not. As a reference point, if the outcome data were randomly scrambled, the average log-loss estimate after 25 simulations, was `r signif(rand_log_loss, 3)`. Since this is a non-informative prediction, it gives a sense of how bad the log-loss value would be for a poor model.
+
+Another performance metric that uses the predicted class probabilities is the Brier score [@brier1950verification; @bella2013effect]. Suppose that the value $y_{ik}$ is a 0/1 indicator for whether the observed outcome $i$ corresponds to class $k$. Using this the score is:
+
+$$
+Brier = \frac{1}{N}\sum_{i=1}^N\sum_{k=1}^C (y_{ik} - \hat{p}_{ik})^2
+$$
+
+```{r}
+#| label: decomp
+#| eval: false
+#| include: false
+brier_decomp_2cls <- 
+  nb_val_pred %>% 
+  group_by(.pred_edible) %>% 
+  summarize(n = n(), r = sum(class == "edible"), .groups = "drop") %>% 
+  mutate(cal = n * (r - .pred_edible)^2, refine = n * r * (1- r)) %>% 
+  summarize(cal = mean(cal), refine = mean(refine), .groups = "drop")
+```
+
+This is the mean squared error of the predicted class probabilities $\hat{p}_{ik}$. The Brier score can range between zero and two, but for two class problems, it is often rescaled to range between zero and one. A perfect model has a score of zero. If a performance metric achieves its smallest value when the probability estimate is perfect, it is called a *proper scoring rule*. There are theoretical benefits to using such a metric and, in the case of the Brier score, it also measures how well a model is calibrated (see @sec-calibration). In fact, the Brier score can be decomposed into different components, one of which specifically measures calibration. However, this can only be computed when the estimated probability values are not unique. For the random forest model, the Brier score value was `r signif(nb_mtr$mean[nb_mtr$.metric == "brier_class"], 3)`.
+
+As with hard class predictions, there are a variety of specialized metrics for two-class problems.
+
+### Reciever Operating Characteristic Curves
+
+ROC curves [@Altman:1994uv; @Brown2006wp; @Fawcett2006gr] were designed as a general method that, given a collection of continuous predictions, determines an effective threshold such that values above the threshold are indicative of a specific event. This tool will be examined in this context in @sec-imbalances, but here we describe how the ROC curve can be used to determine alternate cutoffs for class probabilities.
+
+Recall that, for our random forest model, the default sensitivity and specificity were `r round(nb_mtr$mean[nb_mtr$.metric == "sensitivity"] * 100, 1)`{{< pct >}} and `r round(nb_mtr$mean[nb_mtr$.metric == "specificity"] * 100, 1)`{{< pct >}}, respectively. Suppose that we changed the probability threshold from 50{{< pct >}} to 25{{< pct >}}. This means that we only need to be 25{{< pct >}} sure that our sample is an event to call it an event. As a result, more validation set samples are classified as events. Many of those truly are events, so the sensitivity jumps to `r round(roc_points$sensitivity[1] * 100, 1)`{{< pct >}}. However, some of these newly labeled samples are actually non-events and this harms the specificity, which falls to `r round(roc_points$specificity[1] * 100, 1)`{{< pct >}}.
+
+On the other hand, what if we were more stringent about declaring samples as events? Raising the probability threshold to 75{{< pct >}} would label fewer samples as positive. Fewer predicted samples means fewer false positives, and now specificity increases to `r round(roc_points$specificity[3] * 100, 1)`{{< pct >}}. Now, as one might suspect, fewer predicted events means that we incorrectly predicted some true events, and the sensitivity decreases to `r round(roc_points$sensitivity[3] * 100, 1)`{{< pct >}}.
+
+Changing the probability threshold generally causes a trade-off between sensitivity and specificity. However, the rate of change in these values is not always the same. If the modeling problem requires very good sensitivity, the threshold can be modified so that there is a larger gain in one metric than the decrease in the other.
+
+The ROC curve is created by evaluating the class probabilities for the model across a continuum of thresholds. For each candidate threshold, the resulting true positive rate (i.e., the sensitivity) and the false positive rate (one minus the specificity) are plotted against each other. @fig-roc-curve shows the results of this process for the random forest model predictions for the validation set. The circle shows the default 50{{< pct >}} threshold while the downward triangle corresponds to the performance characteristics for a threshold of 25{{< pct >}}. The upward-facing triangle is the 75{{< pct >}} threshold.
+
+```{r}
+#| label: fig-roc-curve
+#| echo: false
+#| out-width: 60%
+#| fig-width: 5
+#| fig-height: 5
+#| fig-cap: Validation set ROC curves for the random forest model The symbols represent different probability thresholds. 
+
+autoplot(nb_val_roc) + 
+  geom_point(
+    data = roc_points,
+    aes(
+      y = sensitivity,
+      x = 1 - specificity,
+      col = threshold,
+      pch = threshold
+    ),
+    cex = 4
+  ) +
+  scale_shape_manual(values = c(6, 1, 2))
+```
+
+This plot is a helpful tool for choosing a threshold that appropriately maximizes the trade-off between sensitivity and specificity. However, altering the threshold only has the effect of changing the categorization of samples so that more samples are labeled as either positive (e.g., a higher threshold) or negative (e.g., a lower threshold). The impact to the confusion matrix of changing the threshold moves samples into one of the off-diagonal cells, while moving samples out of the other off-diagonal cell. This means that changing the threshold cannot simultaneously move samples into *both* off-diagonal table cells. When altering the threshold, there is almost always a tradeoff between sensitivity and specificity.
+
+The ROC curve can also be used to assess a predictive model quantitatively. A perfect model that completely separates the two classes would have 100{{< pct >}} sensitivity and specificity across all thresholds. Graphically, the ROC curve would be a single step between (0, 0) and (0, 1) and remain constant from (0, 1) to (1, 1). The area under the ROC curve for such a model would be 1.00. A completely ineffective model, or one that would randomly predict the response category, would result in an ROC curve that closely follows the 45-degree diagonal line and would have an area under the ROC curve of approximately 0.50. To visually compare different models, their ROC curves can be superimposed on the same graph. Comparing ROC curves can be useful in contrasting two or more models with different predictor sets (for the same model), different tuning parameters (i.e., within model comparisons), or completely different classifiers (i.e., between models).
+
+The optimal model's ROC curve should be shifted towards the upper left corner of the plot and have the greatest area under the curve. Our random forest model had an estimated area under the ROC curve of `r signif(nb_mtr$mean[nb_mtr$.metric == "roc_auc"], 3)`. Confidence intervals can be determined using the bootstrap confidence interval method [@Hall:2004][^5]. There is a considerable amount of research on methods to formally compare multiple ROC curves. See @Hanley:1982uc, @delong1988com, @Venkatraman:2000ek, and @Pepe for more information.
+
+[^5]: If a model were resampled multiple times, @sec-comparing-models discusses a Bayesian method for producing interval estimates for any performance metric.
+
+One advantage of using ROC curves to characterize models is that, since it is a function of sensitivity and specificity, it is insensitive to disparities in the class proportions [@Provost1998p1185; @Fawcett2006gr]. This is discussed more in @sec-class-imbalance-problems. Another advantage is that a two-class model can be optimized without having to know the best probability threshold to use to measure performance with hard class predictions. Using the ROC AUC, the modeler can defer the threshold question until a final model is selected.
+
+One disadvantage of using the area under the curve to evaluate models is that it obscures information. For example, when comparing models, it is common that no individual ROC curve is uniformly better than another (i.e., the curves cross). By summarizing these curves, there is a loss of information, especially if one particular area of the curve is of interest. For example, one model may produce a steep ROC curve slope on the left but have a lower AUC than another. If the lower end of the ROC curve were of primary interest, then AUC would not identify the best model. If one section of the ROC curve is more critical than others (i.e., high sensitivity, low specificity), a more focused metric can be computed with the partial area under the ROC curve [@McClish].
+
+The ROC curve is only defined for two class problems but has been extended to handle three or more classes. @Hand:2001us, @Lachiche:2003vp, and @Li:2008hh use different approaches to extend the definition of the ROC curve with more than two classes.
+
+### Precision-Recall Curves
+
+Like ROC curves, precision-recall curves can be created by computing those metrics over different thresholds. Like ROC curves, the area under the curve is a good summary metric, and the highest attainable value is 1.0. @fig-pr-curve shows the curve for the random forest model. Again, three different thresholds are labeled in the plot.
+
+```{r}
+#| label: fig-pr-curve
+#| echo: false
+#| warning: false
+#| out-width: 60%
+#| fig-width: 5
+#| fig-height: 5
+#| fig-cap: A precision-recall curve, estimated with the validation set, for the random forest model.
+
+autoplot(nb_val_pr) + 
+  geom_point(
+    data = pr_points,
+    aes(
+      y = precision,
+      x = recall,
+      col = threshold,
+      pch = threshold
+    ),
+    cex = 4
+  ) +
+  scale_shape_manual(values = c(6, 1, 2)) +
+  coord_obs_pred()
+```
+
+### Gain Charts
+
+A technique that is very different from the ROC and PR curves is the Gain charts [@Ling:1998ua] (a.k.a. lift charts). This helps assess the ability of a model to detect events in a data set with two classes. In other words, it is most effective when the highest utility of a model is to find rare events (as opposed to being interested in the global range of predictions). This is especially important for information retrieval. Suppose a group of samples with $M$ events is *scored* using the event class probability. When ordered by the class probability, one would hope that the events are ranked higher than the non-events. Gain charts do just this: rank the samples by their scores and determine the cumulative event rate as more samples are evaluated. In the optimal case, the $M$ highest ranked samples would contain all $M$ events. When the model is non-informative, the highest ranked $X${{< pct >}} samples of the data would contain, on average, $X$ events. The *lift* is the number of samples detected by a model above a completely random selection of samples.
+
+To construct the *gain chart* we would take the following steps:
+
+1.  Predict a set of samples that were not used in the model building process but have known outcomes
+2.  Determine the *baseline* event rate, i.e. the percent of true events in the entire data set
+3.  Order the data by the classification probability of the event of interest
+4.  For each unique class probability value, calculate the percent of true events in all samples less than the probability value
+5.  Divide the percent of true events for each probability threshold by the baseline event rate.
+
+The gain chart plots the the cumulative gain/lift against the cumulative percentage of samples that have been screened. @fig-gain-curve shows the best and worse case gain curves for our data (which has an event rate of `r round(mean(nb_cal_pred$class == "edible") * 100, 1)`{{< pct >}}). A non-informative model would randomly predict an event. This model would produce a curve that is close to the 45 degree reference line, meaning that the model has no benefit for ranking samples. The upper boundary of the shaded line indicates where a perfect model would be manifested on this plot. If we had a perfect model for these data, the `r round(mean(nb_cal_pred$class == "edible") * 100, 1)`{{< pct >}} point on the *x*-axis would correspond to the situation where all of the events have been captured.
+
+```{r}
+#| label: fig-gain-curve
+#| echo: false
+#| out-width: 50%
+#| fig-width: 5
+#| fig-height: 5
+#| fig-cap: "A gain curve based on the validation set. The dotted linear indicates the percentage of samples to query in order to capture 30{{< pct >}} of the samples from the first class."
+
+nb_val_gain %>%
+  autoplot() +
+  geom_segment(
+    data = gain_point,
+    aes(
+      x = .percent_tested, xend = .percent_tested,
+      y = 0, yend = .percent_found
+    ),
+    col = "purple", linewidth = 1, lty = 3
+  ) +
+  geom_segment(
+    data = gain_point,
+    aes(
+      x = 0, xend = .percent_tested,
+      y = .percent_found, yend = .percent_found
+    ),
+    col = "purple", linewidth = 1, lty = 3
+  ) +
+  coord_obs_pred()
+```
+
+Like ROC curves, the gain curves for different models can be compared to find the most appropriate model and the area under the curve can be used as a quantitative measure of performance. Also like ROC curves, some parts of the gain curve are of more interest than others. For example, the section of the curve associated with the highest ranked samples should have an enriched true positive rate and is likely to be the most important part of the curve.
+
+Suppose that our objective is to identify 30{{< pct >}} of the samples from the first class using the random forest model. How much of the data would need to be selected in order to pinpoint these samples? The gain chart helps to identify the percent of samples needed to be selected. The dotted lines in @fig-gain-curve indicates that the top `r round(gain_point$.percent_tested, 1)`{{< pct >}} samples will most likely contain predicted 30{{< pct >}} of the samples from the first class.
+
+## Weighted performance metrics
+
+Two class performance metrics are convenient summaries and are generally interpretable. As we saw earlier in this chapter, the metrics of accuracy and Kappa can directly be extended to more that two classes. Because of the desirable characteristics of other two-class performance metrics, conventions have been constructed to extend these metrics. These conventions can be applied to any two-class metric. We will use sensitivity, *S*, to illustrate the conventions.
+
+The first approach, "macro averaging" computes $C$ versions of the statistic using a "one-versus-all" approach. For example, when $C = 3$, $S_1$ is the sensitivity when the first class is considered the event and the second and third classes are pooled into the non-event category. $S_2$ is the sensitivity when the second class is considered as the event, and so on. The macro estimate of sensitivity is computed as their average:
+
+$$
+S_{macro} = \frac{1}{C}\sum_{k=1}^C S_k
+$$
+
+where the $S_k$ are the one-versus-all metrics.
+
+A naive average of sensitivities is appropriate when the classes are balanced. When the classes are unbalanced, an unweighted average will bias this metric towards the sensitivity of the largest class. To account for class imbalance, *Weighted macro averaging* uses the class frequencies $n_k$ as weights
+
+$$
+S_{macro, wts} = \sum_{k=1}^C \frac{S_k}{n_k}
+$$
+
+Finally, *micro averaging* is a more complex approach because it aggregates the ingredients that go into the specific calculations. Sensitivity, for example, requires the number of true-positive and false negatives. These are summed and used in the regular computation of sensitivity:
+
+$$
+S_{micro} = \frac{{\displaystyle \sum_{k=1}^C TP_k}}{\left( {\displaystyle \sum_{k=1}^C TP_k} \right) + \left( {\displaystyle \sum_{k=1}^C FN_k} \right) }
+$$ Note that there are many performance metrics that naturally work with three or more classes. There is little point in using these averaging tools for accuracy, Kappa, MCC, ROC AUC, and others.
+
+
+## Calibration {#sec-calibration}
+
+Whether a classification model is used to predict spam e-mail, a molecule's toxicity status, or as inputs to insurance fraud or customer lifetime value calculations, we desire that the estimated class probabilities are reflective of the true underlying probability of the sample. That is, the predicted class probability (or probability-like value) needs to be well-calibrated. To be well-calibrated, the probabilities must effectively reflect the true likelihood of the event of interest. Returning to the spam filter illustration, if a model produces a probability or probability-like value of 20{{< pct >}} for the likelihood of a particular e-mail to be spam, then this value would be well-calibrated if similar types of messages would truly belong to that class on average in 1 of 5 samples.
+
+One way to assess the quality of the class probabilities is using a *calibration plot*. For a given set of set of data, this plot shows some measure of the observed probability of an event versus the predicted class probability.
+
+One approach for creating this visualization is to score a collection of samples with known outcomes (preferably not the training set) using a classification model. The next step is to bin the data into groups based on their class probabilities. For example, a set of bins might be \[0, 10{{< pct >}}\], (10{{< pct >}}, 20{{< pct >}}\], ..., (90{{< pct >}}, 100{{< pct >}}\]. For each bin, determine the observed event rate. Suppose that 50 samples fell into the bin for class probabilities less than 10{{< pct >}} and there was a single event. The midpoint of the bin is 5{{< pct >}} and the observed event rate would be 2{{< pct >}}. The calibration plot would display the midpoint of the bin on the *x*-axis and the observed event rate on the *y*-axis. If the points fall along a 45 degree line, the model has produced well-calibrated probabilities.
+
+@fig-cal-curves (a) shows an example of the this plot for the random forest results. The small marks on the top and bottom of the plot show where the predicted probability values fall for each class. These marks show that none of the class predictions are close to the extremes; the probability values for the first class are between `r round(min(nb_val_pred$.pred_edible) * 100, 1)`{{< pct >}} and `r round(max(nb_val_pred$.pred_edible) * 100, 1)`{{< pct >}}. This is a common occurrence for tree-based models, and is especially true of tree ensembles. For this reason, these types of models tend to over-predict at the lower extreme and under-predict at the higher extreme. The line in the plot does not fall on the diagonal, indicating that, while the model has excellent performance, these values might not reflect the true probability estimates.
+
+```{r}
+#| label: fig-cal-curves
+#| echo: false
+#| out-width: 90%
+#| fig-width: 7
+#| fig-height: 4
+#| fig-cap: Calibration curves for random forest model. The colored regions are individual 90{{< pct >}} confidence intervals. 
+
+cal_plot_1 <- 
+  nb_val_pred %>% 
+  cal_plot_windowed(class, .pred_edible, window_size = 0.2, step_size = 0.025) + 
+  ggtitle("(a) moving 20% bins")
+
+cal_plot_2 <- 
+  nb_val_pred %>% 
+  cal_plot_logistic(class, .pred_edible) + 
+  ggtitle("(b) logistic regression")
+
+cal_plot_1 + cal_plot_2
+```
+
+The downside to this binning approach is that, for small data sets, the results can have very large variability or there may not be enough data within each bin to make accurate judgements regarding calibration. One alternative is to use moving windows. For example, for fixed bin width of 0.20, compute the required statistics and then move the bin by a small amount (say 0.02). This would result in larger bins capturing more data that would slide across the range of probability values.
+
+Another alternative is to fit a model to the data. Logistic regression is a relatively simple classification model for binary outcomes and is discussed in @sec-logistic-regression. We can fit this model using our observed outcomes and use the predicted class probabilities ($\hat{p}_i$) as the predictor. If the probabilities are well-calibrated, the model should show a linear relationship. One other feature that can be used in this diagnostic is to model the predictor with a smoothing spline. This enables the logistic model to reflect when the calibration is very poor. @fig-cal-curves (b) illustrates the same pattern with a much smaller degree of uncertainty since the model coefficients utilize all of the data.
+
+```{r}
+#| label: logistic_cal
+#| include: false
+
+logistic_cal <- nb_cal_pred %>% cal_estimate_logistic(truth = class, smooth = TRUE)
+pred_cal <- nb_val_pred %>% cal_apply(logistic_cal)
+
+num_logistic_vals <-  nb_cal_pred %>% distinct(.pred_edible) %>% nrow()
+iso_cal <- nb_cal_pred %>% cal_estimate_isotonic(truth = class)
+pred_cal_iso <- nb_val_pred %>% cal_apply(iso_cal)
+num_isotonic_vals <- vctrs::vec_unique_count(pred_cal_iso$.pred_edible)
+
+iso_boot_cal <- nb_cal_pred %>% cal_estimate_isotonic_boot(truth = class, times = 1000)
+pred_cal_iso_boot <- nb_val_pred %>% cal_apply(iso_boot_cal)
+num_isotonic_boot_vals <- vctrs::vec_unique_count(pred_cal_iso_boot$.pred_edible)
+```
+
+What can be done with poorly calibrated predictions? There are approaches for post-processing the predicted probabilities to have higher fidelity to the observed data. The customary method is to use a logistic regression fit, as seen in @fig-cal-curves (b), to re-calibrate the predictions. First a suitable logistic regression model is created in the same manner as the one used for diagnosis. Recall that the original predictions are used as predictors of the model. To re-calibrate a set of predictions, the original values are pushed through the model and the resulting logistic regression values are used as the new probability predictions.
+
+@platt1999probabilistic first proposed using logistic regression as a method of converting any quantitative score into a probability-like value. *Platt scaling* also adjusts the class indicators from binary 0/1 values to values slightly different from those values.
+
+This brings up questions about which data should be used to fit the calibration model and which to evaluate its efficacy. We’ve previously mentioned that using simple re-predictions of the training set is a very bad idea and that is especially true here. If the model was resampled, the out-of-sample predictions can be used to fit the calibration model. In our example, a single validation set was used. Unfortunately, if all of the held-out data were used for re-calibration, the only unused data left would be the test set (which should not be compromised).
+
+Since there are `r format(nrow(pred_cal), big.mark = ",")` samples in the validation set, we will randomly select half to fit the calibration model and will use the other half to evaluate how well the calibration process worked. @fig-re-cal-curves shows the results where panel (a) uses a sliding window to assess the smaller data set using a window size of 20{{< pct >}} that moves in 5{{< pct >}} increments. From these figures, the class probabilities appear to have been improved. Note that these values now encompass the entire probability range.
+
+```{r}
+#| label: fig-re-cal-curves
+#| echo: false
+#| out-width: 90%
+#| fig-width: 7
+#| fig-height: 4
+#| fig-cap: Calibration curves for random forest model _after_ re-calibration using logistic regression.
+
+cal_plot_3 <- 
+  pred_cal %>% 
+  cal_plot_windowed(class, .pred_edible, window_size = 0.2, step_size = 0.025) + 
+  ggtitle("(a) moving 20% bins")
+
+cal_plot_4 <- 
+  pred_cal %>% 
+  cal_plot_logistic(class, .pred_edible) + 
+  ggtitle("(b) logistic regression")
+
+cal_plot_3 + cal_plot_4
+```
+
+```{r}
+#| label: re-cal
+#| echo: false
+re_class_stats <- pred_cal %>% cls_mtr(class, estimate = .pred_class, .pred_edible)
+```
+
+Using this approach to calibration, the new probability estimates have a Brier score of `r signif(re_class_stats$.estimate[re_class_stats$.metric == "brier_class"], 3)`. While this is smaller than the value (`r signif(nb_mtr$mean[nb_mtr$.metric == "brier_class"], 3)`) prior to calibration, the exact same data were not used. This makes it difficult to say that the improvement is real.
+
+There other approaches for re-calibrating. First, is isotonic regression [@isotonic]. This tool fits a model that will generate monotonic, non-decreasing, predictions: $\hat{y}_i \le \hat{y}_{i+ 1}$ when $x_i \le x_{i+ 1}$. There are multiple methods to create such models but the most straightforward approach is the pooled-adjacent violators algorithm (PAVA) of @pava. This method adjusts a sequence of data points that are not monotonically increasing to be so. For example, @tbl-isotonic shows an example where the rows are ordered by their model's predicted probabilities. One column shows a binary indicator for class `A`. The first three rows have the same outcome (`B`) but the fourth row is actually class `A`. The PAVA algorithm then takes the averages of the binary indicators that bracket the discordant value and all of these probability estimates are given a value of 1/3. From the table, it is clear that there are three possible probability estimates after isotonic regression is used.
+
+::::::: columns
+::: {.column width="25%"}
+:::
+
+:::: {.column width="50%"}
+::: {#tbl-isotonic}
+```{r}
+#| label: tbl-isotonic
+#| echo: false
+
+iso_example <- 
+  tibble::tribble(
+    ~Truth, ~Binary, ~Model, ~Isotonic,
+    "B",       0,      0,         0,
+    "B",       0,   0.01,         0,
+    "B",       0,    0.1,         0,
+    "A",       1,    0.2,      0.33,
+    "B",       0,    0.4,      0.33,
+    "B",       0,    0.5,      0.33,
+    "A",       1,    0.6,         1,
+    "A",       1,    0.7,         1,
+    "A",       1,    0.8,         1,
+    "A",       1,    0.9,         1
+  )
+
+iso_example %>% 
+  kbl() %>% 
+  add_header_above(c(" " = 2, "Estimated Probability of Class A" = 2)) %>% 
+  kable_styling(full_width = FALSE)  
+```
+
+
+An example of calculations for calibration via isotonic regression.
+:::
+::::
+
+::: {.column width="25%"}
+:::
+:::::::
+
+The nice feature of this tool is that it is nonparametric and makes almost no distributional assumptions. However, one downside is that there are a small number of unique re-calibrated probability estimates. For this reason, it is advised to use isotonic regression for large data sets. For example, for the random forest data used for calibration, there were originally `r num_logistic_vals` unique probability estimates while, after isotonic regression is applied, there are only `r num_isotonic_vals` possible values.
+
+```{r}
+#| label: fig-re-cal-iso-curves
+#| echo: false
+#| out-width: 90%
+#| fig-width: 7
+#| fig-height: 4
+#| fig-cap: Calibration curves for random forest model _after_ re-calibration using isoreg regression.
+
+cal_plot_5 <- 
+  pred_cal_iso %>% 
+  cal_plot_windowed(class, .pred_edible, window_size = 0.2, step_size = 0.025) + 
+  ggtitle("(a) moving 20% bins")
+
+cal_plot_6 <- 
+  pred_cal_iso_boot %>% 
+  cal_plot_windowed(class, .pred_edible, window_size = 0.2, step_size = 0.025) + 
+  ggtitle("(b) moving 20% bins, bootstrapped")
+
+cal_plot_5 + cal_plot_6
+```
+
+There are many other tools in the calibration toolbox, such as beta calibration [@betacal]. There are also methods for calibrating classification models with three or more classes [@NIPS2001abdbeb4d; @johansson21a; @NEURIPS2021bbc92a64].
+
+Finally, it is important to re-compute performance using the re-calibrated predictions. Also note that, since the class probabilities have been altered, any hard predictions should be recomputed since some values may have moved across the chosen probability threshold. Using the set of `r nrow(pred_cal)` data points that have been re-calibrated, the re-estimated sensitivity and specificity were `r round(re_class_stats$.estimate[re_class_stats$.metric == "sensitivity"] * 100, 1)`{{< pct >}} and `r round(re_class_stats$.estimate[re_class_stats$.metric == "specificity"] * 100, 1)`{{< pct >}}, respectively and the area under the ROC curve was `r signif(re_class_stats$.estimate[re_class_stats$.metric == "roc_auc"], 3)`
+
+
+## Ordered Categories
+
+As previously mentioned, our outcome classes can have an inherent ordering.
+
+examples
+
+Since there is an ordering, it might be reasonable to think that misclassification severity relates to how "far" a predicted class is from its true class. For example, risk analysis systems, such as FMEA, involve enumerating different ways that a thing can fail and the corresponding consequences. Suppose that we have an ordinal scale for risk consisting of "low," "moderate," "severe," and "catastrophic". It is reasonable to think that predicting that the risk is moderate when it is actually catastrophic is very bad. Predicting a moderate risk to be low may not be as dire.
+
+There are a few metrics that use hard classification predictions. We previously mentioned the Kappa statistic. To penalize misclassification errors based on their distance to the true classification, [@Agresti:2002vi] developed the *weighted Kappa* statistic where the errors' weights depend on their position differences. Let's look at a four-class example from APM where computing jobs run on a server executed very fast (VF), fast (F), moderately long (M), or a long time (L).
+
+A linear weighting for the Kappa statistic is shown in table XXX. There are bands of diagonal weights that are either 0, 1, 2, or 3. Weight Kappa statistics enable "more incorrect" errors more than others.
+
+```{r}
+#| label: ordered-stats
+#| echo: false
+#| results: hide
+kap_linear <- function(data, truth, estimate, na_rm = TRUE, ...) {
+  kap(
+    data = data,
+    truth = !!rlang::enquo(truth),
+    estimate = !!rlang::enquo(estimate),
+    weighting = "linear",
+    na_rm = na_rm,
+    ...
+  ) %>% 
+    mutate(.estimator = "linear")
+}
+kap_linear <- new_class_metric(kap_linear, "maximize")
+
+kap_quadratic <- function(data, truth, estimate, na_rm = TRUE, ...) {
+  kap(
+    data = data,
+    truth = !!rlang::enquo(truth),
+    estimate = !!rlang::enquo(estimate),
+    weighting = "quadratic",
+    na_rm = na_rm,
+    ...
+  ) %>% 
+    mutate(.estimator = "quadratic")
+}
+kap_quadratic <- new_class_metric(kap_quadratic, "maximize")
+
+kap_set <- metric_set(kap, kap_linear, kap_quadratic)
+kap_res <- 
+  hpc_cv %>% 
+  kap_set(truth = obs, estimate = pred)
+
+# ------------------------------------------------------------------------------
+
+mse_ordered <- function(dat) {
+  ord_diffs <- as.integer(dat$obs) - as.integer(dat$pred)
+  mean(ord_diffs^2)
+}
+
+set.seed(579)
+hpc_perm <- permutations(hpc_cv, times = 50, permute = obs)
+
+mse_perm <- 
+  hpc_perm %>% 
+  mutate(null = map_dbl(splits, ~ mse_ordered(analysis(.x))))
+
+mean(mse_perm$null)
+
+# ------------------------------------------------------------------------------
+
+hpc_costs_vals <- tribble(
+  ~estimate, ~truth, ~cost,
+  "VF",      "VF",    0,
+  "VF",      "F",     1,
+  "VF",      "M",     5,
+  "VF",      "L",    10,
+  "F",       "VF",    1,
+  "F",       "F",     0,
+  "F",       "M",     5,
+  "F",       "L",     5,
+  "M",       "VF",    1,
+  "M",       "F",     1,
+  "M",       "M",     0,
+  "M",       "L",     1,
+  "L",       "VF",    1,
+  "L",       "F",     1,
+  "L",       "M",     1,
+  "L",       "L",     0
+)
+
+hpc_costs_tbl <- 
+  hpc_costs_vals %>% 
+  mutate(truth = paste0("cost_", truth)) %>% 
+  pivot_wider(id_cols = c(estimate), names_from = c(truth), values_from = cost) %>% 
+  mutate(blank3 = "  ") %>% 
+  dplyr::select(-estimate) %>% 
+  relocate(blank3)
+  
+
+hpc_costs <- 
+  hpc_cv %>%
+  classification_cost(obs, VF:L, costs = hpc_costs_vals)
+
+hpc_costs_perm <- 
+  hpc_perm %>% 
+  mutate(null = map_dbl(
+    splits, 
+    ~ classification_cost(analysis(.x), truth = obs, VF:L, costs = hpc_costs_vals)$.estimate)
+  )
+```
+
+::::::: columns
+::: {.column width="5%"}
+:::
+
+:::: {.column width="90%"}
+::: {#tbl-confusion-matrix-costs}
+```{r}
+#| label: tbl-confusion-costs
+#| echo: false
+
+lvls <- levels(hpc_cv$obs)
+
+hpc_conf_mat <-
+  hpc_cv %>% 
+  conf_mat(obs, estimate = pred) %>% 
+  pluck("table") %>% 
+  as.matrix() %>% 
+  as_tibble() %>% 
+  pivot_wider(id_cols = c(Prediction), names_from = c(Truth), values_from = n) %>% 
+  mutate(blank = "  ") %>% 
+  relocate(blank, .after = "Prediction") 
+
+hpc_errors <- toeplitz(1:4)
+colnames(hpc_errors) <- rownames(hpc_errors) <- levels(hpc_cv$obs)
+hpc_errors <- 
+  hpc_errors %>%
+  as.table() %>% 
+  as.data.frame() %>% 
+  set_names(c("Prediction", "Truth", "n")) %>% 
+  mutate(Truth = paste0("wts_", Truth)) %>% 
+  pivot_wider(id_cols = c(Prediction), names_from = c(Truth), values_from = n) %>% 
+  mutate(blank2 = "  ") %>% 
+  dplyr::select(-Prediction) %>% 
+  relocate(blank2)
+  
+bind_cols(hpc_conf_mat, hpc_errors, hpc_costs_tbl <- 
+  hpc_costs_vals %>% 
+  mutate(truth = paste0("cost_", truth)) %>% 
+  pivot_wider(id_cols = c(estimate), names_from = c(truth), values_from = cost) %>% 
+  mutate(blank3 = "  ") %>% 
+  dplyr::select(-estimate) %>% 
+  relocate(blank3)) %>% 
+  kbl(col.names = c("Prediction", "", lvls, "", lvls, "", lvls)) %>% 
+  add_header_above(c(" " = 2, "Truth" = 4, " " = 1, "Linear Weights" = 4, " " = 1, "Custom Costs" = 4)) %>% 
+  kable_styling(full_width = FALSE)
+```
+
+A four class ordinal outcome with a confusion matrix, a linear set of weights for each potiental error, and a custom cost scheme used by @apm.
+:::
+::::
+
+::: {.column width="5%"}
+:::
+:::::::
+
+We computed Kappa under three scenareos: equal weights (`r round(kap_res$.estimate[kap_res$.estimator == "multiclass"], 3)`), linear scores (`r round(kap_res$.estimate[kap_res$.estimator == "linear"], 3)`), and quadratic scores (`r round(kap_res$.estimate[kap_res$.estimator == "quadratic"], 3)`).
+
+The mean squared error for these data was `r signif(sqrt(mse_ordered(hpc_cv)), 3)`. How bad is this? If we repeatedly permute the outcome classes and measure the RMSE we find that the worst case-scenario is about `r signif(sqrt(mean(mse_perm$null)), 3)`.
+
+For the custom cost analysis, the average cost was `r signif(hpc_costs$.estimate, 3)` with a worst-case value of about `r signif(mean(hpc_costs_perm$null), 3)`.
+
+## Multi-objective Assessments
+
+Pareto optimal; desirability functions.
+
+## Chapter References {.unnumbered}
+
+```{r}
+#| label: teardown-cluster
+#| include: false
+
+# stopCluster(cl)
+```
+
