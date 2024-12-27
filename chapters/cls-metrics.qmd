@@ -75,17 +75,100 @@ TODO
 -   mention bootstrapping and permutations
 -   desirability and other methods for a combined score?
 
+Classification models are used to predict outcomes that are categorical in nature. They primarily produce two types of predictions: 
 
-Nature of classification predictions: hard and soft; information content; LLMs and no probs
+- *Hard class predictions* are the most likely category in the form of a single qualitative value. 
+- *Soft class predictions* are a set of numeric scores, one per category, reflecting the likelihood of each. We’ll focus solely on probability estimates of each class for soft predictions. 
 
-introduce prevalence here?
+Hard class predictions are almost always created by finding the category corresponding to the largest value of the soft predictions^[TODO about generative models]. Below, we will single out the case where two possible categories exist and consider an alternate method of converting class probabilities into hard class predictions (via thresholding). 
 
+Many classification models use probabilistic assumptions to estimate class probabilities. For example, logistic regression assumes that the outcome follows a Bernoulli distribution. From there, parameter estimates can be determined using maximum likelihood or Bayesian estimation, which then defines the probability estimates. Other algorithms, such as tree-based models, make no assumptions regarding the data. 
+
+::: {.important-box}
+It is very important to carefully choose which metric (or metrics) to optimize a model. The metric defines what your model should consider important, and it will almost always believe that your chosen metric is the only important criterion. This can often lead to unintended consequences. 
+:::
+
+This chapter describes myriad approaches for quantifying how well a classification model functions via performance metrics. 
+
+
+## Choosing Appropriate Metrics
+
+Let’s consider a few critical aspects of classification metrics.  To further this discussion, we’ll focus on specific metrics that are computed with hard or soft class predictions. For class probability predictions, we’ve seen the Brier score used repeatedly in the previous chapters. As a reminder, this statistic is similar to the sum of squared errors in regression: for each class, the estimated class probabilities are contrasted with their corresponding binary indicators. These differences are squared and averaged. Let’s juxtapose the Brier score with the most simple metric for hard predictions: the overall accuracy of the model (i.e., the proportion of samples that were correctly predicted). 
+
+To start, should our metric be based on hard or soft predictions? This, of course, depends on how the model will be applied to data and how users will consume its predictions. However, a strong argument can be made that performance metrics that use soft predictions should be favored over those using hard predictions. Information theory uses the idea of _self-information_: if the value of a variable has some probability $\pi$ of occurring, we can measure the amount of information using $I = -log_2(\pi)$ where the units are called bits. 
+
+Since accuracy is the average of binary indicators of “correctness.” Since there are two possible values, the information is $-log_2(1/2)$ = 1.0 bit. 
+
+Suppose we are computing the Brier score, and for simplicity, the probability estimates can be measured to the second decimal place. In this case, there are 101 possible values, so the data used in the Brier score contain $-log_2(1/101)$ bits (about `r round(-log2(1/101), 1)`). 
+
+This simple analysis implies that metrics that use probabilities will contain much more information (literally and figuratively) than class predictions. As a result, probability-based metrics will be more capable of discriminating between models. 
+
+Let’s also consider two examples of how metrics can lead to unintended consequences. 
+
+First, accuracy is very sensitive to class imbalances (where one or more classes do not occur very often). Suppose that we have two classes, and one only occurs 1% of the time (called the “minority class” in this context). When accuracy is used for these data, an inferior model can easily achieve 99% accuracy simply by always predicting the majority class. If accuracy is all that we care about, then we can satisfy the literal goal, but our model will probably fail to fulfill the intention of the model. 
+
+The second example contrasts the concepts of _discrimination_ and _calibration_. 
+
+- A model can discriminate the classes well when the probability estimates of the true class are larger than the probabilities for the others. In other words, being good at discrimination means that you can, to some degree, successfully discern the true classes 
+
+- A classification model is well-calibrated when the estimated probability predictions are close to their real theoretical counterparts.   
+
+Some metrics favor one of these characteristics over the other. For example, neural networks for classification use binary indicators for their outcome data and try to produce models so that their predictions are near these values. To ensure that the results are “probability like,” meaning that they add up to one and are on `[0, 1]`, the softmax transformation  [@Bridle1990] is applied to the raw predictions:
+
+$$
+\hat{p}_k^* = \frac{e^{\hat{y}_k}}{{\displaystyle  \sum_{l=1}^Ce^{\hat{y}_l}}}
+$$
+
+```{r}
+#| label: discrim-vs-cal
+#| include: false
+sim_n <- 500
+set.seed(107)
+non_cal_example <- 
+  tibble(
+    .prob_event = c(rnorm(sim_n, mean = .55, sd = 0.025),
+                    rnorm(sim_n, mean = .45, sd = 0.025)),
+    class = factor(rep(c("event", "no-event"), each = sim_n))
+  ) %>% 
+  mutate(
+    .pred_class = ifelse(.prob_event >= 1/2, "event", "no-event"),
+    .pred_class = factor(.pred_class, levels = c("event", "no-event"))
+  )
+event_prob_rng <- range(non_cal_example$.prob_event) * 100
+non_cal_acc <- accuracy_vec(non_cal_example$class, non_cal_example$.pred_class) * 100
+non_cal_brier <- brier_class_vec(non_cal_example$class, non_cal_example$.prob_event)
+```
+
+While the softmax method ensures they have the correction range, it does not guarantee that a model with good discrimination is well-calibrated. @fig-discrim-vs-cal shows a hypothetical example that illustrates what can occur when the softmax method is used. The distributions of the two classes have a good degree of separation, indicating that the model can discriminate the true classes. The observed accuracy is large (`r round(non_cal_acc, 1)`%) but the predicted probabilities only range from `r round(event_prob_rng[1], 1)`% to `r round(event_prob_rng[2], 1)`%. It is improbable that the true probability values have such a narrow range, and we can assume that the calibration is poor here. The observed Brier score is large  (`r round(non_cal_brier, 3)`), supporting this assumption.
+
+```{r}
+#| label: fig-discrim-vs-cal
+#| echo: false
+#| out-width: 70%
+#| fig-width: 6
+#| fig-height: 4.25
+#| fig-cap: An example of a model that has good discrimination but poor calibration. 
+
+p_ex_dens <- 
+  non_cal_example %>% 
+  ggplot(aes(.prob_event, col = class, fill = class)) + 
+  stat_density(alpha = 1 / 4, trim = TRUE, adjust = 1.2) + 
+  lims(x = 0:1) +
+  labs(x = "Predicted Probability of Event") +
+  theme(legend.position = "top") +
+  scale_color_brewer(palette = "Accent") +
+  scale_fill_brewer(palette = "Accent")
+p_ex_dens
+```
+
+In some cases, the pattern shown in @fig-discrim-vs-cal may be acceptable. For example, if the goal of the model is to identify “events” (such as the most profitable consumers in a database), the model’s calibration may not be important; your main interest is in ranking the rows in a data set. However, we suggest that probability predictions are far more informative than class predictions, and thus, good calibration is a key feature of most classification models. 
 
 ## Example Data
 
-For this chapter, a training set of `r format(nrow(shroom_cal), big.mark = ",")` data points, validation set of `r format(nrow(shroom_val), big.mark = ",")` data points, and a test set of `r format(nrow(shroom_val), big.mark = ",")` data points are used to illustrate various methods.
+To demonstrate classification metrics, we'll primarily use a data set with mushroom characteristics to predict whether specific mushrooms are edible or poisonous. We'll use these data in conjunction with a naive Bayes classification model (see @sec-naive-bayes)
 
-A naive Bayes model (see @sec-naive-bayes) was used to model these data. 
+For this chapter, a training set of `r format(nrow(shroom_train), big.mark = ",")` data points, validation set of `r format(nrow(shroom_val), big.mark = ",")` data points, and a test set of `r format(nrow(shroom_val), big.mark = ",")` data points are used to illustrate various methods.
+
 
 ## Confusion Matrices
 
@@ -133,11 +216,7 @@ Confusion matrix for validation set predictions from the naive Bayes model.
 
 ## Assessing Hard Class Predictions
 
-$$
-accuracy = \frac{1}{n}\sum_{k=1}^Cn_{kk}
-$$
-
-where $n_{ij}$ are the number of counts in the *i* th row and the *j* th column of the confusion matrix, $n$ is the total number of data points, and $C$ is the number of classes. For the naive Bayes model, the accuracy computed on the validation set was `r round(nb_mtr$mean[nb_mtr$.metric == "accuracy"] * 100, 1)`{{< pct >}}.
+For the naive Bayes model, the accuracy computed on the validation set was `r round(nb_mtr$mean[nb_mtr$.metric == "accuracy"] * 100, 1)`{{< pct >}}.
 
 $$
 Kappa = \frac{accuracy - E}{1 - E}
