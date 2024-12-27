@@ -1,0 +1,53 @@
+name: Deploy
+
+on:
+  workflow_dispatch:
+  push:
+    branches: [main, master]
+  pull_request:
+    branches: [main, master]
+
+permissions:
+  contents: write
+
+concurrency:
+  group: "deploy"
+  cancel-in-progress: true
+
+env:
+  RENV_PATHS_ROOT: ~/.cache/R/renv
+
+
+jobs:
+  deploy:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: "Setup R"
+        uses: r-lib/actions/setup-r@v2
+        with:
+          use-public-rspm: true
+          
+      - name: Install shinylive package
+        shell: Rscript {0}
+        run: |
+          install.packages("shinylive")
+      
+      - uses: quarto-dev/quarto-actions/setup@v2
+        with:
+          version: pre-release
+          tinytex: false
+      
+      - name: Render Quarto Project
+        shell: bash
+        env:
+          GH_PAGES: gh-pages
+        run: |
+          git config --local user.name github-actions[bot]
+          git config --local user.email 41898282+github-actions[bot]@users.noreply.github.com
+          quarto render
+          git fetch origin "${GH_PAGES}"
+          git checkout origin/"${GH_PAGES}" -- preview
+          mv preview _book/
+          quarto publish gh-pages --no-prompt --no-render --no-browser
