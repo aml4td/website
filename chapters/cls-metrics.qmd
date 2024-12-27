@@ -42,6 +42,9 @@ load("../RData/mushrooms.RData")
 #| warnnig: false
 #| cache: true
 
+shroom_n <- nrow(shroom_train) + nrow(shroom_val) + nrow(shroom_cal) + nrow(shroom_test)
+shroom_xtab <- round(table(shroom_train$class)/nrow(shroom_train)* 100, 1)
+
 cls_mtr <- 
   metric_set(accuracy, bal_accuracy, detection_prevalence, f_meas, j_index, 
              kap, mcc, npv, ppv, precision, recall, sensitivity, specificity, 
@@ -66,14 +69,6 @@ nb_val_gain <- gain_curve(nb_val_pred, class, .pred_edible)
 nb_test_pred <- augment(nb_fit, shroom_test) %>% dplyr::select(class, starts_with(".pred"))
 nb_cal_pred <- augment(nb_fit, shroom_cal)   %>% dplyr::select(class, starts_with(".pred"))
 ```
-
-
-TODO
-
--   update data description; maybe talk a little about the example data
--   shinylive for roc/pr/gain
--   mention bootstrapping and permutations
--   desirability and other methods for a combined score?
 
 Classification models are used to predict outcomes that are categorical in nature. They primarily produce two types of predictions: 
 
@@ -167,10 +162,66 @@ In some cases, the pattern shown in @fig-discrim-vs-cal may be acceptable. For e
 
 To demonstrate classification metrics, we'll primarily use a data set with mushroom characteristics to predict whether specific mushrooms are edible or poisonous. We'll use these data in conjunction with a naive Bayes classification model (see @sec-naive-bayes)
 
-For this chapter, a training set of `r format(nrow(shroom_train), big.mark = ",")` data points, validation set of `r format(nrow(shroom_val), big.mark = ",")` data points, and a test set of `r format(nrow(shroom_val), big.mark = ",")` data points are used to illustrate various methods.
+The inital data pool contained `r format(shroom_n, big.mark = ",")` data points. The main partition of the data was into training ($n_{tr}$ = `r format(nrow(shroom_train), big.mark = ",")`), validation ($n_{val}$ = `r format(nrow(shroom_val), big.mark = ",")`), and test ($n_{te}$ = `r format(nrow(shroom_test), big.mark = ",")`). Additionally, a _calibration_ set of $n_{cal}$ = `r format(nrow(shroom_cal), big.mark = ",")` mushrooms were allocated for the processes described in @sec-calibration. 
 
+The predictors of the outcome were:
 
-## Confusion Matrices
+:::: {.columns}
+
+::: {.column width="50%"}
+- does bruise or bleed (yes or no)
+- cap color (categorical, 12 values)
+- cap diameter (numeric)
+- cap shape (categorical, 7 values)
+- cap surface (categorical, 8 values)
+- gill attachment (categorical, 8 values, contains unknowns)
+- gill color (categorical, 12 values)
+- gill spacing (close, distant, or none)
+- habitat (categorical, 8 values)
+- has ring (yes or no)
+:::
+
+::: {.column width="50%"}
+
+- ring type (categorical, 9 values, contains unknowns)
+- season (categorical, 4 values)
+- spore print color (categorical, 7 values)
+- stem color (categorical, 13 values)
+- stem height (numeric)
+- stem root (categorical, 4 values)
+- stem surface (categorical, 8 values)
+- stem width (numeric)
+- veil color (categorical, 7 values)
+- partial veil (partial or unknown)
+:::
+
+::::
+
+The outcome data has relatively balanced classes with `r shroom_xtab["edible"]`% of the mushrooms being edible. 
+
+No preprocessing was applied to the data for this model. Naive Bayes models do not require the categorical predictors to be decomposed into binary indicator columns or transformations of the numeric predictors. As shown above, the predictors with missing data were encoded as a level in one of the possible categories. 
+
+We'll fit the model to the training set and, for the most part, use the validation set to demonstrate the various metrics. @fig-naive-bayes-probs shows the distirbution of the probability of the event (edible) for the validation set. 
+
+```{r}
+#| label: fig-naive-bayes-probs
+#| echo: false
+#| out-width: 70%
+#| fig-width: 6
+#| fig-height: 4.25
+#| fig-cap: The distribution of the validation set class probability estimates for a naive Bayes model, split by the true class of the mushroom. . 
+
+nb_val_pred %>% 
+  ggplot(aes(.pred_edible)) + 
+  geom_vline(xintercept = 1 / 2, col = "blue", lty = 3) +
+  geom_histogram(col = "white", binwidth = 0.02) + 
+  facet_wrap(~ class, ncol = 1, labeller = "label_both") + 
+  labs(x = "Probability of Being Edible")
+```
+
+## Assessing Hard Class Predictions
+
+One of the most fundamental ways to inspect and understand how well hard class prediction performs is the confusion matrix, simply a cross-tabulation of the observed and predicted predictions. From this, we can conceptualize where the model under-performs. An excellent model has the largest counts along the diagonal where the observed and predicted classes are the same. For the naive Bayes model, @tbl-confusion-matrix shows the confusion matrix for the mushroom data’s validation set. 
 
 ```{r}
 #| label: cls-metrics
@@ -186,6 +237,8 @@ conf_mat_table <-
   mutate(Prediction = gsub("class_", "Class ", Prediction)) %>% 
   mutate(blank = "  ") %>% 
   relocate(blank, .after = "Prediction") 
+
+acc_int <- binom.test(sum(diag(nb_conf_mat$table)), sum(nb_conf_mat$table), conf.level = 0.9)
 ```
 
 ::::::: columns
@@ -199,7 +252,10 @@ conf_mat_table <-
 #| echo: false
 
 conf_mat_table %>% 
-  kbl(col.names = c("Prediction", "", "edible", "poisonous")) %>% 
+  kbl(
+    col.names = c("Prediction", "", "edible", "poisonous"),
+    format.args = list(big.mark = ',')
+  ) %>%
   add_header_above(c(" " = 2, "Truth" = 2)) %>% 
   kable_styling(full_width = FALSE)
 ```
@@ -212,11 +268,20 @@ Confusion matrix for validation set predictions from the naive Bayes model.
 :::
 :::::::
 
+It may be helpful to also present the confusion matrix in terms of percentages. For example, we might think that the model is worse at predicting the poisonous than edible mushrooms since the upper right cell has a larger count (`r nb_conf_mat$table["edible", "poisonous"]`) than the lower left cell (`r nb_conf_mat$table["poisonous", "edible"]`). However, this difference is partially explained by their being more poisonous mushrooms in the right column than in the left column of edible samples. It can also be helpful to visualize the matrix as a heatmap where darker colors represent larger counts, especially when there are a large number of possible classes. 
+
+We can also view the confusion matrix as a “sufficient statistic” since it has all the information required to compute the metrics based on hard class predictions. For example, the accuracy computed from our validation set was `r round(nb_mtr$mean[nb_mtr$.metric == "accuracy"] * 100, 1)`%, which is 
+
+$$
+accuracy = \frac{1}{n}\sum_{k=1}^Cn_{kk}
+$$
+
+where $n_{ij}$ are the number of counts in the *i* th row and the *j* th column of the confusion matrix, $n$ is the total number of data points, and $C$ is the number of classes. 
 
 
-## Assessing Hard Class Predictions
+Many of the metrics in this section are in the form of a proportion. For each, confidence intervals can be computed using typical methods for binomial proportions. We suggest using asymmetric intervals, such as the “exact” technique in @clopper1934use. See @newcombe1998two and @meeker2017statistical for discussions of different methods for computing intervals on proportions. For the validation set results, the 90% confidence interval was (`r round(acc_int$conf.int[1]*100, 1)`%, `r round(acc_int$conf.int[2]*100, 1)`%).
 
-For the naive Bayes model, the accuracy computed on the validation set was `r round(nb_mtr$mean[nb_mtr$.metric == "accuracy"] * 100, 1)`{{< pct >}}.
+As previously mentioned, accuracy is misleading when there is a class imbalance. There are a few ways to correct for imbalances, most notably the measure of agreement called Kappa. This normalizes the accuracy by a measure of expected accuracy based on chance agreement ($E$): 
 
 $$
 Kappa = \frac{accuracy - E}{1 - E}
@@ -227,6 +292,10 @@ where $E$ is the expected accuracy based on the marginal totals of the confusion
 $$
 E =\frac{1}{n^{2}}\sum_{k=1}^2n_{k1}n_{k2}
 $$
+
+
+
+
 
 Matthews correlation coefficient [@MATTHEWS1975442; @GORODKIN2004367] (MCC) is another metric that can compare the observed and predicted classes. The equation for *C* classes is:
 
@@ -881,6 +950,15 @@ For the custom cost analysis, the average cost was `r signif(hpc_costs$.estimate
 ## Multi-objective Assessments
 
 Pareto optimal; desirability functions. J statistic
+
+
+
+TODO
+
+-   shinylive for roc/pr/gain
+-   mention bootstrapping and permutations
+-   desirability and other methods for a combined score?
+
 
 ## Chapter References {.unnumbered}
 
