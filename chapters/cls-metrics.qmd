@@ -293,9 +293,9 @@ $$
 E =\frac{1}{n^{2}}\sum_{k=1}^2n_{k1}n_{k2}
 $$
 
-Much like correlation statistics, the range of Kappa is $\pm$ 1, with values of one corresponding to perfect agreement and zero meaning negative agreement. While negative values are possible, they are uncommon. Interpreting Kappa can be difficult since no well-defined values indicate that the results are good enough. This is compounded by the fact that the values can change with different prevalences of the classes [@thompson1988reappraisal;@guggenmoos1996meaning]. For this reason, it isn’t easy to compare values between data sets or to have a single standard. There are also differences in range when the outcome data has different numbers of classes; a Kappa value of 2.5 has a different meaning when $C = 2$ than with some other number of possible classes. 
+Much like correlation statistics, the range of Kappa is $\pm$ 1, with values of one corresponding to perfect agreement and zero meaning negative agreement. While negative values are possible, they are uncommon. Interpreting Kappa can be difficult since no well-defined values indicate that the results are good enough. This is compounded by the fact that the values can change with different prevalences of the classes [@thompson1988reappraisal;@guggenmoos1996meaning]. For this reason, it isn’t easy to compare values between data sets or to have a single standard. There are also differences in range when the outcome data has different numbers of classes; a Kappa value of 0.5 has a different meaning when $C = 2$ than with some other number of possible classes. 
 
-The Kappa statistic can also incorporate different weights for different types of errors [@cohen1968weighted]. This is discussed in more detail in @sec-ordered-categories.
+The Kappa statistic can also incorporate different weights for different types of errors [@cohen1968weighted]. This is discussed in more detail in @sec-ordered-categories below.
 
 Using the data from @tbl-confusion-matrix, the Kappa value was `r round(nb_mtr$mean[nb_mtr$.metric == "kap"], 3)`. While subjective, this value probably indicates satisfactory agreement between the true classes and the predictions. 
 
@@ -323,9 +323,9 @@ The statistic mirrors the correlation coefficient for numeric data in that it ra
 
 tibble::tribble(
   ~Prediction, ~event, ~`non-event`,
-      "event",   "TP",       "FP",
-  "non-event",   "FN",       "TN"
-  ) %>% 
+  "event",   "TP",         "FP",
+  "non-event",   "FN",         "TN"
+) %>% 
   kbl() %>% 
   add_header_above(c(" " = 1, "Truth" = 2)) %>% 
   kable_styling(full_width = FALSE) 
@@ -341,67 +341,141 @@ A general confusion matrix for outcomes with two classes.
 
 
 $$
-Sensitivity = \frac{\text{correctly predicted events}}{\text{total events}} = \frac{TP}{TP + FN}
+Sens = \frac{\text{correctly predicted events}}{\text{total events}} = \frac{TP}{TP + FN}
 $$
 
 
 
 $$
-Specificity = \frac{\text{correctly predicted non-events}}{\text{total non-events}} = \frac{TN}{TN + FP}
+Spec = \frac{\text{correctly predicted non-events}}{\text{total non-events}} = \frac{TN}{TN + FP}
 $$
 
 
 
 $$
 \begin{align}
-PPV&= \frac{Sensitivity \times Prevalence}{(Sensitivity \times Prevalence) + ((1 - Specificity) \times (1 - Prevalence))}  \notag \\
+PPV&= \frac{Sens \times Prev}{(Sens \times Prev) + \left((1 - Spec) \times (1 - Prev)\right)}  \notag \\
 \notag \\
-NPV&= \frac{Specificity \times (1 - Prevalence)}{(Prevalence \times (1 - Sensitivity)) + (Specificity \times (1 - Prevalence))} \notag
+NPV&= \frac{Spec \times (1 - Prev)}{\left(Prev \times (1 - Sens)\right) + \left(Spec \times (1 - Prev)\right)} \notag
 \end{align}
 $$
 
 
-```{r}
+::: {#fig-prevalence}
+
+::: {.figure-content}
+
+
+```{shinylive-r}
 #| label: fig-prevalence
-#| echo: false
-#| out-width: 65%
-#| fig-width: 6
-#| fig-height: 4
-#| fig-cap: The effect of prevalence on the postive and negative predictive values using the sensitivity and specificity from the naive Bayes model. 
+#| viewerHeight: 550
+#| standalone: true
 
-ppv_fn <- function(sens, spec, prev = 1 / 2) {
-  ( sens * prev ) / ( (sens * prev) + ( (1 - spec) * (1 - prev) ) )
+library(shiny)
+library(dplyr)
+library(purrr)
+library(ggplot2)
+library(patchwork)
+library(bslib)
+
+source("https://raw.githubusercontent.com/aml4td/website/main/R/shiny-setup.R")
+
+# ------------------------------------------------------------------------------
+
+ui <- fluidPage(
+  theme = grid_theme,
+  layout_columns(
+    fill = FALSE,
+    col_widths = breakpoints(sm = c(-3, 6, -3)),
+    column(
+      width = 10,
+      sliderInput(
+        inputId = "prev",
+        label = "Prevelance",
+        min = 0,
+        max = 1,
+        value = 1/2,
+        width = "100%",
+        step = 1/10
+      )
+    )
+  ),
+  as_fill_carrier(plotOutput('results'))
+)
+
+server <- function(input, output) {
+  
+  ppv_fn <- function(sens, spec, prev = 1 / 2) {
+    ( sens * prev ) / ( (sens * prev) + ( (1 - spec) * (1 - prev) ) )
+  }
+  npv_fn <- function(sens, spec, prev = 1 / 2) {
+    ( spec * (1 - prev) ) / ( ( (1 - sens) * prev) + ( (spec) * (1 - prev) ) )
+  }
+  
+  
+  output$results <-
+    renderPlot({
+      
+      x <- seq(0, 1, length.out = 50)
+      n <- length(x)
+      cond_x <- (0:4) / 4
+      rng <- extendrange(0:1, f = 0.02)
+      
+      ###
+      
+      pos_df <- expand.grid(spec = cond_x, sens = x)
+      pos_df$prev <- input$prev
+      pos_df$PPV <- ppv_fn(pos_df$sens, pos_df$spec, prev = pos_df$prev)
+      pos_df$Specificity <- format(pos_df$spec, digits = 3)
+      
+      pos_p <- 
+        pos_df %>% 
+        ggplot(aes(x = sens, y = PPV, col = Specificity)) +
+        geom_line(linewidth = 1) + 
+        lims(x = 0:1, y = rng) + 
+        theme_bw() +
+        theme(
+          legend.position = "top",
+          legend.text = element_text(size = 9)
+        ) +
+        scale_color_brewer(palette = "Reds") +
+        labs(x = "Sensitivity")
+      
+      ###
+      
+      neg_df <- expand.grid(sens = cond_x, spec = x)
+      neg_df$prev <- input$prev
+      neg_df$NPV <- npv_fn(neg_df$sens, neg_df$spec, prev = neg_df$prev)
+      neg_df$Sensitivity <- format(neg_df$sens, digits = 3)
+      
+      neg_p <- 
+        neg_df %>% 
+        ggplot(aes(x = spec, y = NPV, col = Sensitivity)) +
+        geom_line(linewidth = 1) + 
+        lims(x = 0:1, y = rng) + 
+        theme_bw() +
+        theme(
+          legend.position = "top",
+          legend.text = element_text(size = 9)
+        ) +
+        scale_color_brewer(palette = "Blues") +
+        labs(x = "Specificity")
+      
+      print(pos_p + plot_spacer() + neg_p + plot_layout(widths = c(6, 1 , 6)))
+      
+    }, res = 100)
 }
-npv_fn <- function(sens, spec, prev = 1 / 2) {
-  ( spec * (1 - prev) ) / ( ( (1 - sens) * prev) + ( (spec) * (1 - prev) ) )
-}
 
-x <- seq(0, 1, length.out = 100)
- 
-grid <- 
-  crossing(
-    sens = nb_mtr$mean[nb_mtr$.metric == "sensitivity"], 
-    spec = nb_mtr$mean[nb_mtr$.metric == "specificity"], 
-    prev = x
-  ) %>% 
-  mutate(
-    PPV = pmap_dbl(list(sens, spec, prev), ppv_fn),
-    NPV = pmap_dbl(list(sens, spec, prev), npv_fn)
-  )
+app <- shinyApp(ui, server)
 
-grid %>% 
-  pivot_longer(cols = c(PPV, NPV), names_to = "metric: ") %>% 
-  ggplot(aes(x = prev, y = value, col = `metric: `)) +
-  geom_vline(xintercept = mean(nb_cal_pred$class == "edible"), lty = 2) +
-  geom_line() + 
-  labs(x = "Prevalence", y = NULL) +
-  theme(legend.position = "top")
+app
 ```
+:::
 
+A visualization of how the ingedients to the positive and negative predictive values affect the statistics. 
 
-$$
-PPV = \frac{Sensitivity}{Sensitivity \times (1 - Specificity)} = \frac{TP}{TP+FP}
-$$
+:::
+
 
 $$
 Precision = \frac{\text{relevant and retrieved}}{\text{total retrieved}}=\frac{TP}{TP + FP}
@@ -476,7 +550,7 @@ get_closest <- function(x, value) {
     mutate(
       threshold = format(round(.threshold, 2)),
       threshold = sprintf("%2.2f", .threshold)
-      )
+    )
 }
 roc_points <- 
   bind_rows(
@@ -872,7 +946,7 @@ hpc_costs_tbl <-
   mutate(blank3 = "  ") %>% 
   dplyr::select(-estimate) %>% 
   relocate(blank3)
-  
+
 
 hpc_costs <- 
   hpc_cv %>%
@@ -920,14 +994,14 @@ hpc_errors <-
   mutate(blank2 = "  ") %>% 
   dplyr::select(-Prediction) %>% 
   relocate(blank2)
-  
+
 bind_cols(hpc_conf_mat, hpc_errors, hpc_costs_tbl <- 
-  hpc_costs_vals %>% 
-  mutate(truth = paste0("cost_", truth)) %>% 
-  pivot_wider(id_cols = c(estimate), names_from = c(truth), values_from = cost) %>% 
-  mutate(blank3 = "  ") %>% 
-  dplyr::select(-estimate) %>% 
-  relocate(blank3)) %>% 
+            hpc_costs_vals %>% 
+            mutate(truth = paste0("cost_", truth)) %>% 
+            pivot_wider(id_cols = c(estimate), names_from = c(truth), values_from = cost) %>% 
+            mutate(blank3 = "  ") %>% 
+            dplyr::select(-estimate) %>% 
+            relocate(blank3)) %>% 
   kbl(col.names = c("Prediction", "", lvls, "", lvls, "", lvls)) %>% 
   add_header_above(c(" " = 2, "Truth" = 4, " " = 1, "Linear Weights" = 4, " " = 1, "Custom Costs" = 4)) %>% 
   kable_styling(full_width = FALSE)
