@@ -44,6 +44,7 @@ load("../RData/mushrooms.RData")
 
 shroom_n <- nrow(shroom_train) + nrow(shroom_val) + nrow(shroom_cal) + nrow(shroom_test)
 shroom_xtab <- round(table(shroom_train$class)/nrow(shroom_train)* 100, 1)
+obs_prev <- round(mean(shroom_train$class == "poisonous") * 100, 1)
 
 cls_mtr <- 
   metric_set(accuracy, bal_accuracy, detection_prevalence, f_meas, j_index, 
@@ -62,9 +63,9 @@ nb_res <-
 nb_fit <- fit_best(nb_res)
 nb_mtr <- collect_metrics(nb_res)
 nb_val_pred <- collect_predictions(nb_res)
-nb_val_roc <- roc_curve(nb_val_pred, class, .pred_edible)
-nb_val_pr <- pr_curve(nb_val_pred, class, .pred_edible)
-nb_val_gain <- gain_curve(nb_val_pred, class, .pred_edible)
+nb_val_roc <- roc_curve(nb_val_pred, class, .pred_poisonous)
+nb_val_pr <- pr_curve(nb_val_pred, class, .pred_poisonous)
+nb_val_gain <- gain_curve(nb_val_pred, class, .pred_poisonous)
 
 nb_test_pred <- augment(nb_fit, shroom_test) %>% dplyr::select(class, starts_with(".pred"))
 nb_cal_pred <- augment(nb_fit, shroom_cal)   %>% dplyr::select(class, starts_with(".pred"))
@@ -79,12 +80,44 @@ Hard class predictions are almost always created by finding the category corresp
 
 Many classification models use probabilistic assumptions to estimate class probabilities. For example, logistic regression assumes that the outcome follows a Bernoulli distribution. From there, parameter estimates can be determined using maximum likelihood or Bayesian estimation, which then defines the probability estimates. Other algorithms, such as tree-based models, make no assumptions regarding the data. 
 
+An important characteristic of classification outcomes is the _prevalence_ of the classes. This is the frequency at which each class level occurs _in the wild_. For example, in late 2024, the prevalence of COVID-19 was believed to be between 5% and 7%. The prevalence is not a universal, static constant; it can change by geography and time. However, as we’ll see below, the prevalence can affect the results of many metrics. 
+
+For classification models, the prevalence is directly related to Bayes’ Rule. It is the _prior distribution_ for the outcome variable (i.e., $Pr[y]$ in Equation TODO). While the prevalence can be estimated from our training set, we should also know that it should reflect our _a priori_ beliefs (if any) about the outcome data. 
+
+For example, @fig-wordle-prior (left panel) shows the prior for Wordle^[[`https://www.nytimes.com/games/wordle/index.html`](https://www.nytimes.com/games/wordle/index.html)] scores as defined by one of the authors. Wordle is a game where the player has six attempts to guess a five-letter word. There are seven levels, the last (an `X`) representing the case where the player failed to guess the word. The prior for a single try should not be zero but incredibly small. There are thousands of possible words, although many players choose a starter word that they believe optimal^[This author’s starter word is `caret` - it contains two common vowels and three important consonants.]. Guessing the word on two tries is extremely fortuitous, and the author placed a 4% probability of this occurring. There is also the opinion that correctly guessing in three or four turns should consume the bulk of the probability, and values of 40% and 35% were assigned to these. Not guessing the word was also thought to be about 5%. The final prior was  (in order) 0.01%, 4%, 40%, 35%, 10%, 5.99%, and 5%. 
+
+```{r}
+#| label: fig-wordle-prior
+#| echo: false
+#| out-width: 60%
+#| fig-width: 6
+#| fig-height: 4
+#| fig-cap: Two potential prior distributions for Wordle scores, one based on the prior belief of a single person and another extracted from a social media platform.
+
+tries <- c(paste(1:6), "X")
+
+belief <- tibble(tries = tries, prob = c(0.01, 4, 40, 35, 10, 5.99, 5), source = "Belief")
+bluesky <- tibble(tries = tries, prob = c(0.57, 6.68, 26.24, 34.71, 21.22, 8.69, 1.9), source = "Bluesky Data")
+wordle <- bind_rows(belief, bluesky)
+
+wordle %>% 
+  ggplot((aes(tries, prob))) + 
+  geom_bar(stat = "identity") + 
+  facet_wrap(~ source) +
+  labs(x = "Number of Guesses", y = "Probability (%)")
+```
+
+The figure also shows the distribution of 179,430 self-reported scores on the Bluesky social media platform (between 2023-02-28 and 2024-11-30). While more bell-shaped, these data have some potential issues. The first two probabilities, 0.57% and 6.68%, are abnormally high. It is exceedingly unlikely that half of a percent of guesses were correct on the first try, given that there are 603 unique words in this data set. Also, the second guess probability is only achievable if a highly optimized first word is used rigorously. 
+
+Theoretically, these two distributions should be different since one is the belief of a single person and may not generalize well to the general population of players. However, the prior is about belief and only has a significant effect when the size of the data is relatively small (as previously discussed in Sections [-@sec-effect-encodings] and TODO).
+
+This chapter describes myriad approaches for quantifying how well a classification model functions via performance metrics. 
+
 ::: {.important-box}
 It is very important to carefully choose which metric (or metrics) to optimize a model. The metric defines what your model should consider important, and it will almost always believe that your chosen metric is the only important criterion. This can often lead to unintended consequences. 
 :::
 
-This chapter describes myriad approaches for quantifying how well a classification model functions via performance metrics. 
-
+The next section discusses important characteristics of performance metrics. After this, two sections discuss specific metrics for both types of predictions. Another section discussed the special case where the class levels are ordered (such as with the Wordle scores). There is also a section specifically on model calibration and another describing the use of multiple metrics. 
 
 ## Choosing Appropriate Metrics
 
@@ -139,7 +172,7 @@ While the softmax method ensures they have the correction range, it does not gua
 ```{r}
 #| label: fig-discrim-vs-cal
 #| echo: false
-#| out-width: 70%
+#| out-width: 60%
 #| fig-width: 6
 #| fig-height: 4.25
 #| fig-cap: An example of a model that has good discrimination but poor calibration. 
@@ -160,7 +193,7 @@ In some cases, the pattern shown in @fig-discrim-vs-cal may be acceptable. For e
 
 ## Example Data
 
-To demonstrate classification metrics, we'll primarily use a data set with mushroom characteristics to predict whether specific mushrooms are edible or poisonous. We'll use these data in conjunction with a naive Bayes classification model (see @sec-naive-bayes)
+To demonstrate classification metrics, we'll primarily use a data set with mushroom characteristics to predict whether specific mushrooms are edible or poisonous. We'll use these data in conjunction with a naive Bayes classification model^[This data set is very easy. Other models, even simple decision trees, can produce nearly perfect results. We’ll use it here with a less powerful model for illustration purposes. The gravity of incorrectly predicting a poisonous mushroom to be edible makes the discussion of certain errors more compelling.] (see @sec-naive-bayes). This model uses a simplified version of Bayes' Rule. 
 
 The inital data pool contained `r format(shroom_n, big.mark = ",")` data points. The main partition of the data was into training ($n_{tr}$ = `r format(nrow(shroom_train), big.mark = ",")`), validation ($n_{val}$ = `r format(nrow(shroom_val), big.mark = ",")`), and test ($n_{te}$ = `r format(nrow(shroom_test), big.mark = ",")`). Additionally, a _calibration_ set of $n_{cal}$ = `r format(nrow(shroom_cal), big.mark = ",")` mushrooms were allocated for the processes described in @sec-calibration. 
 
@@ -197,11 +230,11 @@ The predictors of the outcome were:
 
 ::::
 
-The outcome data has relatively balanced classes with `r shroom_xtab["edible"]`% of the mushrooms being edible. 
+The outcome data has relatively balanced classes with `r shroom_xtab["poisonous"]`% of the mushrooms being poisonous. 
 
 No preprocessing was applied to the data for this model. Naive Bayes models do not require the categorical predictors to be decomposed into binary indicator columns or transformations of the numeric predictors. As shown above, the predictors with missing data were encoded as a level in one of the possible categories. 
 
-We'll fit the model to the training set and, for the most part, use the validation set to demonstrate the various metrics. @fig-naive-bayes-probs shows the distirbution of the probability of the event (edible) for the validation set. 
+We'll fit the model to the training set and, for the most part, use the validation set to demonstrate the various metrics. @fig-naive-bayes-probs shows the distirbution of the probability of the event (poisonous) for the validation set. 
 
 ```{r}
 #| label: fig-naive-bayes-probs
@@ -209,17 +242,19 @@ We'll fit the model to the training set and, for the most part, use the validati
 #| out-width: 70%
 #| fig-width: 6
 #| fig-height: 4.25
-#| fig-cap: The distribution of the validation set class probability estimates for a naive Bayes model, split by the true class of the mushroom. . 
+#| fig-cap: The distribution of the validation set class probability estimates for a naive Bayes model, split by the true class of the mushroom. 
 
 nb_val_pred %>% 
-  ggplot(aes(.pred_edible)) + 
+  ggplot(aes(.pred_poisonous)) + 
   geom_vline(xintercept = 1 / 2, col = "blue", lty = 3) +
   geom_histogram(col = "white", binwidth = 0.02) + 
   facet_wrap(~ class, ncol = 1, labeller = "label_both") + 
-  labs(x = "Probability of Being Edible")
+  labs(x = "Probability of Being oisonous")
 ```
 
 ## Assessing Hard Class Predictions {#sec-cls-hard-metrics}
+
+Unless otherwise stated, hard class predictions for two-class problems are assigned in this chapter using a 50% cutoff. Alternate cutoffs are investigated in @sec-roc.
 
 One of the most fundamental ways to inspect and understand how well hard class prediction performs is the confusion matrix, simply a cross-tabulation of the observed and predicted predictions. From this, we can conceptualize where the model under-performs. An excellent model has the largest counts along the diagonal where the observed and predicted classes are the same. For the naive Bayes model, @tbl-confusion-matrix shows the confusion matrix for the mushroom data’s validation set. 
 
@@ -278,7 +313,6 @@ $$
 
 where $n_{ij}$ are the number of counts in the *i* th row and the *j* th column of the confusion matrix, $n$ is the total number of data points, and $C$ is the number of classes. 
 
-
 Many of the metrics in this section are in the form of a proportion. For each, confidence intervals can be computed using typical methods for binomial proportions. We suggest using asymmetric intervals, such as the “exact” technique in @clopper1934use. See @newcombe1998two and @meeker2017statistical for discussions of different methods for computing intervals on proportions. For the validation set results, the 90% confidence interval was (`r round(acc_int$conf.int[1]*100, 1)`%, `r round(acc_int$conf.int[2]*100, 1)`%).
 
 As previously mentioned, accuracy is misleading when there is a class imbalance. There are a few ways to correct for imbalances, most notably the measure of agreement called Kappa [@Cohen1960]. This normalizes the accuracy by a measure of expected accuracy based on chance agreement ($E$): 
@@ -299,17 +333,28 @@ The Kappa statistic can also incorporate different weights for different types o
 
 Using the data from @tbl-confusion-matrix, the Kappa value was `r round(nb_mtr$mean[nb_mtr$.metric == "kap"], 3)`. While subjective, this value probably indicates satisfactory agreement between the true classes and the predictions. 
 
-Matthews correlation coefficient [@MATTHEWS1975442; @GORODKIN2004367] (MCC) is another metric that can compare the observed and predicted classes. The equation for *C* classes is:
+Despite the qualitative nature of the classes, we can also compute a correlation statistic between the observed and predicted classes. Initially developed in the early twentieth century [@ekstrom2011phi], the Phi-coefficient was rediscovered by @MATTHEWS1975442 and, more recently, is referred to as the Matthews correlation coefficient (MCC). For $C = 2$, the statistic is: 
+
+
+$$
+MCC = \frac {n_{11}n_{22}-n_{12}n_{21}}{\sqrt {n_{1\boldsymbol{\cdot} }n_{2\boldsymbol{\cdot} }n_{\boldsymbol{\cdot} 2}n_{\boldsymbol{\cdot} 1}}}
+$$
+where the dot notation indicates the sum of the row or column. More generally, for $C$ classes: 
 
 $$
 {\displaystyle {\text{MCC}}={\frac {\displaystyle{\sum_{k=1}^C\sum_{l=1}^C\sum _{m=1}^C(n_{kk}n_{lm}-n_{kl}n_{mk})}}{{\sqrt {{\displaystyle \sum_{k=1}^C\left(\sum _{l=1}^Cn_{kl}\right)\left(\sum _{\substack{k'=1\\k'\neq k}}^C\sum _{l'=1}^Cn_{k'l'}\right)}}}{\sqrt {{\displaystyle\sum_{k=1}^C\left(\sum _{l=1}^Cn_{lk}\right)\left(\sum _{\substack{k'=1\\k'\neq k}}^C\sum _{l'=1}^Cn_{l'k'}\right)}}}}}}
 $$
 
-The statistic mirrors the correlation coefficient for numeric data in that it ranges from -1 to +1 and, like Kappa, has a similar interpretation. The MCC estimate, `r signif(nb_mtr$mean[nb_mtr$.metric == "mcc"], 3)`, is very close to the Kappa estimate.
+Like Kappa, the statistic mirrors the correlation coefficient for numeric data in that it ranges from -1 to +1 and a similar interpretation to ordinary correlation coefficients. For the mushroom data, the MCC estimate, `r signif(nb_mtr$mean[nb_mtr$.metric == "mcc"], 3)`, is very close to the Kappa estimate shown above. We find that this is often the case and the similarity was investigated more in @delgado2019cohen. 
 
+
+TODO similarity of results, recent reference
+
+Accuracy, Kappa, and MCC can be computed regardless of the number of classes. There are numerous specialized metrics for $C = 2$, i.e. “binary classification.”. The next section reviews these and @sec-cls-metrics-wts describes a few methods for using these metrics when $C > 2$.
 
 ## Metrics for Two Classes {#sec-cls-two-classes}
 
+It helps to conceptualize metrics for two classes when one class can be defined as the _event of interest_ (i.e., which of the two is most important). The choice mainly affects the interpretation of metrics. For the mushroom data, either class would be appropriate, but we will choose “poisonous” as the event for our descriptions. We’ll also use “positives” to refer to the event of interest and “negatives” for the other class value. From this, we can name those positives correctly predicted as “true positives” (TP) and the accurately predicted negatives as “true negatives” (TN). If a positive sample was _incorrectly_ predicted as negative, we have “false negatives” (FN) and, conversely, “false positives” (FP) for poorly predicted negative samples. @tbl-confusion-matrix-two-class arranges these cases in a 2 $\times$ 2 confusion matrix. 
 
 ::::::: columns
 ::: {.column width="30%"}
@@ -317,6 +362,7 @@ The statistic mirrors the correlation coefficient for numeric data in that it ra
 
 :::: {.column width="40%"}
 ::: {#tbl-confusion-matrix-two-class}
+
 ```{r}
 #| label: tbl-confusion-matrix-two-class
 #| echo: false
@@ -332,6 +378,7 @@ tibble::tribble(
 ```
 
 A general confusion matrix for outcomes with two classes.
+
 :::
 ::::
 
@@ -340,25 +387,61 @@ A general confusion matrix for outcomes with two classes.
 :::::::
 
 
-$$
-Sens = \frac{\text{correctly predicted events}}{\text{total events}} = \frac{TP}{TP + FN}
-$$
-
-
+There are particular metrics associated with the accuracy of each class. Sensitivity is the probably of correctly predicting the event of interest: 
 
 $$
-Spec = \frac{\text{correctly predicted non-events}}{\text{total non-events}} = \frac{TN}{TN + FP}
+Sensitivity = \frac{\text{correctly predicted events}}{\text{total events}} = \frac{TP}{TP + FN}
 $$
 
-
+The accuracy of non-events is measured by specificity: 
 
 $$
-\begin{align}
-PPV&= \frac{Sens \times Prev}{(Sens \times Prev) + \left((1 - Spec) \times (1 - Prev)\right)}  \notag \\
-\notag \\
-NPV&= \frac{Spec \times (1 - Prev)}{\left(Prev \times (1 - Sens)\right) + \left(Spec \times (1 - Prev)\right)} \notag
-\end{align}
+Specificity = \frac{\text{correctly predicted non-events}}{\text{total non-events}} = \frac{TN}{TN + FP}
 $$
+
+Specificity is focused on accuracy but we often refer to the false positive rate which is simply one minus the specificity. 
+
+Sensitivity and specificity are bedrock metrics for two classes since they represent the two possible ways models can go wrong. In the statistics literature, they correspond to “Type I” and “Type II” errors, respectively. We’ll examine their relationship to one another below when receiver operating characteristic (ROC) curves are discussed.
+
+With the mushroom data, the sensitivity  was `r round(nb_mtr$mean[nb_mtr$.metric == "sensitivity"] * 100, 1)`% and the specificity was nearly the same: `r round(nb_mtr$mean[nb_mtr$.metric == "specificity"] * 100, 1)`%. Since these are simple ratios, confidence intervals can be computed using the same technique mentioned for overall accuracy. 
+
+These two metrics are commonly reported when a two-class model is evaluated. However, they is a subtle issue in their usage. If we want to know how well the model works, they don’t really answer a question that anyone would ask. For example, sensitivity is the answer to: 
+
+> **Q1**: If I know my mushroom is poisonous, what percentage of the time do I correctly predict it to be poisonous?
+
+This is because sensitivity _conditions_ on the sample being positive. If we knew that, we would not require a model to make a prediction. What we would really like to know: 
+
+> **Q2**: If I predict this mushroom to be poisonous, what is the probability that it is actually poisonous? 
+
+This is a different question that requires more data than just the sensitivity estimate. 
+
+To explain, we have to return to Bayes’ Rule. In this context, the sensitivity is the likelihood term $Pr[x = poison | y = poison]$ (where $x$ represents the predicted class). To answer the question equation, what we need is: 
+
+$$
+Pr[y = poison| x = poison] = \frac{Pr[y = poison] Pr[x = poison | y = poison]}{Pr[x = poison]}
+$$  {#eq-bayes-ppv}
+
+This reflects the idea that we need to know how often the event really occurs (independent of our model). If the event rarely happens anyway, that should affect the probability of us predicting it to happen. 
+
+For the event class, Q2 is measured by a statistic called the _positive predictive value_ (PPV), which requires sensitivity, specificity, and prevalence: 
+
+$$
+PPV= \frac{Prev \times Sens}{(Sens \times Prev) + \left((1 - Spec) \times (1 - Prev)\right)}
+$$  {#eq-ppv}
+
+Without knowing anything about how often the average mushroom is poisonous, we could choose a prevalence of 50% as an uninformative prior. Our estimate from the training set (`r obs_prev`%) is close to uninformative, so we will use that in our computations. 
+
+With our estimates in hand, the answer to Q2 is 
+
+> A2: `r round(nb_mtr$mean[nb_mtr$.metric == "ppv"] * 100, 1)`% of the time, a mushroom is poisonous when we predict it to be.”
+
+The Bayesian analog to specificity is called the _negative predictive value_ (NPV) and has a similar formula: 
+
+$$
+NPV= \frac{(1 - Prev) \times Spec}{\left(Prev \times (1 - Sens)\right) + \left(Spec \times (1 - Prev)\right)}
+$$  {#eq-npv}
+
+Using the prevalence from our traning set and the metrics computed on the validation set, the NPV estimate is `r round(nb_mtr$mean[nb_mtr$.metric == "npv"] * 100, 1)`%. 
 
 
 ::: {#fig-prevalence}
@@ -476,13 +559,23 @@ A visualization of how the ingedients to the positive and negative predictive va
 
 :::
 
+The predictive value metrics are rarely quoted since they are more complex and rely on good prevalence estimates. They also tend to give worse impressions of model efficacy than sensitivity and specificity. 
+
+Sensitivity and specificity (and PPV/NPV) are measuring opposite types of errors. When paired, they are most appropriate when the overall model quality is important. In contrast, we’ll now consider a few other metrics for two-class problems focusing primarily on the event class.
+
+Information retrieval (IR) focuses on finding relevant documents from a large collection. Once a training set of documents is labeled (as relevant or not), IR systems consume the document’s contents (mostly text) and use those data to predict whether a new document is relevant. In our previous discussion, the event of interest is when the true class of the outcome is “relevant.” The term “retrieved” is also used to define the identified documents, meaning the documents that have been predicted to be relevant (i.e., TP + FP). 
+
+The primary two metrics used in information retrieval are precision and recall. Precision is the proportion of relevant documents in the data set that have been identified:
 
 $$
 Precision = \frac{\text{relevant and retrieved}}{\text{total retrieved}}=\frac{TP}{TP + FP}
 $$ 
 
-In the special case when the classes are balanced, this is equal to the positive predictive value (but is not otherwise).
+For example, in the validation set, our naive Bayes model has predicted that `r format(sum(nb_conf_mat$table["poisonous",]), big.mark = ",")` mushrooms were predicted/identified to be poisonous using a 50% cutoff. Of these, `r format( nb_conf_mat$table["poisonous","poisonous"], big.mark = ",")` were truely poisonous. The ratio of these values produced a precision value of `r round(nb_mtr$mean[nb_mtr$.metric == "npv"] * 100, 1)`%.
 
+It is sometimes said that precision is the same as the positive predicted value. However, this is only the case when the prevalence is 50% (i.e., balanced classes). For information retrieval, it is doubtful that the event rate would be so large (otherwise, documents would be very easily found).  
+
+The recall is the rate that identified documents are actually relavant: 
 
 $$
 Recall = \frac{\text{relevant and retrieved}}{\text{total relevant}} = \frac{TP}{TP + FN}
@@ -490,20 +583,20 @@ $$
 
 This is the same as sensitivity.
 
-Additionally, the $F_1$ score is the harmonic mean of precision and recall:
+These two metrics are sometimes qualified by how many of the top  K documents are found (e.g., “precision@K”). 
+
+Also related are F-measures, which are combinations of precision and recall. For example, the $F_1$ score is the harmonic mean of precision and recall:
 
 $$
 F_{1}=2\left(\frac{precision \times recall}{precision + recall}\right)
 $$
-
-More generally, the score can be written as
+More generally, the F-score can be written as
 
 $$
 F_{\beta}=(1+\beta_2)\left(\frac{precision \times recall}{(\beta^2 \times precision) + recall}\right)
 $$
 
-
-
+It is worth reiterating that precision and recall serve a completely different goal than sensitivity and specificity. They are focused on finding events in the data, while sensitivity and specificity are concerned with overall model quality by balancing the two possible error types. 
 
 ## Weighted performance metrics {#sec-cls-metrics-wts}
 
@@ -531,9 +624,7 @@ $$
 
 Note that there are many performance metrics that naturally work with three or more classes. There is little point in using these averaging tools for accuracy, Kappa, MCC, ROC AUC, and others.
 
-
 ## Evaluating Probabilistic Predictions {#sec-cls-metrics-soft}
-
 
 ```{r}
 #| label: prob-metrics
@@ -577,14 +668,13 @@ set.seed(1)
 rand_log_loss <- 
   purrr::map_dfr(1:25, ~ mutate(nb_val_pred, class = sample(class)), .id = "rep") %>% 
   group_by(rep) %>%  
-  mn_log_loss(class, .pred_edible) %>% 
+  mn_log_loss(class, .pred_poisonous) %>% 
   summarize(mean = mean(.estimate)) %>% 
   pluck("mean")
 ```
 
 
 ### Cross-Entropy {#sec-cross-entropy}
-
 
 $$
 loss = -\frac{1}{N}\sum_{i=1}^N\sum_{k=1}^Cy_{ik}\log(\hat{p}_{ik})
@@ -604,15 +694,13 @@ $$
 #| include: false
 brier_decomp_2cls <- 
   nb_val_pred %>% 
-  group_by(.pred_edible) %>% 
-  summarize(n = n(), r = sum(class == "edible"), .groups = "drop") %>% 
-  mutate(cal = n * (r - .pred_edible)^2, refine = n * r * (1- r)) %>% 
+  group_by(.pred_poisonous) %>% 
+  summarize(n = n(), r = sum(class == "poisonous"), .groups = "drop") %>% 
+  mutate(cal = n * (r - .pred_poisonous)^2, refine = n * r * (1- r)) %>% 
   summarize(cal = mean(cal), refine = mean(refine), .groups = "drop")
 ```
 
 This is the mean squared error of the predicted class probabilities $\hat{p}_{ik}$. The Brier score can range between zero and two, but for two class problems, it is often rescaled to range between zero and one. A perfect model has a score of zero. If a performance metric achieves its smallest value when the probability estimate is perfect, it is called a *proper scoring rule*. There are theoretical benefits to using such a metric and, in the case of the Brier score, it also measures how well a model is calibrated (see @sec-calibration). In fact, the Brier score can be decomposed into different components, one of which specifically measures calibration. However, this can only be computed when the estimated probability values are not unique. For the naive Bayes model, the Brier score value was `r signif(nb_mtr$mean[nb_mtr$.metric == "brier_class"], 3)`.
-
-
 
 ### Reciever Operating Characteristic Curves {#sec-roc}
 
@@ -638,9 +726,7 @@ autoplot(nb_val_roc) +
   scale_shape_manual(values = c(6, 1, 2))
 ```
 
-
 ### Precision-Recall Curves {#sec-pr}
-
 
 ```{r}
 #| label: fig-pr-curve
@@ -696,163 +782,6 @@ nb_val_gain %>%
   ) +
   coord_obs_pred()
 ```
-
-
-
-
-## Calibration {#sec-calibration}
-
-
-```{r}
-#| label: fig-cal-curves
-#| echo: false
-#| out-width: 90%
-#| fig-width: 7
-#| fig-height: 4
-#| fig-cap: Calibration curves for naive Bayes model. The colored regions are individual 90{{< pct >}} confidence intervals. 
-
-cal_plot_1 <- 
-  nb_val_pred %>% 
-  cal_plot_windowed(class, .pred_edible, window_size = 0.2, step_size = 0.025) + 
-  ggtitle("(a) moving 20% bins")
-
-cal_plot_2 <- 
-  nb_val_pred %>% 
-  cal_plot_logistic(class, .pred_edible) + 
-  ggtitle("(b) logistic regression")
-
-cal_plot_1 + cal_plot_2
-```
-
-The downside to this binning approach is that, for small data sets, the results can have very large variability or there may not be enough data within each bin to make accurate judgements regarding calibration. One alternative is to use moving windows. For example, for fixed bin width of 0.20, compute the required statistics and then move the bin by a small amount (say 0.02). This would result in larger bins capturing more data that would slide across the range of probability values.
-
-Another alternative is to fit a model to the data. Logistic regression is a relatively simple classification model for binary outcomes and is discussed in @sec-logistic-regression. We can fit this model using our observed outcomes and use the predicted class probabilities ($\hat{p}_i$) as the predictor. If the probabilities are well-calibrated, the model should show a linear relationship. One other feature that can be used in this diagnostic is to model the predictor with a smoothing spline. This enables the logistic model to reflect when the calibration is very poor. @fig-cal-curves (b) illustrates the same pattern with a much smaller degree of uncertainty since the model coefficients utilize all of the data.
-
-```{r}
-#| label: logistic_cal
-#| include: false
-
-logistic_cal <- nb_cal_pred %>% cal_estimate_logistic(truth = class, smooth = TRUE)
-pred_cal <- nb_val_pred %>% cal_apply(logistic_cal)
-
-num_logistic_vals <-  nb_cal_pred %>% distinct(.pred_edible) %>% nrow()
-iso_cal <- nb_cal_pred %>% cal_estimate_isotonic(truth = class)
-pred_cal_iso <- nb_val_pred %>% cal_apply(iso_cal)
-num_isotonic_vals <- vctrs::vec_unique_count(pred_cal_iso$.pred_edible)
-
-iso_boot_cal <- nb_cal_pred %>% cal_estimate_isotonic_boot(truth = class, times = 1000)
-pred_cal_iso_boot <- nb_val_pred %>% cal_apply(iso_boot_cal)
-num_isotonic_boot_vals <- vctrs::vec_unique_count(pred_cal_iso_boot$.pred_edible)
-```
-
-What can be done with poorly calibrated predictions? There are approaches for post-processing the predicted probabilities to have higher fidelity to the observed data. The customary method is to use a logistic regression fit, as seen in @fig-cal-curves (b), to re-calibrate the predictions. First a suitable logistic regression model is created in the same manner as the one used for diagnosis. Recall that the original predictions are used as predictors of the model. To re-calibrate a set of predictions, the original values are pushed through the model and the resulting logistic regression values are used as the new probability predictions.
-
-@platt1999probabilistic  proposed using logistic regression as a method of converting any quantitative score into a probability-like value. *Platt scaling* also adjusts the class indicators from binary 0/1 values to values slightly different from those values.
-
-This brings up questions about which data should be used to fit the calibration model and which to evaluate its efficacy. We’ve previously mentioned that using simple re-predictions of the training set is a very bad idea and that is especially true here. If the model was resampled, the out-of-sample predictions can be used to fit the calibration model. In our example, a single validation set was used. Unfortunately, if all of the held-out data were used for re-calibration, the only unused data left would be the test set (which should not be compromised).
-
-TODO change below
-
-Since there are `r format(nrow(pred_cal), big.mark = ",")` samples in the validation set, we will randomly select half to fit the calibration model and will use the other half to evaluate how well the calibration process worked. @fig-re-cal-curves shows the results where panel (a) uses a sliding window to assess the smaller data set using a window size of 20{{< pct >}} that moves in 5{{< pct >}} increments. From these figures, the class probabilities appear to have been improved. Note that these values now encompass the entire probability range.
-
-```{r}
-#| label: fig-re-cal-curves
-#| echo: false
-#| out-width: 90%
-#| fig-width: 7
-#| fig-height: 4
-#| fig-cap: Calibration curves for naive Bayes model _after_ re-calibration using logistic regression in conjunction with a calibration set.
-
-cal_plot_3 <- 
-  pred_cal %>% 
-  cal_plot_windowed(class, .pred_edible, window_size = 0.2, step_size = 0.025) + 
-  ggtitle("(a) moving 20% bins")
-
-cal_plot_4 <- 
-  pred_cal %>% 
-  cal_plot_logistic(class, .pred_edible) + 
-  ggtitle("(b) logistic regression")
-
-cal_plot_3 + cal_plot_4
-```
-
-```{r}
-#| label: re-cal
-#| echo: false
-re_class_stats <- pred_cal %>% cls_mtr(class, estimate = .pred_class, .pred_edible)
-```
-
-Using this approach to calibration, the new probability estimates have a Brier score of `r signif(re_class_stats$.estimate[re_class_stats$.metric == "brier_class"], 3)`. While this is smaller than the value (`r signif(nb_mtr$mean[nb_mtr$.metric == "brier_class"], 3)`) prior to calibration, the exact same data were not used. This makes it difficult to say that the improvement is real.
-
-There other approaches for re-calibrating. First, is isotonic regression [@isotonic]. This tool fits a model that will generate monotonic, non-decreasing, predictions: $\hat{y}_i \le \hat{y}_{i+ 1}$ when $x_i \le x_{i+ 1}$. There are multiple methods to create such models but the most straightforward approach is the pooled-adjacent violators algorithm (PAVA) of @pava. This method adjusts a sequence of data points that are not monotonically increasing to be so. For example, @tbl-isotonic shows an example where the rows are ordered by their model's predicted probabilities. One column shows a binary indicator for class `A`. The first three rows have the same outcome (`B`) but the fourth row is actually class `A`. The PAVA algorithm then takes the averages of the binary indicators that bracket the discordant value and all of these probability estimates are given a value of 1/3. From the table, it is clear that there are three possible probability estimates after isotonic regression is used.
-
-::::::: columns
-::: {.column width="25%"}
-:::
-
-:::: {.column width="50%"}
-::: {#tbl-isotonic}
-```{r}
-#| label: tbl-isotonic
-#| echo: false
-
-iso_example <- 
-  tibble::tribble(
-    ~Truth, ~Binary, ~Model, ~Isotonic,
-    "B",       0,      0,         0,
-    "B",       0,   0.01,         0,
-    "B",       0,    0.1,         0,
-    "A",       1,    0.2,      0.33,
-    "B",       0,    0.4,      0.33,
-    "B",       0,    0.5,      0.33,
-    "A",       1,    0.6,         1,
-    "A",       1,    0.7,         1,
-    "A",       1,    0.8,         1,
-    "A",       1,    0.9,         1
-  )
-
-iso_example %>% 
-  kbl() %>% 
-  add_header_above(c(" " = 2, "Estimated Probability of Class A" = 2)) %>% 
-  kable_styling(full_width = FALSE)  
-```
-
-
-An example of calculations for calibration via isotonic regression.
-:::
-::::
-
-::: {.column width="25%"}
-:::
-:::::::
-
-The nice feature of this tool is that it is nonparametric and makes almost no distributional assumptions. However, one downside is that there are a small number of unique re-calibrated probability estimates. For this reason, it is advised to use isotonic regression for large data sets. For example, for the naive Bayes data used for calibration, there were originally `r num_logistic_vals` unique probability estimates while, after isotonic regression is applied, there are only `r num_isotonic_vals` possible values.
-
-```{r}
-#| label: fig-re-cal-iso-curves
-#| echo: false
-#| out-width: 90%
-#| fig-width: 7
-#| fig-height: 4
-#| fig-cap: Calibration curves for naive Bayes model _after_ re-calibration using isoreg regression.
-
-cal_plot_5 <- 
-  pred_cal_iso %>% 
-  cal_plot_windowed(class, .pred_edible, window_size = 0.2, step_size = 0.025) + 
-  ggtitle("(a) moving 20% bins")
-
-cal_plot_6 <- 
-  pred_cal_iso_boot %>% 
-  cal_plot_windowed(class, .pred_edible, window_size = 0.2, step_size = 0.025) + 
-  ggtitle("(b) moving 20% bins, bootstrapped")
-
-cal_plot_5 + cal_plot_6
-```
-
-There are many other tools in the calibration toolbox, such as beta calibration [@betacal]. There are also methods for calibrating classification models with three or more classes [@NIPS2001abdbeb4d; @johansson21a; @NEURIPS2021bbc92a64].
-
-Finally, it is important to re-compute performance using the re-calibrated predictions. Also note that, since the class probabilities have been altered, any hard predictions should be recomputed since some values may have moved across the chosen probability threshold. Using the set of `r nrow(pred_cal)` data points that have been re-calibrated, the re-estimated sensitivity and specificity were `r round(re_class_stats$.estimate[re_class_stats$.metric == "sensitivity"] * 100, 1)`{{< pct >}} and `r round(re_class_stats$.estimate[re_class_stats$.metric == "specificity"] * 100, 1)`{{< pct >}}, respectively and the area under the ROC curve was `r signif(re_class_stats$.estimate[re_class_stats$.metric == "roc_auc"], 3)`
-
 
 ## Ordered Categories {#sec-ordered-categories}
 
@@ -1020,6 +949,160 @@ We computed Kappa under three scenareos: equal weights (`r round(kap_res$.estima
 The mean squared error for these data was `r signif(sqrt(mse_ordered(hpc_cv)), 3)`. How bad is this? If we repeatedly permute the outcome classes and measure the RMSE we find that the worst case-scenario is about `r signif(sqrt(mean(mse_perm$null)), 3)`.
 
 For the custom cost analysis, the average cost was `r signif(hpc_costs$.estimate, 3)` with a worst-case value of about `r signif(mean(hpc_costs_perm$null), 3)`.
+
+## Calibration {#sec-calibration}
+
+
+```{r}
+#| label: fig-cal-curves
+#| echo: false
+#| out-width: 90%
+#| fig-width: 7
+#| fig-height: 4
+#| fig-cap: Calibration curves for naive Bayes model. The colored regions are individual 90{{< pct >}} confidence intervals. 
+
+cal_plot_1 <- 
+  nb_val_pred %>% 
+  cal_plot_windowed(class, .pred_poisonous, window_size = 0.2, step_size = 0.025) + 
+  ggtitle("(a) moving 20% bins")
+
+cal_plot_2 <- 
+  nb_val_pred %>% 
+  cal_plot_logistic(class, .pred_poisonous) + 
+  ggtitle("(b) logistic regression")
+
+cal_plot_1 + cal_plot_2
+```
+
+The downside to this binning approach is that, for small data sets, the results can have very large variability or there may not be enough data within each bin to make accurate judgements regarding calibration. One alternative is to use moving windows. For example, for fixed bin width of 0.20, compute the required statistics and then move the bin by a small amount (say 0.02). This would result in larger bins capturing more data that would slide across the range of probability values.
+
+Another alternative is to fit a model to the data. Logistic regression is a relatively simple classification model for binary outcomes and is discussed in @sec-logistic-regression. We can fit this model using our observed outcomes and use the predicted class probabilities ($\hat{p}_i$) as the predictor. If the probabilities are well-calibrated, the model should show a linear relationship. One other feature that can be used in this diagnostic is to model the predictor with a smoothing spline. This enables the logistic model to reflect when the calibration is very poor. @fig-cal-curves (b) illustrates the same pattern with a much smaller degree of uncertainty since the model coefficients utilize all of the data.
+
+```{r}
+#| label: logistic-cal
+#| include: false
+#| cache: true
+
+logistic_cal <- nb_cal_pred %>% cal_estimate_logistic(truth = class, smooth = TRUE)
+pred_cal <- nb_val_pred %>% cal_apply(logistic_cal)
+
+num_logistic_vals <-  nb_cal_pred %>% distinct(.pred_poisonous) %>% nrow()
+iso_cal <- nb_cal_pred %>% cal_estimate_isotonic(truth = class)
+pred_cal_iso <- nb_val_pred %>% cal_apply(iso_cal)
+num_isotonic_vals <- vctrs::vec_unique_count(pred_cal_iso$.pred_poisonous)
+
+iso_boot_cal <- nb_cal_pred %>% cal_estimate_isotonic_boot(truth = class, times = 1000)
+pred_cal_iso_boot <- nb_val_pred %>% cal_apply(iso_boot_cal)
+num_isotonic_boot_vals <- vctrs::vec_unique_count(pred_cal_iso_boot$.pred_poisonous)
+```
+
+What can be done with poorly calibrated predictions? There are approaches for post-processing the predicted probabilities to have higher fidelity to the observed data. The customary method is to use a logistic regression fit, as seen in @fig-cal-curves (b), to re-calibrate the predictions. First a suitable logistic regression model is created in the same manner as the one used for diagnosis. Recall that the original predictions are used as predictors of the model. To re-calibrate a set of predictions, the original values are pushed through the model and the resulting logistic regression values are used as the new probability predictions.
+
+@platt1999probabilistic  proposed using logistic regression as a method of converting any quantitative score into a probability-like value. *Platt scaling* also adjusts the class indicators from binary 0/1 values to values slightly different from those values.
+
+This brings up questions about which data should be used to fit the calibration model and which to evaluate its efficacy. We’ve previously mentioned that using simple re-predictions of the training set is a very bad idea and that is especially true here. If the model was resampled, the out-of-sample predictions can be used to fit the calibration model. In our example, a single validation set was used. Unfortunately, if all of the held-out data were used for re-calibration, the only unused data left would be the test set (which should not be compromised).
+
+TODO change below
+
+Since there are `r format(nrow(pred_cal), big.mark = ",")` samples in the validation set, we will randomly select half to fit the calibration model and will use the other half to evaluate how well the calibration process worked. @fig-re-cal-curves shows the results where panel (a) uses a sliding window to assess the smaller data set using a window size of 20{{< pct >}} that moves in 5{{< pct >}} increments. From these figures, the class probabilities appear to have been improved. Note that these values now encompass the entire probability range.
+
+```{r}
+#| label: fig-re-cal-curves
+#| echo: false
+#| out-width: 90%
+#| fig-width: 7
+#| fig-height: 4
+#| fig-cap: Calibration curves for naive Bayes model _after_ re-calibration using logistic regression in conjunction with a calibration set.
+
+cal_plot_3 <- 
+  pred_cal %>% 
+  cal_plot_windowed(class, .pred_poisonous, window_size = 0.2, step_size = 0.025) + 
+  ggtitle("(a) moving 20% bins")
+
+cal_plot_4 <- 
+  pred_cal %>% 
+  cal_plot_logistic(class, .pred_poisonous) + 
+  ggtitle("(b) logistic regression")
+
+cal_plot_3 + cal_plot_4
+```
+
+```{r}
+#| label: re-cal
+#| echo: false
+re_class_stats <- pred_cal %>% cls_mtr(class, estimate = .pred_class, .pred_poisonous)
+```
+
+Using this approach to calibration, the new probability estimates have a Brier score of `r signif(re_class_stats$.estimate[re_class_stats$.metric == "brier_class"], 3)`. While this is smaller than the value (`r signif(nb_mtr$mean[nb_mtr$.metric == "brier_class"], 3)`) prior to calibration, the exact same data were not used. This makes it difficult to say that the improvement is real.
+
+There other approaches for re-calibrating. First, is isotonic regression [@isotonic]. This tool fits a model that will generate monotonic, non-decreasing, predictions: $\hat{y}_i \le \hat{y}_{i+ 1}$ when $x_i \le x_{i+ 1}$. There are multiple methods to create such models but the most straightforward approach is the pooled-adjacent violators algorithm (PAVA) of @pava. This method adjusts a sequence of data points that are not monotonically increasing to be so. For example, @tbl-isotonic shows an example where the rows are ordered by their model's predicted probabilities. One column shows a binary indicator for class `A`. The first three rows have the same outcome (`B`) but the fourth row is actually class `A`. The PAVA algorithm then takes the averages of the binary indicators that bracket the discordant value and all of these probability estimates are given a value of 1/3. From the table, it is clear that there are three possible probability estimates after isotonic regression is used.
+
+::::::: columns
+::: {.column width="25%"}
+:::
+
+:::: {.column width="50%"}
+::: {#tbl-isotonic}
+```{r}
+#| label: tbl-isotonic
+#| echo: false
+
+iso_example <- 
+  tibble::tribble(
+    ~Truth, ~Binary, ~Model, ~Isotonic,
+    "B",       0,      0,         0,
+    "B",       0,   0.01,         0,
+    "B",       0,    0.1,         0,
+    "A",       1,    0.2,      0.33,
+    "B",       0,    0.4,      0.33,
+    "B",       0,    0.5,      0.33,
+    "A",       1,    0.6,         1,
+    "A",       1,    0.7,         1,
+    "A",       1,    0.8,         1,
+    "A",       1,    0.9,         1
+  )
+
+iso_example %>% 
+  kbl() %>% 
+  add_header_above(c(" " = 2, "Estimated Probability of Class A" = 2)) %>% 
+  kable_styling(full_width = FALSE)  
+```
+
+
+An example of calculations for calibration via isotonic regression.
+:::
+::::
+
+::: {.column width="25%"}
+:::
+:::::::
+
+The nice feature of this tool is that it is nonparametric and makes almost no distributional assumptions. However, one downside is that there are a small number of unique re-calibrated probability estimates. For this reason, it is advised to use isotonic regression for large data sets. For example, for the naive Bayes data used for calibration, there were originally `r num_logistic_vals` unique probability estimates while, after isotonic regression is applied, there are only `r num_isotonic_vals` possible values.
+
+```{r}
+#| label: fig-re-cal-iso-curves
+#| echo: false
+#| out-width: 90%
+#| fig-width: 7
+#| fig-height: 4
+#| fig-cap: Calibration curves for naive Bayes model _after_ re-calibration using isoreg regression.
+
+cal_plot_5 <- 
+  pred_cal_iso %>% 
+  cal_plot_windowed(class, .pred_poisonous, window_size = 0.2, step_size = 0.025) + 
+  ggtitle("(a) moving 20% bins")
+
+cal_plot_6 <- 
+  pred_cal_iso_boot %>% 
+  cal_plot_windowed(class, .pred_poisonous, window_size = 0.2, step_size = 0.025) + 
+  ggtitle("(b) moving 20% bins, bootstrapped")
+
+cal_plot_5 + cal_plot_6
+```
+
+There are many other tools in the calibration toolbox, such as beta calibration [@betacal]. There are also methods for calibrating classification models with three or more classes [@NIPS2001abdbeb4d; @johansson21a; @NEURIPS2021bbc92a64].
+
+Finally, it is important to re-compute performance using the re-calibrated predictions. Also note that, since the class probabilities have been altered, any hard predictions should be recomputed since some values may have moved across the chosen probability threshold. Using the set of `r nrow(pred_cal)` data points that have been re-calibrated, the re-estimated sensitivity and specificity were `r round(re_class_stats$.estimate[re_class_stats$.metric == "sensitivity"] * 100, 1)`{{< pct >}} and `r round(re_class_stats$.estimate[re_class_stats$.metric == "specificity"] * 100, 1)`{{< pct >}}, respectively and the area under the ROC curve was `r signif(re_class_stats$.estimate[re_class_stats$.metric == "roc_auc"], 3)`
 
 ## Multi-objective Assessments {#sec-multi-objectives}
 

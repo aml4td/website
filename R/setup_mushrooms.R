@@ -32,6 +32,7 @@ mushroom_secondary <-
   clean_names() %>% 
   mutate(
     class = if_else(class == "p", "poisonous", "edible"),
+    class = factor(class, levels = c("poisonous", "edible")),
     does_bruise_or_bleed = if_else(does_bruise_or_bleed, "yes", "no"),
     has_ring = if_else(has_ring, "yes", "no"),
     cap_shape = 
