@@ -69,6 +69,20 @@ nb_val_gain <- gain_curve(nb_val_pred, class, .pred_poisonous)
 
 nb_test_pred <- augment(nb_fit, shroom_test) %>% dplyr::select(class, starts_with(".pred"))
 nb_cal_pred <- augment(nb_fit, shroom_cal)   %>% dplyr::select(class, starts_with(".pred"))
+
+recompute <- function(split) {
+  dat <- analysis(split)
+  cls_mtr(dat, truth = class, estimate = .pred_class, .pred_poisonous)
+}
+
+set.seed(382)
+nb_mtr_perm <- 
+  nb_val_pred %>% 
+  permutations(permute = "class", times = 100) %>% 
+  mutate(.metrics = map(splits, recompute)) %>% 
+  dplyr::select(.metrics) %>% 
+  unnest(.metrics) %>% 
+  dplyr::summarize(mean = mean(.estimate), .by = c(.metric))
 ```
 
 Classification models are used to predict outcomes that are categorical in nature. They primarily produce two types of predictions: 
@@ -288,7 +302,7 @@ acc_int <- binom.test(sum(diag(nb_conf_mat$table)), sum(nb_conf_mat$table), conf
 
 conf_mat_table %>% 
   kbl(
-    col.names = c("Prediction", "", "edible", "poisonous"),
+    col.names = c("Prediction", "", "poisonous", "edible"),
     format.args = list(big.mark = ',')
   ) %>%
   add_header_above(c(" " = 2, "Truth" = 2)) %>% 
@@ -419,7 +433,7 @@ To explain, we have to return to Bayes’ Rule. In this context, the sensitivity
 
 $$
 Pr[y = poison| x = poison] = \frac{Pr[y = poison] Pr[x = poison | y = poison]}{Pr[x = poison]}
-$$  {#eq-bayes-ppv}
+$$ {#eq-bayes-ppv}
 
 This reflects the idea that we need to know how often the event really occurs (independent of our model). If the event rarely happens anyway, that should affect the probability of us predicting it to happen. 
 
@@ -659,7 +673,7 @@ pr_points <-
 
 gain_point <- 
   nb_val_gain %>% 
-  mutate(diff = abs(.percent_found - 30)) %>% 
+  mutate(diff = abs(.percent_found - 50)) %>% 
   slice_min(diff, n = 1)
 
 # ------------------------------------------------------------------------------
@@ -673,20 +687,64 @@ rand_log_loss <-
   pluck("mean")
 ```
 
+As previously stated, class probabilities have far more information than categorical class predictions. We’ll describe common metrics that use these quantitative estimates. A few of these utilize indicators for different classes. We’ll denote binary indicators for class $k = 1, \ldots, C$ and sample $i = 1, \ldots, n$ as $y_{ik}$. For binary data, we use $k=1$ to define the event of interest and $k=2$ to be the non-event so that $y_{i1} = 1$ and $y_{i2} = 0$.
 
 ### Cross-Entropy {#sec-cross-entropy}
 
 $$
 loss = -\frac{1}{N}\sum_{i=1}^N\sum_{k=1}^Cy_{ik}\log(\hat{p}_{ik})
+$$ {#eq-cross-entropy}
+
+where we use the convention that $log(0) = 0$. 
+
+
+$$
+loss = -\frac{1}{N}\sum_{i=1}^N (y_{i1}\log(\hat{p}_{i1}) + y_{i2}\log(\hat{p}_{i2})) = -\frac{1}{N}\sum_{i=1}^N y_{i1}\log(\hat{p}_{i1})
+$$ {#eq-cross-entropy-binary}
+
+since we define $y_{i2} = 0$. When sample $i$ is an event, we would like $\hat{p}_{i1}$ to be as close to one as possible (knowing that $\hat{p}_{i0}$ must be near zero). In doing so, we judge the utility of a binary classification model by measuring the separation between the class probabilities.  
+
+It turns out that if we assume the data points independently arise from a Bernoulli distribution with probability $\pi$, the likelihood statistic is 
+
+$$
+\ell(y_{ik}; \pi) = \prod_{i=1}^n \pi^{y_{i1}} (1 - \pi)^{y_{i2}}
 $$
 
+We typically try to optimize the negative log-likelihood. Logging the function and subtituting our estimate $\hat{p}_{i1}$ for $\pi$, we arrive at: 
+
+$$
+-\log \ell(y_{ik}; \hat{p}_{i1}) = -\sum_{i=1}^n y_{i1}log(\hat{p}_{i1})
+$$
+
+Taking the mean of these values, instead of the sum, leads us to @eq-cross-entropy-binary. 
+
+Often, with classification models, this statistic will be referred to as "log loss^[This does lead to confusion since the loss function in question, the likelihood, is different for different data types (e.g., real numbers, counts, etc). In linear regression, “log loss” also corresponds to the sum of squared errors.]". 
+
+
+
+Secondly, the scale of the value is not interpretable. For example, knowing that the cross-entropy value for our naive Bayes model is `r signif(nb_mtr$mean[nb_mtr$.metric == "mn_log_loss"], 3)` does indicate whether that value is good or bad. We can determine what a poor value of cross-entropy is for this data set by repeatedly permuting the true class column of the validation set, recomputing the metrics, and taking the average. This gives us an estimate of the metrics when there is no connection between the observed classes and their predictions. Following this approach with 100 permutations, the baseline cross-entropy of a poor model was `r signif(nb_mtr_perm$mean[nb_mtr$.metric == "mn_log_loss"], 3)`.
+
+also logging things near zero makes them explode; impossible results when p = 0
+
+the log-loss puts more dramatic emphasis on the extremes of the probability scale than does the Brier loss. 
+
+strictly proper scoring rule in the sense that it is optimized at the true probability distribution.
+
+
+
 ### Brier Scores {#sec-brier}
+
+also called "mean probability score"
+
+Stanski adjustment of 2 for multiclass to normalize range
+
+kruppa 2014: The BS is a strictly proper score (Gneiting and Raftery, 2007), which means that it takes its minimal value only when the true probabilities are inserted as predictions. Phrased differently, it is not possible to improve the BS by systematically predicting probability values other than the best estimate.
 
 Another performance metric that uses the predicted class probabilities is the Brier score [@brier1950verification; @bella2013effect]. Suppose that the value $y_{ik}$ is a 0/1 indicator for whether the observed outcome $i$ corresponds to class $k$. Using this the score is:
 
 $$
 Brier = \frac{1}{N}\sum_{i=1}^N\sum_{k=1}^C (y_{ik} - \hat{p}_{ik})^2
-$$
+$$ {#eq-brier}
 
 ```{r}
 #| label: decomp
@@ -700,7 +758,12 @@ brier_decomp_2cls <-
   summarize(cal = mean(cal), refine = mean(refine), .groups = "drop")
 ```
 
-This is the mean squared error of the predicted class probabilities $\hat{p}_{ik}$. The Brier score can range between zero and two, but for two class problems, it is often rescaled to range between zero and one. A perfect model has a score of zero. If a performance metric achieves its smallest value when the probability estimate is perfect, it is called a *proper scoring rule*. There are theoretical benefits to using such a metric and, in the case of the Brier score, it also measures how well a model is calibrated (see @sec-calibration). In fact, the Brier score can be decomposed into different components, one of which specifically measures calibration. However, this can only be computed when the estimated probability values are not unique. For the naive Bayes model, the Brier score value was `r signif(nb_mtr$mean[nb_mtr$.metric == "brier_class"], 3)`.
+This is the mean squared error of the predicted class probabilities $\hat{p}_{ik}$. The Brier score can range between zero and two, but for two class problems, it is often rescaled to range between zero and one. A perfect model has a score of zero. If a performance metric achieves its smallest value when the probability estimate is perfect, it is called a *proper scoring rule*. There are theoretical benefits to using such a metric and, in the case of the Brier score, it also measures how well a model is calibrated (see @sec-calibration). In fact, the Brier score can be decomposed into different components, one of which specifically measures calibration. However, this can only be computed when the estimated probability values are not unique. 
+
+For the naive Bayes model, the Brier score value was `r signif(nb_mtr$mean[nb_mtr$.metric == "brier_class"], 3)`.
+
+
+We know that Brier scores near zero are best but What is the worst possible value? If we suppose that an ineffective model would produce completely equivocal predictions of $p_{ik} = 1/C$, the worst-case Brier score is $(1 - (1/C))^2$. For example, in a two-class problem, a Brier score of 0.25 would indicate an ineffective model. However, there are many possible distributions of predictive probabilities for bad models. A better (but more complex) approach is via the permutation method previously described. With our mushroom example, the permutation estimate of the worst-case Brier score was `r signif(nb_mtr_perm$mean[nb_mtr$.metric == "brier_class"], 3)`.
 
 ### Reciever Operating Characteristic Curves {#sec-roc}
 
@@ -748,6 +811,7 @@ autoplot(nb_val_pr) +
     ),
     cex = 4
   ) +
+  geom_hline(yintercept = obs_prev/100, lty = 3) +
   scale_shape_manual(values = c(6, 1, 2)) +
   coord_obs_pred()
 ```
@@ -838,7 +902,7 @@ mse_ordered <- function(dat) {
 }
 
 set.seed(579)
-hpc_perm <- permutations(hpc_cv, times = 50, permute = obs)
+hpc_perm <- permutations(hpc_cv, times = 100, permute = obs)
 
 mse_perm <- 
   hpc_perm %>% 
@@ -951,6 +1015,13 @@ The mean squared error for these data was `r signif(sqrt(mse_ordered(hpc_cv)), 3
 For the custom cost analysis, the average cost was `r signif(hpc_costs$.estimate, 3)` with a worst-case value of about `r signif(mean(hpc_costs_perm$null), 3)`.
 
 ## Calibration {#sec-calibration}
+
+note overconfident on bottom diag, under on top
+
+from "CALiBRATiON OF PROBABILITIES:THE STATE OF THE ART": 
+
+> Calibration is essentially a property of single individuals. 
+
 
 
 ```{r}
@@ -1130,4 +1201,3 @@ TODO
 
 # stopCluster(cl)
 ```
-
