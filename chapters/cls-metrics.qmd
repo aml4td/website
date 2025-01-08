@@ -98,8 +98,24 @@ An important characteristic of classification outcomes is the _prevalence_ of th
 
 For classification models, the prevalence is directly related to Bayes’ Rule. It is the _prior distribution_ for the outcome variable (i.e., $Pr[y]$ in Equation TODO). While the prevalence can be estimated from our training set, we should also know that it should reflect our _a priori_ beliefs (if any) about the outcome data. 
 
-For example, @fig-wordle-prior (left panel) shows the prior for Wordle^[[`https://www.nytimes.com/games/wordle/index.html`](https://www.nytimes.com/games/wordle/index.html)] scores as defined by one of the authors. Wordle is a game where the player has six attempts to guess a five-letter word. There are seven levels, the last (an `X`) representing the case where the player failed to guess the word. The prior for a single try should not be zero but incredibly small. There are thousands of possible words, although many players choose a starter word that they believe optimal^[This author’s starter word is `caret` - it contains two common vowels and three important consonants.]. Guessing the word on two tries is extremely fortuitous, and the author placed a 4% probability of this occurring. There is also the opinion that correctly guessing in three or four turns should consume the bulk of the probability, and values of 40% and 35% were assigned to these. Not guessing the word was also thought to be about 5%. The final prior was  (in order) 0.01%, 4%, 40%, 35%, 10%, 5.99%, and 5%. 
 
+```{r}
+#| label: load-wordle
+#| echo: false
+load("../RData/wordle_tries.RData")
+num_res <- nrow(wordle_tries)
+num_words <- vctrs::vec_unique_count(wordle_tries$word_number)
+
+prior_empirical <- table(wordle_tries$tries) / num_res
+prior_empirical <- as.vector(prior_empirical)
+
+p_rand <- 1 / num_words
+p_obs <- mean(wordle_tries$tries == "1")
+over_est <- round(p_obs / p_rand, 2)
+```
+
+
+For example, @fig-wordle-prior (left panel) shows the prior for Wordle^[[`https://www.nytimes.com/games/wordle/index.html`](https://www.nytimes.com/games/wordle/index.html)] scores as defined by one of the authors. Wordle is a game where the player has six attempts to guess a five-letter word. There are seven levels, the last (an `X`) representing the case where the player failed to guess the word. The prior for a single try should not be zero but incredibly small. There are thousands of possible words, although many players choose a starter word that they believe optimal^[This author’s starter word is `caret` - it contains two common vowels and three important consonants.]. Guessing the word on two tries is considerably fortuitous, and the author placed a 4% probability of this occurring. There is also the opinion that correctly guessing in three or four turns should consume the bulk of the probability, and values of 40% and 35% were assigned to these. Not guessing the word was also thought to be about 5%. The final prior was  (in order) 0.1%, 4%, 40%, 35%, 10%, 5.9%, and 5%. 
 ```{r}
 #| label: fig-wordle-prior
 #| echo: false
@@ -110,8 +126,8 @@ For example, @fig-wordle-prior (left panel) shows the prior for Wordle^[[`https:
 
 tries <- c(paste(1:6), "X")
 
-belief <- tibble(tries = tries, prob = c(0.01, 4, 40, 35, 10, 5.99, 5), source = "Belief")
-bluesky <- tibble(tries = tries, prob = c(0.57, 6.68, 26.24, 34.71, 21.22, 8.69, 1.9), source = "Bluesky Data")
+belief <- tibble(tries = tries, prob = c(0.1, 4, 40, 35, 10, 5.9, 5), source = "Author's Belief")
+bluesky <- tibble(tries = tries, prob = prior_empirical * 100, source = "Bluesky Data")
 wordle <- bind_rows(belief, bluesky)
 
 wordle %>% 
@@ -121,7 +137,7 @@ wordle %>%
   labs(x = "Number of Guesses", y = "Probability (%)")
 ```
 
-The figure also shows the distribution of 179,430 self-reported scores on the Bluesky social media platform (between 2023-02-28 and 2024-11-30). While more bell-shaped, these data have some potential issues. The first two probabilities, 0.57% and 6.68%, are abnormally high. It is exceedingly unlikely that half of a percent of guesses were correct on the first try, given that there are 603 unique words in this data set. Also, the second guess probability is only achievable if a highly optimized first word is used rigorously. 
+The figure also shows the distribution of `r format(num_res, big.mark = ",")` self-reported scores across `r format(num_words, big.mark = ",")` words on the Bluesky social media platform. While more bell-shaped, these data have some potential issues. The first two probabilities, `r round(prior_empirical[1] * 100, 2)`% and `r round(prior_empirical[2] * 100, 2)`%, are abnormally high. It is exceedingly unlikely that more than one half of a percent of guesses were correct on the first try, given that there are `r format(num_words, big.mark = ",")` unique words in this data set^[If first guesses were random, this rate is `r round(over_est, 1)`-fold higher than is expected by chance. Even though initial guesses are _not_ random the initial guess rate is implausibly high.]. Also, the second guess probability is only achievable if a highly optimized first word is used rigorously. 
 
 Theoretically, these two distributions should be different since one is the belief of a single person and may not generalize well to the general population of players. However, the prior is about belief and only has a significant effect when the size of the data is relatively small (as previously discussed in Sections [-@sec-effect-encodings] and TODO).
 
@@ -930,173 +946,6 @@ nb_val_gain %>%
   coord_obs_pred()
 ```
 
-## Ordered Categories {#sec-ordered-categories}
-
-As previously mentioned, our outcome classes can have an inherent ordering.
-
-examples - wordle
-
-Since there is an ordering, it might be reasonable to think that misclassification severity relates to how "far" a predicted class is from its true class. For example, risk analysis systems, such as FMEA, involve enumerating different ways that a thing can fail and the corresponding consequences. Suppose that we have an ordinal scale for risk consisting of "low," "moderate," "severe," and "catastrophic". It is reasonable to think that predicting that the risk is moderate when it is actually catastrophic is very bad. Predicting a moderate risk to be low may not be as dire.
-
-There are a few metrics that use hard classification predictions. We previously mentioned the Kappa statistic. To penalize misclassification errors based on their distance to the true classification, [@cohen1968weighted] developed the *weighted Kappa* statistic where the errors' weights depend on their position differences. Let's look at a four-class example from @apm where computing jobs run on a server executed very fast (VF), fast (F), moderately long (M), or a long time (L).
-
-A linear weighting for the Kappa statistic is shown in @tbl-confusion-matrix-costs. There are bands of diagonal weights that are either 0, 1, 2, or 3. Weight Kappa statistics enable "more incorrect" errors more than others.
-
-```{r}
-#| label: ordered-stats
-#| echo: false
-#| results: hide
-kap_linear <- function(data, truth, estimate, na_rm = TRUE, ...) {
-  kap(
-    data = data,
-    truth = !!rlang::enquo(truth),
-    estimate = !!rlang::enquo(estimate),
-    weighting = "linear",
-    na_rm = na_rm,
-    ...
-  ) %>% 
-    mutate(.estimator = "linear")
-}
-kap_linear <- new_class_metric(kap_linear, "maximize")
-
-kap_quadratic <- function(data, truth, estimate, na_rm = TRUE, ...) {
-  kap(
-    data = data,
-    truth = !!rlang::enquo(truth),
-    estimate = !!rlang::enquo(estimate),
-    weighting = "quadratic",
-    na_rm = na_rm,
-    ...
-  ) %>% 
-    mutate(.estimator = "quadratic")
-}
-kap_quadratic <- new_class_metric(kap_quadratic, "maximize")
-
-kap_set <- metric_set(kap, kap_linear, kap_quadratic)
-kap_res <- 
-  hpc_cv %>% 
-  kap_set(truth = obs, estimate = pred)
-
-# ------------------------------------------------------------------------------
-
-mse_ordered <- function(dat) {
-  ord_diffs <- as.integer(dat$obs) - as.integer(dat$pred)
-  mean(ord_diffs^2)
-}
-
-set.seed(579)
-hpc_perm <- permutations(hpc_cv, times = 100, permute = obs)
-
-mse_perm <- 
-  hpc_perm %>% 
-  mutate(null = map_dbl(splits, ~ mse_ordered(analysis(.x))))
-
-mean(mse_perm$null)
-
-# ------------------------------------------------------------------------------
-
-hpc_costs_vals <- tribble(
-  ~estimate, ~truth, ~cost,
-  "VF",      "VF",    0,
-  "VF",      "F",     1,
-  "VF",      "M",     5,
-  "VF",      "L",    10,
-  "F",       "VF",    1,
-  "F",       "F",     0,
-  "F",       "M",     5,
-  "F",       "L",     5,
-  "M",       "VF",    1,
-  "M",       "F",     1,
-  "M",       "M",     0,
-  "M",       "L",     1,
-  "L",       "VF",    1,
-  "L",       "F",     1,
-  "L",       "M",     1,
-  "L",       "L",     0
-)
-
-hpc_costs_tbl <- 
-  hpc_costs_vals %>% 
-  mutate(truth = paste0("cost_", truth)) %>% 
-  pivot_wider(id_cols = c(estimate), names_from = c(truth), values_from = cost) %>% 
-  mutate(blank3 = "  ") %>% 
-  dplyr::select(-estimate) %>% 
-  relocate(blank3)
-
-
-hpc_costs <- 
-  hpc_cv %>%
-  classification_cost(obs, VF:L, costs = hpc_costs_vals)
-
-hpc_costs_perm <- 
-  hpc_perm %>% 
-  mutate(null = map_dbl(
-    splits, 
-    ~ classification_cost(analysis(.x), truth = obs, VF:L, costs = hpc_costs_vals)$.estimate)
-  )
-```
-
-::::::: columns
-::: {.column width="5%"}
-:::
-
-:::: {.column width="90%"}
-::: {#tbl-confusion-matrix-costs}
-```{r}
-#| label: tbl-confusion-costs
-#| echo: false
-
-lvls <- levels(hpc_cv$obs)
-
-hpc_conf_mat <-
-  hpc_cv %>% 
-  conf_mat(obs, estimate = pred) %>% 
-  pluck("table") %>% 
-  as.matrix() %>% 
-  as_tibble() %>% 
-  pivot_wider(id_cols = c(Prediction), names_from = c(Truth), values_from = n) %>% 
-  mutate(blank = "  ") %>% 
-  relocate(blank, .after = "Prediction") 
-
-hpc_errors <- toeplitz(0:3)
-colnames(hpc_errors) <- rownames(hpc_errors) <- levels(hpc_cv$obs)
-hpc_errors <- 
-  hpc_errors %>%
-  as.table() %>% 
-  as.data.frame() %>% 
-  set_names(c("Prediction", "Truth", "n")) %>% 
-  mutate(Truth = paste0("wts_", Truth)) %>% 
-  pivot_wider(id_cols = c(Prediction), names_from = c(Truth), values_from = n) %>% 
-  mutate(blank2 = "  ") %>% 
-  dplyr::select(-Prediction) %>% 
-  relocate(blank2)
-
-bind_cols(hpc_conf_mat, hpc_errors, hpc_costs_tbl <- 
-            hpc_costs_vals %>% 
-            mutate(truth = paste0("cost_", truth)) %>% 
-            pivot_wider(id_cols = c(estimate), names_from = c(truth), values_from = cost) %>% 
-            mutate(blank3 = "  ") %>% 
-            dplyr::select(-estimate) %>% 
-            relocate(blank3)) %>% 
-  kbl(col.names = c("Prediction", "", lvls, "", lvls, "", lvls)) %>% 
-  add_header_above(c(" " = 2, "Truth" = 4, " " = 1, "Linear Weights" = 4, " " = 1, "Custom Costs" = 4)) %>% 
-  kable_styling(full_width = FALSE)
-```
-
-A four class ordinal outcome with a confusion matrix, a linear set of weights for each potiental error, and a custom cost scheme used by @apm.
-:::
-::::
-
-::: {.column width="5%"}
-:::
-:::::::
-
-We computed Kappa under three scenareos: equal weights (`r round(kap_res$.estimate[kap_res$.estimator == "multiclass"], 3)`), linear scores (`r round(kap_res$.estimate[kap_res$.estimator == "linear"], 3)`), and quadratic scores (`r round(kap_res$.estimate[kap_res$.estimator == "quadratic"], 3)`).
-
-The mean squared error for these data was `r signif(sqrt(mse_ordered(hpc_cv)), 3)`. How bad is this? If we repeatedly permute the outcome classes and measure the RMSE we find that the worst case-scenario is about `r signif(sqrt(mean(mse_perm$null)), 3)`.
-
-For the custom cost analysis, the average cost was `r signif(hpc_costs$.estimate, 3)` with a worst-case value of about `r signif(mean(hpc_costs_perm$null), 3)`.
-
 ## Calibration {#sec-calibration}
 
 note overconfident on bottom diag, under on top
@@ -1257,6 +1106,117 @@ cal_plot_5 + cal_plot_6
 There are many other tools in the calibration toolbox, such as beta calibration [@betacal]. There are also methods for calibrating classification models with three or more classes [@NIPS2001abdbeb4d; @johansson21a; @NEURIPS2021bbc92a64].
 
 Finally, it is important to re-compute performance using the re-calibrated predictions. Also note that, since the class probabilities have been altered, any hard predictions should be recomputed since some values may have moved across the chosen probability threshold. Using the set of `r nrow(pred_cal)` data points that have been re-calibrated, the re-estimated sensitivity and specificity were `r round(re_class_stats$.estimate[re_class_stats$.metric == "sensitivity"] * 100, 1)`{{< pct >}} and `r round(re_class_stats$.estimate[re_class_stats$.metric == "specificity"] * 100, 1)`{{< pct >}}, respectively and the area under the ROC curve was `r signif(re_class_stats$.estimate[re_class_stats$.metric == "roc_auc"], 3)`
+
+
+## Ordered Categories {#sec-ordered-categories}
+
+```{r}
+#| label: load-wordle-results
+#| echo: false
+load("../RData/wordle_results.RData")
+load("../RData/one_user_data_splits.RData")
+
+user_dist <- table(word_split$data$tries)
+
+user_lab <- c("two tries", "three tries", "four tries", "five tries", 
+              "six tries", "unsuccessful")
+user_dist_chr <- paste0(user_lab, " ($n$ = ", as.vector(user_dist), ")")
+user_dist_chr <- cli::format_inline("{user_dist_chr}")
+
+boot_fit_2 <- mean(map_int(word_rs$splits, ~ sum(analysis(.x)$tries == "2")))
+boot_fit_x <- mean(map_int(word_rs$splits, ~ sum(analysis(.x)$tries == "X")))
+boot_prd_2 <- mean(map_int(word_rs$splits, ~ sum(assessment(.x)$tries == "2")))
+boot_prd_x <- mean(map_int(word_rs$splits, ~ sum(assessment(.x)$tries == "X")))
+```
+
+As previously mentioned, our outcome classes can have an inherent ordering. Since there is an ordering, it might be reasonable to think that misclassification severity relates to how "far" a predicted class is from its true class. For example, risk analysis systems, such as FMEA, involve enumerating different ways that a thing can fail and the corresponding consequences. Suppose that we have an ordinal scale for risk consisting of "low," "moderate," "severe," and "catastrophic". It is reasonable to think that predicting that the risk is moderate when it is actually catastrophic is very bad. Predicting a moderate risk to be low may not be as dire.
+
+To demonstrate, let's return to the Wordle data. We can treat the outcome as ordinal since the number of tries has a natural ordering. Using the data associated with @fig-wordle-prior, we assembled data from a single user for `r nrow(word_split$data)` days. These data were modeled with different sets of predictors computed from the letters: counts of each letter (in the word, first letter, last letter, etc), indicators for double letters, and common bigrams. A set of nine popular starter words was also used to compute a similarity score for each daily word. They are used to predict how uncommon the word might be and would probably influence the number of tries. The distribution of the outcome was: `r user_dist_chr`. A stratified 3:1 training/testing split was used to partition the data and models were optimized for predicitng the number of tries. The left-hand side of @tbl-confusion-matrix-costs shows a test set confusion matrix for a Wordle model for . 
+
+```{r}
+#| label: ordered-stats
+#| echo: false
+#| results: hide
+
+mse_ordered <- function(dat) {
+  ord_diffs <- as.integer(dat$tries) - as.integer(dat$.pred_class)
+  mean(ord_diffs^2)
+}
+
+set.seed(579)
+wordle_perm <- permutations(rule_te_pred, times = 100, permute = tries)
+
+mse_perm <- 
+  wordle_perm %>% 
+  mutate(null = map_dbl(splits, ~ mse_ordered(analysis(.x))))
+
+```
+
+::::::: columns
+::: {.column width="15%"}
+:::
+
+:::: {.column width="70%"}
+::: {#tbl-confusion-matrix-costs}
+```{r}
+#| label: tbl-confusion-costs
+#| echo: false
+
+lvls <- levels(rule_te_pred$tries)
+wordle_conf_mat <- 
+  rule_te_pred %>% 
+  conf_mat(tries, estimate = .pred_class) %>% 
+  pluck("table") %>% 
+  as.matrix() %>% 
+  as_tibble() %>% 
+  pivot_wider(id_cols = c(Prediction), names_from = c(Truth), values_from = n) %>% 
+  mutate(blank = "  ") %>% 
+  relocate(blank, .after = "Prediction")
+
+wordle_errors <- toeplitz(0:5)
+colnames(wordle_errors) <- rownames(wordle_errors) <- lvls
+wordle_errors <- 
+  wordle_errors %>%
+  as.table() %>% 
+  as.data.frame() %>% 
+  set_names(c("Prediction", "Truth", "n")) %>% 
+  mutate(Truth = paste0("wts_", Truth)) %>% 
+  pivot_wider(id_cols = c(Prediction), names_from = c(Truth), values_from = n) %>% 
+  mutate(blank2 = "  ") %>% 
+  dplyr::select(-Prediction) %>% 
+  relocate(blank2)
+
+bind_cols(wordle_conf_mat, wordle_errors) %>% 
+  kbl(col.names = c("Prediction", "", lvls, "", lvls)) %>% 
+  add_header_above(c(" " = 2, "Truth" = length(lvls), 
+                     " " = 1, "Linear Weights" = length(lvls))) %>% 
+  kable_styling(full_width = FALSE)
+```
+
+A six class ordinal outcome with a confusion matrix (left) and a linear set of weights for each potiental error (right).
+:::
+::::
+
+::: {.column width="15%"}
+:::
+:::::::
+
+
+There are a few metrics that use hard classification predictions. We previously mentioned the Kappa statistic. To penalize misclassification errors based on their distance to the true classification, REF developed the *weighted Kappa* statistic where the errors' weights depend on their positional differences. 
+
+A linear weighting for the Kappa statistic is shown in @tbl-confusion-matrix-costs. There are bands of diagonal integer weights that are 0, 1, 2, $\ldots$, 5. Weight Kappa statistics enable "more incorrect" errors more than others.
+
+For this test set, the estimate of the unweighted Kappa statistic was `r signif(rule_mtr$test[rule_mtr$.metric == "kap"], 3)`, which is outstanding. If we increase the penalty for more disparate errors, the performance values for linear and quadratic weights were `r signif(rule_mtr$test[rule_mtr$.metric == "kap_lin"], 3)` and `r signif(rule_mtr$test[rule_mtr$.metric == "kap_lin"], 3)`, respectively. 
+
+REF suggested ordinal versions of common regression metrics, such as the mean squared error (MSE). These use the positional “errors” between the true and predicted outcomes. For example, if a word requires two tries, but we predict that the puzzle will be solved with six tries, the error is +2. These metrics should be fairly understandable since they mimic common statistics used to evaluate models. However, there has been scant evidence that they offer a benefit over existing metrics that have been studied and evaluated for decades. The mean squared error for these data was `r signif(sqrt(mse_ordered(rule_te_pred)), 3)`. How bad is this? If we repeatedly permute the outcome classes and measure the RMSE we find that the worst case-scenario is about `r signif(sqrt(mean(mse_perm$null)), 3)`.
+
+For probability predictions, there is an extension to the Brier score called the _ranked probability score_ (RPS)[@epstein1969scoring;@constantinou2012solving]. The computations are very similar to @eq-brier but use different data. Instead of $y_{ik}$ corresponding to class $k$ only, the RPS assigns a value of 1 if the position of the true class is $\le k$. Similarly, the value of $\hat{p}_{ik}$ is the cumulative sum of the estimated probabilities corresponding to classes $\le k$. For example, with the Wordle data, $k = 3$ corresponds to four tries and $y_{i3}$ would have a value of 1.0 if the i<sup>th</sup> sample was solved in two, three, or four tries (and is zero otherwise). The corresponding cumulative probability is the sum of the individual probabilities of solving the puzzle in two, three, or four tries. The RPS inherits the same benefits as the Brier score since they are both proper scoring rules. See @stael1970family and @gneiting2007strictly.
+
+The ranked probability score measures the correctness (and calibration) of the question: “How well am I predicting that the event occurs in $k$ or less classes?”. 
+
+The test set probabilities associated with the test set were used to compute the Brier score estimate and the ranked probability score value. The RPS estimate was `r signif(rule_mtr$test[rule_mtr$.metric == "ranked_prob_score"], 3)` and its corresponding permuted "no information" estimate was `r signif(rule_mtr$permuted[rule_mtr$.metric == "ranked_prob_score"], 3)`. This indicates that the model appears to function effectively when evaluating the cumulative probability estimates. For comparison, the unordered Brier score for these data was `r signif(rule_mtr$test[rule_mtr$.metric == "brier_class"], 3)` (with permuted value `r signif(rule_mtr$permuted[rule_mtr$.metric == "brier_class"], 3)`), indicating reduced effectiveness when the classes are treated as unordered. This does make sense since the RPS is more forgiving of inaccuracies in the individual probability estimates as long as their sum is accurate. See @murphy1970ranked for a comparison of these two flavors of the Brier score. 
+
+
 
 ## Multi-objective Assessments {#sec-multi-objectives}
 
