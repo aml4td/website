@@ -19,6 +19,7 @@ library(discrim)
 library(probably)
 library(patchwork)
 library(kableExtra)
+library(cli)
 
 # ------------------------------------------------------------------------------
 # set options
@@ -1116,7 +1117,7 @@ Finally, it is important to re-compute performance using the re-calibrated predi
 load("../RData/wordle_results.RData")
 load("../RData/one_user_data_splits.RData")
 
-user_dist <- table(word_split$data$tries)
+user_dist <- table(bind_rows(bst_te_pred, bst_oob_pred)$tries)
 
 user_lab <- c("two tries", "three tries", "four tries", "five tries", 
               "six tries", "unsuccessful")
@@ -1131,7 +1132,7 @@ boot_prd_x <- mean(map_int(word_rs$splits, ~ sum(assessment(.x)$tries == "X")))
 
 As previously mentioned, our outcome classes can have an inherent ordering. Since there is an ordering, it might be reasonable to think that misclassification severity relates to how "far" a predicted class is from its true class. For example, risk analysis systems, such as FMEA, involve enumerating different ways that a thing can fail and the corresponding consequences. Suppose that we have an ordinal scale for risk consisting of "low," "moderate," "severe," and "catastrophic". It is reasonable to think that predicting that the risk is moderate when it is actually catastrophic is very bad. Predicting a moderate risk to be low may not be as dire.
 
-To demonstrate, let's return to the Wordle data. We can treat the outcome as ordinal since the number of tries has a natural ordering. Using the data associated with @fig-wordle-prior, we assembled data from a single user for `r nrow(word_split$data)` days. These data were modeled with different sets of predictors computed from the letters: counts of each letter (in the word, first letter, last letter, etc), indicators for double letters, and common bigrams. A set of nine popular starter words was also used to compute a similarity score for each daily word. They are used to predict how uncommon the word might be and would probably influence the number of tries. The distribution of the outcome was: `r user_dist_chr`. A stratified 3:1 training/testing split was used to partition the data and models were optimized for predicitng the number of tries. The left-hand side of @tbl-confusion-matrix-costs shows a test set confusion matrix for a Wordle model for . 
+To demonstrate, let's return to the Wordle data. We can treat the outcome as ordinal since the number of tries has a natural ordering. Using the data associated with @fig-wordle-prior, we assembled data from a single user for `r nrow(bst_te_pred) + nrow(bst_oob_pred)` days. These data were modeled with different sets of predictors computed from the letters: counts of each letter (in the word, first letter, last letter, etc), indicators for double letters, and common bi-grams. A set of nine popular starter words was also used to compute a similarity score for each daily word. They are used to predict how uncommon the word might be and would probably influence the number of tries. The distribution of the outcome was: `r user_dist_chr`. A 3:1 training/testing split was used to partition these data and different models were optimized for predicitng the number of tries. The left-hand side of @tbl-confusion-matrix-costs shows a test set confusion matrix for a Wordle model for a RuleFit model (described in @sec-cls-rule-fit). Note that `r cli::format_inline("{no(sum(bst_te_pred$tries == 'X'))} unsolved word{?s}")` (i.e., class "X") were in the test set partition. 
 
 ```{r}
 #| label: ordered-stats
@@ -1163,9 +1164,13 @@ mse_perm <-
 #| echo: false
 
 lvls <- levels(rule_te_pred$tries)
-wordle_conf_mat <- 
+
+wordle_conf_mat_obj <- 
   rule_te_pred %>% 
-  conf_mat(tries, estimate = .pred_class) %>% 
+  conf_mat(tries, estimate = .pred_class)
+
+wordle_conf_mat <- 
+  wordle_conf_mat_obj %>% 
   pluck("table") %>% 
   as.matrix() %>% 
   as_tibble() %>% 
@@ -1201,6 +1206,8 @@ A six class ordinal outcome with a confusion matrix (left) and a linear set of w
 :::
 :::::::
 
+About `r round(mean(rule_te_pred$tries == rule_te_pred$.pred_class) * 100, 0)`% of the class predictions mostly fall along the diagonal line of the confusion matrix. The classes corresponding to three, four, and five tries had appreciable errors. 
+
 
 There are a few metrics that use hard classification predictions. We previously mentioned the Kappa statistic. To penalize misclassification errors based on their distance to the true classification, REF developed the *weighted Kappa* statistic where the errors' weights depend on their positional differences. 
 
@@ -1208,7 +1215,7 @@ A linear weighting for the Kappa statistic is shown in @tbl-confusion-matrix-cos
 
 For this test set, the estimate of the unweighted Kappa statistic was `r signif(rule_mtr$test[rule_mtr$.metric == "kap"], 3)`, which is outstanding. If we increase the penalty for more disparate errors, the performance values for linear and quadratic weights were `r signif(rule_mtr$test[rule_mtr$.metric == "kap_lin"], 3)` and `r signif(rule_mtr$test[rule_mtr$.metric == "kap_lin"], 3)`, respectively. 
 
-REF suggested ordinal versions of common regression metrics, such as the mean squared error (MSE). These use the positional “errors” between the true and predicted outcomes. For example, if a word requires two tries, but we predict that the puzzle will be solved with six tries, the error is +2. These metrics should be fairly understandable since they mimic common statistics used to evaluate models. However, there has been scant evidence that they offer a benefit over existing metrics that have been studied and evaluated for decades. The mean squared error for these data was `r signif(sqrt(mse_ordered(rule_te_pred)), 3)`. How bad is this? If we repeatedly permute the outcome classes and measure the RMSE we find that the worst case-scenario is about `r signif(sqrt(mean(mse_perm$null)), 3)`.
+@nakov2019semeval suggested ordinal versions of common regression metrics, such as the mean squared error (MSE). These use the positional “errors” between the true and predicted outcomes. For example, if a word requires two tries, but we predict that the puzzle will be solved with six tries, the error is +2. These metrics should be fairly understandable since they mimic common statistics used to evaluate models. However, there has been scant evidence that they offer a benefit over existing metrics that have been studied and evaluated for decades. The mean squared error for these data was `r signif(sqrt(mse_ordered(rule_te_pred)), 3)`. How bad is this? If we repeatedly permute the outcome classes and measure the RMSE we find that the worst case-scenario is about `r signif(sqrt(mean(mse_perm$null)), 3)`.
 
 For probability predictions, there is an extension to the Brier score called the _ranked probability score_ (RPS)[@epstein1969scoring;@constantinou2012solving]. The computations are very similar to @eq-brier but use different data. Instead of $y_{ik}$ corresponding to class $k$ only, the RPS assigns a value of 1 if the position of the true class is $\le k$. Similarly, the value of $\hat{p}_{ik}$ is the cumulative sum of the estimated probabilities corresponding to classes $\le k$. For example, with the Wordle data, $k = 3$ corresponds to four tries and $y_{i3}$ would have a value of 1.0 if the i<sup>th</sup> sample was solved in two, three, or four tries (and is zero otherwise). The corresponding cumulative probability is the sum of the individual probabilities of solving the puzzle in two, three, or four tries. The RPS inherits the same benefits as the Brier score since they are both proper scoring rules. See @stael1970family and @gneiting2007strictly.
 
