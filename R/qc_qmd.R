@@ -49,7 +49,7 @@ qc_qmd <- function(path) {
     ## check that there is a stub for each section
     if (needs_stub(content[i])) {
       cli::cli_inform(c(x = "Needs a stub: {.val {content[i]}} at {.file {path}:{i}}"))
-      content[i] <- paste(content[i], "{#sec-validation}")
+      content[i] <- paste(content[i], "{#sec-TODO}")
     }
   }
   
