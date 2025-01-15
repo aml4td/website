@@ -28,6 +28,10 @@ needs_stub <- function(txt) {
   !has_stub & !un_num & !nada
 }
 
+has_label <- function(x) {
+  grepl("#| label: ", x, fixed = TRUE)
+}
+
 qc_qmd <- function(path) {
   suppressPackageStartupMessages(library(dplyr))
   
@@ -72,6 +76,17 @@ qc_qmd <- function(path) {
     content <- content[-removals]
   }
   
+  # No yaml "label" value at top of R chunk
+  chunk_start <- rev(which(grepl("^```\\{r\\}", content)))
+  # List from highest to lowest to preserve line numbers below current
+  check_has_label <- purrr:::map_lgl(content[chunk_start + 1], has_label)
+  if (any(!check_has_label)) {
+    lns <- chunk_start[which(!check_has_label)]
+    for (ln in lns) {
+      cli::cli_inform(c(x = "No chunk {.code #| label:} at {.file {path}:{ln}}:"))
+    }
+  }
+  
   # write out results
   cat(content, file = path, sep = "\n")
   invisible(TRUE)
@@ -80,3 +95,4 @@ qc_qmd <- function(path) {
 qmd_files <- list.files(path = "chapters", pattern = "\\.qmd$", full.names = TRUE)
 qmd_files <- qmd_files[!grepl("(news)|(contri)", qmd_files)]
 linted <- purrr::map_lgl(qmd_files, qc_qmd)
+
