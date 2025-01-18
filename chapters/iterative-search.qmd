@@ -35,17 +35,17 @@ num_workers <- parallel::detectCores()
 
 Grid search is a static procedure; we predetermine which candidates will be evaluated before beginning. How can we adaptively optimize tuning parameters in a sequential manner? Perhaps more importantly, _when_ is this a good approach? 
 
-Previously, we’ve seen that a plateau of good performance in the parameter space can be  possible. This is often the case but will not always be true. If the region of optimal performance is small, we must create a large space-filling design to find it. When there are many tuning parameters, the computational expense can be unreasonable. An even worse situation is one where the previously described speed-up techniques (such as the submodel trick from @sec-submodels) are not applicable. Racing can be very efficient, but if the training set is very large, it may be that a validation set is more appropriate than multiple resamples; racing cannot be used in this situation. Finally, there are practical considerations when the data set is very large. Most parallel processing techniques require the data to be in memory for each parallel worker, rendering that technique moot. 
+Previously, we’ve seen that a plateau of good performance in the parameter space is possible. This is often the case but will not always be true. If the region of optimal performance is small, we must create a large space-filling design to find it. When there are many tuning parameters, the computational expense can be unreasonable. An even worse situation is one where the previously described speed-up techniques (such as the submodel trick from @sec-submodels) are not applicable. Racing can be very efficient, but if the training set is very large, it may be that using a validation set is more appropriate than multiple resamples; in this case, racing cannot be used. Finally, there are practical considerations when the data set is very large. Most parallel processing techniques require the data to be in memory for each parallel worker, restricting their utility. 
 
-Generally, we are not often constrained by these issues _for models used for tabular data_. However, there are a few models that might be better optimized sequentially. The first two that come to mind are large neural networks^[Sections [-@sec-cls-svm] and [-@sec-reg-svm]]. and support vector machines^[Sections [-@sec-cls-nnet] and [-@sec-reg-nnet]] (SVMs) [@scholkopf2001;@cristianini2004]. For the former, as the number of layers increases, so does the number of tuning parameters. Neural networks also have many important tuning parameters associated with the model’s training, such as the learning rate, regularization parameters, etc. These models also require more preprocessing than others; they are suspectable to uninformative predictors, missing data, and collinearity. Depending on the data set, there can be many pre-model tuning parameters. 
+Generally, we are not often constrained by these issues _for models used for tabular data_. However, there are a few models that might be better optimized sequentially. The first two that come to mind are large neural networks^[Sections [-@sec-cls-svm] and [-@sec-reg-svm]]. and support vector machines^[Sections [-@sec-cls-nnet] and [-@sec-reg-nnet]] (SVMs) [@scholkopf2001;@cristianini2004]. For the former, as the number of layers increases, so does the number of tuning parameters. Neural networks also have many important tuning parameters associated with the model’s training, such as the learning rate, regularization parameters, etc. These models also require more preprocessing than others; they are suspectable to the effects of uninformative predictors, missing data, and collinearity. Depending on the data set, there can be many pre-model tuning parameters. 
 
-Support vector machines are models with fewer tuning parameters than neural networks but with similar preprocessing requirements. Unfortunately, the tuning parameter space can have large areas of poor performance with "islands" where the model works well. The location of these can change from data set to data set. We’ll see an example of this shortly in a small, two-parameter example. 
+Support vector machines are models with fewer tuning parameters than neural networks but with similar preprocessing requirements. Unfortunately, the tuning parameter space can have large areas of poor performance with "islands" where the model works well. The location of these can change from data set to data set. We’ll see an example of this shortly where two model parameters are tuned.
 
 These two models, in particular, are more likely to benefit from an optimization method that chooses candidates as the process evolves. 
 
 In theory, any iterative optimization procedures can be used. In general, gradient methods, such as steepest descent or Newton’s method, are the most commonly used technique for nonlinear optimization. These tools are suboptimal when it comes to parameter tuning but play important parts in other areas of machine learning and, for this reason, they will be discussed later. 
 
-Derivative-free techniques can be helpful when tuning parameters, and there are many that can be used for nonlinear optimizations. Traditional examples are genetic algorithms, simulated annealing, particle swarm optimization, etc. We’ll consider the first two of these in Sections [-@sec-sim-anneal] and [-@sec-genetic-algo]. Currently, the most well-known iterative tool for tuning models is Bayesian optimization. This will be examined in @sec-bayes-opt. However, before this, @sec-bayes will flesh out what it means for a model to be Bayesian. 
+Derivative-free techniques can be helpful for model tuning. Traditional examples are genetic algorithms, simulated annealing, particle swarm optimization, etc. We’ll consider the first two of these in Sections [-@sec-sim-anneal] and [-@sec-genetic-algo]. Currently, the most well-known iterative tool for tuning models is Bayesian optimization. This will be examined in @sec-bayes-opt. However, before this, @sec-bayes will flesh out what it means for a model to be Bayesian. 
 
 To get started, let's revisit a data set. 
 
@@ -59,7 +59,7 @@ source("../R/setup_chemometrics.R")
 
 We’ll return to the data previously seen in @sec-barley where we want to predict the percentage of barley oil in a mixture. Recall that the predictors are extremely correlated with one another. In @sec-embeddings, we considered embedding methods like PCA to preprocess the data and these models were able to achieve RMSE values of about 6% (shown in @fig-barley-linear-bakeoff). 
 
-In this chapter, we’ll model these data in two different scenarios. First, we’ll use them as a "toy problem" where only two support vector machine tuning parameters are optimized. This is a little unrealistic, but it allows us to visualize how iterative search methods work in a 2D space. Second, in @sec-bayes-opt-nnet, we’ll get serious and optimize a larger group of parameters for neural networks simultaneously with three parameters of a specialized preprocessing technique. 
+In this chapter, we’ll model these data in two different scenarios. First, we’ll use them as a "toy problem" where only two tuning parameters are optimized for a support vector machine model. This is a little unrealistic, but it allows us to visualize how iterative search methods work in a 2D space. Second, in @sec-bayes-opt-nnet, we’ll get serious and optimize a larger group of parameters for neural networks simultaneously with additional parameters for a specialized preprocessing technique. 
 
 Let's start with the toy example that uses an SVM regression model. This highly flexible nonlinear model can represent the predictor data in higher dimensions using a _kernel transformation_ [@hofmann2008]. This type of function combines numeric predictor vectors from two data points using a dot product. There are many different types of kernel functions, but for a _polynomial_ kernel, it is: 
 
@@ -67,7 +67,7 @@ $$
 k(\boldsymbol{x}_1, \boldsymbol{x}_2) = (a\boldsymbol{x}_1'\boldsymbol{x}_2 + b)^q
 $$ {#eq-kernel-poly}
 
-where $a$ is called the scaling factor, $b$ is a constant offset value, and $q$ is the polynomial degree. The dot product of predictor vectors ($\boldsymbol{x}_i$) measures both angle and distance. Note that for the kernel function to work in an appropriate way, the two vectors must have elements with consistent units (i.e., they have been standardized). 
+where $a$ is called the scaling factor, $b$ is a constant offset value, and $q$ is the polynomial degree. The dot product of predictor vectors ($\boldsymbol{x}_i$) measures both angle and distance between points. Note that for the kernel function to work in an appropriate way, the two vectors must have elements with consistent units (i.e., they have been standardized). 
 
 The kernel function operates much like a polynomial basis expansion; it projects a data point into a much larger, nonlinear space. The idea is that a more complex representation of the predictors might enable the model to make better predictions. 
 
@@ -77,7 +77,9 @@ The most commonly tuned SVM parameter is independent of the different kernel fun
 
 Just as in @sec-embeddings, the RMSE will be computed from a validation set and these statistics will be used to guide our efforts. 
 
-Let's define a wide  space for our two tuning parameters: cost will vary from 2<sup>-10</sup> to 2<sup>10</sup> and the scale factor^[Why do these two parameters use different bases? It’s mostly a convention. Both parameters have valid values that can range across many orders of magnitude. The change in cost tends to occur more slowly than the scaling factor, so a smaller base of 2 is often used.] is allowed to range from 10<sup>-10</sup> to 10<sup>-0.1</sup>. @fig-svm-grid visualizes the RMSE across these ranges^[These are not simulated data, so this surface is an approximation of the true RMSE via the validation set using a very large regular grid. The RMSE results are estimates and would change if we used different random numbers for data splitting.] where darker colors indicate smaller RMSE values. The lower left diagonal area is a virtual "dead zone" with very large RMSE results that don't appear to change much. There is also a diagonal wedge of good performance (symbolized by the darker colors). The figure shows the location of the smallest RMSE value and a diagonal ridge of parameter combinations with nearly equal results. Any points on this line would produce good models (at least for this toy example). Note that there is a small locale of excessively large RMSE values in the upper right. Increasing both tuning parameters to their upper limits is a bad idea.  
+Let's define a wide  space for our two tuning parameters: cost will vary from 2<sup>-10</sup> to 2<sup>10</sup> and the scale factor^[Why do these two parameters use different bases? It’s mostly a convention. Both parameters have valid values that can range across many orders of magnitude. The change in cost tends to occur more slowly than the scaling factor, so a smaller base of 2 is often used.] is allowed to range from 10<sup>-10</sup> to 10<sup>-0.1</sup>. 
+
+@fig-svm-grid visualizes the RMSE across these ranges^[These are not simulated data, so this surface is an approximation of the true RMSE via the validation set using a very large regular grid. The RMSE results are estimates and would change if we used different random numbers for data splitting.] where darker colors indicate smaller RMSE values. The lower left diagonal area is a virtual "dead zone" with very large RMSE results that don't appear to change much. There is also a diagonal wedge of good performance (symbolized by the darker colors). The figure shows the location of the smallest RMSE value and a diagonal ridge of parameter combinations with nearly equal results. Any points on this line would produce good models (at least for this toy example). Note that there is a small locale of excessively large RMSE values in the upper right. Increasing both tuning parameters to their upper limits is a bad idea.  
 
 ```{r}
 #| label: svm-spec
@@ -154,11 +156,11 @@ regular_mtr %>%
 
 The next section will discuss gradient descent optimization and why it isn’t a good choice for model tuning. The two subsequent sections will discuss how two traditional global search methods, simulated annealing and genetic algorithms, can be used to search the parameter space. After this, the focus is on Bayesian optimization. Finally, we end with an extended analysis of the barley prediction problem. 
 
-## Sidebar: Gradient-Based Optimization
+## Sidebar: Gradient-Based Optimization {#sec-gradient-opt}
 
-To formalize the idea of optimization, we must have an **objective function** that defines what we are trying to optimize. This can also be called a loss function (specifically to be minimized). In either case, this value is signified by $\psi()$. The parameters that modify $\psi()$ are denoted as $\boldsymbol{\theta}$, which is $p \times 1$ in dimension and is assumed to be real numbers. We'll also assume that $\psi()$ is smooth and generally differentiable and, without losing generality, assume that smaller values are better. 
+To formalize the idea of optimization, we must have an **objective function** that defines what we are trying to optimize. This can also be called a loss function (specifically to be minimized). In either case, this value is signified by $\psi()$. The parameters that modify $\psi()$ are denoted as $\boldsymbol{\theta}$, which is $p \times 1$ in dimension and is assumed to be real numbers. We'll also assume that $\psi()$ is smooth and generally differentiable and, without losing generality, assume that _smaller values are better_. 
 
-We’ll denote the first derivative ($\psi'(\boldsymbol{\theta})$), for simplicity, as $g(\boldsymbol{\theta})$. The matrix of second deriviatives, called the Hessian matrix, is symbolized as $H(\boldsymbol{\theta})$. 
+We’ll denote the first derivative ($\psi'(\boldsymbol{\theta})$), for simplicity, as $g(\boldsymbol{\theta})$ ($p\times 1$). The matrix of second deriviatives, called the Hessian matrix, is symbolized as $H(\boldsymbol{\theta})$ ($p\times  p$). 
 
 We start with an initial guess, $\boldsymbol{\theta}_0$, and compute the gradient at this point, yielding a $p$ dimensional directional vector. To get to our next parameter value, simple gradient descent uses the update:
 
@@ -171,7 +173,6 @@ The value $\alpha$ defines how far we should travel in our new direction. This c
 We proceed to iterate this process until some measure of convergence is achieved. For example, the optimization could be halted if the objective function does not improve more than a very small value. @lu2022gradient and @zhang2019gradient are excellent introductions to gradient-based optimization that is focused on training models.
 
 As a simple demonstration, @fig-grad-descent shows $\psi(\theta) = \theta\: cos(\theta/2)$ for values of $\theta$ between $\pm 10.0$. We want to minimize this function. There is a _global_ minimum at about $\theta \approx `r round(optimize(function(x) x * cos(.5 * x) , c(-6, 10))$minimum, 2)`$ while there are _local_ minima at $\theta = -10.0$ and $\theta \approx `r round(optimize(function(x) x * cos(.5 * x) , c(-6, 0))$minimum, 2)`$. These are false solutions where some search procedures might become trapped. 
-
 
 :::: {.columns}
 
@@ -380,9 +381,9 @@ An example of simple gradient descent for the function $\psi(\theta) = \theta\: 
 
 :::: 
 
-The figure enables the choice of $\theta_0$ to starting the process, the value of $\alpha$, and how many iterations to used. Consider a few configurations:
+The figure enables the choice of $\theta_0$, the value of $\alpha$, and how many iterations to used. Consider a few configurations:
 
-- Starting at $\theta = 3$, a learning rate of $\alpha = 2.0$ is inappropriate. The search initially moves towards the global minimum but then reverses course _past_ the best value and becomes trapped around one of the local optima. 
+- Starting at $\theta = 3$, a learning rate of $\alpha = 2.0$ is inappropriate. The search initially moves towards the global minimum but then reverses course and jumps past the best value, then becomes trapped around one of the local optima. 
 
 - If we keep $\theta = 3$ and decrease learning rate to $\alpha = 1.0$, we quickly find the best result. 
 
@@ -390,19 +391,19 @@ The figure enables the choice of $\theta_0$ to starting the process, the value o
 
 Clearly, the learning rate is important.  The starting value also matters; values less than 2.0 never appear to reach the optimum. 
 
-This gradient descent algorithm outlined above is extremely basic. There are far more complex versions, the most well-known of which is the Newton-Raphson method (a.k.a. Newton’s Method) that incorporates second derivatives ($H(\boldsymbol{\theta})$) in the updating formula^[However, computing the Hessian matrix increases the computational cost by about 3-fold.]. 
+This gradient descent algorithm outlined above is extremely basic. There are far more complex versions, the most well-known of which is the Newton-Raphson method (a.k.a. Newton’s Method) that incorporates the second derivative matrix $H(\boldsymbol{\theta})$ in the updating formula^[However, computing the Hessian matrix increases the computational cost by about 3-fold.]. 
 
-We often know _when_ gradient-based optimization will work well. If we know the equation for the objective function, we can determine its properties, such as whether it is a convex function, and theory can tell us if a global optimum can be foundvia the use of gradients. For example, squared error loss $\psi(\boldsymbol{\theta}) = (y-\hat{y})^2$, is convex when  the relationship for the predicted value $\hat{y}$ is a well-behaved function of $\boldsymbol{\theta}$ (such as in linear regression). 
+We often know _when_ gradient-based optimization will work well. If we know the equation for the objective function, we can determine its properties, such as whether it is a convex function, and theory can tell us if a global optimum can be found via the use of gradients. For example, squared error loss $\psi(\boldsymbol{\theta}) = (y-\hat{y})^2$, is convex when  the relationship for the predicted value $\hat{y}$ is a well-behaved function of $\boldsymbol{\theta}$ (such as in linear regression). 
 
 However, there are additional considerations when it comes to optimizations for predictive models. First, since data are not deterministic, the loss function is not only a random variable but can be excessively noisy. This noise can have a detrimental effect on how well the optimization proceeds. 
 
 Second, our objective function is usually a performance metric (such as RMSE) and not all metrics are mathematically well-behaved (or smooth or convex). In the case of deep neural networks, the model equations can lead to a non-convex function even when the objective function itself is simple (e.g., squared error loss).  In this case, we must worry that our optimized parameters correspond to a local optimum, not a global one. This can occur because traditional gradient methods are _greedy_; they proceed in a direction that is always optimal for the current estimates of $\boldsymbol{\theta}$. This makes a lot of sense and is mostly effective. However, with complex or non-standard objective functions, the optimization can get stuck in a local optimum.
 
-There are additional complications related to model tuning. In this case, the $\boldsymbol{\theta}$ values are the tuning parameters. These might not be real numbers. For example, the number of spline terms is a whole number, and the updating equation might yield a fractional value for the number of terms. Still other parameters are qualitative in nature, such as the type of activation function in a neural network. 
+There are additional complications related to model where the $\boldsymbol{\theta}$ values are the tuning parameters. These might not be real numbers. For example, the number of spline terms is a whole number, and the updating equation might yield a fractional value for the number of terms. Still other parameters are qualitative in nature, such as the type of activation function in a neural network.
 
-During model tuning, we know not to repredict the training set (due to overfitting). Procedures such as resampling make the evaluation of $\psi()$ computationally expensive since multiple models should be trained. Unless we use symbolic gradient equations, the numerical process of approximating the gradient vector $g(\boldsymbol{\theta})$ can require a large number of function evaluations. 
+During model tuning, we know to avoid repredicting the training set (due to overfitting). Procedures such as resampling make the evaluation of $\psi()$ computationally expensive since multiple models should be trained. Unless we use symbolic gradient equations, the numerical process of approximating the gradient vector $g(\boldsymbol{\theta})$ can require a large number of function evaluations. 
 
-Later, we’ll discuss *stochastic gradient descent* (SGD)[@udl2023,Chapter 6]. This variation is often used to train very complex networks when there is a large amount of training data. SGD is a way to approximate the gradient vector using a small subset of the data at a time. While this does cause variation in the direction of descent, this variation often has the beneficial side effect of helping to escape from local minima. Also, when there are large amounts of training data, SGD can be much faster than using the entire dataset.
+Later, we’ll discuss *stochastic gradient descent* (SGD)[@udl2023,Chapter 6]. This variation is often used to train very complex networks when there is a large amount of training data. SGD is a way to approximate the gradient vector using a small subset of the data at a time. While this does cause variation in the direction of descent, this variation often has the beneficial side effect of helping to escape from local minima. Also, when there are large amounts of training data, computer memory may be insufficient to hold the entirety of the data. SGD may be the only solution because it does not require all of the data at once (and can also be much faster).
 
 Until then, the next three chapters will describe different stochastic optimization, gradient-free  methods that are well-suited for parameter tuning since they can sidestep some of the issues described above. 
 
@@ -450,7 +451,7 @@ Given a starting value, SA creates a random perturbation of the current candidat
 
 For our SVM example, suppose we start with a candidate where $x_0 = \left[log_2 (cost), log_{10} (scale)\right[$ was $x_0 = [-10, -0.1]$ and had an associated RMSE value of 6.10%. For the next candidate, a perturbation of this values is created, say $x_1 = [-7.11, -0.225]$. Suppose that the corresponding RMSE was measured at 5.97%. Since $x_1$ has a better performance metric it is automatically accepted and is used to create the next parameter. 
 
-However, suppose that our new RMSE was 7.00%, meaning that $x_1$ did worse than our initial one.  
+However, suppose that the RMSE value for $x_1$ was 7.00%, meaning that the new candidate did worse than the initial one.  
 
 Simulated annealing generates a probability threshold for accepting the worse solution. Typically, the probability depends on two quantities: 
 
@@ -460,12 +461,12 @@ Simulated annealing generates a probability threshold for accepting the worse so
 An often used equation for the probability, assuming that smaller values are better, is 
 
 $$
-Pr[accept] = \exp\Bigl[-i\bigl(\psi(\boldsymbol{\theta}_{i}) - \psi(\boldsymbol{\theta}_{i-1})\bigr)\Bigr]
+Pr[accept] = \exp\Bigl[-i\bigl(\hat{Q}(\boldsymbol{\theta}_{i}) - \hat{Q}(\boldsymbol{\theta}_{i-1})\bigr)\Bigr]
 $$
 
 where $i$ is the iteration number. To compare 6.1% versus 7.0%, the acceptance probability is `r round(exp(-(7-6.10)) * 100, 1)`%. To make the determination, a random uniform number is generated and is used to compare to a random number to decide on the next step. If this difference were to occur at a later iteration, say $i = 5$, the probability would drop to `r round(exp(-5*(7-6.10)) * 100, 1)`%.
 
-One small matter is related to the scale of the objective function. The difference in the exponent is very sensitive to scale. If, for example, instead of percentages we were to use the proportions 0.61 and 0.70, the probability would change from `r round(exp(-(7-6.10)) * 100, 1)`% to `r round(exp(-(.7-.610)) * 100, 1)`%. One way to mitigate this issue is to use a normalized difference by dividing the raw difference by the previous objective function (i.e., (0.70-0.61) / 0.70). This is the approach used in the SA analyses here. 
+One small matter is related to the scale of the objective function. The difference in the exponent is very sensitive to scale. If, for example, instead of percentages we were to use the proportions 0.61 and 0.70, the probability of acceptance would change from `r round(exp(-(7-6.10)) * 100, 1)`% to `r round(exp(-(.7-.610)) * 100, 1)`%. One way to mitigate this issue is to use a normalized difference by dividing the raw difference by the previous objective function (i.e., (0.70-0.61) / 0.70). This is the approach used in the SA analyses here. 
 
 This process is continued until either a pre-defined number of iterations is reached or if there is no improvement by a certain number of iterations. The best result found at any time in the optimization is used as the final value; there is no real notion of "convergance" for this method. Also, as previously mentioned, a restart rule can stop simulated annealing from delving too far into suboptimal regions if no best results have occurred within some period of time. When the processes is restarted, can be continue from either the last best candidate point from previous iterations or at a random point in the parameter space. 
 
@@ -483,7 +484,6 @@ To illustrate, a very small initial space-filling design with three candidates w
 ::: {.column width="50%"}
 
 ::: {#tbl-svm-initial}
-
 
 ```{r}
 #| label: tbl-svm-initial
@@ -674,20 +674,21 @@ An example of how simulated annealing can investigate the tuning parameter space
 
 :::: 
 
-During the search, there were `r cli::format_inline("{length(best_iters)} iteration{?s}")` where a new global best result was discovered (iterations `r cli::format_inline("{best_iters}")`). There were also `r cli::format_inline("{length(restart_iters)} restart{?s}")`  at iterations `r cli::format_inline("{restart_iters}")`. In the end, the best results occurred with a cost value of 2<sup>`r best_overall$log_cost`</sup> and a scale factor of 10<sup>`r round(best_overall$log_scale, 2)`</sup>. The corresponding validation set RMSE was `r round(best_overall$mean, 2)`%. With this random seed, the search gets near the ridge of best performance but only lingers there for short times. It does spend a fair amount of time meandering in regions of poor performance. 
+During the search, there were `r cli::format_inline("{length(best_iters)} iteration{?s}")` where a new global best result was discovered (iterations `r cli::format_inline("{best_iters}")`). There were also `r cli::format_inline("{length(restart_iters)} restart{?s}")`  at iterations `r cli::format_inline("{restart_iters}")`. In the end, the best results occurred with a cost value of 2<sup>`r best_overall$log_cost`</sup> and a scale factor of 10<sup>`r round(best_overall$log_scale, 2)`</sup>. The corresponding validation set RMSE was `r round(best_overall$mean, 2)`%. With this random seed, the search gets near the ridge of best performance shown in @fig-svm-grid but only lingers there for short times. It does spend a fair amount of time meandering in regions of poor performance. 
 
-Simulated annealing has some attractive qualities. First, the process of creating a new candidate works for any type of parameter (e.g., real, integer, or qualitative). This isn’t the case for the two other iterative methods we’ll discuss. Also, the perturbation process is very fast; there is very little computational overhead between acquiring the next objective function value. Also, since we are effectively simulating new candidate sets, we can potentially apply constraints to parameters or groups of parameters. For example, if a tuning parameter could only be odd integers, this would not be a significant problem for simulated annealing. 
+Simulated annealing has some attractive qualities. First, the process of creating a new candidate works for any type of parameter (e.g., real, integer, or qualitative). This isn’t the case for the two other iterative methods we’ll discuss. Also, the perturbation process is very fast; there is very little computational overhead to acquire the next objective function value. Also, since we are effectively simulating new candidate sets, we can potentially apply constraints to parameters or groups of parameters. For example, if a tuning parameter could only be odd integers, this would not be a significant problem for simulated annealing. 
 
 There are a few downsides to this method. Compared to the other search methods, SA makes small incremental changes. If we start far away from the optimum, many iterations might be required to reach it.  One way to mitigate this issue is to do a small space-filling design and start from the best point (as we did). In fact, applying SA search after a grid search (perhaps using racing) can be a good way to verify that the grid search was effective. 
 
 Another disadvantage is that a single candidate is processed at a time. If the training set size is not excessive, we could parallel process the multiple candidates simultaneously. We could make a batch of perturbations and pick the best value to keep or apply the probabilistic process of accepting a poor value. 
-This optimization took `r prettyunits::pretty_sec((initial_time[3] + sa_time[3]) / nrow(sa_history))` per candidate to execute. 
+
+This optimization took `r prettyunits::pretty_sec((initial_time[3] + sa_time[3]) / nrow(sa_history))` per candidate to execute for these data. 
 
 ## Genetic Algorithms  {#sec-genetic-algo}
 
 Genetic algorithms (GAs)[@Mitchell1996AnIT;@eiben2015introduction] are an optimization method that mimics the process of evolution via natural selection. Our application (parameter tuning) isn't well suited to GAs; a standard GA search will use hundreds to millions of objective function evaluations. We will use a small search due to practical considerations. Despite this, genetic algorithms can often find a solution near the optimal value fairly quickly and, as previously stated, there is often a region of acceptable candidates. Finally, GAs are very unlikely to become stuck in a locally optimal space. 
 
-Instead of search iterations, genetic algorithms are counted in _generations_. A generation is a group of candidate values that are evaluated at the same time (as a batch)^[Think of the candidates within a generation as a population of people.]. Once their corresponding performance metrics are computed, a small set of the best candidates is selected and are used to create the next generation via _reproduction_. Reproduction would entail combining a pair of "parent" candidates by swapping information^[Analogous to chromosomes.], and then random mutations can be applied. Once the next generation is created, the process continues for some pre-defined time limit or maximum number of generations. 
+Instead of search iterations, genetic algorithms are counted in _generations_. A generation is a group of candidate values that are evaluated at the same time (as a batch)^[Think of the candidates within a generation as a population of people.]. Once their corresponding performance metrics are computed, a small set of the best candidates is selected and is used to create the next generation via _reproduction_. Reproduction would entail combining a pair of "parent" candidates by swapping information^[Analogous to chromosomes.], and then random mutations can be applied. Once the next generation is created, the process continues for some pre-defined time limit or maximum number of generations. 
 
 How, exactly, does this work? The first step is to pick a numerical representation for each candidate. Let’s consider methods for our main types of data. 
 
@@ -710,7 +711,7 @@ For mutation, a candidate’s values are either locally perturbed or simulated w
 
 Binary encodings for real numbers were suggested in the early days of genetic algorithms. In this case, each candidate value is encoded as a set of binary integers. For example, consider a log<sub>2</sub> cost value of -2.34. To convert this to binary, we multiply it by 100 (assuming a limit of two decimal places) to convert it to an integer. If we use 8 binary digits (a.k.a. "bits") to represent 234, we get ``r GA::decimal2binary(234) %>% paste(collapse = "")``. If the candidates could have both positive and negative numbers, we can add an extra bit at the start that is 1 when the value is positive, yielding:  ``r GA::decimal2binary(234) %>% c(0, .) %>% paste(collapse = "")``. 
 
-The method of _cross-over_ was often used for the reproduction of binary representations. For a single cross-over, a random location between digits was created for each candidate value, and the binary digits were swapped. For example, a representation with bits might have parents `ABCDE` and `VWXYZ.`  If they were crossed over between the second and third elements, the children would be `ABXYZ` and `VWCDE`. There are reproduction methods that use multiple cross-over points to create a more granular sharing of information. 
+The method of _cross-over_ was often used for the reproduction of binary representations. For a single cross-over, a random location between digits was created for each candidate value, and the binary digits were swapped. For example, a representation with five bits might have parents `ABCDE` and `VWXYZ.`  If they were crossed over between the second and third elements, the children would be `ABXYZ` and `VWCDE`. There are reproduction methods that use multiple cross-over points to create a more granular sharing of information. 
 
 There are systematic bias that can occur when crossing binary representations as described by @rana1999distributional and @Soule2009. For example, there are positional biases. For example, if the first bits (`A` and `V`) capture the sign of the value, the sign is more likely to follow the initial bits than the later bits to an offspring. 
 
@@ -726,14 +727,13 @@ For integers, the same approach can be used as real numbers, but after the usual
 
 For qualitative tuning parameters, one (inelegant) approach is to encode them into values on the real line or as integers. For example,  for a parameter with values "red,", "blue," and "green", we could map them to bins of `[0, 1/3)`, `[1/3, 2/3)`, and `[2/3, 1]`. From here, we reproduce and mutate them as described above, then convert them back to their non-numeric categories. This is more palatable when there is a natural ordering of the values but is otherwise a workable but unfortunate approach. Mutation is simple though; at rate $\pi_m$, a value is flipped to a random selection of the possible values.
 
-### Assembling Generations
+### Assembling Generations {#sec-ga-generations}
 
-Now that we know how to make new candidates, we can form new generations. We start by choosing the size. Normally, the minimum population size within a generation is at least 25-50 candidates. This may be infeasible depending on the computational cost of the model and the characteristics of the training set, such as size. We can use fewer points in the generation, but the risk is that we will never sample any acceptable results. In that case, combining the best results only results in more mediocre candidates. Increasing the mutation rate may help avoid this problem. For the first iteration, random sampling of the space is often used. Unsurprisingly, we strongly recommend that a space-filling design is a better tool to create the initial candidate set. 
+Now that we know how to make new candidates, we can form new generations. We start by choosing the size. Normally, the minimum population size within a generation is at least 25-50 candidates. This may be infeasible depending on the computational cost of the model and the characteristics of the training set, such as size. We can use fewer points in the generation, but the risk is that we will never sample any acceptable results. In that case, combining the best results only results in more mediocre candidates. Increasing the mutation rate may help avoid this problem. For the first iteration, random sampling of the space is often used. Unsurprisingly, we strongly recommend that a space-filling design for the initial candidate set. 
 
 Finally, there is the choice of which candidates to reproduce at each generation. There are myriad techniques for selecting which candidates are used to make the next generation of candidates. The simplest is to pick two parents by randomly selecting them with probabilities that are proportional to their performance (i.e., the best candidates are chosen most often). There is also the idea of _elitism_ in selection. Depending on the size of the generation, we could retain a few of the best-performing candidates from the previous generation. The performance values of these candidates would not have to be recomputed (saving time), and their information is likely to persist in a few good candidates for the next generation.
 
-### Two Parameter Example
-
+### Two Parameter Example {#sec-2D-example}
 
 ```{r}
 #| label: ga-descr
@@ -755,8 +755,7 @@ other_best <- round(unique(best_by_gen$fitness[!is_same_as_gen_1]), 3)
 other_best <- paste0(other_best, "%")
 ```
 
-To illustrate genetic algorithms in two dimensions, a population size of 8 was used for 7 generations were created for the toy example. These are _not_ good default values but were instead chosen to be at parity with the previous SA search and the optimization method used in the next section. The values of the two tuning parameters were kept as floating point values. The parental selection was conducted using sampling weights proportional to the RMSE values (smaller being better), a mutation rate of 10%, and a single candidate was retained at each generation via elitism.  The computations within a generation where computed in parallel. In parallel, this optimization took `r prettyunits::pretty_sec(ga_time[3] / nrow(ga_history))` per candidate (on average).  @fig-ga-example illustrates the results of the search.   
-
+To illustrate genetic algorithms in two dimensions, a population size of 8 was used for 7 generations. These are _not_ good default values but were instead chosen to be at parity with the previous SA search and the optimization method used in the next section. The values of the two tuning parameters were kept as floating point values. The parental selection was conducted using sampling weights proportional to the RMSE values (smaller being better), a mutation rate of 10%, and a single candidate was retained at each generation via elitism.  The computations within a generation where computed in parallel. In parallel, this optimization took `r prettyunits::pretty_sec(ga_time[3] / nrow(ga_history))` per candidate (on average).  @fig-ga-example illustrates the results of the search.   
 
 :::: {.columns}
 
@@ -881,29 +880,37 @@ Several generations of a genetic algorithm that search tuning parameter space. T
 
 A space-filling design was used to ensure that the initial population was diverse. Fortuitously, one design point was very close to the ridge, with an RMSE of `r round(best_by_gen$fitness[1], 2)`%.  After this, there `r cli::format_inline("{?was/were} {length(other_best)} generations with better candidate{?s}")` (with almost identical performance): `r cli::format_inline("{other_best}")`. We can see that, after three generations, the search is concentrated around the ridge of optimal performance. In later generations, some candidates have outliers in one dimension; this is the effect of mutation during reproduction. 
 
-### Summary
+### Summary {#sec-ga-summary}
 
 This small toy example is somewhat problematic for demonstrating genetic algorithms. The example’s low parameter dimensionality and the relatively low computational expense per candidate might deceive one into believing that genetic algorithms could be the answer to most of our problems.  Genetic algorithms are versatile and powerful tools for global optimization. Like simulated annealing, there is very little overhead between generations. However, in most real applications, there are more than two parameter dimensions. This means that larger populations are required and, most likely, many more generations. If the data size is not massive, we've seen that parallel processing can help^[If you have access to high-performance computing infrastructure,  the parallel processing can run the individuals in the population in parallel and, within these, any resampling iterations can also be parallelized.]. 
+
+Now we'll take a look at what makes a Bayesian model Bayesian.
 
 ## Sidebar: Bayesian Models {#sec-bayes}
 
 We've superficially described an application of Bayesian analysis in @sec-effect-encodings. Before discussing Bayesian optimization, we should give a general description of Bayesian analysis, especially since it will appear again several times after this chapter. 
 
-Many models make probabilistic assumptions about their data or parameters. For example, a linear regression model using ordinary least squares estimation can be constructed by making assumptions regarding the model errors. We can assume that the residuals are independent of one another and follow a Gaussian distribution with zero mean and a constant standard deviation. From there, it follows that the regression parameters ($\beta$ coefficients) also follow Gaussian distributions. 
+Many models make probabilistic assumptions about their data or parameters. For example, a linear regression model has the form
 
-Based on these assumptions, our objective function becomes the Gaussian log-likelihood function, generally denoted as $\ell(z|\theta)$. We fix the outcome and predictor data and try to find values of $\sigma$ and the $\beta$  parameters that maximize the objective function. This is maximum likelihood estimation. 
+$$
+y_i = \beta_0 + \beta_1x_1 + \cdots + \beta_px_p + \epsilon_i
+$$
+
+Using ordinary least squares estimation, we can make assumptions regarding the model errors ($\epsilon_i$). We can assume that the residuals are independent of one another and follow a Gaussian distribution with zero mean and a constant standard deviation. From there, it follows that the regression parameters ($\beta$ coefficients) also follow Gaussian distributions. 
+
+Based on these assumptions, our objective function is the Gaussian likelihood function, generally denoted as $\ell(z|\theta)$, although we often maximize the log of this value. We fix the outcome and predictor data and try to find values of $\sigma$ and the $\beta$  parameters that maximize the objective function (log $\ell(z|\theta)$). This process is maximum likelihood estimation. 
 
 ::: {.important-box}
-One important point is that each model parameter is treated as a single, non-random value. Our maximum likelihood estimate (MLE) is a point estimate and, based on our assumptions about the residuals, we know the distribution of the MLEs. 
+One important point is that each model parameter is treated as a single value. Our maximum likelihood estimate (MLE) is a point estimate and, based on our assumptions about the residuals, we know the distribution of the MLEs. 
 :::
 
-The consequence of this is that we cannot make inferences about the model parameters (since they are considered to be single points). Most of our inference is about the MLEs. This leads to the circuitous explanation of hypothesis tests and confidence intervals. The explaination of a 5% confidence interval is:
+The consequence of this is that we cannot make inferences about the true, unknown model parameters since they are considered to be single points. Instead, our inference focuses on the MLEs. This leads to the circuitous explanation of hypothesis tests and confidence intervals. For example, the explaination of a 90% confidence interval is:
 
-> “We believe that if we were to repeat this experiment a large number of times, the true parameter value would fall between $L$ and $U$ X% of the time.” 
+> "We believe that if we were to repeat this experiment a large number of times, the true parameter value would fall between $L$ and $U$ 90% of the time." 
 
-A Bayesian approach uses a different philosophy regarding our probability assumptions. It assumes that the unknown parameters are drawn from a prior distribution that reflects what we know about them. The "prior" adjective is important; the modeler should specify it before seeing the observed data. To be clear, maximum likelihood estimation treats the unknown parameters as random while Bayesian methods have us make probabilistic assumptions about each of them. 
+A Bayesian approach uses a different philosophy regarding our probability assumptions. It assumes that the unknown parameters are drawn from a prior distribution that reflects what we know about them. We'll denote our prior distribution as $\pi(\theta)$. The "prior" adjective is important; the modeler should specify it before seeing the observed data. 
 
-For example, recall our model for the time to deliver food in @eq-log-linear. A reasonable prior for the regression parameter associated with distance would have a distribution that has zero probability for values less than zero. We would never think that (log) delivery times decrease with distance. If we worked at the restaurant, we might be able to be more specific based on what we've seen. There might be a basic belief that, all other things are equal, and we might think that every mile further away from the restaurant increases time two-fold. From there, we could find a probability distribution that would fit those assumptions. We'll denote our prior distribution as $\pi(\theta)$. 
+For example, recall our model for the time to deliver food in @eq-log-linear. A reasonable prior for the regression parameter associated with distance would have a distribution that has zero probability for values less than zero. We would never think that (log) delivery times decrease with distance. If we worked at the restaurant, we might be able to be more specific based on what we've seen. There might be a basic belief that, all other things are equal, and we might think that every mile further away from the restaurant increases time two-fold. From there, we could find a probability distribution that would fit those assumptions. 
 
 Once we have our prior distributions for our parameters and assumptions regarding our data distributions, we can write down the equations required to estimate our results. Bayes' Rule is a basic probability statement that combines the prior distribution with our likelihood function: 
 
@@ -913,11 +920,11 @@ $$ {#eq-bayes-rule-distr}
 
 $\pi(\theta|x)$ is the posterior distribution: the probability distribution of our parameters, given the observed data. This is the endpoint for any Bayesian analysis. 
 
-Another important point is that Bayesian estimation has a much more difficult goal than maximum likelihood estimation.  The latter needs to find point estimates of its parameters while Bayesian estimation has to estimate the entire posterior distribution $\pi(\theta|x)$. In a moment, we’ll look at a simple problem with a simple solution. However, in most other cases, the computational requirements to do Bayesian estimation are considerably higher. That's the bad news.
+Another important point is that Bayesian estimation has a much more difficult goal than maximum likelihood estimation.  The latter needs to find point estimates of its parameters while Bayesian estimation has to estimate the entire posterior distribution $\pi(\theta|x)$. In a moment, we’ll look at a simple problem with a simple solution. However, in most other cases, the computational requirements for Bayesian estimation are considerably higher. That's the bad news.
 
 The good news is that, once we find the posterior distribution, it is incredibly useful. First, we can make direct statements about parameter values. Unlike confidence intervals, Bayesian methods allow us to say things like 
 
-> “We believe that there is a X% probability that the true value of the parameter is between $L$ and $U$.” 
+> "We believe that there is a 90% probability that the true value of the parameter is between $L$ and $U$." 
 
 It also lets us easily make similar statements regarding more complex combinations of parameters (such as ratios, etc).
 
@@ -925,7 +932,7 @@ Finally, we should mention the effect of the prior on the computations. It does 
 
 To illustrate, let’s look at a very simple example. 
 
-### A Single Proportion 
+### A Single Proportion  {#sec-single-proportion}
 
 ```{r}
 #| label: include-forested
@@ -950,21 +957,23 @@ alpha_post <- alpha + n_y
 beta_post <- n_tr - n_y + beta
 ```
 
-For the forestry data last seen in @sec-spatial-resampling, the outcome is categorical with values “yes” and “no” for the question “Is this location forested?” We might use the training data set to estimate the rate ($\pi$) that the event occurs. The simplest statistic is the sample proportion: the number of events divided by the number of total data points: ($\hat{\pi}$ = `r round(p_mle, 3)`%). 
+For the forestry data last seen in @sec-spatial-resampling, the outcome is categorical with values "yes" and "no" for the question "Is this location forested?" We might use the training data set to estimate the rate ($\pi$) that the event occurs. The simplest statistic is the sample proportion: the number of events divided by the number of total data points: ($\hat{\pi}$ = `r round(p_mle, 3)`%). 
 
 To estimate this rate using maximum likelihood estimation, we might assume that the data follow a binomial distribution with theoretical probability $\pi$. From there we can solve equations that find a value of $\pi$ that correspond to the largest likelihood. It turns out that the sample proportion is also the maximum likelihood estimate. 
 
-Instead of treating the unknown parameter as a single non-rnaomd value, Bayesian methods propose that the parameter comes from a _distribution_ of possible values. This distribution reflects our prior understanding or belief about the parameter based on what we know of the situation. For this reason, it is called a _prior_ distribution. If we think that the probability that a location in Washington state is forested, we would choose a distribution with higher probabilities near 1.0. 
+Instead of treating the unknown parameter as a single value, Bayesian methods propose that the parameter comes from a _distribution_ of possible values. This distribution reflects our prior understanding or belief about the parameter based on what we know of the situation. For this reason, it is called a _prior_ distribution. If we think that locations in Washington state are very likely to be forested, we would choose a distribution that has more area for higher probabilities. 
 
-For a binomial model, an example of a prior distribution for the probability of an event is the Beta distribution. The Beta distribution is very flexable and has values range between zero and one. It is indexed by two parameters: $\alpha$ and $\beta$. @fig-beta-dist shows different versions of the Beta for different values.  
+For a binomial model, an example of a prior is the Beta distribution. The Beta distribution is very flexable and has values range between zero and one. It is indexed by two parameters: $\alpha$ and $\beta$. @fig-beta-dist shows different versions of the Beta for different values.  
 
 To settle on a specific prior, we would posit different questions such as:
 
-- “Are there rate values that we would _never_ believe possible?”
-- “What is the most likely value that we would expect and how certain are we of that?” 
-- “Do we think that the distribution of possible values is symmetric?”
+- "Are there rate values that we would _never_ believe possible?"
+- "What is the most likely value that we would expect and how certain are we of that?" 
+- "Do we think that the distribution of possible values is symmetric?"
 
-From these answers, we would experiment with different values of $\alpha$ and $\beta$ until we find a combination that encapsulates what we believe. If we think that larger probabilities of forestation are more likely, we might choose a Beta prior that has values of $\alpha$  that are larger than $\beta$. This is an example of an informative prior, albeit a weak one. As our prior distribution is more peaked, it reflects that before seeing any data, we have strong beliefs. If we honestly have no idea, we could choose a uniform distribution between zero and one using $\alpha = \beta = 1$.  
+and so on.
+
+From these answers, we would experiment with different values of $\alpha$ and $\beta$ until we find a combination that encapsulates what we believe. If we think that larger probabilities of forestation are more likely, we might choose a Beta prior that has values of $\alpha$ that are larger than $\beta$, which places more mass on larger values (as seen below). This is an example of an _informative prior_, albeit a weak one. As our prior distribution is more peaked it reflects that, before seeing any data, we have strong beliefs. If we honestly have no idea, we could choose a uniform distribution between zero and one using $\alpha = \beta = 1$.  
 
 ```{r}
 #| label: fig-beta-dist
@@ -995,13 +1004,13 @@ $$
 \hat{p}_{BB} = \frac{n_+ +\alpha}{n_{tr} + \alpha + \beta}
 $$ {#eq-beta-bin-mean}
 
-If, before seeing the data, we had chosen $\alpha = 5$ and $\beta = 1$, we estimate that $\hat{p}_{BB} = `r round(beta_bin_estimate(n_y, n_tr, 5, 1), 3)`$%. This is pretty close to our simple estimate because there is so much data in the training set ($n_{tr} = `r n_tr`$) that the influence of the prior is severely diminished. As a counter-example, suppose we took a very small sample that resulted in $n_y = 1$ and $n_{tr} = 3$, the prior would pull the estimate from 33.3% to `r round(beta_bin_estimate(1, 3, 5, 3), 1)`%. 
+If, before seeing the data, we had chosen $\alpha = 5$ and $\beta = 1$, we estimate that $\hat{p}_{BB} = `r round(beta_bin_estimate(n_y, n_tr, 5, 1), 3)`$%. This is pretty close to our simple estimate because there is so much data in the training set ($n_{tr}$ = `r format(n_tr, big.mark = ",")`) that the influence of the prior is severely diminished. As a counter-example, suppose we took a very small sample that resulted in $n_y$ = 1 and $n_{tr}$ = 3, the prior would pull the estimate from the MLE of 33.3% to `r round(beta_bin_estimate(1, 3, 5, 3), 1)`%. 
 
 Now suppose that for regulatory purposes, we were required to produce an interval estimate for our parameter. From these data and our prior, we could say that the true probability of forestation has a 90% chance of being between `r round(qbeta(0.05, alpha_post, beta_post)*100, 1)`% and `r round(qbeta(0.95, alpha_post, beta_post)*100, 1)`%. 
 
-We did mention that it can be very difficult to compute the posterior distribution. We deliberately chose this situation because, it turns out that if we assume a binomial distribution for our data and a $Beta(\alpha, \beta)$ prior, the posterior is  $Beta(\alpha + n_y, n_{tr} - n_y + \beta)$. More often than not, we will not have a simple analytical solution for the posterior. That said, we’ll see this happen again in @sec-gp.
+We did mention that it can be very difficult to compute the posterior distribution. We deliberately chose the Beta distribution because, if we assume a binomial distribution for our data and a $Beta(\alpha, \beta)$ prior, the posterior is  $Beta(\alpha + n_y, n_{tr} - n_y + \beta)$. More often than not, we will not have a simple analytical solution for the posterior. That said, we’ll see this happen again in @sec-gp.
 
-<br>
+For a Bayesian model, the predictions also have a posterior _distribution_, reflecting the probability of a wide range of values. As with non-Bayesian models, we often summarize the posterior using the most likely value (perhaps using the mean or mode of the distribution). We can also measure the uncertainty in the prediction using the estimated standard deviation. 
 
 ::: {.note-box}
 To summarize: 
@@ -1011,19 +1020,17 @@ To summarize:
  - Different statistics can be estimated from the posterior, including individual predictions.  
 :::
 
-We’ll encounter even more Bayesian methods in subsequent chapters.
+We’ll encounter even more Bayesian methods in subsequent chapters. In @sec-cls-metrics, we'll describe the process of developing a prior for muticlass problem based on the results of Wordle scores.
+
+Now that we know more about Bayesian statistics, let's see how they can be used to tune models.
 
 ## Bayesian Optimization {#sec-bayes-opt}
 
 Bayesian optimization (BO) is a search procedure that uses an overarching statistical model to predict the next set of candidate values, given past performance. It is currently the most used iterative search routine for optimizing models. The technique originated with @movckus1975bayesian and was further developed by @jones1998efficient who also proposed using space-filling designs to sample the parameter space. More recently, @gramacy2020surrogates and @garnett2023 are comprehensive resources for this methodology.
 
-It is often tied to a particular Bayesian predictive model: the Gaussian process (GP) regression model [@binois2022survey]. However, before diving into the details of that model, we can discuss what a Bayesian model is and why it is required for this optimization process. 
+It is often tied to a particular Bayesian predictive model: the Gaussian process (GP) regression model [@binois2022survey]. However, before diving into the details of that model, we should discuss how any Bayesian method can be used for optimization.
 
-Now, let’s get back to how priors can be used for optimizing tuning parameters. 
-
-### Why are Bayesian models good for optimization?
-
-As previously said, the Bayesian model will predict which candidate vector should be sampled next. Similar to the racing model from @eq-perf-mod-racing, the outcome used in the model is our performance metric of interest ($Q$):
+Similar to the racing model from @eq-perf-mod-racing, the Bayesian model's outcome will be our estimated performance metric (i.e., $\hat{Q}$). The predictors for this model will be the tuning parameter values:
 
 $$
 Q_j = f(\boldsymbol{\theta}_j)+ \epsilon_{j}
@@ -1066,9 +1073,9 @@ two_cand_data %>%
   labs(y = "Posterior Density")
 ```
 
-The second candidate has a mean RMSE that is predicted to have an improvement that is  twice as large as the first but also has considerably large uncertainty. On average, this is a better choice but there is more area to the right of the vertical line. The probability of candidate two having worse results than the current best is `r two_cand_probs$prob[two_cand_probs$group == "# 2"]`%. 
+The second candidate has a mean RMSE that is predicted to have about a 2-fold improvement but also has considerably large uncertainty. On average, this is a better choice but there is more area to the right of the vertical line. The probability of candidate two having worse results than the current best is `r two_cand_probs$prob[two_cand_probs$group == "# 2"]`%. 
 
-Which choice is better? The first is a safer bet and the second offers higher risk and higher reward. Which candidate to pick is often driven by out state of mind. However, we should definitely consider _why_ the variance is so large for the second candidate. 
+Which choice is better? The first is a safer bet and the second offers higher risk with a higher reward. Which candidate to pick is often driven by out state of mind. However, we should definitely consider _why_ the variance is so large for the second candidate. 
 
 We’ve previously discussed the variance-bias tradeoff and demonstrated that large uncertainty in the performance metric can often be explained by _model variance_. Recall that models might vary due to predictive instability caused by a model that is far more complex than is required, such as the polynomial example in @sec-variance-bias. 
 
@@ -1082,7 +1089,7 @@ This example demonstrates different philosophies for a search: _exploitation_ an
 
 Using a Bayesian model in @eq-surrogate is advantageous because it can make mean and variance predictions, these two concepts can be weighted differently for potential new candidates.  Let’s assume that our surrogate Bayesian model does significantly account for spatial effects. The next section describes the overall process of how we use it to optimize the model. 
 
-### How does BO work?
+### How Does Bayesian Optimization Work? {#sec-acquisition}
 
 The search routine starts with a set of $s_0$ initial candidates and corresponding performance statistics ($\hat{Q}_j$). Using these data, the metric is used as the model outcome and the candidate values as predictors. This surrogate model is used to make predictions of the mean and standard deviation of the metric at new candidate values. A new objective function, called an _acquisition function_, combines the mean and standard into a single value [@garnett2023, Chapter 7]. The next candidate that we'll evaluate on the next iteration is the one that optimizes the acquisition function (and then repeat this process). 
 
@@ -1094,7 +1101,7 @@ $$ {#eq-exp-improve}
 
 where $\Phi(\cdot)$ is the cumulative standard normal and $\phi(\cdot)$ is the standard normal density.
 
-One of these terms is driven by the mean prediction and the other by the standard deviation of prediction. Expected improvement is a blend of both but, at different stages of the optimization, one may dominate. Imagine a parameter space where most of the regions have been sampled to some degree. If our Bayesian model is driven by spatial variation, most of the remaining space has relatively small values for sigma and the first term will drive the optimization. Conversely, at the initial iterations, the second term will be very large. Unless there is a large mean prediction effect, the spatial aspect of the prediction will dominate (and the focus is more on extrapolation). 
+Expected improvement is a blend of both mean and variance but, at different stages of the optimization, one may dominate. Imagine a parameter space where most of the regions have been sampled to some degree. If our Bayesian model is driven by spatial variation, most of the remaining space has relatively small values for sigma and one of the terms in @eq-exp-improve will drive the optimization. Conversely, at the initial iterations, the other will be very large. Unless there is a large mean prediction effect, the spatial aspect of the prediction will dominate (and the focus is more on extrapolation). 
 
 Additionally, the expected improvement can be altered to include a tradeoff factor $\xi$ so that improvement is the positive part of 
 
@@ -1102,11 +1109,11 @@ $$
 \delta(\hat{\boldsymbol{\theta}}) = Q_{opt} - \mu(\hat{\boldsymbol{\theta}}) + \xi
 $$
 
-This effectively inflates the value of the current best and resulting smaller value of $\delta(\hat{\boldsymbol{\theta}})$ helps emphasize the second term EI term (leading to more extrapolation). $\xi$ could be a single constant or a function that changes the tradeoff value as a function of iterations. 
+This effectively inflates the value of the current best and resulting value of $\delta(\hat{\boldsymbol{\theta}})$ helps emphasize extrapolation. $\xi$ could be a single constant or a function that changes the tradeoff value as a function of iterations. 
 
 As with simulated annealing, we can keep sampling until a pre-specified limit on iterations or computational time is reached. An early stopping rule can be helpful where we prematurely end the search if a new best result is not found within a specific number of iterations. 
 
-Let's see how this approach works in a single dimension. @fig-bo-example shows how expected improvement can be used to find the global minimum of $\psi(\theta) = \theta\: cos(\theta/2)$. Th light grey line in the lower panel represents the tue value of $\psi(\theta)$ across the parameter space. 
+Let's see how this approach works in a single dimension. @fig-bo-example shows how expected improvement can be used to find the global minimum of $\psi(\theta) = \theta\: cos(\theta/2)$. Th light grey line in the lower panel represents the true value of $\psi(\theta)$ across the parameter space. 
 
 The process starts with $s_0 = 2$ candidate points at -8.0 and 3.0. 
 
@@ -1116,7 +1123,7 @@ If we were to optimize solely on the mean prediction, we would choose our next p
 
 The color of the line depicts the predicted variance, which drops to zero near the existing points and explodes in the regions in between our two points. If we were to exclusively focus on the variance of the objective function, we would choose the next point to be away from the two that have been sampled so far, such as the interval $-6 \le \theta \le 1$ or $\theta \ge 4$.
 
-Combining the mean and variance predictions via expected improvement, we can achieve a balance. At the first iteration, two areas around (but not at) $\theta = 3.0$ are predicted to have large expected improvements. The region on the left is sampled and, once $\psi(\theta = 3)$ is evaluated, the next point is closer to the true global optima. The process continues and alternates between sampling near the best results and filling in regions where there are no nearby candidate values. After 15 iterations, the search is very close to the best results. 
+Combining the mean and variance predictions via expected improvement, we can achieve a balance. At the first iteration, two areas around (but not at) $\theta = 3.0$ are predicted to have large expected improvements. The region on the left is sampled and, once $\psi(\theta = 3)$ is evaluated, the next point is closer to the true global optimum. The process continues and alternates between sampling near the best result and filling in regions where there are no nearby candidate values. After 15 iterations, the search is very close to the true global optimum. 
 
 ::: {#fig-bayes-opt}
 
@@ -1169,7 +1176,6 @@ ui <- page_fillable(
   as_fill_carrier(plotOutput("iterations"))
 )
 
-
 server <- function(input, output) {
   
   y_rng <- extendrange(true_curve$y)
@@ -1210,7 +1216,6 @@ server <- function(input, output) {
           axis.text.x = element_blank(), axis.ticks.x = element_blank(),
           plot.margin = margin(t = 5.5, r = 5.5, b = 0.0, l = 5.5, unit = "pt")
         ) 
-  
       
       print((p_ei / p) + plot_layout(heights = c(2, 3)))
       
@@ -1241,19 +1246,19 @@ $$
 CB(\hat{\boldsymbol{\theta}}) = \mu(\hat{\boldsymbol{\theta}}) - \kappa\: \sigma(\hat{\boldsymbol{\theta}})
 $$
 
-where $\kappa$ sets the confidence level and often has values that are _much_ smaller than the traditional 0.90 to 0.99 range used for statistical inference. This multiplier also modulates between extrapolation (large $\kappa$) and exploitation (small $\kappa$) for the search. 
+where $\kappa$ sets the confidence level and often has values that are _much_ smaller than range used for statistical inference (e.g., centered around 1.64). This multiplier also modulates between extrapolation (large $\kappa$) and exploitation (small $\kappa$) for the search. 
 
 Apart from different acquisition functions, many other variations can be used in Bayesian optimization. For example, like simulated annealing, the default is the sample one candidate at a time. This limits the computational efficiency of the search process if we can fit models in parallel. There are alterations where multiple candidates can be _simulated_. TODO MORE HERE
 
-Now that the general optimization process has been outlined, let's focus on the most popular Bayesian model for searching the Gaussian process (GP) model. 
+Now that the general optimization process has been outlined, let's focus on the most popular model associated with Bayesian optimization. 
 
-### Gaussian Process models {#sec-gp}
+### Gaussian Process Models {#sec-gp}
 
 GPs [@williams2006gaussian;@garnett2023] are often motivated as special cases of stochastic processes, which are the collection of random variables that are indexed by one or more variables. The most common example of a stochastic process is the stock market. A stock price is a random variable that, in this case, is indexed by time. A Gaussian process is just a stochastic process whose data are assumed to be multivariate normal. 
 
 Gaussian processes are different from basic multivariable normal distributions. Let's say that we collected the heights and weights of 100 students in a specific grade. If we collect the heights and weights into a two-dimensional vector $\boldsymbol{x} = [height, weight]$, we might assume that the data is multivariate normal, with a 2D population mean _vector_ and a 2 $\times$ 2 covariance matrix, i.e., $\boldsymbol{x} \sim N(\boldsymbol{\mu}, \Sigma)$. In this case, the data are a sample of people at a static time point. 
 
-However, a Gaussian process is a **sequence of data** so we have to specify their mean and covariance parameters dynamically; there are mean and covariance _functions_ instead of vectors and matrices. The mean function is often denoted as  $\mu(\boldsymbol{x})$. One way of writing the covariance function is $\Sigma(\boldsymbol{x}, \boldsymbol{x}') = \tau^2k(\boldsymbol{x}, \boldsymbol{x}')$ where $k(\cdot, \cdot)$ is a **kernel function**. 
+However, a Gaussian process is a **sequence of data** so we have to specify their means and covariances dynamically; there are mean and covariance _functions_ instead of vectors and matrices. The mean function is often denoted as  $\mu(\boldsymbol{x})$. One way of writing the covariance function is $\Sigma(\boldsymbol{x}, \boldsymbol{x}') = \tau^2k(\boldsymbol{x}, \boldsymbol{x}')$ where $k(\cdot, \cdot)$ is a **kernel function** and $\tau$ is akin to a constant standard deviation.
 
 We've seen kernels before, back in @eq-kernel-poly when they were associated with support vector machine models. For Gaussian processes that define the variance between two data points from the process. Some kernels can be written as a function of the difference $\delta_{ii'} = ||\boldsymbol{x} - \boldsymbol{x}'||$. A common fuction is the squared exponential:
 
@@ -1286,11 +1291,11 @@ $$
 Pr[y | \boldsymbol{x}] = \frac{Pr[y] Pr[\boldsymbol{x} | y]}{Pr[\boldsymbol{x}]} = \frac{(prior)\times (likelihood)}{(evidence)}
 $$ {#eq-bayes-rule}
 
-The GP model is Bayesian because we have specified the distributions for the outcome and predictors ($Pr[y]$ and $Pr[\boldsymbol{x}]$, respectively) in a circuitous way. The kernel function is the primary driver of the prior distribution of Gaussian processes. 
+The GP model is Bayesian because we have specified the distributions for the outcome and predictors ($Pr[y]$ and $Pr[\boldsymbol{x}]$, respectively) simultaneous way. The kernel function is the primary driver of the prior distribution of Gaussian processes. 
 
 _In theory_, each of these is easy to compute with a simple multivariate normal. However, we don't the value of $\tau^2$ nor do we know the values of any kernel parameters used by $k(\cdot,\cdot)$.  
 
-Training Gaussian process models can be difficult and the computation cost of training these models increases _cubically_ with the number of data points. In our application, this is the number of tuning parameter candidates with performance statistics. However, after the initial GP model has been trained, there are updating algorithms that can prevent the model from being completely re-estimated from scratch and thus reducing training time. 
+Training Gaussian process models can be difficult and the computation cost of training these models increases _cubically_ with the number of data points. In our application, this is the number of tuning parameter candidates with performance statistics. However, after the initial GP model has been trained, there are updating algorithms that can prevent the model from being completely re-estimated from scratch thus reducing training time. 
 
 TODO qualitative parameters
 
@@ -1300,7 +1305,7 @@ In summary, Gaussian process models are nonlinear models that can use tuning par
 
 In @fig-bayes-opt we've seen how well Bayesian optimization works for a simple one-dimensional function. Let’s apply it in context by using it to optimize our two SVM tuning parameters. 
 
-### A Two Dimensional Illustration
+### A Two Dimensional Illustration {#sec-ba-2D}
 
 ```{r}
 #| label: bo-example-calcs
@@ -1317,7 +1322,6 @@ for (i in 1:max(bo_mtr$.iter)) {
     rmse_best <- c(rmse_best, new_rmse)
   }
 }
-
 
 bo_best_chr <- cli::format_inline("iterations {bo_best}")
 rmse_best_chr <- cli::format_inline("{paste0(signif(rmse_best, 4), '%')}")
@@ -1492,14 +1496,13 @@ An illustration of Bayesian optimization. The open circles represent a small ini
 
 :::: 
 
-
 The complete search produced new optimal values at iterations `r bo_best_chr`. The decrease in RMSE shows few meaningful improvements among negligible decreases: `r rmse_best_chr`. 
 
 The cost of the Gaussian process fit does become more expensive as new candidates are sampled, making the process somewhat less efficient than the previous approaches. The time to compute each candidate was `r prettyunits::pretty_sec((initial_time[3] + bo_time[3])/nrow(bo_mtr))`.
 
 Nonetheless, the search process was able to effectively tune the SVM model and find very good parameters. 
 
-### Advantages and Disadvantages
+### Advantages and Disadvantages {#sec-ba-pros-cons}
 
 SFD does a pretty good job but does measure the extremes of the parameter space; if expensive, use more efficient parameters and let BO sample where it thinks that it should. 
 
@@ -1507,15 +1510,13 @@ one at a time but there are ways of expanding that.
 
 ## Example: Tuning a Neural Network {#sec-bayes-opt-nnet}
 
-We’ll return to the data previously seen in @sec-barley where we want to predict the percentage of barley oil in a mixture. Recall that the predictors are extremely correlated with one another. In @sec-embeddings, we considered embedding methods like PCA to preprocess the data. 
+Our previous work on the Barely data has addressed the high correlation between predictors via feature engineering with principal components. In this chapter, we’ll take a more sophisticated approach to preprocessing these data using signal processing techniques, specifically the **Savitzky-Golay** method [@Schafer2011;@rinnan2009review]. This technique incorporates two main goals: to smooth the data from location to location (i.e., across the x-axis in @fig-barley-data(b)) and to difference the data. Smoothing attempts to reduce measurement noise without diminishing the data patterns that could predict the outcome. Differencing can remove the correlation between locations and might also mitigate other issues, such as systematic background noise. 
 
-In this chapter, we’ll take a more sophisticated approach to preprocessing these data using signal processing techniques, specifically the **Savitzky-Golay** method [@Schafer2011;@rinnan2009review]. This technique incorporates two main goals: to smooth the data from location to location (i.e., across the x-axis in @fig-barley-data(b)) and to difference the data. Smoothing attempts to reduce measurement noise without diminishing the data patterns that could predict the outcome. Differencing can remove the correlation between locations and might also mitigate other issues, such as systematic background noise. 
-
-For smoothing, the procedure uses a moving window across a sample’s location and, within each window, uses a polynomial basis expansion to produce a smoother representation of the data. The window width and the polynomial degree are both tuning parameters. Note that the polynomial degree cannot be larger than the window width. 
+For smoothing, the procedure uses a moving window across a sample’s location and, within each window, uses a polynomial basis expansion to produce a smoother representation of the data. The window width and the polynomial degree are both tuning parameters. Note that the polynomial degree is constrained to be larger than the window width. 
 
 Differencing has a single tuning parameter: the difference order. A zero-order difference leaves the data as-is (after smoothing). A first-order difference is the smoothed value minus the smoothed value for the next location (and so on). Savitzky and Golay's method uses the polynomial estimates to estimate the differences/derivatives, instead of subtracting two columns after smoothing. 
 
-@fig-savitzky-golay shows an example of a small set of locations. The top row shows the effect of smoothing when differencing is not used. For a linear smoother (i.e., a polynomial degree of one), the process can over-smooth the data such that the nonlinear portions of the raw data lose significant amounts of information. This issue goes away as the polynomial order is increased. However, the higher degree polynomial nearly interpolates between data points and may not be smoothing the data. 
+@fig-savitzky-golay shows an example of a small set of locations from a single spectra in @fig-barley-data. The top row shows the effect of smoothing when differencing is not used. For a linear smoother (i.e., a polynomial degree of one), the process can over-smooth the data such that the nonlinear portions of the raw data lose significant amounts of information. This issue goes away as the polynomial order is increased. However, the higher degree polynomial nearly interpolates between data points and may not be smoothing the data in any meaningful way. 
 
 The bottom panel shows the data when a first-order difference is used. The pattern is completely different since the data now represent the rate of change in the outcome rather than the absolute measurement values. Again, larger window sizes oversmooth the data, and the highest degree of polynomial provides minimal smoothing. 
 
@@ -1526,7 +1527,7 @@ The bottom panel shows the data when a first-order difference is used. The patte
 #| fig-height: 6
 #| out-width: 100%
 #| warning: false
-#| fig-cap: "Demonstrations of the Savitzky-Golay preprocessing method for a small region for one specific sample."
+#| fig-cap: "Demonstrations of the Savitzky-Golay preprocessing method for a small region for one specific sample previously shown in @fig-barley-data."
 
 load("../RData/savitzky_golay_demo.RData")
 
@@ -1555,19 +1556,17 @@ diff_p <- diff_plot_data %>%
 smoothed_p / diff_p
 ```
 
-
 We’ll want to optimize these preprocessing parameters simultaneously with the parameters for the supervised model. We’ll fit a neural network with a single layer of hidden units. We’ll tune over the following parameters, described at length in @sec-cls-nnet:
 
 - The number of hidden units in the layer. 
-- The type of nonlinear function that connects the input layer and the hidden layer, called the “activation function.”. Possible functions are “tanh”, exponential linear unit  (“ELU”) functions, rectified linear unit (“ReLU”) functions, and log-sigmoidal functions. 
+- The type of nonlinear function that connects the input layer and the hidden layer, called the "activation function.". Possible functions are "tanh", exponential linear unit  ("ELU") functions, rectified linear unit ("ReLU") functions, and log-sigmoidal functions. 
 - The number of epochs of degraded performance before early stopping is enacted. 
 - The total amount of penalization for the model. 
 - The proportion of $L_1$ penalty (a.k.a. Lasso penalization). 
 - The initial learning rate used during gradient descent. 
-- The “scheduling” function to adjust the learning rate over iterations: “constant”, “cyclic”, or “exponential decay”.
+- The "scheduling" function to adjust the learning rate over iterations: "constant", "cyclic", or "exponential decay".
 
 In all, there are ten tuning parameters, two of which are qualitative. 
-
 
 ```{r}
 #| label: collect-iterative
@@ -1618,7 +1617,6 @@ A space-filling design with `r mlp_sfd_bo_ci %>% filter(.iter == 0) %>% nrow()` 
 
 ::: {#tbl-nnet-initial}
 
-
 ```{r}
 #| label: tbl-nnet-initial
 #| echo: false
@@ -1651,7 +1649,7 @@ The initial set of candidates used for iterative search methods.
  
 :::
 
-Can we improve on these results using iterative optimization? To begin, a simulated annealing search was initialized using the best results in TODO and ran with no early stopping for `r iters` iterations. If a new globally best result was not found within eight iterations, the search restarted from the previously best candidate. `r cli::format_inline("The search was restarted {length(restarts$.iter)} time{?s} at iterations {restarts$.iter}")`. The best candidate was found at iteration `r sa_best` with a RMSE value of `r round(mlp_sfd_sa_best_ci$.estimate, 2)`%, slightly better than the best result found in the initial grid. The 90% confidence interval, (`r round(mlp_sfd_sa_best_ci$.lower, 2)`%, `r round(mlp_sfd_sa_best_ci$.upper, 2)`%), verifies that the new candidate has equivocal performance to the initial best configuration. The top panel of @fig-nnet-sg-iterations shows the RMSE values over iterations and @tbl-nnet-sg-best lists the best candidate value.
+Can we improve on these results using iterative optimization? To begin, a simulated annealing search was initialized using the best results in @tbl-nnet-initial and ran with no early stopping for `r iters` iterations. If a new globally best result was not found within eight iterations, the search restarted from the previously best candidate. `r cli::format_inline("The search was restarted {length(restarts$.iter)} time{?s} at iterations {restarts$.iter}")`. The best candidate was found at iteration `r sa_best` with a RMSE value of `r round(mlp_sfd_sa_best_ci$.estimate, 2)`%, slightly better than the best result found in the initial grid. The 90% confidence interval, (`r round(mlp_sfd_sa_best_ci$.lower, 2)`%, `r round(mlp_sfd_sa_best_ci$.upper, 2)`%), verifies that the new candidate has equivocal performance to the initial best configuration. The top panel of @fig-nnet-sg-iterations shows the RMSE values over iterations and @tbl-nnet-sg-best lists the best candidate value.
 
 ```{r}
 #| label: fig-nnet-sg-iterations
@@ -1684,7 +1682,6 @@ mlp_sfd_sa_ci %>%
 
 A Bayesian optimization was also used with a squared exponential kernel for the covariance function and used expected improvement to select candidates at each of the `r iters` iterations. This search found new best results at `r cli::format_inline("{length(bo_best_iter)} iteration{?s}: {bo_best_iter}")`. Like the SA search, the best RMSE was not substantially different than the one found in the initial grid: `r round(mlp_sfd_bo_best_ci$.estimate, 2)`% with 90% confidence interval, (`r round(mlp_sfd_bo_best_ci$.lower, 2)`%, `r round(mlp_sfd_bo_best_ci$.upper, 2)`%). The iterations and final values also be seen in @fig-nnet-sg-iterations and @tbl-nnet-sg-best, respectively. 
 
-
 :::: {.columns}
 
 ::: {.column width="25%"}
@@ -1693,7 +1690,6 @@ A Bayesian optimization was also used with a squared exponential kernel for the 
 ::: {.column width="50%"}
 
 ::: {#tbl-nnet-sg-best}
-
 
 ```{r}
 #| label: tbl-nnet-sg-best
@@ -1749,5 +1745,10 @@ Many of the parameter values for the final candidates from each search are very 
 
 In terms of computing time, simulated annealing took `r prettyunits::pretty_sec(mlp_sa_time[3] / iters)` on average for each candidate and compared to `r prettyunits::pretty_sec(mlp_bo_time[3] / iters)` required for BO (a `r round(mlp_bo_time[3]/mlp_sa_time[3], 1)`-fold difference). 
 
-## Chapter References {.unnumbered}
+## Summary {#sec-iterative-summary}
 
+There are several different ways to tune models sequentially. For tabular data, these approaches are rarely the only efficient method for model optimization, but they may be preferable for certain models and large data sets.  
+
+The example shown here did not show that the performance of iterative methods was overwhelmingly better than that of the grid search. While this may not be the best example to demonstrate when it is superior, these results are in line with what we have experienced with other data sets. 
+
+## Chapter References {.unnumbered}
