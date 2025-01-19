@@ -278,3 +278,9 @@ darksvglite <- function(file, width, height, ...) {
   )
 }
 
+r_comp <- function(stub) {
+  glue::glue(
+    '<a href="https://tidymodels.aml4td.org/chapters/[stub]">{{< fa brands r-project size=Large >}}</a>',
+    .open = "[", .close = "]"
+  )
+}
