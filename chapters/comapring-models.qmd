@@ -1,0 +1,405 @@
+---
+knitr:
+  opts_chunk:
+    cache.path: "../_cache/compare/"
+---
+
+# Comparing Models {#sec-compare}
+
+```{r}
+#| label: compare-setup
+#| include: false
+source("../R/_common.R")
+
+# ------------------------------------------------------------------------------
+
+library(rstanarm)
+library(doParallel)
+library(patchwork)
+library(tidymodels)
+library(tidyposterior)
+library(bonsai)
+
+# Also requires packages: Cubist, splines2, brulee
+
+# ------------------------------------------------------------------------------
+# Set options
+
+tidymodels_prefer()
+theme_set(theme_transparent())
+cl <- makePSOCKcluster(parallel::detectCores(logical = TRUE))
+registerDoParallel(cl)
+set_options()
+
+# ------------------------------------------------------------------------------
+# Load data
+
+load("../RData/deliveries_lm.RData")
+load("../RData/deliveries_cubist.RData")
+```
+
+
+## Test or Validation Sets
+
+```{r}
+#| label: delivery-data
+#| include: false
+#| cache: true
+
+reg_metrics <- metric_set(mae, rmse, rsq)
+
+delivery_val_res <- 
+  cb_res %>% 
+  collect_predictions() %>% 
+  select(cubist = .pred, time_to_delivery, .row) %>% 
+  full_join(
+    lin_reg_res %>% 
+      collect_predictions() %>% 
+      select(lin_reg = .pred, .row),
+    by = ".row"
+  )
+
+get_metrics <- function(split) {
+  reg_metrics <- metric_set(mae, rmse, rsq)
+  
+  dat <- analysis(split)
+  cb_res <-
+    dat %>% 
+    reg_metrics(time_to_delivery, cubist) %>% 
+    select(term = .metric, cubist = .estimate)
+  
+  lm_res <-
+    dat %>% 
+    reg_metrics(time_to_delivery, lin_reg) %>% 
+    select(term = .metric, lm = .estimate)
+  
+  full_join(cb_res, lm_res, by = "term") %>% 
+    mutate(estimate = lm - cubist) %>% 
+    select(term, estimate)
+}
+
+set.seed(270)
+bootstrapped_metrics <- 
+  delivery_val_res %>% 
+  bootstraps(times = 5000) %>% 
+  mutate(
+    stats = map(splits, get_metrics)
+  ) 
+
+bootstrapped_diff <- 
+  bootstrapped_metrics %>% 
+  int_pctl(stats)
+```
+
+
+```{r}
+#| label: fig-bootstrapped-rmse
+#| echo: false
+#| out-width: 60%
+#| fig-width: 6.25
+#| fig-height: 4
+#| fig-cap: The bootstrap distribution of the difference in RMSE between the linear regression and Cubist models.
+
+bootstrapped_metrics %>% 
+  select(stats) %>% 
+  unnest(stats) %>% 
+  filter(term == "rmse") %>% 
+  ggplot(aes(estimate)) + 
+  geom_histogram(col = "white", bins = 25) +
+  labs(x = "Difference in RMSE")
+```
+
+
+## Resampling Data
+
+
+We'll use the space-filling desing from the boosted tree in section TODO. 
+
+```{r}
+#| label: boosting-model-res
+#| include: false
+#| cache: true
+
+source("~/content/website/R/setup_two_class_example.R")
+
+set.seed(943)
+sim_tr <- sim_logistic(2000, sim_f)
+
+set.seed(14)
+sim_rs <- vfold_cv(sim_tr)
+
+bst_spec <- 
+  boost_tree(learn_rate = tune(), trees = tune()) %>% 
+  set_mode("classification")%>% 
+  set_engine("lightgbm")
+
+bst_wflow <-
+  workflow() %>%
+  add_model(bst_spec) %>%
+  add_formula(class ~ A + B)
+
+bst_param <- 
+  bst_wflow %>% 
+  extract_parameter_set_dials() %>% 
+  update(learn_rate = learn_rate(c(-3, -1)))
+
+bst_sfd <- grid_space_filling(bst_param, size = 15) 
+
+bst_sfd_res <- 
+  bst_wflow %>% 
+  tune_grid(
+    resamples = sim_rs,
+    metrics = metric_set(brier_class),
+    grid = bst_sfd
+  )  
+
+brier_scores <- 
+  bst_sfd_res %>% 
+  collect_metrics()
+
+brier_best <- 
+  brier_scores %>% 
+  slice_min(mean, n = 1) %>% 
+  pluck(".config")
+
+brier_indiv <- 
+  bst_sfd_res %>% 
+  collect_metrics(summarize = FALSE) %>% 
+  mutate(
+    model = gsub("Preprocessor1_", "", .config),
+    model = gsub("Model", "Candidate ", model)
+  )
+
+can_02 <- brier_scores %>% filter(.config == "Preprocessor1_Model02")
+text_02 <- 
+  cli::format_inline("{format(can_02$trees, big.mark = ',')} trees and a learning rate of 10<sup>{signif(log10(can_02$learn_rate), 3)}</sup>.")
+
+can_08 <- brier_scores %>% filter(.config == "Preprocessor1_Model08")
+text_08 <- 
+  cli::format_inline("{format(can_08$trees, big.mark = ',')} trees and a learning rate of 10<sup>{signif(log10(can_08$learn_rate), 3)}</sup>.")
+```
+
+```{r}
+#| label: fig-sfd-brier 
+#| echo: false
+#| out-width: 50%
+#| fig-width: 4.5
+#| fig-height: 4.6
+#| fig-cap: Results of the space-filling design prevously shown in @fig-todo. The best results are within a blue square. 
+  
+bst_sfd_res %>% 
+  collect_metrics() %>% 
+  mutate(`Brier Score` = mean) %>% 
+  ggplot(aes(trees, learn_rate, size = `Brier Score`)) + 
+  geom_point(
+    data = brier_scores %>% slice_min(mean, n = 1),
+    aes(trees, learn_rate), 
+    cex = 4, 
+    pch = 0,
+    col = "blue"
+  ) +
+  geom_point(alpha = 1 / 2) + 
+  scale_y_log10() +
+  coord_fixed(ratio = 1000) +
+  labs(x = "# Trees", y = "Learning Rate")
+```
+
+```{r}
+#| label: cor-stats
+#| include: false
+resample_cors <- 
+  brier_indiv %>% 
+  select(id, model, .estimate) %>% 
+  pivot_wider(id_cols = c(model), names_from = id, values_from = .estimate) %>% 
+  select(-model) %>% 
+  cor()
+
+mean_pairwise <- mean(resample_cors[upper.tri(resample_cors)])
+```
+
+
+```{r}
+#| label: pract-diff
+#| include: false
+
+pract_diff <- 0.01
+```
+
+
+
+```{r}
+#| label: boosting-bayes
+#| include: false
+#| cache: true
+
+other_list <- setdiff(unique(brier_scores$.config), brier_best)
+best_list <- rep(brier_best, length(other_list))
+
+set.seed(885)
+brier_mod <- perf_mod(bst_sfd_res, cores = 10, iter = 10000, chains = 10)
+# or use prior_intercept = student_t(1)
+
+prior_res <- prior_summary(brier_mod$stan)
+
+best_versus_others <- 
+  contrast_models(brier_mod, list_1 = best_list, list_2 = other_list, seed = 395)
+
+best_versus_others_stats <- 
+  best_versus_others %>% 
+  summary(size = pract_diff)
+
+grps <- c("Preprocessor1_Model02", "Preprocessor1_Model08")
+
+two_vs_eight <- 
+  best_versus_others %>% 
+  filter(model_1 == "Preprocessor1_Model08" & model_2 == "Preprocessor1_Model02") 
+
+int_eight <- 
+  brier_mod %>% 
+  tidy() %>% 
+  filter(model == "Preprocessor1_Model08") %>% 
+  pluck("posterior") %>% 
+  quantile(probs = c(0.05, 0.95)) %>% 
+  signif(3)
+
+diff_two <- 
+  best_versus_others %>% 
+  filter(model_1 == "Preprocessor1_Model08" & model_2 == "Preprocessor1_Model02") 
+```
+
+
+
+With racing, we've mentioned that there is a resample-to-resample effect. 
+
+For these data, the mean pairwise-correlation was `r round(mean_pairwise, 2)`. 
+
+similar to discussion on effect encodings and racing. 
+
+We can fit the same model as shown in racing:
+
+$$
+Q_{ij} =(\beta_0 + \beta_{0i}) + \beta_1x_{i1} + \ldots +  \beta_{s-1}x_{i(s-1)}+ \epsilon_{ij}
+$$ {#eq-perf-mod-bayes}
+
+for $i=1,\ldots, B$ resamples and $j=1, \ldots, s$ candidates.
+
+Our model’s goal is inference, so the validity of our probabilistic assumptions directly affects the quality of the results. It is particularly important to determine the distribution of the error term. The obvious choice is Gaussian since our errors are on the real line and might very well be symmetric. This seems to be a reasonable assumption to start with.  For simplicity, we’ll also use Gaussian priors on the regression parameters and an exponential prior on the standard error parameter. 
+
+For this application of Bayesian analysis, we probably don’t have strong opinions on our parameter distributions since we have never seen the results of the ML model. We can make uninformative priors by choosing their scale parameters to be large. For a Gaussian distribution, an uninformative prior would still be bell-shaped but would have an extremely wide range. This approach allows the observed data to have more of an impact on the posterior distributions. Software for fitting these models can use the data to specify how wide an uninformative prior should be (since the equations are unaware of the scale of the values until shown the data).  For our data set, the priors used by the model were: 
+
+$$
+\begin{align}
+\epsilon_i &\sim N(0, \sigma^2) \notag \\
+\sigma &\sim expo(`r signif(prior_res$prior_aux$adjusted_scale, 2)`) \notag \\
+\beta_{0i}  &\sim N(`r signif(prior_res$prior_intercept$location, 2)`, `r signif(prior_res$prior_intercept$adjusted_scale^2, 2)`) \notag \\
+\beta_0  &\sim N(\beta_{0i}, `r signif(prior_res$prior$adjusted_scale[1]^2, 2)`)\notag \\
+\beta_j  &\sim N(0, `r signif(prior_res$prior$adjusted_scale[1]^2, 2)`) \:\text{for}\: j > 0\notag
+\end{align}
+$$
+
+We are modeling the Brier scores, which are non-negative and probably follow a right-skewed distribution such as the lognormal or Gamma. This might cause some doubt over whether our residuals would have a symmetric distribution. We are modeling _estimates_ of the Brier scores, which are averages of independent data points. The Central Limit Theorem tells us that the sample mean will likely become more Gaussian as the number of points used in the computations increases. This should affect many of our performance statistics, including proportions (e.g., accuracy, recall, etc), RMSE, and others. To show the effect of the CLT, @fig-qq-brier shows a Gaussian quantile-quantile plot, which is used to understand our data and at least appear Gaussian. The results are shown for each model candidate, and, in each case, the 10 Brier scores show a linear trend, lending credence that the sampling distribution of our _outcome_ is not skewed^[This discussion can give us confidence that Gaussian error terms are reasonable. However, we must emphasize that the distributions of the outcome data and the residuals do not have to be similar.].
+
+
+```{r}
+#| label: fig-qq-brier 
+#| echo: false
+#| out-width: 80%
+#| fig-width: 7
+#| fig-height: 5
+#| fig-cap: Normal quantile-quantile plot of the resamling results for each model candidate.
+
+brier_indiv %>% 
+  ggplot(aes(sample = .estimate)) + 
+  stat_qq(cex = 1) + 
+  stat_qq_line(alpha = 1 / 4) + 
+  facet_wrap(~ model) +
+  labs(x = NULL, y = NULL)
+```
+
+Estimating these models typically uses the Markov-chain Monte Carlo (MCMC) approach. REFERENCE. To increase the quality of the model fit, we can start multiple MCMC processes (called “chains”) simultaneously. Each starts the sampling process to approximate the posterior distribution numerically. Each chain starts with a “burn-in” or “warmup” phase, during which the MCMC (hopefully) converges. The remaining samples in the chain are used to represent the posterior and, if there are no issues, we can combine the samples from the different chains. 
+
+For our model, we used 10 chains, each with 10,000 iterations. Half of these are used as the warmup phase. In the end, the joint posterior for the model parameters is approximated by 50,000 samples. We can use these to compute various Bayesian estimates of interest, including the posterior of the Brier scores for each model candidate.  
+
+For our model, the top panels of @fig-diff-posterior shows the posteriors for two of the model parameters that represent the Brier scores for the second candidate (`r text_02`) and eighth candidate (`r text_08`) in the grid. The eighth candidate’s posterior is slightly to the left of the second candidate and corresponds to the best results in the grid. We can summarize these distributions by estimating the posterior mean and credible intervals. An X% credible interval contains that percentage of the probability mass of the posterior. These intervals, briefly mentioned in section TODO, are intervals that estimate the range of the true parameter values. For example, with the eighth candidate, the 90% credible interval for the Brier score is (`r int_eight[1]`, `r int_eight[2]`).
+
+```{r}
+#| label: fig-diff-posterior 
+#| echo: false
+#| out-width: 70%
+#| fig-width: 6.25
+#| fig-height: 5
+#| fig-cap: Historgrams of the posteriors for the Brier scores of two candidates (top) and the difference between two (bottom). 
+
+p_post <- 
+  brier_mod %>% 
+  tidy() %>%  
+  filter(model %in% grps) %>%
+  mutate(
+    model = gsub("Preprocessor1_", "", model),
+    model = gsub("Model", "Candidate ", model),
+    model = factor(model, levels = rev(sort(unique(model))))
+  ) %>% 
+  ggplot(aes(posterior)) + 
+  geom_histogram(col = "white", binwidth = 0.002) + 
+  facet_wrap(~ model) +
+  labs(x = "Brier Score Posterior")
+
+p_post_diff <- 
+  diff_two %>%
+  ggplot(aes(difference)) + 
+  geom_histogram(col = "white", binwidth = 0.0005) + 
+  geom_vline(xintercept = -pract_diff, col = "red", alpha = 1 / 4, linewidth = 2) +
+  geom_vline(xintercept = 0, col = "blue", alpha = 1 / 4, linewidth = 2) +
+  labs(x = "Posterior of Difference Bewteen Candidates\n Candidate 8 - Candidate 2")
+
+p_post / p_post_diff
+```
+
+Posterior distributions are very helpful because we can sample them to compute the posterior of some combination of parameters. For example, we might want to know how much of a loss of performance we would have if we preferred the second candidate to the eighth. We can take many samples of the posterior and compute this difference. Those samples represent the posterior of the loss of performance. The bottom of @fig-diff-posterior shows the results. The posterior mean (`r signif(mean(diff_two$difference), 2)`%) indicates that, given the range of Brier scores, the difference is minuscule. Most of the probability mass (`r round(mean(diff_two$difference < 0) * 100, 1)`) is to the left of zero (represented by the blue vertical line). We can interpret this as “There is a `r round(mean(diff_two$difference < 0) * 100, 1)`% probability that candidate eight is better than candidate two.” In other words, the different is highly likely to be real but small in magnitude. 
+
+This is interesting in that, given what we know of the range of Brier scores, the size of the difference is meaningless. Since Bayesian analyses allow us to make direct statements about the underlying parameters, we can also combine the context of the results with the estimated probabilities using Regions of Practical Effects (ROPE) methods. Here, we decide on how much of a difference there would need to be for it to matter realistically. Reasonable Brier scores should range between zero and 0.25 with our ML model. We can use our subject-specific knowledge to decide what change in the Brier score would matter. Suppose we think that a change of `r pract_diff` would define an important difference in two Brier scores.  We can use this practical difference instead of using zero as the critical value. 
+
+In our situation, candidate eight had the smallest Brier score. We can compute the probability of a practical difference by determining how much of the posterior is less than `r -pract_diff` (shown as the red line in @fig-diff-posterior). For our data, this is `r round(mean(diff_two$difference < -pract_diff) * 100, 1)`%, indicating that candidate two does not have a string change of being practically worse than candidate eight. 
+
+@fig-bayes-ranks applies this ROPE analysis to each of the candidates in the grid. The left panel superimposes the ROPE boundary on the credible intervals for the differences between the eighth candidate. The right panel translates this to show the probability of being practically worse than the current best result. Several candidates are practically equivalent to the eighth. 
+
+```{r}
+#| label: fig-bayes-ranks 
+#| echo: false
+#| out-width: 80%
+#| fig-width: 8
+#| fig-height: 5
+#| fig-cap: ROPE analysis comparing candidates to the numerically best. 
+  
+brier_contrasts <- 
+  best_versus_others_stats %>%
+  filter(contrast != paste(brier_best, "vs", brier_best)) %>% 
+  mutate(
+    model = gsub("Preprocessor1_Model08 vs Preprocessor1_", "", contrast),
+    model = gsub("Model", "Candidate ", model),
+    model = factor(model),
+    model = reorder(model, mean)
+  ) %>% 
+  arrange(model)
+
+p_brier <- 
+  brier_contrasts %>% 
+  ggplot(aes(y = model)) +
+  geom_vline(xintercept = -pract_diff, col = "red", alpha = 1 / 4, linewidth = 1.2) +
+  geom_vline(xintercept = 0, col = "blue", alpha = 1 / 4, linewidth = 1.2) +
+  geom_point(aes(x = mean), cex = 1) + 
+  geom_errorbar(aes(xmin = lower, xmax = upper), width = 0.3) +
+  labs(x = "Posterior for the\nDifference in Brier Score", y = NULL, 
+       title = "(a) Posterior Means")
+
+p_rope <- 
+  brier_contrasts %>% 
+  ggplot(aes(y = model)) +
+  geom_point(aes(x = pract_neg), cex = 1) + 
+  labs(x = "Posterior Probability of \nBeing Practically Worse", y = NULL, 
+       title = "(b) ROPE Probabilities")
+
+p_brier + p_rope
+```
+
+
