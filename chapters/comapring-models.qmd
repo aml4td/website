@@ -38,8 +38,22 @@ load("../RData/deliveries_lm.RData")
 load("../RData/deliveries_cubist.RData")
 ```
 
+within model and/or between models
+
+The two sections in this chapter take different approaches to quantifying performance metrics with uncertainty, focused on interval estimates for our metric(s) of choice. This enables the modeler in two ways: 
+
+- We can understand the probable range of performance values. This helps us calibrate how much we should trust our results. 
+- The results are in the same units as the metrics, as opposed to being translated into a surrogate measure (i.e., p-values) obliquely related to how we have been quantifying model effectiveness. 
+
+First, we’ll consider approaches that are useful when there is a single data set, such as a validation or test set. The second section examines tools to compare models when multiple resamples were used during model development, with a focus on Bayesian modeling. 
 
 ## Test or Validation Sets
+
+The original purpose of bootstrap resampling was to estimate the sampling distribution of an arbitrary statistic while making minimal assumptions regarding the distribution of the data. For example, if our data were clearly non-Gaussian, the bootstrap can estimate confidence intervals without explicitly declaring a data distribution. 
+
+Operationally, bootstrap confidence intervals are formed by taking a large number of bootstrap samples (in the thousands) of the data, and the statistic of interest is computed from the analysis set for each. In our analyses, 5,000 bootstrap resamples are used to generate confidence intervals. 
+
+There are numerous ways to compute confidence intervals from these resampled statistics, but the simplest and most popular approach computes quantiles of the resamples. For example, to compute a 90% confidence interval, the 5<sup>th</sup> and 95<sup>th</sup> quantiles are determined. 
 
 ```{r}
 #| label: delivery-data
@@ -73,23 +87,39 @@ get_metrics <- function(split) {
     reg_metrics(time_to_delivery, lin_reg) %>% 
     select(term = .metric, lm = .estimate)
   
-  full_join(cb_res, lm_res, by = "term") %>% 
-    mutate(estimate = lm - cubist) %>% 
-    select(term, estimate)
+  differences <- 
+    full_join(cb_res, lm_res, by = "term") %>% 
+    mutate(
+      estimate = lm - cubist,
+      .group = "difference"     
+    ) %>% 
+    select(term, .group, estimate)
+
+  differences
 }
 
 set.seed(270)
 bootstrapped_metrics <- 
   delivery_val_res %>% 
   bootstraps(times = 5000) %>% 
-  mutate(
-    stats = map(splits, get_metrics)
-  ) 
+  mutate(stats = map(splits, get_metrics)) 
 
 bootstrapped_diff <- 
   bootstrapped_metrics %>% 
   int_pctl(stats)
+
+set.seed(597)
+lm_int <- lin_reg_res %>% int_pctl(times = 5000)
+cb_int <- cb_res %>% int_pctl(times = 5000)
+
+r2_lower <- round(bootstrapped_diff$.lower[bootstrapped_diff$term == "rsq"] * 100, 1)
+r2_upper <- round(bootstrapped_diff$.upper[bootstrapped_diff$term == "rsq"] * 100, 1)
+r2_diff <- round(bootstrapped_diff$.estimate[bootstrapped_diff$term == "rsq"] * 100, 1)
 ```
+
+For test and validation sets, we have a data set of predictions and true values. We can bootstrap these data and compute our performance metrics to understand the uncertainty in our results and compare models. For example, for the linear regression model, the 90% interval for the validation set  R<sup>2</sup> was (`r round(lm_int$.lower[lm_int$.metric == "rsq"] * 100, 1)`%, `r round(lm_int$.upper[lm_int$.metric == "rsq"] * 100, 1)`%), and the corresponding interval for the cubist model was (`r round(cb_int$.lower[cb_int$.metric == "rsq"] * 100, 1)`%, `r round(cb_int$.upper[cb_int$.metric == "rsq"] * 100, 1)`%). The negligible overlap in these intervals helps us recognize that there is likely a difference R<sup>2</sup> between the two models. 
+
+It is possible to get a more direct answer though. We can also compute intervals for the difference in performance between two models when the same data set is predicted. In this case, we match predictions for the two models (i.e., by row number) and bootstrap the joint data set^[This contrasts with computing two sets of bootstrap resamples for each model. We bootstrap the paired results.]. Within each resample, the metrics are computed, and their difference is returned as the statistic of interest. Looking at the difference in R<sup>2</sup> for the two models (parameterized as linear regression - cubist), 5,000 bootstrap samples where generated from the validation set. The distirbution of the resampled differences as shown in @fig-bootstrapped-rmse. From this, the estimated difference is `r r2_diff`% with corresponding 90% confidence interval is (`r r2_lower`%, `r r2_upper`%). This suggests that there is a statistical difference in the coefficient of determination between the models; it is unclear whether the magnitude represents a practical difference though. 
 
 
 ```{r}
@@ -98,29 +128,32 @@ bootstrapped_diff <-
 #| out-width: 60%
 #| fig-width: 6.25
 #| fig-height: 4
-#| fig-cap: The bootstrap distribution of the difference in RMSE between the linear regression and Cubist models.
+#| fig-cap: The bootstrap distribution of the difference in R<sup>2</sup> between the linear regression and Cubist models.
 
 bootstrapped_metrics %>% 
   select(stats) %>% 
   unnest(stats) %>% 
-  filter(term == "rmse") %>% 
+  filter(term == "rsq") %>% 
   ggplot(aes(estimate)) + 
   geom_histogram(col = "white", bins = 25) +
-  labs(x = "Difference in RMSE")
+  scale_x_continuous(labels = label_percent()) +
+  labs(x = "Difference in R2")
 ```
-
+The bootstrap was previously used to generate confidence intervals in Figures [-@fig-delivery-increases], [-@fig-barley-linear-bakeoff], and [-@fig-delivery-items].
 
 ## Resampling Data
 
+When models are resampled, the process offers a small but rich data set that can be used as a substrate for statistical analysis. We’ve seen this in the context of racing in @sec-racing already; the resampled performance statistics were analyzed to determine which (if any) should be discarded from consideration. 
 
-We'll use the space-filling desing from the boosted tree in section TODO. 
+There is a sizable literature on analyzing resamples to compare and/or benchmark models, possibly starting with HOTHORN. Other references include TODO. 
+
 
 ```{r}
 #| label: boosting-model-res
 #| include: false
 #| cache: true
 
-source("~/content/website/R/setup_two_class_example.R")
+source("../R/setup_two_class_example.R")
 
 set.seed(943)
 sim_tr <- sim_logistic(2000, sim_f)
@@ -168,7 +201,8 @@ brier_indiv <-
   mutate(
     model = gsub("Preprocessor1_", "", .config),
     model = gsub("Model", "Candidate ", model)
-  )
+  ) %>% 
+  arrange(id, .config)
 
 can_02 <- brier_scores %>% filter(.config == "Preprocessor1_Model02")
 text_02 <- 
@@ -179,13 +213,19 @@ text_08 <-
   cli::format_inline("{format(can_08$trees, big.mark = ',')} trees and a learning rate of 10<sup>{signif(log10(can_08$learn_rate), 3)}</sup>.")
 ```
 
+Before getting started, recall that in @sec-grid-search, a boosted tree was tuned over the number of trees in the ensemble and the learning rate. Different grids of 15 candidate values were used to illustrate grid search. For this example, the training set consisted of `r format(nrow(sim_tr), big.mark = ',')` data points and 10-fold cross-validation was used for the resampling scheme. The Brier score was the metric used to select a candidate value.  
+
+We'll use the space-filling design previously shown in the right-hand panel of @fig-bst-grids. This figure is reproduced here in @fig-sfd-brier where the candidate with the numerically smallest Brier score is shown. 
+
+We'll use these data to demonstrate the process of comparing models when multiple resamples are available. 
+
 ```{r}
 #| label: fig-sfd-brier 
 #| echo: false
 #| out-width: 50%
 #| fig-width: 4.5
 #| fig-height: 4.6
-#| fig-cap: Results of the space-filling design prevously shown in @fig-todo. The best results are within a blue square. 
+#| fig-cap: Results of the space-filling design prevously shown in @fig-bst-grids. The best results are within a blue square. 
   
 bst_sfd_res %>% 
   collect_metrics() %>% 
@@ -204,6 +244,8 @@ bst_sfd_res %>%
   labs(x = "# Trees", y = "Learning Rate")
 ```
 
+In the discussion of racing methods, it was mentioned that resampling statistics can have severe resample-to-resample effects where the performance scores across models tend to be highly correlated with one another (relative to scores from other resamples). If we do not take this correlation into account, the consequence is that our variance estimates will be underpowered. Suppose we wanted to know the variance of the difference between two performance metrics $M_1$ and $M_2$. That variance is the sum of the variances of $M_1$ and $M_2$ _minus twice the covariance_ between them. The resample-to-resample effect can lead to high covariances and if we assume the covariance to be zero, our variance may be excessively overestimated. 
+
 ```{r}
 #| label: cor-stats
 #| include: false
@@ -215,8 +257,22 @@ resample_cors <-
   cor()
 
 mean_pairwise <- mean(resample_cors[upper.tri(resample_cors)])
+
+grps <- c("Preprocessor1_Model02", "Preprocessor1_Model08")
+
+indiv_8 <- brier_indiv$.estimate[brier_indiv$.config == "Preprocessor1_Model08"]
+indiv_2 <- brier_indiv$.estimate[brier_indiv$.config == "Preprocessor1_Model02"]
+
+mean_8 <- brier_scores$mean[brier_scores$.config == "Preprocessor1_Model08"]
+mean_2 <- brier_scores$mean[brier_scores$.config == "Preprocessor1_Model02"]
+
+naive_diff <- signif(t.test(indiv_8, indiv_2, conf.level = 0.9)$conf.int, 3)
+paired_diff <- signif(t.test(indiv_8, indiv_2, paired = TRUE, conf.level = 0.9)$conf.int, 3)
 ```
 
+Let’s consider a pairwise comparison. In our grid, candidate 8 (`r text_08`, denoted as $C_8$) has the best Brier score of `r signif(mean_8, 4)`. We’ll compare its performance to the second candidate (`r text_02`, a.k.a. $C_2$) whose estimated score was `r signif(mean_2, 4)`. The correlation between the individual resamples for these two candidates was `r round(cor(indiv_8, indiv_2), 3)`. 
+
+We could use their ten resampled Brier scores and, assuming the normality of the scores, compute a confidence interval for the mean difference in Brier scores. Disregarding the high correlation, a 90% interval on the difference ($C_8 - C_2$) is (`r naive_diff[1]`, `r naive_diff[2]`). When we correctly account for the correlation, the values and interpretation drastically change: (`r paired_diff[1]`, `r paired_diff[2]`). 
 
 ```{r}
 #| label: pract-diff
@@ -224,8 +280,6 @@ mean_pairwise <- mean(resample_cors[upper.tri(resample_cors)])
 
 pract_diff <- 0.01
 ```
-
-
 
 ```{r}
 #| label: boosting-bayes
@@ -267,25 +321,25 @@ diff_two <-
   filter(model_1 == "Preprocessor1_Model08" & model_2 == "Preprocessor1_Model02") 
 ```
 
-
-
-With racing, we've mentioned that there is a resample-to-resample effect. 
-
-For these data, the mean pairwise-correlation was `r round(mean_pairwise, 2)`. 
-
-similar to discussion on effect encodings and racing. 
-
-We can fit the same model as shown in racing:
+To facilitate comparisons, we’ll use the same linear model as was used with racing, except we will use the complete set of resamples for analysis: 
 
 $$
 Q_{ij} =(\beta_0 + \beta_{0i}) + \beta_1x_{i1} + \ldots +  \beta_{s-1}x_{i(s-1)}+ \epsilon_{ij}
 $$ {#eq-perf-mod-bayes}
 
-for $i=1,\ldots, B$ resamples and $j=1, \ldots, s$ candidates.
+for $i=1,\ldots, B$ resamples and $j=1, \ldots, s$ candidates. Recall that this is a _random intercept model_ where the source of the randomness is attributed to the different resamples (via $\beta_{0i}$). This model formulation appropriately accounts for the high correlations between all of our candidates. 
+
+In the racing chapter, this model was estimated using a linear mixed effects model. This model can be quickly estimated, and confidence intervals can be produced that would help us measure uncertainty in our performance metrics or in differences between specific pairs of candidates. This estimation method is relatively fast, making it the best approach for racing. 
+
+One downside though is that we can’t make any inferences about the true theoretical metric values; we can only say things about our parameter estimates^[As previously discussed in section TODO.]. A different estimation method is used for comparing models for the same model formulation. A Bayesian approach will be described shortly and the directness of its inference can be used to blend practical knowledge with uncertainty estimates (that cannot be done with a non-Bayesian model).
+
+Bayesian methods require additional specifications for distributions of the parameters in @eq-perf-mod-bayes. Let’s walk through how we could settle on our priors and error distribution for these data. 
 
 Our model’s goal is inference, so the validity of our probabilistic assumptions directly affects the quality of the results. It is particularly important to determine the distribution of the error term. The obvious choice is Gaussian since our errors are on the real line and might very well be symmetric. This seems to be a reasonable assumption to start with.  For simplicity, we’ll also use Gaussian priors on the regression parameters and an exponential prior on the standard error parameter. 
 
-For this application of Bayesian analysis, we probably don’t have strong opinions on our parameter distributions since we have never seen the results of the ML model. We can make uninformative priors by choosing their scale parameters to be large. For a Gaussian distribution, an uninformative prior would still be bell-shaped but would have an extremely wide range. This approach allows the observed data to have more of an impact on the posterior distributions. Software for fitting these models can use the data to specify how wide an uninformative prior should be (since the equations are unaware of the scale of the values until shown the data).  For our data set, the priors used by the model were: 
+For this application of Bayesian analysis, we probably don’t have strong opinions on our parameter distributions since we have never seen the results of the ML model. We can make uninformative priors by choosing their scale parameters to be large. For a Gaussian distribution, an uninformative prior would still be bell-shaped but would have an extremely wide range. This approach allows the observed data to have more of an impact on the posterior distributions, diminishing the effect of the priors. 
+
+The modeler can manually set the variances of the priors to be large. Alternatively, software for fitting these models can use the data to specify how wide an uninformative prior should be (since the equations are unaware of the scale of the values until the data are shown).  For our data set, the specific priors used by the model were: 
 
 $$
 \begin{align}
@@ -297,30 +351,36 @@ $$
 \end{align}
 $$
 
-We are modeling the Brier scores, which are non-negative and probably follow a right-skewed distribution such as the lognormal or Gamma. This might cause some doubt over whether our residuals would have a symmetric distribution. We are modeling _estimates_ of the Brier scores, which are averages of independent data points. The Central Limit Theorem tells us that the sample mean will likely become more Gaussian as the number of points used in the computations increases. This should affect many of our performance statistics, including proportions (e.g., accuracy, recall, etc), RMSE, and others. To show the effect of the CLT, @fig-qq-brier shows a Gaussian quantile-quantile plot, which is used to understand our data and at least appear Gaussian. The results are shown for each model candidate, and, in each case, the 10 Brier scores show a linear trend, lending credence that the sampling distribution of our _outcome_ is not skewed^[This discussion can give us confidence that Gaussian error terms are reasonable. However, we must emphasize that the distributions of the outcome data and the residuals do not have to be similar.].
-
+Regarding the Guassian assumption for the errors, we are modeling the Brier scores, which are non-negative and involve the sum of squared terms. Intuition might suggest that this type of values probably follow a right-skewed distribution such as the lognormal or Gamma. This might cause some doubt over whether our residuals would have a symmetric shape Hoever, we are modeling _estimates_ of the Brier scores, which are averages of independent data points. The Central Limit Theorem tells us that the sample mean will likely become more Gaussian as the number of points used in the computations increases. This should affect many of our performance statistics, including proportions (e.g., accuracy, recall, etc), RMSE, and others. To show the effect of the Central Limit Theorem, @fig-qq-brier shows a Gaussian quantile-quantile plot, which is used to understand our data and at least appear Gaussian. The results are shown for each model candidate, and, in each case, the 10 Brier scores show a linear trend, lending credence that the sampling distribution of our _outcome_ is not skewed^[This discussion can give us confidence that Gaussian error terms are reasonable. However, we must emphasize that the distributions of the outcome data and the residuals do not have to be similar.].
 
 ```{r}
 #| label: fig-qq-brier 
 #| echo: false
-#| out-width: 80%
-#| fig-width: 7
+#| out-width: 60%
+#| fig-width: 5
 #| fig-height: 5
 #| fig-cap: Normal quantile-quantile plot of the resamling results for each model candidate.
 
+# brier_indiv %>% 
+#   ggplot(aes(sample = .estimate)) + 
+#   stat_qq(cex = 1) + 
+#   stat_qq_line(alpha = 1 / 4) + 
+#   facet_wrap(~ model) +
+#   labs(x = NULL, y = NULL)
+
 brier_indiv %>% 
-  ggplot(aes(sample = .estimate)) + 
-  stat_qq(cex = 1) + 
-  stat_qq_line(alpha = 1 / 4) + 
-  facet_wrap(~ model) +
-  labs(x = NULL, y = NULL)
+    ggplot(aes(sample = .estimate, col = model)) + 
+    stat_qq(cex = 1, show.legend = FALSE) + 
+    stat_qq_line(alpha = 1 / 4, show.legend = FALSE) + 
+   facet_wrap(~ model) +
+    labs(x = "Theoretical Quantiles", y = "Sample Quantiles")
 ```
 
 Estimating these models typically uses the Markov-chain Monte Carlo (MCMC) approach. REFERENCE. To increase the quality of the model fit, we can start multiple MCMC processes (called “chains”) simultaneously. Each starts the sampling process to approximate the posterior distribution numerically. Each chain starts with a “burn-in” or “warmup” phase, during which the MCMC (hopefully) converges. The remaining samples in the chain are used to represent the posterior and, if there are no issues, we can combine the samples from the different chains. 
 
 For our model, we used 10 chains, each with 10,000 iterations. Half of these are used as the warmup phase. In the end, the joint posterior for the model parameters is approximated by 50,000 samples. We can use these to compute various Bayesian estimates of interest, including the posterior of the Brier scores for each model candidate.  
 
-For our model, the top panels of @fig-diff-posterior shows the posteriors for two of the model parameters that represent the Brier scores for the second candidate (`r text_02`) and eighth candidate (`r text_08`) in the grid. The eighth candidate’s posterior is slightly to the left of the second candidate and corresponds to the best results in the grid. We can summarize these distributions by estimating the posterior mean and credible intervals. An X% credible interval contains that percentage of the probability mass of the posterior. These intervals, briefly mentioned in section TODO, are intervals that estimate the range of the true parameter values. For example, with the eighth candidate, the 90% credible interval for the Brier score is (`r int_eight[1]`, `r int_eight[2]`).
+For our model, the top panels of @fig-diff-posterior shows the posteriors for $C_2$ and $C_8$. The eighth candidate’s posterior is slightly to the left of the second candidate and corresponds to the best results in the grid. We can summarize these distributions by estimating the posterior mean and credible intervals. An X% credible interval contains that percentage of the probability mass of the posterior. These intervals, briefly mentioned in section TODO, are intervals that estimate the range of the true parameter values. For example, the 90% credible interval for $C_8$'s Brier score is (`r int_eight[1]`, `r int_eight[2]`).
 
 ```{r}
 #| label: fig-diff-posterior 
@@ -355,13 +415,13 @@ p_post_diff <-
 p_post / p_post_diff
 ```
 
-Posterior distributions are very helpful because we can sample them to compute the posterior of some combination of parameters. For example, we might want to know how much of a loss of performance we would have if we preferred the second candidate to the eighth. We can take many samples of the posterior and compute this difference. Those samples represent the posterior of the loss of performance. The bottom of @fig-diff-posterior shows the results. The posterior mean (`r signif(mean(diff_two$difference), 2)`%) indicates that, given the range of Brier scores, the difference is minuscule. Most of the probability mass (`r round(mean(diff_two$difference < 0) * 100, 1)`) is to the left of zero (represented by the blue vertical line). We can interpret this as “There is a `r round(mean(diff_two$difference < 0) * 100, 1)`% probability that candidate eight is better than candidate two.” In other words, the different is highly likely to be real but small in magnitude. 
+Posterior distributions are very helpful because we can sample them to compute the posterior of some combination of parameters. For example, we might want to know how much of a loss of performance we would have if we preferred the $C_2$ over $C_8$. We can take many samples of the posterior and compute this difference. Those samples represent the posterior of the loss of performance. The bottom of @fig-diff-posterior shows the results. The posterior mean (`r signif(mean(diff_two$difference), 2)`%) indicates that, given the range of Brier scores, the difference is minuscule. Most of the probability mass (`r round(mean(diff_two$difference < 0) * 100, 1)`) is to the left of zero (represented by the blue vertical line). We can interpret this as “There is a `r round(mean(diff_two$difference < 0) * 100, 1)`% probability that $C_8$ is better than $C_2$.” In other words, the different is highly likely to be real but small in magnitude. 
 
 This is interesting in that, given what we know of the range of Brier scores, the size of the difference is meaningless. Since Bayesian analyses allow us to make direct statements about the underlying parameters, we can also combine the context of the results with the estimated probabilities using Regions of Practical Effects (ROPE) methods. Here, we decide on how much of a difference there would need to be for it to matter realistically. Reasonable Brier scores should range between zero and 0.25 with our ML model. We can use our subject-specific knowledge to decide what change in the Brier score would matter. Suppose we think that a change of `r pract_diff` would define an important difference in two Brier scores.  We can use this practical difference instead of using zero as the critical value. 
 
-In our situation, candidate eight had the smallest Brier score. We can compute the probability of a practical difference by determining how much of the posterior is less than `r -pract_diff` (shown as the red line in @fig-diff-posterior). For our data, this is `r round(mean(diff_two$difference < -pract_diff) * 100, 1)`%, indicating that candidate two does not have a string change of being practically worse than candidate eight. 
+In our situation, candidate eight had the smallest Brier score. We can compute the probability of a practical difference by determining how much of the posterior is less than `r -pract_diff` (shown as the red line in @fig-diff-posterior). For our data, this is `r round(mean(diff_two$difference < -pract_diff) * 100, 1)`%, indicating that $C_2$ does not have a strong change of being practically worse than $C_8$. 
 
-@fig-bayes-ranks applies this ROPE analysis to each of the candidates in the grid. The left panel superimposes the ROPE boundary on the credible intervals for the differences between the eighth candidate. The right panel translates this to show the probability of being practically worse than the current best result. Several candidates are practically equivalent to the eighth. 
+@fig-bayes-ranks applies this ROPE analysis to each of the candidates in the grid. The left panel superimposes the ROPE boundary on the credible intervals for the differences between $C_8$ and the other candidates. The right panel translates this to show the probability of being practically worse than the current best result. Several candidates are practically equivalent to $C_8$. 
 
 ```{r}
 #| label: fig-bayes-ranks 
