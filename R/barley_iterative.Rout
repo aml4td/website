@@ -1,0 +1,1467 @@
+
+R version 4.4.1 (2024-06-14) -- "Race for Your Life"
+Copyright (C) 2024 The R Foundation for Statistical Computing
+Platform: aarch64-apple-darwin20
+
+R is free software and comes with ABSOLUTELY NO WARRANTY.
+You are welcome to redistribute it under certain conditions.
+Type 'license()' or 'licence()' for distribution details.
+
+  Natural language support but running in an English locale
+
+R is a collaborative project with many contributors.
+Type 'contributors()' for more information and
+'citation()' on how to cite R or R packages in publications.
+
+Type 'demo()' for some demos, 'help()' for on-line help, or
+'help.start()' for an HTML browser interface to help.
+Type 'q()' to quit R.
+
+> # pak::pak(c("tidymodels/dials@constraints"), ask = FALSE)
+> library(tidymodels)
+── Attaching packages ────────────────────────────────────── tidymodels 1.2.0 ──
+✔ broom        1.0.7.9000     ✔ recipes      1.1.0.9001
+✔ dials        1.3.0.9000     ✔ rsample      1.2.1.9000
+✔ dplyr        1.1.4.9000     ✔ tibble       3.2.1.9032
+✔ ggplot2      3.5.1          ✔ tidyr        1.3.1     
+✔ infer        1.0.7.9000     ✔ tune         1.2.1     
+✔ modeldata    1.4.0          ✔ workflows    1.1.4.9000
+✔ parsnip      1.2.1.9003     ✔ workflowsets 1.1.0.9000
+✔ purrr        1.0.2.9000     ✔ yardstick    1.3.1.9000
+── Conflicts ───────────────────────────────────────── tidymodels_conflicts() ──
+✖ purrr::discard() masks scales::discard()
+✖ dplyr::filter()  masks stats::filter()
+✖ dplyr::lag()     masks stats::lag()
+✖ recipes::step()  masks stats::step()
+• Use suppressPackageStartupMessages() to eliminate package startup messages
+> library(finetune)
+> library(future)
+> library(bestNormalize)
+> library(measure)
+> library(modeldatatoo)
+> 
+> tidymodels_prefer()
+> conflicted::conflicts_prefer(recipes::update)
+[conflicted] Removing existing preference.
+[conflicted] Will prefer recipes::update over any other package.
+> plan("multisession")
+> options(future.globals.maxSize = 1.0 * 1e9)  ## 1.0 GB
+> 
+> # ------------------------------------------------------------------------------
+> 
+> chimiometrie_2019 <-
++   data_chimiometrie_2019()  %>%
++   add_rowindex() %>% 
++   select(-soy_oil, -lucerne) %>% 
++   rename(.sample = .row)
+> 
+> barley_breaks <- (0:27) * 2
+> 
+> set.seed(101)
+> barley_split <- initial_validation_split(chimiometrie_2019, prop = c(0.7, 0.15), 
++                                          strata = barley)
+> barley_train <- training(barley_split)
+> barley_val <- validation(barley_split)
+> barley_test <- testing(barley_split)
+> barley_rs <- validation_set(barley_split)
+> 
+> # ------------------------------------------------------------------------------
+> 
+> reg_mtr <- metric_set(rmse)
+> num_iter <- 50
+> 
+> # ------------------------------------------------------------------------------
+> 
+> barley_sg_rec <-
++   recipe(barley ~ ., data = barley_train) %>%
++   update_role(.sample, new_role = ".sample") %>%
++   step_measure_input_wide(starts_with("wvlgth_")) %>%
++   step_measure_savitzky_golay(
++     differentiation_order = tune(),
++     degree = tune(),
++     window_side = tune()
++   ) %>% 
++   step_measure_output_wide(prefix = "x_") %>% 
++   step_orderNorm(all_predictors())
+> 
+> mlp_spec <-
++   mlp(
++     hidden_units = tune(),
++     activation =  tune(),
++     penalty = tune(),
++     learn_rate = tune(),
++     epoch = 2000
++   ) %>%
++   set_mode("regression") %>%
++   set_engine("brulee",
++              stop_iter = tune(),
++              mixture = tune(),
++              rate_schedule = tune())
+> 
+> mlp_wflow <- workflow(barley_sg_rec, mlp_spec)
+> 
+> acts <- c("tanh", "relu", "elu", "log_sigmoid")
+> 
+> mlp_param <-
++   mlp_wflow %>%
++   extract_parameter_set_dials() %>%
++   update(
++     hidden_units = hidden_units(c(2, 100)),
++     activation = activation(acts),
++     learn_rate = learn_rate(c(-2, -1/2)),
++     mixture = mixture(),
++     window_side = window_side(c(1, 10))
++   )
+> 
+> 
+> mlp_param <- 
++   mlp_param %>% 
++   add_parameter_constraint(
++     degree  >= differentiation_order + 1 & (2 * window_side) + 1 >= degree
++   )
+> 
+> 
+> grid_size <- nrow(mlp_param) + 1
+> set.seed(230)
+> init_rnd <- 
++   grid_random(mlp_param, size = floor(grid_size * 2)) %>% 
++   slice_sample(n = grid_size)
+> init_sfd <- grid_space_filling(mlp_param, size = 17) 
+> 
+> # ------------------------------------------------------------------------------
+> 
+> grid_ctrl <- control_grid(save_pred = TRUE, parallel_over = "everything")
+> 
+> mlp_init_sfd_time <- system.time({
++   set.seed(13)
++   mlp_sfd_initial <-
++     mlp_wflow %>%
++     tune_grid(
++       resamples = barley_rs,
++       grid = init_sfd,
++       metrics = reg_mtr,
++       control = grid_ctrl
++     )
++ })
+! validation: preprocessor 3/9:
+  The window size (5) should be greater than or equal to `degree` (5).
+  `window_side` was increased from 2 to 3.
+! validation: preprocessor 4/9:
+  The window size (3) should be greater than or equal to `degree` (3).
+  `window_side` was increased from 1 to 2.
+> 
+> mlp_init_rnd_time <- system.time({
++   set.seed(13)
++   mlp_rnd_initial <-
++     mlp_wflow %>%
++     tune_grid(
++       resamples = barley_rs,
++       grid = init_rnd,
++       metrics = reg_mtr,
++       control = grid_ctrl
++     )
++ })
+! validation: preprocessor 3/11:
+  The window size (3) should be greater than or equal to `degree` (3).
+  `window_side` was increased from 1 to 2.
+! validation: preprocessor 6/11:
+  The window size (3) should be greater than or equal to `degree` (3).
+  `window_side` was increased from 1 to 2.
+> 
+> # ------------------------------------------------------------------------------
+> 
+> mlp_large_time <- system.time({
++   set.seed(284)
++   mlp_large <-
++     mlp_wflow %>%
++     tune_grid(
++       resamples = barley_rs,
++       grid = num_iter + nrow(mlp_sfd_initial),
++       metrics = reg_mtr,
++       param_info = mlp_param,
++       control = grid_ctrl
++     )
++ })
+> 
+> set.seed(74)
+> mlp_large_ci <- 
++   int_pctl(mlp_large, times = 5000, alpha = 0.1) %>%
++   mutate(method = "Grid Search")
+> 
+> # ------------------------------------------------------------------------------
+> 
+> mlp_bo_time <- system.time({
++   set.seed(760)
++   mlp_sfd_bo <-
++     mlp_wflow %>%
++     tune_bayes(
++       resamples = barley_rs,
++       initial = mlp_sfd_initial,
++       iter = num_iter,
++       param_info = mlp_param,
++       metrics = reg_mtr,
++       control = control_bayes(
++         save_pred = TRUE,
++         no_improve = Inf,
++         verbose_iter = TRUE,
++         verbose = FALSE,
++         save_workflow = TRUE
++       )
++     )
++ })
+! There are 10 tuning parameters and 9 grid points were requested.
+• There are more tuning parameters than there are initial points. This is
+  likely to cause numerical issues in the first few search iterations.
+Optimizing rmse using the expected improvement
+
+── Iteration 1 ─────────────────────────────────────────────────────────────────
+
+i Current best:		rmse=3.642 (@iter 0)
+i Gaussian process model
+! The Gaussian process model is being fit using 16 features but only has 9
+  data points to do so. This may cause errors or a poor model fit.
+✓ Gaussian process model
+i Generating 2952 candidates
+i Predicted candidates
+i hidden_units=21, penalty=0.0202, activation=relu, learn_rate=0.0123,
+  stop_iter=12, mixture=0.849, rate_schedule=cyclic, window_side=8,
+  differentiation_order=2, degree=5
+i Estimating performance
+ℹ The workflow being saved contains a recipe, which is 20.8 Mb in ℹ memory. If
+this was not intentional, please set the control setting ℹ `save_workflow =
+FALSE`.
+✓ Estimating performance
+ⓧ Newest results:	rmse=6.66
+
+── Iteration 2 ─────────────────────────────────────────────────────────────────
+
+i Current best:		rmse=3.642 (@iter 0)
+i Gaussian process model
+! The Gaussian process model is being fit using 16 features but only has 10
+  data points to do so. This may cause errors or a poor model fit.
+! Gaussian process model: did not converge in 10 iterations
+✓ Gaussian process model
+i Generating 2909 candidates
+i Predicted candidates
+i hidden_units=53, penalty=3.78e-08, activation=tanh, learn_rate=0.014,
+  stop_iter=7, mixture=0.398, rate_schedule=cyclic, window_side=6,
+  differentiation_order=2, degree=5
+i Estimating performance
+ℹ The workflow being saved contains a recipe, which is 20.8 Mb in ℹ memory. If
+this was not intentional, please set the control setting ℹ `save_workflow =
+FALSE`.
+✓ Estimating performance
+ⓧ Newest results:	rmse=3.926
+
+── Iteration 3 ─────────────────────────────────────────────────────────────────
+
+i Current best:		rmse=3.642 (@iter 0)
+i Gaussian process model
+! The Gaussian process model is being fit using 16 features but only has 11
+  data points to do so. This may cause errors or a poor model fit.
+✓ Gaussian process model
+i Generating 2949 candidates
+i Predicted candidates
+i hidden_units=20, penalty=9.41e-07, activation=tanh, learn_rate=0.0266,
+  stop_iter=3, mixture=0.973, rate_schedule=none, window_side=5,
+  differentiation_order=3, degree=5
+i Estimating performance
+ℹ The workflow being saved contains a recipe, which is 20.8 Mb in ℹ memory. If
+this was not intentional, please set the control setting ℹ `save_workflow =
+FALSE`.
+✓ Estimating performance
+ⓧ Newest results:	rmse=5.379
+
+── Iteration 4 ─────────────────────────────────────────────────────────────────
+
+i Current best:		rmse=3.642 (@iter 0)
+i Gaussian process model
+! The Gaussian process model is being fit using 16 features but only has 12
+  data points to do so. This may cause errors or a poor model fit.
+✓ Gaussian process model
+i Generating 2942 candidates
+i Predicted candidates
+i hidden_units=2, penalty=0.416, activation=tanh, learn_rate=0.229,
+  stop_iter=10, mixture=0.194, rate_schedule=cyclic, window_side=6,
+  differentiation_order=1, degree=4
+i Estimating performance
+ℹ The workflow being saved contains a recipe, which is 20.8 Mb in ℹ memory. If
+this was not intentional, please set the control setting ℹ `save_workflow =
+FALSE`.
+✓ Estimating performance
+ⓧ Newest results:	rmse=8.688
+
+── Iteration 5 ─────────────────────────────────────────────────────────────────
+
+i Current best:		rmse=3.642 (@iter 0)
+i Gaussian process model
+! The Gaussian process model is being fit using 16 features but only has 13
+  data points to do so. This may cause errors or a poor model fit.
+! Gaussian process model: did not converge in 10 iterations
+✓ Gaussian process model
+i Generating 2944 candidates
+i Predicted candidates
+i hidden_units=63, penalty=3.93e-09, activation=log_sigmoid,
+  learn_rate=0.0329, stop_iter=8, mixture=0.961, rate_schedule=cyclic,
+  window_side=3, differentiation_order=1, degree=2
+i Estimating performance
+ℹ The workflow being saved contains a recipe, which is 20.8 Mb in ℹ memory. If
+this was not intentional, please set the control setting ℹ `save_workflow =
+FALSE`.
+✓ Estimating performance
+ⓧ Newest results:	rmse=3.965
+
+── Iteration 6 ─────────────────────────────────────────────────────────────────
+
+i Current best:		rmse=3.642 (@iter 0)
+i Gaussian process model
+! The Gaussian process model is being fit using 16 features but only has 14
+  data points to do so. This may cause errors or a poor model fit.
+! Gaussian process model: did not converge in 10 iterations
+✓ Gaussian process model
+i Generating 2978 candidates
+i Predicted candidates
+i hidden_units=46, penalty=0.000149, activation=elu, learn_rate=0.0298,
+  stop_iter=3, mixture=0.868, rate_schedule=none, window_side=9,
+  differentiation_order=2, degree=3
+i Estimating performance
+ℹ The workflow being saved contains a recipe, which is 20.8 Mb in ℹ memory. If
+this was not intentional, please set the control setting ℹ `save_workflow =
+FALSE`.
+✓ Estimating performance
+ⓧ Newest results:	rmse=3.917
+
+── Iteration 7 ─────────────────────────────────────────────────────────────────
+
+i Current best:		rmse=3.642 (@iter 0)
+i Gaussian process model
+! The Gaussian process model is being fit using 16 features but only has 15
+  data points to do so. This may cause errors or a poor model fit.
+! Gaussian process model: did not converge in 10 iterations
+✓ Gaussian process model
+i Generating 3008 candidates
+i Predicted candidates
+i hidden_units=64, penalty=0.0071, activation=elu, learn_rate=0.195,
+  stop_iter=13, mixture=0.948, rate_schedule=cyclic, window_side=6,
+  differentiation_order=1, degree=5
+i Estimating performance
+ℹ The workflow being saved contains a recipe, which is 20.8 Mb in ℹ memory. If
+this was not intentional, please set the control setting ℹ `save_workflow =
+FALSE`.
+✓ Estimating performance
+ⓧ Newest results:	rmse=6.8
+
+── Iteration 8 ─────────────────────────────────────────────────────────────────
+
+i Current best:		rmse=3.642 (@iter 0)
+i Gaussian process model
+! The Gaussian process model is being fit using 16 features but only has 16
+  data points to do so. This may cause errors or a poor model fit.
+! Gaussian process model: did not converge in 10 iterations
+✓ Gaussian process model
+i Generating 2966 candidates
+i Predicted candidates
+i hidden_units=97, penalty=1.18e-05, activation=log_sigmoid,
+  learn_rate=0.0637, stop_iter=3, mixture=0.549, rate_schedule=cyclic,
+  window_side=4, differentiation_order=1, degree=4
+i Estimating performance
+ℹ The workflow being saved contains a recipe, which is 20.8 Mb in ℹ memory. If
+this was not intentional, please set the control setting ℹ `save_workflow =
+FALSE`.
+✓ Estimating performance
+ⓧ Newest results:	rmse=4.177
+
+── Iteration 9 ─────────────────────────────────────────────────────────────────
+
+i Current best:		rmse=3.642 (@iter 0)
+i Gaussian process model
+! The Gaussian process model is being fit using 16 features but only has 17
+  data points to do so. This may cause errors or a poor model fit.
+✓ Gaussian process model
+i Generating 2967 candidates
+i Predicted candidates
+i hidden_units=10, penalty=5.94e-06, activation=elu, learn_rate=0.203,
+  stop_iter=14, mixture=0.201, rate_schedule=decay_time, window_side=9,
+  differentiation_order=2, degree=3
+i Estimating performance
+ℹ The workflow being saved contains a recipe, which is 20.8 Mb in ℹ memory. If
+this was not intentional, please set the control setting ℹ `save_workflow =
+FALSE`.
+✓ Estimating performance
+ⓧ Newest results:	rmse=4.299
+
+── Iteration 10 ────────────────────────────────────────────────────────────────
+
+i Current best:		rmse=3.642 (@iter 0)
+i Gaussian process model
+! Gaussian process model: did not converge in 10 iterations
+✓ Gaussian process model
+i Generating 2947 candidates
+i Predicted candidates
+i hidden_units=59, penalty=8.46e-05, activation=relu, learn_rate=0.0405,
+  stop_iter=8, mixture=0.171, rate_schedule=step, window_side=1,
+  differentiation_order=0, degree=2
+i Estimating performance
+ℹ The workflow being saved contains a recipe, which is 20.8 Mb in ℹ memory. If
+this was not intentional, please set the control setting ℹ `save_workflow =
+FALSE`.
+✓ Estimating performance
+ⓧ Newest results:	rmse=6.554
+
+── Iteration 11 ────────────────────────────────────────────────────────────────
+
+i Current best:		rmse=3.642 (@iter 0)
+i Gaussian process model
+✓ Gaussian process model
+i Generating 2958 candidates
+i Predicted candidates
+i hidden_units=82, penalty=4.04e-06, activation=log_sigmoid,
+  learn_rate=0.0364, stop_iter=16, mixture=0.00424, rate_schedule=step,
+  window_side=8, differentiation_order=2, degree=4
+i Estimating performance
+ℹ The workflow being saved contains a recipe, which is 20.8 Mb in ℹ memory. If
+this was not intentional, please set the control setting ℹ `save_workflow =
+FALSE`.
+✓ Estimating performance
+ⓧ Newest results:	rmse=4.482
+
+── Iteration 12 ────────────────────────────────────────────────────────────────
+
+i Current best:		rmse=3.642 (@iter 0)
+i Gaussian process model
+! Gaussian process model: did not converge in 10 iterations
+✓ Gaussian process model
+i Generating 2970 candidates
+i Predicted candidates
+i hidden_units=27, penalty=4.01e-10, activation=tanh, learn_rate=0.148,
+  stop_iter=18, mixture=0.916, rate_schedule=step, window_side=3,
+  differentiation_order=2, degree=4
+i Estimating performance
+ℹ The workflow being saved contains a recipe, which is 20.8 Mb in ℹ memory. If
+this was not intentional, please set the control setting ℹ `save_workflow =
+FALSE`.
+✓ Estimating performance
+ⓧ Newest results:	rmse=4.655
+
+── Iteration 13 ────────────────────────────────────────────────────────────────
+
+i Current best:		rmse=3.642 (@iter 0)
+i Gaussian process model
+✓ Gaussian process model
+i Generating 2951 candidates
+i Predicted candidates
+i hidden_units=82, penalty=5.53e-09, activation=relu, learn_rate=0.0885,
+  stop_iter=11, mixture=0.96, rate_schedule=step, window_side=3,
+  differentiation_order=2, degree=4
+i Estimating performance
+ℹ The workflow being saved contains a recipe, which is 20.8 Mb in ℹ memory. If
+this was not intentional, please set the control setting ℹ `save_workflow =
+FALSE`.
+✓ Estimating performance
+ⓧ Newest results:	rmse=4.667
+
+── Iteration 14 ────────────────────────────────────────────────────────────────
+
+i Current best:		rmse=3.642 (@iter 0)
+i Gaussian process model
+! Gaussian process model: did not converge in 10 iterations
+✓ Gaussian process model
+i Generating 2961 candidates
+i Predicted candidates
+i hidden_units=9, penalty=2.09e-05, activation=tanh, learn_rate=0.0403,
+  stop_iter=15, mixture=0.687, rate_schedule=cyclic, window_side=8,
+  differentiation_order=2, degree=4
+i Estimating performance
+ℹ The workflow being saved contains a recipe, which is 20.8 Mb in ℹ memory. If
+this was not intentional, please set the control setting ℹ `save_workflow =
+FALSE`.
+✓ Estimating performance
+ⓧ Newest results:	rmse=3.943
+
+── Iteration 15 ────────────────────────────────────────────────────────────────
+
+i Current best:		rmse=3.642 (@iter 0)
+i Gaussian process model
+✓ Gaussian process model
+i Generating 2966 candidates
+i Predicted candidates
+i hidden_units=18, penalty=9.17e-08, activation=log_sigmoid,
+  learn_rate=0.102, stop_iter=5, mixture=0.989, rate_schedule=cyclic,
+  window_side=5, differentiation_order=1, degree=3
+i Estimating performance
+ℹ The workflow being saved contains a recipe, which is 20.8 Mb in ℹ memory. If
+this was not intentional, please set the control setting ℹ `save_workflow =
+FALSE`.
+✓ Estimating performance
+ⓧ Newest results:	rmse=4.304
+
+── Iteration 16 ────────────────────────────────────────────────────────────────
+
+i Current best:		rmse=3.642 (@iter 0)
+i Gaussian process model
+✓ Gaussian process model
+i Generating 2978 candidates
+i Predicted candidates
+i hidden_units=98, penalty=1.02e-10, activation=tanh, learn_rate=0.0193,
+  stop_iter=15, mixture=0.0634, rate_schedule=none, window_side=3,
+  differentiation_order=3, degree=5
+i Estimating performance
+ℹ The workflow being saved contains a recipe, which is 20.8 Mb in ℹ memory. If
+this was not intentional, please set the control setting ℹ `save_workflow =
+FALSE`.
+✓ Estimating performance
+ⓧ Newest results:	rmse=6.419
+
+── Iteration 17 ────────────────────────────────────────────────────────────────
+
+i Current best:		rmse=3.642 (@iter 0)
+i Gaussian process model
+! Gaussian process model: did not converge in 10 iterations
+✓ Gaussian process model
+i Generating 3011 candidates
+i Predicted candidates
+i hidden_units=82, penalty=5.56e-09, activation=log_sigmoid,
+  learn_rate=0.0296, stop_iter=12, mixture=0.167, rate_schedule=step,
+  window_side=9, differentiation_order=2, degree=4
+i Estimating performance
+ℹ The workflow being saved contains a recipe, which is 20.8 Mb in ℹ memory. If
+this was not intentional, please set the control setting ℹ `save_workflow =
+FALSE`.
+✓ Estimating performance
+ⓧ Newest results:	rmse=4.34
+
+── Iteration 18 ────────────────────────────────────────────────────────────────
+
+i Current best:		rmse=3.642 (@iter 0)
+i Gaussian process model
+✓ Gaussian process model
+i Generating 2921 candidates
+i Predicted candidates
+i hidden_units=64, penalty=2.66e-05, activation=tanh, learn_rate=0.0287,
+  stop_iter=10, mixture=0.6, rate_schedule=decay_time, window_side=8,
+  differentiation_order=2, degree=4
+i Estimating performance
+ℹ The workflow being saved contains a recipe, which is 20.8 Mb in ℹ memory. If
+this was not intentional, please set the control setting ℹ `save_workflow =
+FALSE`.
+✓ Estimating performance
+ⓧ Newest results:	rmse=3.954
+
+── Iteration 19 ────────────────────────────────────────────────────────────────
+
+i Current best:		rmse=3.642 (@iter 0)
+i Gaussian process model
+! Gaussian process model: did not converge in 10 iterations
+✓ Gaussian process model
+i Generating 2932 candidates
+i Predicted candidates
+i hidden_units=12, penalty=1.13e-08, activation=tanh, learn_rate=0.219,
+  stop_iter=18, mixture=0.932, rate_schedule=decay_time, window_side=7,
+  differentiation_order=2, degree=5
+i Estimating performance
+ℹ The workflow being saved contains a recipe, which is 20.8 Mb in ℹ memory. If
+this was not intentional, please set the control setting ℹ `save_workflow =
+FALSE`.
+✓ Estimating performance
+ⓧ Newest results:	rmse=4.2
+
+── Iteration 20 ────────────────────────────────────────────────────────────────
+
+i Current best:		rmse=3.642 (@iter 0)
+i Gaussian process model
+✓ Gaussian process model
+i Generating 2952 candidates
+i Predicted candidates
+i hidden_units=97, penalty=1.21e-10, activation=tanh, learn_rate=0.178,
+  stop_iter=19, mixture=0.655, rate_schedule=decay_expo, window_side=8,
+  differentiation_order=3, degree=4
+i Estimating performance
+ℹ The workflow being saved contains a recipe, which is 20.8 Mb in ℹ memory. If
+this was not intentional, please set the control setting ℹ `save_workflow =
+FALSE`.
+✓ Estimating performance
+ⓧ Newest results:	rmse=6.02
+
+── Iteration 21 ────────────────────────────────────────────────────────────────
+
+i Current best:		rmse=3.642 (@iter 0)
+i Gaussian process model
+! Gaussian process model: did not converge in 10 iterations
+✓ Gaussian process model
+i Generating 2951 candidates
+i Predicted candidates
+i hidden_units=66, penalty=7.36e-09, activation=tanh, learn_rate=0.202,
+  stop_iter=7, mixture=0.033, rate_schedule=decay_expo, window_side=2,
+  differentiation_order=1, degree=3
+i Estimating performance
+ℹ The workflow being saved contains a recipe, which is 20.8 Mb in ℹ memory. If
+this was not intentional, please set the control setting ℹ `save_workflow =
+FALSE`.
+✓ Estimating performance
+ⓧ Newest results:	rmse=6.252
+
+── Iteration 22 ────────────────────────────────────────────────────────────────
+
+i Current best:		rmse=3.642 (@iter 0)
+i Gaussian process model
+✓ Gaussian process model
+i Generating 2951 candidates
+i Predicted candidates
+i hidden_units=40, penalty=2.18e-07, activation=log_sigmoid,
+  learn_rate=0.0157, stop_iter=5, mixture=0.832, rate_schedule=decay_expo,
+  window_side=8, differentiation_order=4, degree=5
+i Estimating performance
+ℹ The workflow being saved contains a recipe, which is 20.8 Mb in ℹ memory. If
+this was not intentional, please set the control setting ℹ `save_workflow =
+FALSE`.
+✓ Estimating performance
+ⓧ Newest results:	rmse=6.106
+
+── Iteration 23 ────────────────────────────────────────────────────────────────
+
+i Current best:		rmse=3.642 (@iter 0)
+i Gaussian process model
+✓ Gaussian process model
+i Generating 2934 candidates
+i Predicted candidates
+i hidden_units=93, penalty=8.71e-06, activation=tanh, learn_rate=0.0413,
+  stop_iter=10, mixture=0.787, rate_schedule=decay_expo, window_side=9,
+  differentiation_order=1, degree=4
+i Estimating performance
+ℹ The workflow being saved contains a recipe, which is 20.8 Mb in ℹ memory. If
+this was not intentional, please set the control setting ℹ `save_workflow =
+FALSE`.
+✓ Estimating performance
+ⓧ Newest results:	rmse=6.241
+
+── Iteration 24 ────────────────────────────────────────────────────────────────
+
+i Current best:		rmse=3.642 (@iter 0)
+i Gaussian process model
+✓ Gaussian process model
+i Generating 2938 candidates
+i Predicted candidates
+i hidden_units=14, penalty=1.15e-08, activation=log_sigmoid,
+  learn_rate=0.0243, stop_iter=8, mixture=0.0053, rate_schedule=decay_expo,
+  window_side=5, differentiation_order=4, degree=5
+i Estimating performance
+ℹ The workflow being saved contains a recipe, which is 20.8 Mb in ℹ memory. If
+this was not intentional, please set the control setting ℹ `save_workflow =
+FALSE`.
+✓ Estimating performance
+ⓧ Newest results:	rmse=6.117
+
+── Iteration 25 ────────────────────────────────────────────────────────────────
+
+i Current best:		rmse=3.642 (@iter 0)
+i Gaussian process model
+✓ Gaussian process model
+i Generating 2956 candidates
+i Predicted candidates
+i hidden_units=46, penalty=0.00441, activation=relu, learn_rate=0.0232,
+  stop_iter=12, mixture=0.517, rate_schedule=decay_expo, window_side=7,
+  differentiation_order=4, degree=5
+i Estimating performance
+ℹ The workflow being saved contains a recipe, which is 20.8 Mb in ℹ memory. If
+this was not intentional, please set the control setting ℹ `save_workflow =
+FALSE`.
+✓ Estimating performance
+ⓧ Newest results:	rmse=5.644
+
+── Iteration 26 ────────────────────────────────────────────────────────────────
+
+i Current best:		rmse=3.642 (@iter 0)
+i Gaussian process model
+✓ Gaussian process model
+i Generating 2943 candidates
+i Predicted candidates
+i hidden_units=55, penalty=2.87e-08, activation=elu, learn_rate=0.103,
+  stop_iter=9, mixture=0.843, rate_schedule=cyclic, window_side=10,
+  differentiation_order=2, degree=4
+i Estimating performance
+ℹ The workflow being saved contains a recipe, which is 20.8 Mb in ℹ memory. If
+this was not intentional, please set the control setting ℹ `save_workflow =
+FALSE`.
+✓ Estimating performance
+ⓧ Newest results:	rmse=3.821
+
+── Iteration 27 ────────────────────────────────────────────────────────────────
+
+i Current best:		rmse=3.642 (@iter 0)
+i Gaussian process model
+✓ Gaussian process model
+i Generating 2957 candidates
+i Predicted candidates
+i hidden_units=98, penalty=1.65e-09, activation=tanh, learn_rate=0.0128,
+  stop_iter=12, mixture=0.906, rate_schedule=cyclic, window_side=9,
+  differentiation_order=2, degree=5
+i Estimating performance
+ℹ The workflow being saved contains a recipe, which is 20.8 Mb in ℹ memory. If
+this was not intentional, please set the control setting ℹ `save_workflow =
+FALSE`.
+✓ Estimating performance
+♥ Newest results:	rmse=3.617
+
+── Iteration 28 ────────────────────────────────────────────────────────────────
+
+i Current best:		rmse=3.617 (@iter 27)
+i Gaussian process model
+✓ Gaussian process model
+i Generating 2943 candidates
+i Predicted candidates
+i hidden_units=50, penalty=0.000446, activation=relu, learn_rate=0.0209,
+  stop_iter=11, mixture=0.232, rate_schedule=cyclic, window_side=8,
+  differentiation_order=4, degree=5
+i Estimating performance
+ℹ The workflow being saved contains a recipe, which is 20.8 Mb in ℹ memory. If
+this was not intentional, please set the control setting ℹ `save_workflow =
+FALSE`.
+✓ Estimating performance
+ⓧ Newest results:	rmse=4.47
+
+── Iteration 29 ────────────────────────────────────────────────────────────────
+
+i Current best:		rmse=3.617 (@iter 27)
+i Gaussian process model
+✓ Gaussian process model
+i Generating 2956 candidates
+i Predicted candidates
+i hidden_units=78, penalty=3.1e-05, activation=tanh, learn_rate=0.0351,
+  stop_iter=16, mixture=0.872, rate_schedule=none, window_side=2,
+  differentiation_order=1, degree=5
+i Estimating performance
+! validation: preprocessor 1/1:
+  The window size (5) should be greater than or equal to `degree` (5).
+  `window_side` was increased from 2 to 3.
+ℹ The workflow being saved contains a recipe, which is 20.8 Mb in ℹ memory. If
+this was not intentional, please set the control setting ℹ `save_workflow =
+FALSE`.
+✓ Estimating performance
+ⓧ Newest results:	rmse=3.853
+
+── Iteration 30 ────────────────────────────────────────────────────────────────
+
+i Current best:		rmse=3.617 (@iter 27)
+i Gaussian process model
+! Gaussian process model: did not converge in 10 iterations
+✓ Gaussian process model
+i Generating 2937 candidates
+i Predicted candidates
+i hidden_units=93, penalty=3.79e-09, activation=elu, learn_rate=0.114,
+  stop_iter=7, mixture=0.601, rate_schedule=cyclic, window_side=4,
+  differentiation_order=2, degree=4
+i Estimating performance
+ℹ The workflow being saved contains a recipe, which is 20.8 Mb in ℹ memory. If
+this was not intentional, please set the control setting ℹ `save_workflow =
+FALSE`.
+✓ Estimating performance
+ⓧ Newest results:	rmse=4.434
+
+── Iteration 31 ────────────────────────────────────────────────────────────────
+
+i Current best:		rmse=3.617 (@iter 27)
+i Gaussian process model
+! Gaussian process model: did not converge in 10 iterations
+✓ Gaussian process model
+i Generating 2959 candidates
+i Predicted candidates
+i hidden_units=16, penalty=4.4e-08, activation=log_sigmoid,
+  learn_rate=0.0127, stop_iter=8, mixture=0.902, rate_schedule=cyclic,
+  window_side=6, differentiation_order=2, degree=3
+i Estimating performance
+ℹ The workflow being saved contains a recipe, which is 20.8 Mb in ℹ memory. If
+this was not intentional, please set the control setting ℹ `save_workflow =
+FALSE`.
+✓ Estimating performance
+ⓧ Newest results:	rmse=3.858
+
+── Iteration 32 ────────────────────────────────────────────────────────────────
+
+i Current best:		rmse=3.617 (@iter 27)
+i Gaussian process model
+✓ Gaussian process model
+i Generating 2949 candidates
+i Predicted candidates
+i hidden_units=89, penalty=3.16e-09, activation=log_sigmoid,
+  learn_rate=0.0178, stop_iter=18, mixture=0.234, rate_schedule=cyclic,
+  window_side=5, differentiation_order=1, degree=4
+i Estimating performance
+ℹ The workflow being saved contains a recipe, which is 20.8 Mb in ℹ memory. If
+this was not intentional, please set the control setting ℹ `save_workflow =
+FALSE`.
+✓ Estimating performance
+ⓧ Newest results:	rmse=4.143
+
+── Iteration 33 ────────────────────────────────────────────────────────────────
+
+i Current best:		rmse=3.617 (@iter 27)
+i Gaussian process model
+! Gaussian process model: did not converge in 10 iterations
+✓ Gaussian process model
+i Generating 2934 candidates
+i Predicted candidates
+i hidden_units=87, penalty=1.93e-10, activation=log_sigmoid,
+  learn_rate=0.0155, stop_iter=13, mixture=0.962, rate_schedule=cyclic,
+  window_side=9, differentiation_order=1, degree=4
+i Estimating performance
+ℹ The workflow being saved contains a recipe, which is 20.8 Mb in ℹ memory. If
+this was not intentional, please set the control setting ℹ `save_workflow =
+FALSE`.
+✓ Estimating performance
+ⓧ Newest results:	rmse=4.198
+
+── Iteration 34 ────────────────────────────────────────────────────────────────
+
+i Current best:		rmse=3.617 (@iter 27)
+i Gaussian process model
+✓ Gaussian process model
+i Generating 2971 candidates
+i Predicted candidates
+i hidden_units=20, penalty=0.000184, activation=tanh, learn_rate=0.083,
+  stop_iter=9, mixture=0.857, rate_schedule=none, window_side=10,
+  differentiation_order=1, degree=2
+i Estimating performance
+ℹ The workflow being saved contains a recipe, which is 20.8 Mb in ℹ memory. If
+this was not intentional, please set the control setting ℹ `save_workflow =
+FALSE`.
+✓ Estimating performance
+ⓧ Newest results:	rmse=3.922
+
+── Iteration 35 ────────────────────────────────────────────────────────────────
+
+i Current best:		rmse=3.617 (@iter 27)
+i Gaussian process model
+! Gaussian process model: did not converge in 10 iterations
+✓ Gaussian process model
+i Generating 2955 candidates
+i Predicted candidates
+i hidden_units=34, penalty=0.106, activation=elu, learn_rate=0.0455,
+  stop_iter=16, mixture=0.14, rate_schedule=cyclic, window_side=2,
+  differentiation_order=4, degree=5
+i Estimating performance
+! validation: preprocessor 1/1:
+  The window size (5) should be greater than or equal to `degree` (5).
+  `window_side` was increased from 2 to 3.
+ℹ The workflow being saved contains a recipe, which is 20.8 Mb in ℹ memory. If
+this was not intentional, please set the control setting ℹ `save_workflow =
+FALSE`.
+✓ Estimating performance
+ⓧ Newest results:	rmse=7.97
+
+── Iteration 36 ────────────────────────────────────────────────────────────────
+
+i Current best:		rmse=3.617 (@iter 27)
+i Gaussian process model
+! Gaussian process model: did not converge in 10 iterations
+✓ Gaussian process model
+i Generating 2935 candidates
+i Predicted candidates
+i hidden_units=59, penalty=5.95e-06, activation=elu, learn_rate=0.164,
+  stop_iter=18, mixture=0.892, rate_schedule=decay_time, window_side=9,
+  differentiation_order=1, degree=4
+i Estimating performance
+ℹ The workflow being saved contains a recipe, which is 20.8 Mb in ℹ memory. If
+this was not intentional, please set the control setting ℹ `save_workflow =
+FALSE`.
+✓ Estimating performance
+ⓧ Newest results:	rmse=4.403
+
+── Iteration 37 ────────────────────────────────────────────────────────────────
+
+i Current best:		rmse=3.617 (@iter 27)
+i Gaussian process model
+✓ Gaussian process model
+i Generating 2946 candidates
+i Predicted candidates
+i hidden_units=100, penalty=3.7e-08, activation=tanh, learn_rate=0.0163,
+  stop_iter=14, mixture=0.209, rate_schedule=cyclic, window_side=6,
+  differentiation_order=2, degree=3
+i Estimating performance
+ℹ The workflow being saved contains a recipe, which is 20.8 Mb in ℹ memory. If
+this was not intentional, please set the control setting ℹ `save_workflow =
+FALSE`.
+✓ Estimating performance
+ⓧ Newest results:	rmse=3.767
+
+── Iteration 38 ────────────────────────────────────────────────────────────────
+
+i Current best:		rmse=3.617 (@iter 27)
+i Gaussian process model
+✓ Gaussian process model
+i Generating 2948 candidates
+i Predicted candidates
+i hidden_units=32, penalty=0.00027, activation=log_sigmoid, learn_rate=0.036,
+  stop_iter=9, mixture=0.0576, rate_schedule=none, window_side=7,
+  differentiation_order=2, degree=4
+i Estimating performance
+ℹ The workflow being saved contains a recipe, which is 20.8 Mb in ℹ memory. If
+this was not intentional, please set the control setting ℹ `save_workflow =
+FALSE`.
+✓ Estimating performance
+ⓧ Newest results:	rmse=4.021
+
+── Iteration 39 ────────────────────────────────────────────────────────────────
+
+i Current best:		rmse=3.617 (@iter 27)
+i Gaussian process model
+✓ Gaussian process model
+i Generating 2975 candidates
+i Predicted candidates
+i hidden_units=72, penalty=8.39e-10, activation=tanh, learn_rate=0.125,
+  stop_iter=8, mixture=0.324, rate_schedule=cyclic, window_side=9,
+  differentiation_order=1, degree=2
+i Estimating performance
+ℹ The workflow being saved contains a recipe, which is 20.8 Mb in ℹ memory. If
+this was not intentional, please set the control setting ℹ `save_workflow =
+FALSE`.
+✓ Estimating performance
+ⓧ Newest results:	rmse=3.847
+
+── Iteration 40 ────────────────────────────────────────────────────────────────
+
+i Current best:		rmse=3.617 (@iter 27)
+i Gaussian process model
+! Gaussian process model: did not converge in 10 iterations
+✓ Gaussian process model
+i Generating 2949 candidates
+i Predicted candidates
+i hidden_units=34, penalty=8.08e-05, activation=relu, learn_rate=0.204,
+  stop_iter=3, mixture=0.129, rate_schedule=decay_time, window_side=9,
+  differentiation_order=1, degree=5
+i Estimating performance
+ℹ The workflow being saved contains a recipe, which is 20.8 Mb in ℹ memory. If
+this was not intentional, please set the control setting ℹ `save_workflow =
+FALSE`.
+✓ Estimating performance
+ⓧ Newest results:	rmse=4.26
+
+── Iteration 41 ────────────────────────────────────────────────────────────────
+
+i Current best:		rmse=3.617 (@iter 27)
+i Gaussian process model
+! Gaussian process model: did not converge in 10 iterations
+✓ Gaussian process model
+i Generating 2941 candidates
+i Predicted candidates
+i hidden_units=53, penalty=6.12e-09, activation=log_sigmoid,
+  learn_rate=0.0328, stop_iter=16, mixture=0.862, rate_schedule=cyclic,
+  window_side=10, differentiation_order=2, degree=3
+i Estimating performance
+ℹ The workflow being saved contains a recipe, which is 20.8 Mb in ℹ memory. If
+this was not intentional, please set the control setting ℹ `save_workflow =
+FALSE`.
+✓ Estimating performance
+ⓧ Newest results:	rmse=4.076
+
+── Iteration 42 ────────────────────────────────────────────────────────────────
+
+i Current best:		rmse=3.617 (@iter 27)
+i Gaussian process model
+✓ Gaussian process model
+i Generating 2961 candidates
+i Predicted candidates
+i hidden_units=32, penalty=2.67e-10, activation=tanh, learn_rate=0.0636,
+  stop_iter=12, mixture=0.981, rate_schedule=cyclic, window_side=5,
+  differentiation_order=1, degree=4
+i Estimating performance
+ℹ The workflow being saved contains a recipe, which is 20.8 Mb in ℹ memory. If
+this was not intentional, please set the control setting ℹ `save_workflow =
+FALSE`.
+✓ Estimating performance
+ⓧ Newest results:	rmse=3.66
+
+── Iteration 43 ────────────────────────────────────────────────────────────────
+
+i Current best:		rmse=3.617 (@iter 27)
+i Gaussian process model
+! Gaussian process model: did not converge in 10 iterations
+✓ Gaussian process model
+i Generating 2968 candidates
+i Predicted candidates
+i hidden_units=51, penalty=2.41e-05, activation=relu, learn_rate=0.0379,
+  stop_iter=7, mixture=0.991, rate_schedule=cyclic, window_side=7,
+  differentiation_order=2, degree=4
+i Estimating performance
+ℹ The workflow being saved contains a recipe, which is 20.8 Mb in ℹ memory. If
+this was not intentional, please set the control setting ℹ `save_workflow =
+FALSE`.
+✓ Estimating performance
+ⓧ Newest results:	rmse=3.957
+
+── Iteration 44 ────────────────────────────────────────────────────────────────
+
+i Current best:		rmse=3.617 (@iter 27)
+i Gaussian process model
+✓ Gaussian process model
+i Generating 2921 candidates
+i Predicted candidates
+i hidden_units=100, penalty=2.91e-07, activation=log_sigmoid,
+  learn_rate=0.0384, stop_iter=20, mixture=0.264, rate_schedule=decay_time,
+  window_side=9, differentiation_order=4, degree=5
+i Estimating performance
+ℹ The workflow being saved contains a recipe, which is 20.8 Mb in ℹ memory. If
+this was not intentional, please set the control setting ℹ `save_workflow =
+FALSE`.
+✓ Estimating performance
+ⓧ Newest results:	rmse=4.651
+
+── Iteration 45 ────────────────────────────────────────────────────────────────
+
+i Current best:		rmse=3.617 (@iter 27)
+i Gaussian process model
+✓ Gaussian process model
+i Generating 2942 candidates
+i Predicted candidates
+i hidden_units=69, penalty=1.17e-05, activation=tanh, learn_rate=0.0155,
+  stop_iter=11, mixture=0.541, rate_schedule=cyclic, window_side=10,
+  differentiation_order=1, degree=3
+i Estimating performance
+ℹ The workflow being saved contains a recipe, which is 20.8 Mb in ℹ memory. If
+this was not intentional, please set the control setting ℹ `save_workflow =
+FALSE`.
+✓ Estimating performance
+ⓧ Newest results:	rmse=3.799
+
+── Iteration 46 ────────────────────────────────────────────────────────────────
+
+i Current best:		rmse=3.617 (@iter 27)
+i Gaussian process model
+✓ Gaussian process model
+i Generating 2943 candidates
+i Predicted candidates
+i hidden_units=23, penalty=8.41e-10, activation=tanh, learn_rate=0.0158,
+  stop_iter=19, mixture=0.724, rate_schedule=none, window_side=3,
+  differentiation_order=1, degree=2
+i Estimating performance
+ℹ The workflow being saved contains a recipe, which is 20.8 Mb in ℹ memory. If
+this was not intentional, please set the control setting ℹ `save_workflow =
+FALSE`.
+✓ Estimating performance
+ⓧ Newest results:	rmse=4.115
+
+── Iteration 47 ────────────────────────────────────────────────────────────────
+
+i Current best:		rmse=3.617 (@iter 27)
+i Gaussian process model
+! Gaussian process model: did not converge in 10 iterations
+✓ Gaussian process model
+i Generating 2984 candidates
+i Predicted candidates
+i hidden_units=28, penalty=2.73e-06, activation=tanh, learn_rate=0.0104,
+  stop_iter=13, mixture=0.292, rate_schedule=cyclic, window_side=2,
+  differentiation_order=1, degree=4
+i Estimating performance
+ℹ The workflow being saved contains a recipe, which is 20.8 Mb in ℹ memory. If
+this was not intentional, please set the control setting ℹ `save_workflow =
+FALSE`.
+✓ Estimating performance
+ⓧ Newest results:	rmse=3.829
+
+── Iteration 48 ────────────────────────────────────────────────────────────────
+
+i Current best:		rmse=3.617 (@iter 27)
+i Gaussian process model
+✓ Gaussian process model
+i Generating 2932 candidates
+i Predicted candidates
+i hidden_units=52, penalty=8.26e-06, activation=tanh, learn_rate=0.0717,
+  stop_iter=10, mixture=0.87, rate_schedule=cyclic, window_side=6,
+  differentiation_order=1, degree=3
+i Estimating performance
+ℹ The workflow being saved contains a recipe, which is 20.8 Mb in ℹ memory. If
+this was not intentional, please set the control setting ℹ `save_workflow =
+FALSE`.
+✓ Estimating performance
+ⓧ Newest results:	rmse=3.672
+
+── Iteration 49 ────────────────────────────────────────────────────────────────
+
+i Current best:		rmse=3.617 (@iter 27)
+i Gaussian process model
+✓ Gaussian process model
+i Generating 2948 candidates
+i Predicted candidates
+i hidden_units=68, penalty=1.39e-09, activation=tanh, learn_rate=0.211,
+  stop_iter=12, mixture=0.987, rate_schedule=cyclic, window_side=9,
+  differentiation_order=1, degree=2
+i Estimating performance
+ℹ The workflow being saved contains a recipe, which is 20.8 Mb in ℹ memory. If
+this was not intentional, please set the control setting ℹ `save_workflow =
+FALSE`.
+✓ Estimating performance
+ⓧ Newest results:	rmse=3.844
+
+── Iteration 50 ────────────────────────────────────────────────────────────────
+
+i Current best:		rmse=3.617 (@iter 27)
+i Gaussian process model
+✓ Gaussian process model
+i Generating 2945 candidates
+i Predicted candidates
+i hidden_units=16, penalty=0.000221, activation=tanh, learn_rate=0.048,
+  stop_iter=5, mixture=0.379, rate_schedule=cyclic, window_side=3,
+  differentiation_order=2, degree=3
+i Estimating performance
+ℹ The workflow being saved contains a recipe, which is 20.8 Mb in ℹ memory. If
+this was not intentional, please set the control setting ℹ `save_workflow =
+FALSE`.
+✓ Estimating performance
+ⓧ Newest results:	rmse=4.146
+ℹ The workflow being saved contains a recipe, which is 20.8 Mb in ℹ memory. If
+this was not intentional, please set the control setting ℹ `save_workflow =
+FALSE`.
+> 
+> set.seed(74)
+> mlp_sfd_bo_ci <- 
++   int_pctl(mlp_sfd_bo, times = 5000, alpha = 0.1) %>%
++   mutate(method = "Bayesian Optimzation")
+> 
+> mlp_sfd_bo_met <- collect_metrics(mlp_sfd_bo)
+> mlp_sfd_bo_best <- integer(0)
+> mlp_sfd_bo_rmse <- 
++   mlp_sfd_bo_met %>% 
++   filter(.iter == 0) %>% 
++   slice_min(mean) %>% 
++   pluck("mean")
+> 
+> for (i in 1:max(mlp_sfd_bo_met$.iter)) {
++   curr_rmse <- 
++     mlp_sfd_bo_met %>% 
++     filter(.iter == i) %>% 
++     pluck("mean")
++   if (curr_rmse < mlp_sfd_bo_rmse) {
++     mlp_sfd_bo_rmse <- curr_rmse
++     mlp_sfd_bo_best <- c(mlp_sfd_bo_best, i)
++   }
++ }
+> 
+> ###
+> 
+> # set.seed(760)
+> # mlp_rnd_bo <-
+> #   mlp_wflow %>%
+> #   tune_bayes(
+> #     resamples = barley_rs,
+> #     initial = mlp_rnd_initial,
+> #     iter = num_iter,
+> #     param_info = mlp_param,
+> #     metrics = reg_mtr,
+> #     control = control_bayes(
+> #       save_pred = TRUE,
+> #       no_improve = Inf,
+> #       verbose_iter = TRUE,
+> #       verbose = FALSE,
+> #       save_workflow = TRUE
+> #     )
+> #   )
+> 
+> # ------------------------------------------------------------------------------
+> 
+> mlp_sa_time <- system.time({
++   set.seed(50)
++   mlp_sfd_sa <-
++     mlp_wflow %>%
++     tune_sim_anneal(
++       resamples = barley_rs,
++       initial = mlp_sfd_initial,
++       iter = num_iter,
++       param_info = mlp_param,
++       metrics = reg_mtr,
++       control = control_sim_anneal(
++         save_pred = TRUE,
++         no_improve = Inf,
++         verbose_iter = TRUE,
++         verbose = FALSE,
++         save_workflow = TRUE,
++         save_history = TRUE
++       )
++     )
++ })
+Optimizing rmse
+Initial best: 3.64200
+ℹ The workflow being saved contains a recipe, which is 20.8 Mb in ℹ memory. If
+this was not intentional, please set the control setting ℹ `save_workflow =
+FALSE`.
+1 ─ discard suboptimal rmse=6.6954
+ℹ The workflow being saved contains a recipe, which is 20.8 Mb in ℹ memory. If
+this was not intentional, please set the control setting ℹ `save_workflow =
+FALSE`.
+2 ◯ accept suboptimal  rmse=3.6628
+ℹ The workflow being saved contains a recipe, which is 20.8 Mb in ℹ memory. If
+this was not intentional, please set the control setting ℹ `save_workflow =
+FALSE`.
+3 ─ discard suboptimal rmse=4.3938
+ℹ The workflow being saved contains a recipe, which is 20.8 Mb in ℹ memory. If
+this was not intentional, please set the control setting ℹ `save_workflow =
+FALSE`.
+4 ─ discard suboptimal rmse=3.8753
+ℹ The workflow being saved contains a recipe, which is 20.8 Mb in ℹ memory. If
+this was not intentional, please set the control setting ℹ `save_workflow =
+FALSE`.
+5 ─ discard suboptimal rmse=6.7171
+ℹ The workflow being saved contains a recipe, which is 20.8 Mb in ℹ memory. If
+this was not intentional, please set the control setting ℹ `save_workflow =
+FALSE`.
+6 ─ discard suboptimal rmse=5.8642
+ℹ The workflow being saved contains a recipe, which is 20.8 Mb in ℹ memory. If
+this was not intentional, please set the control setting ℹ `save_workflow =
+FALSE`.
+7 ─ discard suboptimal rmse=6.3023
+ℹ The workflow being saved contains a recipe, which is 20.8 Mb in ℹ memory. If
+this was not intentional, please set the control setting ℹ `save_workflow =
+FALSE`.
+8 ✖ restart from best  rmse=3.8468
+ℹ The workflow being saved contains a recipe, which is 20.8 Mb in ℹ memory. If
+this was not intentional, please set the control setting ℹ `save_workflow =
+FALSE`.
+9 ─ discard suboptimal rmse=6.807
+ℹ The workflow being saved contains a recipe, which is 20.8 Mb in ℹ memory. If
+this was not intentional, please set the control setting ℹ `save_workflow =
+FALSE`.
+10 ─ discard suboptimal rmse=3.8369
+ℹ The workflow being saved contains a recipe, which is 20.8 Mb in ℹ memory. If
+this was not intentional, please set the control setting ℹ `save_workflow =
+FALSE`.
+11 ─ discard suboptimal rmse=6.7786
+ℹ The workflow being saved contains a recipe, which is 20.8 Mb in ℹ memory. If
+this was not intentional, please set the control setting ℹ `save_workflow =
+FALSE`.
+12 ─ discard suboptimal rmse=6.8537
+ℹ The workflow being saved contains a recipe, which is 20.8 Mb in ℹ memory. If
+this was not intentional, please set the control setting ℹ `save_workflow =
+FALSE`.
+13 ─ discard suboptimal rmse=3.9064
+ℹ The workflow being saved contains a recipe, which is 20.8 Mb in ℹ memory. If
+this was not intentional, please set the control setting ℹ `save_workflow =
+FALSE`.
+14 ─ discard suboptimal rmse=3.8558
+ℹ The workflow being saved contains a recipe, which is 20.8 Mb in ℹ memory. If
+this was not intentional, please set the control setting ℹ `save_workflow =
+FALSE`.
+15 ♥ new best           rmse=3.5961
+! validation: preprocessor 1/1:
+  The `degree` argument to `step_measure_savitzky_golay()` should be gre...
+  or equal to `differentiation_order` (3). The polynomial degree was inc...
+  4.
+ℹ The workflow being saved contains a recipe, which is 20.8 Mb in ℹ memory. If
+this was not intentional, please set the control setting ℹ `save_workflow =
+FALSE`.
+16 ◯ accept suboptimal  rmse=3.7832
+! validation: preprocessor 1/1:
+  The `degree` argument to `step_measure_savitzky_golay()` should be gre...
+  or equal to `differentiation_order` (4). The polynomial degree was inc...
+  5.
+ℹ The workflow being saved contains a recipe, which is 20.8 Mb in ℹ memory. If
+this was not intentional, please set the control setting ℹ `save_workflow =
+FALSE`.
+17 ─ discard suboptimal rmse=4.4752
+! validation: preprocessor 1/1:
+  The `degree` argument to `step_measure_savitzky_golay()` should be gre...
+  or equal to `differentiation_order` (4). The polynomial degree was inc...
+  5.
+ℹ The workflow being saved contains a recipe, which is 20.8 Mb in ℹ memory. If
+this was not intentional, please set the control setting ℹ `save_workflow =
+FALSE`.
+18 ─ discard suboptimal rmse=5.748
+ℹ The workflow being saved contains a recipe, which is 20.8 Mb in ℹ memory. If
+this was not intentional, please set the control setting ℹ `save_workflow =
+FALSE`.
+19 ─ discard suboptimal rmse=4.4106
+ℹ The workflow being saved contains a recipe, which is 20.8 Mb in ℹ memory. If
+this was not intentional, please set the control setting ℹ `save_workflow =
+FALSE`.
+20 + better suboptimal  rmse=3.7539
+! validation: preprocessor 1/1:
+  The `degree` argument to `step_measure_savitzky_golay()` should be gre...
+  or equal to `differentiation_order` (2). The polynomial degree was inc...
+  3.
+ℹ The workflow being saved contains a recipe, which is 20.8 Mb in ℹ memory. If
+this was not intentional, please set the control setting ℹ `save_workflow =
+FALSE`.
+21 ─ discard suboptimal rmse=6.0615
+ℹ The workflow being saved contains a recipe, which is 20.8 Mb in ℹ memory. If
+this was not intentional, please set the control setting ℹ `save_workflow =
+FALSE`.
+22 ─ discard suboptimal rmse=4.3739
+ℹ The workflow being saved contains a recipe, which is 20.8 Mb in ℹ memory. If
+this was not intentional, please set the control setting ℹ `save_workflow =
+FALSE`.
+23 ✖ restart from best  rmse=4.3283
+ℹ The workflow being saved contains a recipe, which is 20.8 Mb in ℹ memory. If
+this was not intentional, please set the control setting ℹ `save_workflow =
+FALSE`.
+24 ─ discard suboptimal rmse=4.0645
+ℹ The workflow being saved contains a recipe, which is 20.8 Mb in ℹ memory. If
+this was not intentional, please set the control setting ℹ `save_workflow =
+FALSE`.
+25 ─ discard suboptimal rmse=3.9251
+ℹ The workflow being saved contains a recipe, which is 20.8 Mb in ℹ memory. If
+this was not intentional, please set the control setting ℹ `save_workflow =
+FALSE`.
+26 ─ discard suboptimal rmse=6.5183
+! validation: preprocessor 1/1:
+  The `degree` argument to `step_measure_savitzky_golay()` should be gre...
+  or equal to `differentiation_order` (3). The polynomial degree was inc...
+  4.
+ℹ The workflow being saved contains a recipe, which is 20.8 Mb in ℹ memory. If
+this was not intentional, please set the control setting ℹ `save_workflow =
+FALSE`.
+27 ─ discard suboptimal rmse=6.1924
+ℹ The workflow being saved contains a recipe, which is 20.8 Mb in ℹ memory. If
+this was not intentional, please set the control setting ℹ `save_workflow =
+FALSE`.
+28 ─ discard suboptimal rmse=4.2118
+ℹ The workflow being saved contains a recipe, which is 20.8 Mb in ℹ memory. If
+this was not intentional, please set the control setting ℹ `save_workflow =
+FALSE`.
+29 ─ discard suboptimal rmse=4.4054
+ℹ The workflow being saved contains a recipe, which is 20.8 Mb in ℹ memory. If
+this was not intentional, please set the control setting ℹ `save_workflow =
+FALSE`.
+30 ─ discard suboptimal rmse=5.372
+! validation: preprocessor 1/1:
+  The `degree` argument to `step_measure_savitzky_golay()` should be gre...
+  or equal to `differentiation_order` (3). The polynomial degree was inc...
+  4.
+ℹ The workflow being saved contains a recipe, which is 20.8 Mb in ℹ memory. If
+this was not intentional, please set the control setting ℹ `save_workflow =
+FALSE`.
+31 ✖ restart from best  rmse=4.1825
+ℹ The workflow being saved contains a recipe, which is 20.8 Mb in ℹ memory. If
+this was not intentional, please set the control setting ℹ `save_workflow =
+FALSE`.
+32 ─ discard suboptimal rmse=4.2326
+ℹ The workflow being saved contains a recipe, which is 20.8 Mb in ℹ memory. If
+this was not intentional, please set the control setting ℹ `save_workflow =
+FALSE`.
+33 ─ discard suboptimal rmse=6.1141
+ℹ The workflow being saved contains a recipe, which is 20.8 Mb in ℹ memory. If
+this was not intentional, please set the control setting ℹ `save_workflow =
+FALSE`.
+34 ─ discard suboptimal rmse=4.1102
+ℹ The workflow being saved contains a recipe, which is 20.8 Mb in ℹ memory. If
+this was not intentional, please set the control setting ℹ `save_workflow =
+FALSE`.
+35 ─ discard suboptimal rmse=3.9962
+ℹ The workflow being saved contains a recipe, which is 20.8 Mb in ℹ memory. If
+this was not intentional, please set the control setting ℹ `save_workflow =
+FALSE`.
+36 ─ discard suboptimal rmse=4.1843
+ℹ The workflow being saved contains a recipe, which is 20.8 Mb in ℹ memory. If
+this was not intentional, please set the control setting ℹ `save_workflow =
+FALSE`.
+37 ─ discard suboptimal rmse=4.1318
+! validation: preprocessor 1/1:
+  The `degree` argument to `step_measure_savitzky_golay()` should be gre...
+  or equal to `differentiation_order` (3). The polynomial degree was inc...
+  4.
+ℹ The workflow being saved contains a recipe, which is 20.8 Mb in ℹ memory. If
+this was not intentional, please set the control setting ℹ `save_workflow =
+FALSE`.
+38 ─ discard suboptimal rmse=4.3437
+ℹ The workflow being saved contains a recipe, which is 20.8 Mb in ℹ memory. If
+this was not intentional, please set the control setting ℹ `save_workflow =
+FALSE`.
+39 ✖ restart from best  rmse=4.0608
+ℹ The workflow being saved contains a recipe, which is 20.8 Mb in ℹ memory. If
+this was not intentional, please set the control setting ℹ `save_workflow =
+FALSE`.
+40 ─ discard suboptimal rmse=4.2268
+ℹ The workflow being saved contains a recipe, which is 20.8 Mb in ℹ memory. If
+this was not intentional, please set the control setting ℹ `save_workflow =
+FALSE`.
+41 ─ discard suboptimal rmse=5.9898
+ℹ The workflow being saved contains a recipe, which is 20.8 Mb in ℹ memory. If
+this was not intentional, please set the control setting ℹ `save_workflow =
+FALSE`.
+42 ─ discard suboptimal rmse=4.4258
+ℹ The workflow being saved contains a recipe, which is 20.8 Mb in ℹ memory. If
+this was not intentional, please set the control setting ℹ `save_workflow =
+FALSE`.
+43 ─ discard suboptimal rmse=4.7556
+ℹ The workflow being saved contains a recipe, which is 20.8 Mb in ℹ memory. If
+this was not intentional, please set the control setting ℹ `save_workflow =
+FALSE`.
+44 ─ discard suboptimal rmse=5.4075
+ℹ The workflow being saved contains a recipe, which is 20.8 Mb in ℹ memory. If
+this was not intentional, please set the control setting ℹ `save_workflow =
+FALSE`.
+45 ─ discard suboptimal rmse=3.7767
+ℹ The workflow being saved contains a recipe, which is 20.8 Mb in ℹ memory. If
+this was not intentional, please set the control setting ℹ `save_workflow =
+FALSE`.
+46 ─ discard suboptimal rmse=6.1311
+ℹ The workflow being saved contains a recipe, which is 20.8 Mb in ℹ memory. If
+this was not intentional, please set the control setting ℹ `save_workflow =
+FALSE`.
+47 ✖ restart from best  rmse=6.5165
+ℹ The workflow being saved contains a recipe, which is 20.8 Mb in ℹ memory. If
+this was not intentional, please set the control setting ℹ `save_workflow =
+FALSE`.
+48 ─ discard suboptimal rmse=3.6394
+ℹ The workflow being saved contains a recipe, which is 20.8 Mb in ℹ memory. If
+this was not intentional, please set the control setting ℹ `save_workflow =
+FALSE`.
+49 ─ discard suboptimal rmse=4.2651
+ℹ The workflow being saved contains a recipe, which is 20.8 Mb in ℹ memory. If
+this was not intentional, please set the control setting ℹ `save_workflow =
+FALSE`.
+50 ─ discard suboptimal rmse=6.8747
+> 
+> set.seed(74)
+> mlp_sfd_sa_ci <- 
++   int_pctl(mlp_sfd_sa, times = 5000, alpha = 0.1) %>%
++   mutate(method = "Simulated Annealing")
+> 
+> mlp_sfd_sa_met <- collect_metrics(mlp_sfd_sa)
+> mlp_sfd_sa_best <- integer(0)
+> mlp_sfd_sa_rmse <- 
++   mlp_sfd_sa_met %>% 
++   filter(.iter == 0) %>% 
++   slice_min(mean) %>% 
++   pluck("mean")
+> 
+> for (i in 1:max(mlp_sfd_sa_met$.iter)) {
++   curr_rmse <- 
++     mlp_sfd_sa_met %>% 
++     filter(.iter == i) %>% 
++     pluck("mean")
++   if (curr_rmse < mlp_sfd_sa_rmse) {
++     mlp_sfd_sa_rmse <- curr_rmse
++     mlp_sfd_sa_best <- c(mlp_sfd_sa_best, i)
++   }
++ }
+> 
+> load(file.path(tempdir(), "sa_history.RData"))
+> 
+> ###
+> 
+> # set.seed(50)
+> # mlp_rnd_sa <-
+> #   mlp_wflow %>%
+> #   tune_sim_anneal(
+> #     resamples = barley_rs,
+> #     initial = mlp_rnd_initial,
+> #     iter = num_iter,
+> #     param_info = mlp_param,
+> #     metrics = reg_mtr,
+> #     control = control_sim_anneal(
+> #       save_pred = TRUE,
+> #       no_improve = Inf,
+> #       verbose_iter = TRUE,
+> #       verbose = FALSE,
+> #       save_workflow = TRUE,
+> #       save_history = TRUE
+> #     )
+> #   )
+> 
+> 
+> # ------------------------------------------------------------------------------
+> 
+> # save_obj <- ls(pattern = ("(bo$)|(sa$)|(initial$)|(time$)|(^ci)"))
+> save_obj <- ls(pattern = ("(met$)|(ci$)|(best$)|(time$)|(history)"))
+> save(list = save_obj, file = "RData/barley_iterative.RData")
+> 
+> proc.time()
+     user    system   elapsed 
+ 8314.890   673.783 15387.451 
