@@ -1,27 +1,3 @@
-library(shiny)
-library(bslib)
-library(tidymodels)
-
-light_bg <- "#fcfefe" # from aml4td.scss
-grid_theme <- bs_theme(
-  bg = light_bg, fg = "#595959"
-)
-
-theme_light_bl<- function(...) {
-  
-  ret <- ggplot2::theme_bw(...)
-  
-  col_rect <- ggplot2::element_rect(fill = light_bg, colour = light_bg)
-  ret$panel.background  <- col_rect
-  ret$plot.background   <- col_rect
-  ret$legend.background <- col_rect
-  ret$legend.key        <- col_rect
-  
-  ret$legend.position <- "top"
-  
-  ret
-}
-
 ui <- page_fillable(
   theme = bs_theme(bg = "#fcfefe", fg = "#595959"),
   sliderInput(
@@ -39,8 +15,11 @@ ui <- page_fillable(
 
 server <- function(input, output) {
   
-  # load(url("https://raw.githubusercontent.com/aml4td/website/main/RData/barley_linear_embeddings.RData"))
-  load("../RData/two_param_iter_sa.RData")
+  load(url("https://raw.githubusercontent.com/aml4td/website/main/RData/two_param_iter_sa.RData"))
+  load(url("https://raw.githubusercontent.com/aml4td/website/main/RData/two_param_iter_large.RData"))
+  
+  num_cuts <- 50
+  rd_or <- colorRampPalette(rev(RColorBrewer::brewer.pal(9, "OrRd")))(num_cuts)
   
   # ------------------------------------------------------------------------------
   
@@ -49,48 +28,67 @@ server <- function(input, output) {
   
   log10_labs <- trans_format("log10", math_format(10^.x, function(x) format(x, digits = 3)))
   log2_labs <- trans_format("log2", math_format(2^.x, function(x) format(x, digits = 3)))
-
+  
   # ------------------------------------------------------------------------------
+  
+  sa_history <- 
+    sa_history %>% 
+    mutate(RMSE = cut(mean, breaks = seq(5, 31, length = num_cuts)))
   
   # TODO pre-compute these
   sa_init <- 
     sa_history %>% 
-    filter(.iter == 0) %>% 
-    rename(RMSE = mean)
+    filter(.iter == 0)
   best_init <- 
     sa_init %>% 
-    slice_min(RMSE) %>% 
-    select(.iter, cost, scale_factor)
+    slice_min(mean) %>% 
+    select(.iter, cost, scale_factor, RMSE)
   poor_init <- 
     anti_join(sa_init, best_init, by = c(".iter", "cost", "scale_factor")) %>% 
     select(.iter, cost, scale_factor)
   
   initial_plot <- 
-    sa_history %>%
-    ggplot(aes(scale_factor, cost)) +
-    geom_point(data = sa_init, cex = 5, pch = 1, col = "black") +
-    scale_x_log10(limits = x_rng, , labels = log10_labs) +
-    scale_y_continuous(limits = y_rng, trans = "log2", labels = log2_labs) +
-    theme_bw() +
-    labs(x = "Scaling Factor", y = "Cost") +
+    regular_mtr %>%
+    mutate(RMSE = cut(mean, breaks = seq(5, 31, length = num_cuts))) %>% 
+    ggplot(aes(scale_factor, cost, col = RMSE)) +
+    geom_point(data = sa_init, cex = 3, pch = 1, col = "black") +
+    geom_line(
+      data = regular_mtr %>% slice_min(mean, n = 18),
+      stat = "smooth",
+      col = "black",
+      method = lm,
+      se = FALSE,
+      formula = y ~ x,
+      alpha = 1 / 8,
+      linewidth = 2
+    ) + 
+    scale_x_log10(limits = x_rng,
+                  labels = log10_labs,
+                  expand = expansion(add = c(-1 / 5, -1 / 5))) +
+    scale_y_continuous(limits = y_rng, trans = "log2", labels = log2_labs,
+                       expand = expansion(add = c(-1/2, -1/2))) +
+    scale_color_manual(values = rd_or, drop = FALSE) +
     coord_fixed(ratio = 1/2) +
-    scale_fill_distiller(palette = "Blues", type = "seq", 
-                         direction = -1, transform = "log") +
-    theme(legend.text = element_blank())
+    theme_bw() +
+    theme(legend.position = "none")
   
   # ------------------------------------------------------------------------------
   
   output$path <-
     renderPlot({
       
-      # TODO pre-compute these
-      current_path <- paths[[input$iter]]
-      last_best <- iter_best[[input$iter]]
+      current_path <- 
+        paths[[input$iter]] %>% 
+        mutate(mean = RMSE,
+               RMSE = cut(RMSE, breaks = seq(5, 31, length = num_cuts)))
+      last_best <- 
+        iter_best[[input$iter]] %>% 
+        mutate(RMSE = cut(mean, breaks = seq(5, 31, length = num_cuts)))
       
       last_best_iter <-
         last_best %>% 
         pluck(".iter")
-
+      
       lab <- iter_label[[input$iter]]
       
       current_plot <- 
@@ -99,14 +97,15 @@ server <- function(input, output) {
         geom_point(
           data = current_path %>% filter(.iter > 0),
           aes(scale_factor, cost, col = RMSE),
-          cex = 3
+          cex = 2
         ) +
-        geom_point(data = last_best, cex = 4, col = "black", pch = 8) +
-        labs(title = lab)
+        geom_point(data = last_best, cex = 4, aes(col = RMSE), pch = 8,
+                   show.legend = FALSE) +
+        labs(x = "Scaling Factor", y = "Cost", title = lab) 
       
       print(current_plot)
       
-    })
+    }, res = 100)
   
   output$notes <-
     renderText({

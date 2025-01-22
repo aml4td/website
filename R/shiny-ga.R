@@ -1,54 +1,30 @@
-library(shiny)
-library(bslib)
-library(tidymodels)
-
-light_bg <- "#fcfefe" # from aml4td.scss
-grid_theme <- bs_theme(
-  bg = light_bg, fg = "#595959"
-)
-
-theme_light_bl<- function(...) {
-  
-  ret <- ggplot2::theme_bw(...)
-  
-  col_rect <- ggplot2::element_rect(fill = light_bg, colour = light_bg)
-  ret$panel.background  <- col_rect
-  ret$plot.background   <- col_rect
-  ret$legend.background <- col_rect
-  ret$legend.key        <- col_rect
-  
-  ret$legend.position <- "top"
-  
-  ret
-}
-
 ui <- page_fillable(
   theme = bs_theme(bg = "#fcfefe", fg = "#595959"),
-  padding = "1rem",
-  layout_columns(
-    fill = FALSE,
-    col_widths = breakpoints(xs = c(-3, 6, -3), sm = 4),
-    column(
-      width = 12,
-      sliderInput(
-        "gen",
-        label = "Generation",
-        min = 1L,
-        max = 10L,
-        step = 1L,
-        value = 1L
-      )
-    )
+  sliderInput(
+    "gen",
+    label = "Generation",
+    min = 1L,
+    max = 7L,
+    step = 1L,
+    value = 1L,
+    width = "100%"
   ),
   as_fill_carrier(plotOutput("generations"))
 )
 
 server <- function(input, output) {
   
-  # load(url("https://raw.githubusercontent.com/aml4td/website/main/RData/barley_linear_embeddings.RData"))
-  load("../RData/two_param_iter_ga.RData")
-  ga_history$RMSE <- ga_history$fitness
-
+  num_cuts <- 50
+  rd_or <- colorRampPalette(rev(RColorBrewer::brewer.pal(9, "OrRd")))(num_cuts)
+  
+  load(url("https://raw.githubusercontent.com/aml4td/website/main/RData/two_param_iter_ga.RData"))
+  load(url("https://raw.githubusercontent.com/aml4td/website/main/RData/two_param_iter_large.RData"))
+  
+  ga_history$mean <- ga_history$fitness
+  ga_history <- 
+    ga_history %>% 
+    mutate(RMSE = cut(mean, breaks = seq(5, 31, length = num_cuts)))
+  
   # ------------------------------------------------------------------------------
   
   x_rng <- 10^extendrange(c(-10, -1/10))
@@ -65,27 +41,41 @@ server <- function(input, output) {
       last_best <- 
         ga_history %>%
         filter(generation <= input$gen) %>% 
-        slice_min(RMSE)
+        slice_min(mean)
       
       current_gen <- ga_history %>% filter(generation == input$gen) 
       
       p <- 
         ga_history %>%
         ggplot(aes(scale_factor, cost)) +
-        geom_point(data = current_gen, aes(col = RMSE), alpha = 1/2, cex = 3) +
-        # geom_point(data = last_best, cex = 4, pch = 8, col = "yellow") +
-        scale_x_log10(limits = x_rng, labels = log10_labs) +
-        scale_y_continuous(limits = y_rng, trans = "log2", labels = log2_labs) +
-        theme_bw() +
-        theme(legend.position = "top") +
+        geom_line(
+          data = regular_mtr %>% slice_min(mean, n = 18),
+          stat = "smooth",
+          col = "black",
+          method = lm,
+          se = FALSE,
+          formula = y ~ x,
+          alpha = 1 / 8,
+          linewidth = 2
+        ) +
+        geom_point(data = current_gen, aes(col = RMSE), alpha = 2/4, cex = 2, 
+                   show.legend = FALSE) +
+        geom_point(data = last_best, cex = 4, aes(col = RMSE), pch = 8,
+                   show.legend = FALSE) +
         labs(x = "Scaling Factor", y = "Cost") +
+        scale_x_log10(limits = x_rng,
+                      labels = log10_labs,
+                      expand = expansion(add = c(-1 / 5, -1 / 5))) +
+        scale_y_continuous(limits = y_rng, trans = "log2", labels = log2_labs,
+                           expand = expansion(add = c(-1/2, -1/2))) +
+        scale_color_manual(values = rd_or, drop = FALSE) +
         coord_fixed(ratio = 1/2) +
-        scale_fill_distiller(palette = "Blues", type = "seq", 
-                             direction = -1, transform = "log") +
-        theme(legend.text = element_blank())
+        theme_bw() +
+        theme(legend.location = "none")
+      
       print(p)
       
-    })
+    }, res = 100)
 }
 
 app <- shinyApp(ui, server)
