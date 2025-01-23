@@ -896,7 +896,7 @@ GPs [@williams2006gaussian;@garnett2023] are often motivated as special cases of
 
 Gaussian processes are different from basic multivariable normal distributions. Let's say that we collected the heights and weights of 100 students in a specific grade. If we collect the heights and weights into a two-dimensional vector $\boldsymbol{x} = [height, weight]$, we might assume that the data is multivariate normal, with a 2D population mean _vector_ and a 2 $\times$ 2 covariance matrix, i.e., $\boldsymbol{x} \sim N(\boldsymbol{\mu}, \Sigma)$. In this case, the data are a sample of people at a static time point. 
 
-However, a Gaussian process is a **sequence of data** so we have to specify their means and covariances dynamically; there are mean and covariance _functions_ instead of vectors and matrices. The mean function is often denoted as  $\mu(\boldsymbol{x})$. One way of writing the covariance function is $\Sigma(\boldsymbol{x}, \boldsymbol{x}') = \tau^2k(\boldsymbol{x}, \boldsymbol{x}')$ where $k(\cdot, \cdot)$ is a **kernel function** and $\tau$ is akin to a constant standard deviation.
+However, a Gaussian process is a **sequence of data** so we have to specify their means and covariances dynamically; there are mean and covariance _functions_ instead of vectors and matrices. The mean function is often denoted as  $\mu(\boldsymbol{x})$. One way of writing the covariance function is $\Sigma(\boldsymbol{x}, \boldsymbol{x}') = k(\boldsymbol{x}, \boldsymbol{x}') + \sigma^2_{\epsilon}I$ where $k(\cdot, \cdot)$ is a **kernel function** and $\sigma_{\epsilon}$ is akin to a constant error term.
 
 We've seen kernels before, back in @eq-kernel-poly when they were associated with support vector machine models. For Gaussian processes that define the variance between two data points from the process. Some kernels can be written as a function of the difference $\delta_{ii'} = ||\boldsymbol{x} - \boldsymbol{x}'||$. A common fuction is the squared exponential:
 
@@ -904,24 +904,30 @@ $$
 k(\boldsymbol{x}, \boldsymbol{x}') = \exp\left(-\sigma d_{ii'}^2 \right)
 $$ {#eq-kernel-sq-expo}
 
-This function shows that as the two vectors become more different from one another (i.e., further away), the exponentiated difference becomes large, indicating high variance (apart from $\tau^2$). For two identical vectors, this covaraince function yeilds a variance of $\tau^2$. Now, we can see why the previous section had a strong emphasis on spatial variability for Bayesian optimization. @fig-bayes-opt used this kernel function. 
+where $\sigma$ is a scale factor that can be tuned^[This parameter is unrelated to $\sigma_{\epsilon}$.]. The squared exponential function shows that as the two vectors become more different from one another (i.e., further away), the exponentiated difference becomes large, indicating high variance (apart from $\sigma^2_{\epsilon}$). For two identical vectors, this covaraince function yeilds a variance of $\sigma^2_{\epsilon}$. Now, we can see why the previous section had a strong emphasis on spatial variability for Bayesian optimization. @fig-bayes-opt used this kernel function. 
 
-Note that this covariance function has it's own parameter $\sigma$ (similar to $a$, $b$, and $q$ in @eq-kernel-poly). We'll discuss kernel parameters in Gaussian process models below.
-
-A more general covariance function uses the Matern kernel: 
+Note that this covariance function has it's own parameter $\sigma$ (similar to $a$, $b$, and $q$ in @eq-kernel-poly). A more general covariance function uses the Matern kernel: 
 
 $$
 k_{\nu }(\delta_{ii'})=
 {\frac {2^{1-\nu }}{\Gamma (\nu )}}{\Bigg (}{\sqrt {2\nu }}{\frac {\delta_{ii'}}{\rho }}{\Bigg )}^{\nu }\mathcal{K}_{\nu }{\Bigg (}{\sqrt {2\nu }}{\frac {\delta_{ii'}}{\rho }}{\Bigg )}
 $$ {#eq-kernel-matern}
 
-where $\mathcal{K}(\cdot)$ is the Bessel function, $\Gamma(\cdot)$ is the Gamma function, $\rho$ is a tuning parameter for TODO, and $\nu$ is a tuning paramter that controls smoothness. 
+where $\mathcal{K}(\cdot)$ is the Bessel function, $\Gamma(\cdot)$ is the Gamma function, and $\rho$ and $\nu$ are tuning paramters. 
 
-@genton2001classes , @cristianini2004 (Part II), and @garnett2023 (Chapter 4) contain overviews of kernel functions, their different classes, and how they can be used in data analysis.
+One fairly common but unsophisticated method to use qualitative data in the Gaussian process is to convert them to binary indicators and treat them as generic numeric predictors. However, it is difficult to believe that the indicators follow a Gaussian distribution. Also, if there are many levels of qualitative tuning parameters, we may quickly expand the dimension of the Gaussian space, exacerbating the computational costs of training the model. 
 
-Unlike the tuning parameters for the kernel functions used in SVMs, the Gaussian nature of the probability calculations allows different methods for estimating kernel functions internally; there is no need for yet another resampling procedure to optimize them. TODO for example...
+Alternatively, special "categorical kernels" take integers corresponding to levels of a categorical predictor as inputs. For example, one based on an exchangeable correlation structure is: 
 
-TODO nuggets
+$$
+k(x, x') = \rho I(x \ne x') + I(x = x')
+$$ {#eq-kernel-categorical}
+
+where $\rho < 1$ [@joseph2007functionally]. More extensive discussions can be found in @qian2008bayesian, @zhou2011simple, and @saves2023mixed.
+
+Multiple kernels can be used to accommodate a pipeline with both quantitative and qualitative tuning parameters. Depending on the situation, an overall kernel can be created via addition or multiplication. 
+
+@genton2001classes, [@cristianini2004, Part II], and [@garnett2023, chapt 4]  contain overviews of kernel functions, their different classes, and how they can be used and combined for data analysis.
 
 How does this relate to iterative tuning parameter optimization? Suppose that our multivariate random variable is the concatenation of an outcome variable and one or more predictors, our vector of random variable could be thought of as $\boldsymbol{d} = [y, x_1, ..., x_p]$. In a model, we'd like to know what the value of $y$ is for a specific set of $x$ values. Mathematically, this is $Pr[y | \boldsymbol{x}]$ and, since this collection of data is multivariate normal, there are some nice linear algebra equations that can be used to compute this. This ties into Bayesian analysis since we can write @eq-bayes-rule-distr in terms of probabilities: 
 
@@ -931,11 +937,11 @@ $$ {#eq-bayes-rule}
 
 The GP model is Bayesian because we have specified the distributions for the outcome and predictors ($Pr[y]$ and $Pr[\boldsymbol{x}]$, respectively) simultaneous way. The kernel function is the primary driver of the prior distribution of Gaussian processes. 
 
-_In theory_, each of these is easy to compute with a simple multivariate normal. However, we don't the value of $\tau^2$ nor do we know the values of any kernel parameters used by $k(\cdot,\cdot)$.  
+_In theory_, each of these is easy to compute with a simple multivariate normal. However, we don't the value of $\sigma^2_{\epsilon}$ nor do we know the values of any kernel parameters used by $k(\cdot,\cdot)$.  The error term can be estimated a variety of ways, including maximum likelihood, cross-validation, and others (see @ameli2022noise for a survey of methods). For the kernel tuning parameters, it is common to maximize the marginal likelihood to estimate these structural parameters [@williams2006gaussian, chap. 5]. The Gaussian nature of this model enables a number of relatvely strightforward procedures for these purposes. 
 
-Training Gaussian process models can be difficult and the computation cost of training these models increases _cubically_ with the number of data points. In our application, this is the number of tuning parameter candidates with performance statistics. However, after the initial GP model has been trained, there are updating algorithms that can prevent the model from being completely re-estimated from scratch thus reducing training time. 
+Howver, training Gaussian process models can be difficult and the computation cost of training these models increases _cubically_ with the number of data points. In our application, the training set size is the number of tuning parameter candidates with performance statistics. However, after the initial GP model has been trained, there are updating algorithms that can prevent the model from being completely re-estimated from scratch thus reducing training time. 
 
-TODO qualitative parameters
+
 
 ::: {.note-box}
 In summary, Gaussian process models are nonlinear models that can use tuning parameter values to make predictions on future performance statistics. They can predict the mean and variance of performance, the latter being mostly driven by spatial variability.  
