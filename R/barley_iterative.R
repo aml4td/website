@@ -1,4 +1,6 @@
 # pak::pak(c("tidymodels/dials@constraints"), ask = FALSE)
+# pak::pak(c("JamesHWade/measure@sg-parameters"), ask = FALSE)
+# pak::pak(c("prospectr"), ask = FALSE)
 library(tidymodels)
 library(finetune)
 library(future)
@@ -33,6 +35,15 @@ barley_rs <- validation_set(barley_split)
 
 reg_mtr <- metric_set(rmse)
 num_iter <- 50
+
+get_num_iter <- function(x) {
+  library(tidymodels)
+  iters <- 
+    x %>% 
+    extract_fit_engine() %>% 
+    purrr::pluck("best_epoch")
+  iters
+}
 
 # ------------------------------------------------------------------------------
 
@@ -75,15 +86,17 @@ mlp_param <-
     rate_schedule = rate_schedule(sched),
     learn_rate = learn_rate(c(-2, -1/2)),
     mixture = mixture(),
-    degree = degree(c(1, 10)),
+    degree = degree_int(c(1, 10)),
     window_side = window_side(c(1, 10))
   )
 
+# filter length w must be greater than polynomial order p
+# polynomial order p must be greater or equal to differentiation order m
 
 mlp_param <- 
   mlp_param %>% 
   add_parameter_constraint(
-    degree  >= differentiation_order + 1 & (2 * window_side) + 1 >= degree
+    (2 * window_side) + 1 > degree & degree  >= differentiation_order 
   )
 
 
@@ -92,14 +105,19 @@ set.seed(230)
 init_rnd <- 
   grid_random(mlp_param, size = floor(grid_size * 2)) %>% 
   slice_sample(n = grid_size)
-init_sfd <- grid_space_filling(mlp_param, size = 17) 
+init_sfd <- grid_space_filling(mlp_param, size = 20) # set to 20 to get 11 after constraint
+nrow(init_sfd)
 
 # ------------------------------------------------------------------------------
 
-grid_ctrl <- control_grid(save_pred = TRUE, parallel_over = "everything")
+grid_ctrl <- control_grid(
+	save_pred = TRUE,
+	parallel_over = "everything",
+	extract = get_num_iter
+)
 
 mlp_init_sfd_time <- system.time({
-  set.seed(13)
+  set.seed(998)
   mlp_sfd_initial <-
     mlp_wflow %>%
     tune_grid(
@@ -110,42 +128,16 @@ mlp_init_sfd_time <- system.time({
     )
 })
 
-mlp_init_rnd_time <- system.time({
-  set.seed(13)
-  mlp_rnd_initial <-
-    mlp_wflow %>%
-    tune_grid(
-      resamples = barley_rs,
-      grid = init_rnd,
-      metrics = reg_mtr,
-      control = grid_ctrl
-    )
-})
-
-# ------------------------------------------------------------------------------
-
-mlp_large_time <- system.time({
-  set.seed(284)
-  mlp_large <-
-    mlp_wflow %>%
-    tune_grid(
-      resamples = barley_rs,
-      grid = num_iter + nrow(mlp_sfd_initial),
-      metrics = reg_mtr,
-      param_info = mlp_param,
-      control = grid_ctrl
-    )
-})
-
-set.seed(74)
-mlp_large_ci <- 
-  int_pctl(mlp_large, times = 5000, alpha = 0.1) %>%
-  mutate(method = "Grid Search")
+iters_sfd_initial <- 
+  mlp_sfd_initial %>% 
+  collect_extracts() %>% 
+  unnest(.extracts) %>% 
+  rename(num_epochs = .extracts)
 
 # ------------------------------------------------------------------------------
 
 mlp_bo_time <- system.time({
-  set.seed(760)
+  set.seed(684)
   mlp_sfd_bo <-
     mlp_wflow %>%
     tune_bayes(
@@ -188,25 +180,11 @@ for (i in 1:max(mlp_sfd_bo_met$.iter)) {
   }
 }
 
-###
-
-# set.seed(760)
-# mlp_rnd_bo <-
-#   mlp_wflow %>%
-#   tune_bayes(
-#     resamples = barley_rs,
-#     initial = mlp_rnd_initial,
-#     iter = num_iter,
-#     param_info = mlp_param,
-#     metrics = reg_mtr,
-#     control = control_bayes(
-#       save_pred = TRUE,
-#       no_improve = Inf,
-#       verbose_iter = TRUE,
-#       verbose = FALSE,
-#       save_workflow = TRUE
-#     )
-#   )
+iters_sfd_bo <- 
+  mlp_sfd_bo %>% 
+  collect_extracts() %>% 
+  unnest(.extracts) %>% 
+  rename(num_epochs = .extracts)
 
 # ------------------------------------------------------------------------------
 
@@ -226,7 +204,8 @@ mlp_sa_time <- system.time({
         verbose_iter = TRUE,
         verbose = FALSE,
         save_workflow = TRUE,
-        save_history = TRUE
+        save_history = TRUE,
+        extract = get_num_iter
       )
     )
 })
@@ -255,34 +234,18 @@ for (i in 1:max(mlp_sfd_sa_met$.iter)) {
   }
 }
 
+iters_sfd_sa <- 
+  mlp_sfd_sa %>% 
+  collect_extracts() %>% 
+  unnest(.extracts) %>% 
+  rename(num_epochs = .extracts)
+
 load(file.path(tempdir(), "sa_history.RData"))
-
-###
-
-# set.seed(50)
-# mlp_rnd_sa <-
-#   mlp_wflow %>%
-#   tune_sim_anneal(
-#     resamples = barley_rs,
-#     initial = mlp_rnd_initial,
-#     iter = num_iter,
-#     param_info = mlp_param,
-#     metrics = reg_mtr,
-#     control = control_sim_anneal(
-#       save_pred = TRUE,
-#       no_improve = Inf,
-#       verbose_iter = TRUE,
-#       verbose = FALSE,
-#       save_workflow = TRUE,
-#       save_history = TRUE
-#     )
-#   )
-
 
 # ------------------------------------------------------------------------------
 
-save_obj <- ls(pattern = ("(met$)|(ci$)|(best$)|(time$)|(history)|(_param$)"))
-save(list = save_obj, file = "RData/barley_iterative.RData")
+save_obj <- ls(pattern = ("(^iter)|(met$)|(ci$)|(best$)|(time$)|(history)|(_param$)"))
+save(list = save_obj, file = "~/github/website/RData/barley_iterative.RData")
 
 # ------------------------------------------------------------------------------
 # Session versions
