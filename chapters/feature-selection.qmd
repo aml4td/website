@@ -1,0 +1,123 @@
+---
+knitr:
+  opts_chunk:
+    cache.path: "../_cache/feature-selection/"
+---
+
+# Feature Selection {#sec-feature-selection}
+
+```{r}
+#| label: feature-selection-setup
+#| include: false
+source("../R/_common.R")
+
+# ------------------------------------------------------------------------------
+
+library(future)
+library(tidymodels)
+
+# ------------------------------------------------------------------------------
+# Set options
+
+tidymodels_prefer()
+theme_set(theme_transparent())
+plan("multisession")
+set_options()
+
+```
+
+In Chapters [-@sec-numeric-predictors] through [-@sec-interactions-nonlinear], we described different methods for adding new predictors to the model (e.g., interactions, spline columns, etc.). We can add any predictors (or functions of predictors) based on first principles or our intuition or contextual knowledge. 
+
+We are also motivated to remove unwanted or irrelevant predictors. This can decrease model complexity, training time, computer memory, the cost of acquiring unimportant predictors, and so on. For some models, the presence of non-informative predictors can _decrease_ performance. 
+
+We may want to remove predictors based on their distributions. Unsupervised feature selection focuses on just the predictor data. 
+
+More often, though, we are interested in supervised feature selection^[Recall that we use the terms “predictors” and “features” interchangeably. We favor the former term, but “features” is more commonly used when discussing the filtering of columns.]: the removal of predictors that do not appear to have a relationship to the outcome. This implies that we have a statistic that can compute some measure of each predictor’s importance. 
+
+While it is easy to add predictors to a model, it can be very difficult (and computationally expensive) to determine which predictors to remove properly. The reason comes back to the misuse (or over-use) of data. We’ve described the problem of using the same data to fit and evaluate a model. By naively re-predicting the training set, we can accidentally get overly optimistic performance statistics. To compensate for this, resampling repeatedly allocates some data for model fitting and other data for model evaluation. 
+
+For feature selection, we have the same problem when the same data are used to measure importance, filter the predictors, and then train the model on the smaller feature set. It is similar to repeatedly taking the same test and then measuring our knowledge using the grade for the last test repetition. It doesn’t accurately measure the quantity that is important to us.  
+
+This chapter will summarize the most important aspects of feature selection. This is a broad topic and a more extensive discussion can be found in @fes. First, we’ll use an example to quantify the effect of irrelevant predictors on different models. Next, the three main approaches for feature selection are described and illustrated. 
+
+## The Cost of Irrelevant Predictors  {#sec-irrelevant-predictors}
+
+```{r}
+#| label: noise-sim
+#| echo: false
+
+load("../RData/noise_simulation_results.RData")
+```
+
+Does it matter if the model is given extra predictors that are unrelated to the outcome? It depends on the model. To quantify this, data were simulated using the equation described in @hooker2004discovering and also used in @sorokina2008detecting: 
+
+$$
+y_i = \pi^{x_{i1} x_{i2}}  \sqrt{ 2 x_{i3} } - asin(x_{i4}) + \log(x_{i3}  + x_{i5}) - (x_{i9} / x_{i10}) \sqrt{x_{i7} / x_{i8}} - x_{i2} x_{i7} + \epsilon_i
+$$ {#eq-hooker}
+
+where predictors 1, 2, 3, 6, 7, and 9 are standard uniform while the others are uniform on `[0.6, 1.0]`. The errors $\epsilon_i$ are Gaussian with mean zero and a standard deviation of 0.25. Training and testing data sizes where simulated to be 1,000 and 100,000, respectively. 
+
+To assess the effect of useless predictors, between 10 and 100 extra columns of standard normal data were generated (unrelated to the outcome). Models were fit, and the RMSE of the test set was computed for each model. Twenty simulations were run for each combination of models and extra features^[Details and code can be found at [`https://github.com/topepo/noise_features_sim `](https://github.com/topepo/noise_features_sim).]. 
+
+The percent difference from baseline RMSE was computed (baseline being the model with no extra columns). @fig-irrelevant-predictors shows the results for the following models: 
+
+- Bagged regression trees 
+- Bayesian additive regression trees (BART)
+- Boosted trees (via lightGBM)
+- Cubist
+- Generalized additive models (GAMs)
+- K-nearest neighbors (KNN)
+- Multivariate adaptive regression splines (MARS)
+- Penalized linear regression
+- Random forest
+- RuleFit
+- Single-layer neural networks
+- Support vector machines (radial basis function kernel)
+
+These models are described in detail in subsequent chapters. The colors of the points/lines signifies whether the model automatically removes unused predictors from the model equation (see @sec-automatic-selection below). 
+
+```{r}
+#| label: fig-irrelevant-predictors
+#| echo: false
+#| out-width: 70%
+#| fig-width: 6
+#| fig-height: 5
+#| fig-cap: For different regression models, the percent increase in RMSE is shown as a function of the number of additional non-informative predictors. 
+
+noise_simulation_results_pct %>%
+  mutate(
+    `Automatic Selection` = ifelse(fs, "yes", "no")
+  ) %>%
+  ggplot(aes(num_extra, increase)) +
+  geom_hline(yintercept = 0, col = "green", alpha = 1 / 2) +
+  geom_point(aes(col = `Automatic Selection`)) +
+  geom_line(aes(col = `Automatic Selection`)) +
+  facet_wrap(~ label) +
+  labs(x = "# Noise Features", y = "RMSE Increase") +
+  scale_y_continuous(labels = scales::percent)
+
+```
+
+The results show that a few models, K-nearest neighbors, neural networks, and support vector machines, have severely degraded performance as the number of predictors increases. This is most likely due to the use of cross- and/or dot-products of the predictor columns in their calculations. The extra predictors add significant noise to these calculations, and that noise propagates in a way that inhibits the models from accurately determining the underlying relationship with the outcome. 
+
+However, several other models use these same calculations without being drastically affected. This is due to the models **automatically performing feature selection** during model training. Let’s briefly describe two clusters of models that were largely unaffected by the extra columns. 
+
+ 1. Penalized linear regression, generalized additive models, and RuleFit add a penalty to their calculations, restricting the model parameters from becoming abnormally large unless the underlying data warrant a large coefficient. This effectively reduces the impact of extra predictors by keeping their corresponding model coefficient at or near zero. 
+
+ 2. MARS and Cubist selectively include predictors in their regression equations, only including those specifically selected as having value. 
+
+The other unaffected models are tree-based. As seen in @fig-reg-tree, the model makes different rules by selecting predictors to _split_ the data. If a predictor was not used in any split, it is functionally independent of the outcome in the prediction equation. This provides some insensitivity to the presence of non-informative predictors, although there is slight degradation in RMSE as the number of columns increases. 
+
+In summary, irrelevant columns only slightly affect ML models that automatically select features. Models that do not have this attribute can be crippled under the same circumstances. 
+
+## The Classes of Selection Methods {#sec-selection-methods}
+
+## Automatic Selection {#sec-automatic-selection}
+
+## Filter Methods {#sec-filters}
+
+## Wrapper Methods  {#sec-wrappers}
+
+## Valid Feature Selection {#sec-valid-selection}
+
+## Chapter References {.unnumbered}
