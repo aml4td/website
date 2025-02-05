@@ -13,6 +13,7 @@ source("../R/_common.R")
 
 # ------------------------------------------------------------------------------
 
+library(heatmaply)
 library(future)
 library(tidymodels)
 
@@ -38,7 +39,7 @@ While it is easy to add predictors to a model, it can be very difficult (and com
 
 For feature selection, we have the same problem when the same data are used to measure importance, filter the predictors, and then train the model on the smaller feature set. It is similar to repeatedly taking the same test and then measuring our knowledge using the grade for the last test repetition. It doesn’t accurately measure the quantity that is important to us.  
 
-This chapter will summarize the most important aspects of feature selection. This is a broad topic and a more extensive discussion can be found in @fes. First, we’ll use an example to quantify the effect of irrelevant predictors on different models. Next, the three main approaches for feature selection are described and illustrated. 
+This chapter will summarize the most important aspects of feature selection. This is a broad topic and a more extensive discussion can be found in @fes. First, we’ll use an example to quantify the effect of irrelevant predictors on different models. Next, the four main approaches for feature selection are described and illustrated. 
 
 ## The Cost of Irrelevant Predictors  {#sec-irrelevant-predictors}
 
@@ -110,13 +111,85 @@ The other unaffected models are tree-based. As seen in @fig-reg-tree, the model 
 
 In summary, irrelevant columns only slightly affect ML models that automatically select features. Models that do not have this attribute can be crippled under the same circumstances. 
 
-## The Classes of Selection Methods {#sec-selection-methods}
+## Unsupervised Selection {#sec-unsupervised-selection}
+
+There are occasions where the values of the predictors are unfavorable or possibly detrimental to the model. The simplest example is a zero-variance column, where all of the rows of the training set have the same value. There is no information in these data and, although the model might be able to tolerate such a predictor, taking the time to identify and remove such columns is advisable. 
+
+A hypothetical example is a training set of 500 data points with a count-based predictor that has mostly zero counts. However, there are three data points with a count of 1 and one instance with a count of 2. The variance of these data is low, but it would be difficult to determine a cutpoint for removal. @kuhn2008building developed an algorithm to find near-zero predictors, as defined by two criteria:
+
+- The _freqeuncy ratio_ is the frequency of the most prevalent value over the second most frequent value. For our example, the ratio was 496/3 = 165.3.
+- The _proportion of unique values_, which is 3 / 500 = 0.006. 
+
+We can determine thresholds for both of these criteria to remove the predictor. The default behavior is to remove the column of the frequency ratio is greater than 19 **and** the proportion of unique values is less than 0.1. For the example, the predictor would be eliminated. 
+
+```{r}
+#| label: corr-data
+#| echo: false
+
+relab <- c("E", "B", "F", "H", "A", "G", "C", "D", "I", "L", "J", "K")
+
+cor_data <- 
+  modeldata::steroidogenic_toxicity %>% 
+  select(-class) %>% 
+  rename(A = cyp_19a1, B = cyp_11b1, C = cyp_21a1, D = star, E = cyp_11a1,
+         `F` = hsd3b2, G = cyp_11b2, H = cyp_17a1, I = progesterone, 
+         J = cortisol, K = testosterone, L = dhea)
+
+cor_mat <- 
+  cor_data %>% 
+  cor(use = "pairwise.complete.obs") 
+
+cut_0.5 <- 
+  cor_data %>% 
+  recipes:::corr_filter(cutoff = .5) %>% 
+  sort() 
+
+lab_0.5 <- cli::format_inline("{xfun::numbers_to_words(length(cut_0.5))} predictors ({.code {cut_0.5}})")
+```
+
+Another example of an unsupervised filter reduces between-predictor correlations. A high degree of correlation can reduce the effectiveness of many models. We can filter out predictors by choosing a threshold for the (absolute) pairwise correlations and finding the smallest subset of predictors to meet this criterion. 
+
+A good example is @fig-corr-plot, which visualizes the correlation matrix for twelve predictors (from @maglich2014more). Predictors `A` and `B` are highly correlated (corr = `r round(cor_mat["A", "B"], 2)`), and only one might be sufficient to produce a better model. It is less clear which of the other predictors should removed. If we apply a threshold of 1 / 2, then `r lab_0.5` would be removed before model training. 
+
+```{r}
+#| label: fig-corr-plot
+#| echo: false
+#| out-width: 90%
+#| fig-width: 5
+#| fig-height: 5
+#| fig-cap: A heatmap of a correlation matrix for twelve predictors, ordered using a hierarchical clustering algorithm.
+
+heatmaply(
+  cor_mat,
+  branches_lwd = .5,
+  colors = RdBu(50),
+  symm = TRUE,
+  revC = FALSE,
+  label_format_fun = function(...) round(..., digits = 2),
+  limits = c(-1, 1),
+  margins = c(50,215,10,150)
+)
+```
+
+Similar redundancy can occur in categorical predictors. In this case, measures of similarity can be used to filter the predictors in the same way. 
+
+## The Classes of Supervised Methods {#sec-selection-methods}
+
+There are three main strategies for _supervised_ feature selection. The first and most effective was discussed: automatic selection occurs when a subset of predictors is determined during model training. We’ll discuss this more in the next section. 
+
+A second strategy is to use a **filter** to screen predictors before adding them to the model. For example, the analysis shown in @fig-delivery-increases computed how each item in a food order impacted the delivery time.  We could have applied a filter where we only used food item predictors whose lower confidence interval for the increase in time was greater than one. The idea behind the filter is that it is applied once prior to the model fit. 
+
+The third supervised strategy is called **wrappers**. In this case, a sequential algorithm proposes feature subsets, fits the model with these subsets, and then determines a better subset from the results. This sounds similar to iterative optimization because it is. Many of the same tools can be used. Wrappers are the most thorough approach to searching the space of feature subsets, but this can come with an enormous computational cost. 
+
+The next few sections will describe the mechanics of these methods. However, how we utilize these algorithms is tricky. We definitely want to avoid overfitting the predictor set to the training data. 
 
 ## Automatic Selection {#sec-automatic-selection}
 
 ## Filter Methods {#sec-filters}
 
 ## Wrapper Methods  {#sec-wrappers}
+
+## Overfitting the Feature Set {#sec-selection-overfitting}
 
 ## Valid Feature Selection {#sec-valid-selection}
 
