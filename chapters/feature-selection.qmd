@@ -25,6 +25,11 @@ theme_set(theme_transparent())
 plan("multisession")
 set_options()
 
+# ------------------------------------------------------------------------------
+# load data and results
+
+source("../R/setup_deliveries.R")
+load("../RData/deliveries_cubist.RData")
 ```
 
 In Chapters [-@sec-numeric-predictors] through [-@sec-interactions-nonlinear], we described different methods for adding new predictors to the model (e.g., interactions, spline columns, etc.). We can add any predictors (or functions of predictors) based on first principles or our intuition or contextual knowledge. 
@@ -96,7 +101,6 @@ noise_simulation_results_pct %>%
   facet_wrap(~ label) +
   labs(x = "# Noise Features", y = "RMSE Increase") +
   scale_y_continuous(labels = scales::percent)
-
 ```
 
 The results show that a few models, K-nearest neighbors, neural networks, and support vector machines, have severely degraded performance as the number of predictors increases. This is most likely due to the use of cross- and/or dot-products of the predictor columns in their calculations. The extra predictors add significant noise to these calculations, and that noise propagates in a way that inhibits the models from accurately determining the underlying relationship with the outcome. 
@@ -110,6 +114,19 @@ However, several other models use these same calculations without being drastica
 The other unaffected models are tree-based. As seen in @fig-reg-tree, the model makes different rules by selecting predictors to _split_ the data. If a predictor was not used in any split, it is functionally independent of the outcome in the prediction equation. This provides some insensitivity to the presence of non-informative predictors, although there is slight degradation in RMSE as the number of columns increases. 
 
 In summary, irrelevant columns only slightly affect ML models that automatically select features. Models that do not have this attribute can be crippled under the same circumstances. 
+
+## Different Levels of Features
+
+When we talk about selecting features, we should be clear about what level of computation we mean. There are often two levels: 
+
+- **Original predictors** are the unmodified version of the data. 
+- **Derived predictors** refer to the set of columns that are present after feature engineering. 
+
+For example, if our model requires all numeric inputs, a categorical predictor is often converted to binary indicators. A categorical column for the day of the week is the original predictor, while the binary indicators for individual days are the derived predictor. Similarly, the 550 measurement predictors in the barley data are the original predictors, and embedded values, such as the PCA components, are the derived predictors. 
+
+Depending on the context, our interest in feature selection could be at either level. If the original predictors are expensive to estimate, we would be more interested in removing them at the original level; if _any_ of their derived predictors are important, we need the original. 
+
+This idea will arise again in @sec-importance when we discuss _variable importance scores_ for explaining models. 
 
 ## Unsupervised Selection {#sec-unsupervised-selection}
 
@@ -184,6 +201,38 @@ The third supervised strategy is called **wrappers**. In this case, a sequential
 The next few sections will describe the mechanics of these methods. However, how we utilize these algorithms is tricky. We definitely want to avoid overfitting the predictor set to the training data. 
 
 ## Automatic Selection {#sec-automatic-selection}
+
+```{r}
+#| label: mars-deliveries
+#| include: false
+
+set.seed(3838)
+mars_res <- 
+  mars(prod_degree = 2, mode = "regression") %>% 
+  fit(time_to_delivery ~ ., data = delivery_train)
+
+pat <- paste0("(", levels(delivery_train$day), ")", collapse = "|")
+
+mars_imp <- 
+  mars_res$fit %>% 
+  evimp() %>% 
+  unclass() %>% 
+  as.matrix()
+
+mars_df <- 
+  mars_imp %>% 
+  as_tibble(rownames = "term") %>% 
+  mutate(predictor = gsub(pat, "", term))
+
+mars_active <- distinct(mars_df, predictor)
+```
+
+To more closely demonstrate how automatic feature selection works, let’s return to the Cubist model fit to the delivery data in @sec-model-development-whole-game. That model created a series of regression trees, and converted them to rules (i.e., a path through the tree), then fit regression models for every rule. Recall that there was a very large number of rules (`r format(nrow(all_rules), big.mark = ",")`) each with its own linear regression. Despite the size of these data, only `r length(cb_active)` of the original `r length(cb_active) + cb_unused` predictors in the data set were used in rules or model fits; `r cb_unused` were judged to be irrelevant for predicting delivery times. 
+
+This shows that we can often reduce the number of features for free. 
+
+Different models view the training data differently, and the list of relevant predictors will likely change from model to model. When we fit a MARS model [@sec-mars-reg] to the data, only `r nrow(mars_active)` original predictors were used. If we use automatic selection methods to understand what is important, we should fit a variety of different models and create a consensus estimate of which predictors are “active” for the data set.  
+
 
 ## Filter Methods {#sec-filters}
 
