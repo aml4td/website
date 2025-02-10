@@ -16,6 +16,7 @@ source("../R/_common.R")
 library(heatmaply)
 library(future)
 library(tidymodels)
+library(colino)
 
 # ------------------------------------------------------------------------------
 # Set options
@@ -30,6 +31,16 @@ set_options()
 
 source("../R/setup_deliveries.R")
 load("../RData/deliveries_cubist.RData")
+load("../RData/deliveries_lm.RData")
+
+ctrl_rs <-
+  control_resamples(
+    save_pred = TRUE,
+    parallel_over = "everything",
+    save_workflow = TRUE
+  )
+
+reg_metrics <- metric_set(mae, rmse, rsq)
 ```
 
 In Chapters [-@sec-numeric-predictors] through [-@sec-interactions-nonlinear], we described different methods for adding new predictors to the model (e.g., interactions, spline columns, etc.). We can add any predictors (or functions of predictors) based on first principles or our intuition or contextual knowledge. 
@@ -128,11 +139,26 @@ Depending on the context, our interest in feature selection could be at either l
 
 This idea will arise again in @sec-importance when we discuss _variable importance scores_ for explaining models. 
 
+
+## Overfitting the Feature Set {#sec-selection-overfitting}
+
+Take basic linear regression sse as an example
+
+@Ambroise2002p1493
+
+
+## Validating Feature Selection {#sec-validating-selection}
+
+diagram showing the selection is part of preprocessing so that when we validate the pipeline, we must re-run the feature selection
+
+note that the qualitative effect of selection has the largest variance compoment (compared to model-to-model etc)
+
+
 ## Unsupervised Selection {#sec-unsupervised-selection}
 
 There are occasions where the values of the predictors are unfavorable or possibly detrimental to the model. The simplest example is a zero-variance column, where all of the rows of the training set have the same value. There is no information in these data and, although the model might be able to tolerate such a predictor, taking the time to identify and remove such columns is advisable. 
 
-A hypothetical example is a training set of 500 data points with a count-based predictor that has mostly zero counts. However, there are three data points with a count of 1 and one instance with a count of 2. The variance of these data is low, but it would be difficult to determine a cutpoint for removal. @kuhn2008building developed an algorithm to find near-zero predictors, as defined by two criteria:
+A hypothetical example is a training set of 500 data points with a count-based predictor that has mostly zero counts. However, there are three data points with a count of 1 and one instance with a count of 2. The variance of these data is low, but it would be difficult to determine a cutpoint for removal. @kuhn2008building developed an algorithm to find **near-zero predictors**, as defined by two criteria:
 
 - The _freqeuncy ratio_ is the frequency of the most prevalent value over the second most frequent value. For our example, the ratio was 496/3 = 165.3.
 - The _proportion of unique values_, which is 3 / 500 = 0.006. 
@@ -166,7 +192,7 @@ lab_0.5 <- cli::format_inline("{xfun::numbers_to_words(length(cut_0.5))} predict
 
 Another example of an unsupervised filter reduces between-predictor correlations. A high degree of correlation can reduce the effectiveness of many models. We can filter out predictors by choosing a threshold for the (absolute) pairwise correlations and finding the smallest subset of predictors to meet this criterion. 
 
-A good example is @fig-corr-plot, which visualizes the correlation matrix for twelve predictors (from @maglich2014more). Predictors `A` and `B` are highly correlated (corr = `r round(cor_mat["A", "B"], 2)`), and only one might be sufficient to produce a better model. It is less clear which of the other predictors should removed. If we apply a threshold of 1 / 2, then `r lab_0.5` would be removed before model training. 
+A good example is @fig-corr-plot, which visualizes the correlation matrix for twelve predictors (from @maglich2014more). Predictors `A` and `B` are highly correlated (corr = `r round(cor_mat["A", "B"], 2)`), and only one might be sufficient to produce a better model. It is less clear which of the other predictors should removed. If we apply a threshold of 0.5, then `r lab_0.5` would be removed before model training. 
 
 ```{r}
 #| label: fig-corr-plot
@@ -229,17 +255,130 @@ mars_active <- distinct(mars_df, predictor)
 
 To more closely demonstrate how automatic feature selection works, let’s return to the Cubist model fit to the delivery data in @sec-model-development-whole-game. That model created a series of regression trees, and converted them to rules (i.e., a path through the tree), then fit regression models for every rule. Recall that there was a very large number of rules (`r format(nrow(all_rules), big.mark = ",")`) each with its own linear regression. Despite the size of these data, only `r length(cb_active)` of the original `r length(cb_active) + cb_unused` predictors in the data set were used in rules or model fits; `r cb_unused` were judged to be irrelevant for predicting delivery times. 
 
+::: {.important-box}
 This shows that we can often reduce the number of features for free. 
+:::
 
 Different models view the training data differently, and the list of relevant predictors will likely change from model to model. When we fit a MARS model [@sec-mars-reg] to the data, only `r nrow(mars_active)` original predictors were used. If we use automatic selection methods to understand what is important, we should fit a variety of different models and create a consensus estimate of which predictors are “active” for the data set.  
 
 
 ## Filter Methods {#sec-filters}
 
+```{r}
+#| label: filter-deliveries
+#| include: false
+#| cache: true
+
+spline_filter_rec <-
+  recipe(time_to_delivery ~ ., data = delivery_train) %>%
+  step_dummy(all_factor_predictors()) %>%
+  step_zv(all_predictors()) %>%
+  step_spline_natural(hour, distance, deg_free = 10) %>%
+  step_interact(~starts_with("hour"):starts_with("day")) %>% 
+  step_bin2factor(starts_with("item")) %>% 
+  step_select_aov(starts_with("item"), outcome = "time_to_delivery", 
+                  threshold = 0.1)
+
+filter_wflow <-
+  workflow() %>%
+    add_model(linear_reg()) %>%
+    add_recipe(spline_filter_rec)
+
+set.seed(3838)
+filter_res <-
+  fit_resamples(
+    filter_wflow,
+    delivery_rs,
+    control = ctrl_rs,
+    metrics = reg_metrics
+  )
+
+filter_metrics <- collect_metrics(filter_res)
+filter_mae <- filter_metrics$mean[filter_metrics$.metric == "mae"]
+
+spline_metrics <- collect_metrics(lin_reg_res)
+spline_mae <- spline_metrics$mean[spline_metrics$.metric == "mae"]
+
+# ------------------------------------------------------------------------------
+
+spline_tune_filter_rec <-
+  recipe(time_to_delivery ~ ., data = delivery_train) %>%
+  step_dummy(all_factor_predictors()) %>%
+  step_zv(all_predictors()) %>%
+  step_spline_natural(hour, distance, deg_free = 10) %>%
+  step_interact(~starts_with("hour"):starts_with("day")) %>% 
+  step_bin2factor(starts_with("item")) %>% 
+  step_select_aov(starts_with("item"), outcome = "time_to_delivery", 
+                  top_p = tune())
+
+filter_tune_wflow <-
+  workflow() %>%
+    add_model(linear_reg()) %>%
+    add_recipe(spline_tune_filter_rec)
+
+set.seed(3838)
+filter_tune_res <-
+  tune_grid(
+    filter_tune_wflow,
+    delivery_rs,
+    control = ctrl_rs,
+    grid = tibble(top_p = 1:27),
+    metrics = reg_metrics
+  )
+
+# set.seed(382)
+# filter_tune_ci <- 
+#   filter_tune_res %>% 
+#   int_pctl(times = 5000, alpha = 0.10)
+
+filter_tune_mae <- 
+  filter_tune_res %>% 
+  collect_metrics() %>% 
+  filter(.metric == "mae") %>% 
+  mutate(txt = map_chr(mean, dec_to_time))
+
+filter_tune_mae_min <- 
+  filter_tune_mae %>% 
+  slice_min(mean) %>% 
+  pluck("txt")
+
+filter_tune_mae_max <- 
+  filter_tune_mae %>% 
+  slice_max(mean) %>% 
+  pluck("txt")
+```
+
+
+
+```{r}
+#| label: fig-tune-filter
+#| echo: false
+#| out-width: 60%
+#| fig-width: 5
+#| fig-height: 3.25
+#| fig-cap: The effect of a simple t-test filter from the delivery item predictors on performance.  
+
+autoplot(filter_tune_res, metric = "mae") +
+  labs(y = "MAE (in minutes)")
+
+# filter_tune_ci %>% 
+#   filter(.metric == "mae") %>% 
+#   ggplot(aes(top_p)) + 
+#   geom_point(aes(y = .estimate)) + 
+#   # geom_line(aes(y = .estimate), alpha = 1 / 2) +
+#   geom_errorbar(aes(ymin = .lower, ymax = .upper), width = 1 /2, alpha = 1 / 2) + 
+#   labs(y = "MAE (in minutes)", x = "# Selected Predictors")
+```
+
+The result is that, based on performance, it is best to keep almost all of the delivery items in the model. As we start to remove them, performance values decrease, although degradation is negligible (MAE ranges from `r filter_tune_mae_min` to `r filter_tune_mae_max`). The takeaway from this analysis is that these predictors matter statistically but not practically. 
+
+This is counter to the data analysis shown in @fig-delivery-increases, where many of the item predictors were found to be unlikely to affect delivery times (again, statistically).  The difference is key: @fig-delivery-increases shows a set of univariate analyses while the results shown in @fig-tune-filter evaluate the item predictors in a linear model that contains many other predictors (including others for delivery items). 
+
+This surfaces an important idea that we’ll get different results when filters (and feature selection in general) are applied in different ways. 
+
 ## Wrapper Methods  {#sec-wrappers}
 
-## Overfitting the Feature Set {#sec-selection-overfitting}
 
-## Valid Feature Selection {#sec-valid-selection}
+
 
 ## Chapter References {.unnumbered}
