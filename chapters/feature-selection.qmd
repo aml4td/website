@@ -182,17 +182,17 @@ cor_mat <-
   cor_data %>% 
   cor(use = "pairwise.complete.obs") 
 
-cut_0.5 <- 
+cut_0.25 <- 
   cor_data %>% 
-  recipes:::corr_filter(cutoff = .5) %>% 
+  recipes:::corr_filter(cutoff = .25) %>% 
   sort() 
 
-lab_0.5 <- cli::format_inline("{xfun::numbers_to_words(length(cut_0.5))} predictors ({.code {cut_0.5}})")
+lab_0.25 <- cli::format_inline("{xfun::numbers_to_words(length(cut_0.25))} predictors ({.code {cut_0.25}})")
 ```
 
 Another example of an unsupervised filter reduces between-predictor correlations. A high degree of correlation can reduce the effectiveness of many models. We can filter out predictors by choosing a threshold for the (absolute) pairwise correlations and finding the smallest subset of predictors to meet this criterion. 
 
-A good example is @fig-corr-plot, which visualizes the correlation matrix for twelve predictors (from @maglich2014more). Predictors `A` and `B` are highly correlated (corr = `r round(cor_mat["A", "B"], 2)`), and only one might be sufficient to produce a better model. Similar issues occur with predictor pairs `D`/`E` and `K`/`L`. It is less clear which of the other predictors should removed (if any). If we apply a threshold of 0.5, then `r lab_0.5` would be removed before model training. 
+A good example is @fig-corr-plot, which visualizes the correlation matrix for twelve predictors (from @maglich2014more). Predictors `A` and `B` are highly correlated (corr = `r round(cor_mat["A", "B"], 2)`), and only one might be sufficient to produce a better model. Similar issues occur with predictor pairs `D`/`E` and `K`/`L`. It is less clear which of the other predictors should removed (if any). If we apply a threshold of 0.25, then `r lab_0.25` would be removed before model training. 
 
 ```{r}
 #| label: fig-corr-plot
@@ -220,9 +220,9 @@ Similar redundancy can occur in categorical predictors. In this case, measures o
 
 There are three main strategies for _supervised_ feature selection. The first and most effective was discussed: automatic selection occurs when a subset of predictors is determined during model training. We’ll discuss this more in the next section. 
 
-A second strategy is to use a **filter** to screen predictors before adding them to the model. For example, the analysis shown in @fig-delivery-increases computed how each item in a food order impacted the delivery time.  We could have applied a filter where we only used food item predictors whose lower confidence interval for the increase in time was greater than one. The idea behind the filter is that it is applied once prior to the model fit. 
+The second supervised strategy is called **wrappers**. In this case, a sequential algorithm proposes feature subsets, fits the model with these subsets, and then determines a better subset from the results. This sounds similar to iterative optimization because it is. Many of the same tools can be used. Wrappers are the most thorough approach to searching the space of feature subsets, but this can come with an enormous computational cost. 
 
-The third supervised strategy is called **wrappers**. In this case, a sequential algorithm proposes feature subsets, fits the model with these subsets, and then determines a better subset from the results. This sounds similar to iterative optimization because it is. Many of the same tools can be used. Wrappers are the most thorough approach to searching the space of feature subsets, but this can come with an enormous computational cost. 
+A third strategy is to use a **filter** to screen predictors before adding them to the model. For example, the analysis shown in @fig-delivery-increases computed how each item in a food order impacted the delivery time.  We could have applied a filter where we only used food item predictors whose lower confidence interval for the increase in time was greater than one. The idea behind the filter is that it is applied once prior to the model fit. 
 
 The next few sections will describe the mechanics of these methods. However, how we utilize these algorithms is tricky. We definitely want to avoid overfitting the predictor set to the training data. 
 
@@ -260,6 +260,75 @@ This shows that we can often reduce the number of features for free.
 :::
 
 Different models view the training data differently, and the list of relevant predictors will likely change from model to model. When we fit a MARS model [@sec-mars-reg] to the data, only `r nrow(mars_active)` original predictors were used. If we use automatic selection methods to understand what is important, we should fit a variety of different models and create a consensus estimate of which predictors are “active” for the data set.  
+
+## Wrapper Methods  {#sec-wrappers}
+
+Wrapper methods use an overarching search method to optimize binary indicators, one for each potential predictor, that control which predictors are given to the model.
+
+The most popular approach is recursive feature elimination (RFE), which starts with the complete set of predictors and uses a mechanism to rank each in terms of their utility for predicting the outcome. Using this ordering, predictors are successively removed while performance is monitored. The performance profile determines the optimal subset size, and the most important predictors are included in the model. RFE is greedy, though; it predetermines the order of the predictors and will never consider a subset that is inconsistent with this order. 
+
+Two global search methods described in @sec-iterative, genetic algorithms and simulated annealing, can also be used. In this instance, the search space is the predictor space represented as binary indicators. The same process applies, though. For example, a GA would contain a population of different subsets, each producing a fitted model. The performance values enable the creation of the next generation via selection, reproduction, and mutation. In the case of simulated annealing, an initial subset is created and evaluated, and perturbations are created by randomly altering a small set of indicators (to create a “nearby” subset). Suboptimal subsets can be accepted similarly to our application for tuning parameters. 
+
+However, for each of these cases, the details matter. First, we should probably use separate data to 
+
+- estimate performance for each candidate subset and 
+- determining how far the search should proceed.
+
+If we have large data sets, we can partition them into separate validation sets for each purpose. Otherwise, resampling is probably the answer to solve one or both of these problems. 
+
+The need to optimize tuning parameters can greatly complicate this entire process. A set of optimal parameter values for large subset sizes may perform very poorly for small subsets. In some cases, such as $m_{try}$ and the number of embedding dimensions, the tuning parameter depends on the subset size. 
+
+In this case, the traditional approach uses a nested resampling procedure similar to the one shown in @sec-nested-resampling. An inner resampling scheme tunes the model, and the optimized model is used to predict the assessment set from the outer resample. Even with parallel processing, this can become an onerous computational task. 
+
+However, let’s illustrate a wrapper method using an artificial data set from the simulations described in @sec-irrelevant-predictors. We’ll use @eq-hooker and supplement the nine real predictors with twenty noise columns. For simplicity, we’ll use a neural network to predict the outcome with a static set of tuning parameters. The training set consisted of 1,000 data points. 
+
+Since feature selection is part of the broader model pipeline, 10-fold cross-validation was used to measure the effectiveness of 150 iterations of simulated annealing. A separate SA run is created for each resample; we use the analysis set to train the model on the current subset, and the assessment set is used to measure the RMSE. 
+
+@fig-selection-sa shows the results, where each point is the average of the 10 RMSE values for the SA at each iteration. The results clearly improve as the selection process mostly begins to include important predictors and discards a few of the noise columns. After approximately 120 iterations, the solution stabilizes.  This appears to be a very straightforward search process that clearly indicates when to stop the SA search. 
+
+```{r}
+#| label: fig-selection-sa
+#| echo: false
+#| out-width: 60%
+#| fig-width: 5
+#| fig-height: 3.25
+#| fig-cap: The progress of using simualted annealing to select features for.a neural network.  
+load("../RData/nnet_sa_res.RData")
+
+nnet_sa_res$internal %>% 
+  summarize(mean = mean(RMSE), .by = c(Iter)) %>% 
+  ggplot(aes(Iter, mean)) + 
+  geom_line() +
+  geom_point(cex = 1 / 2) +
+  labs(x = "SA Iteration", y = "RMSE (resampled)")
+```
+
+
+However, looks can be deceiving. The feature selection process is incredibly variable, and adding or removing an important predictor can cause severe changes in performance. @fig-selection-sa is showing the _average_ change in performance, and the relative smoothness of this curve is somewhat deceiving. 
+
+@fig-selection-sa-resamples shows what could have happened by visualizing each of the 10 searches. The results are much more dynamic and significantly vary from resample to resample. Most (but not all) searches contain one or two precipitous drops in the RMSE with many spikes of high errors (caused by a bad permutation of the solution). These cliffs and spikes do not reproducibly occur at the same iteration or in the same way. 
+
+
+```{r}
+#| label: fig-selection-sa-resamples
+#| echo: false
+#| out-width: 90%
+#| fig-width: 8
+#| fig-height: 6
+#| fig-cap: The individual SA runs that make up the data in @fig-selection-sa.  
+load("../RData/nnet_sa_res.RData")
+
+nnet_sa_res$internal %>% 
+  ggplot(aes(Iter, RMSE)) + 
+  geom_line() +
+  facet_wrap(~ Resample) +
+  labs(x = "SA Iteration", y = "RMSE")
+```
+
+We should keep in mind that @fig-selection-sa lets us know where, on average, the search should stop, but our actual search result (that uses the entire training set) is more likely to look like what we see in @fig-selection-sa-resamples.
+
+For this particular search, the numerically best result occurred at iteration `r nnet_sa_res$optIter` and the final model contained `r length(nnet_sa_res$optVariables)` predictors where `r xfun::numbers_to_words(sum(grepl("noise", nnet_sa_res$optVariables)))` of the twenty noise columns are still contained in the model. Our resampled estimate of the RMSE, at this iteration, was `r round(mean(nnet_sa_res$internal$RMSE[nnet_sa_res$internal$Iter == nnet_sa_res$optIter]), 3)` (a perfect model would have a value of 0.25). We also simulated a large “test set” and the RMSE for that data set was XXX with the optimized neural network.   
+
 
 
 ## Filter Methods {#sec-filters}
@@ -376,74 +445,101 @@ This is counter to the data analysis shown in @fig-delivery-increases, where man
 
 This surfaces an important idea that we’ll get different results when filters (and feature selection in general) are applied in different ways. 
 
-## Wrapper Methods  {#sec-wrappers}
 
-Wrapper methods use an overarching search method to optimize binary indicators, one for each potential predictor, that control which predictors are given to the model.
+## Subset Size as a Tuning Parameter {#sec-tuning-subset-size}
 
-The most popular approach is recursive feature elimination (RFE), which starts with the complete set of predictors and uses a mechanism to rank each in terms of their utility for predicting the outcome. Using this ordering, predictors are successively removed while performance is monitored. The performance profile determines the optimal subset size, and the most important predictors are included in the model. RFE is greedy, though; it predetermines the order of the predictors and will never consider a subset that is inconsistent with this order. 
+An approach somewhere between filters and wrappers can be used. In this approach, a measure of importance for each predictor is computed, and a tuning parameter is added for how these are to be retained. This is like RFE, but we optimize all the tuning parameters simultaneously and evaluate subsets in a potentially less greedy way. 
 
-Two global search methods described in @sec-iterative, genetic algorithms and simulated annealing, can also be used. In this instance, the search space is the predictor space represented as binary indicators. The same process applies, though. For example, a GA would contain a population of different subsets, each producing a fitted model. The performance values enable the creation of the next generation via selection, reproduction, and mutation. In the case of simulated annealing, an initial subset is created and evaluated, and perturbations are created by randomly altering a small set of indicators (to create a “nearby” subset). Suboptimal subsets can be accepted similarly to our application for tuning parameters. 
+There are two potential downsides, though. First, there is still the potential for enormous computational costs, especially if the ranking process is expensive. For example, if we use a grid search, there is significant potential for the same subset size to occur more than once in the grid^[The same issue can also occur with iterative search]. In this case, we are repeating the same importance calculation multiple times. 
 
-However, for each of these cases, the details matter. First, we should probably use separate data to 
-
-- estimate performance for each candidate subset and 
-- determining how far the search should proceed.
-
-If we have large data sets, we can partition them into separate validation sets for each purpose. Otherwise, resampling is probably the answer to solve one or both of these problems. 
-
-The need to optimize tuning parameters can greatly complicate this entire process. A set of optimal parameter values for large subset sizes may perform very poorly for small subsets. In some cases, such as $m_{try}$ and the number of embedding dimensions, the tuning parameter depends on the subset size. 
-
-In this case, the traditional approach uses a nested resampling procedure similar to the one shown in @sec-nested-resampling. An inner resampling scheme tunes the model, and the optimized model is used to predict the assessment set from the outer resample. Even with parallel processing, this can become an onerous computational task. 
-
-However, let’s illustrate a wrapper method using an artificial data set from the simulations described in @sec-irrelevant-predictors. We’ll use @eq-hooker and supplement the nine real predictors with twenty noise columns. For simplicity, we’ll use a neural network to predict the outcome with a static set of tuning parameters. The training set consisted of 1,000 data points. 
-
-Since feature selection is part of the broader model pipeline, 10-fold cross-validation was used to measure the effectiveness of 150 iterations of simulated annealing. A separate SA run is created for each resample; we use the analysis set to train the model on the current subset, and the assessment set is used to measure the RMSE. 
-
-@fig-selection-sa shows the results, where each point is the average of the 10 RMSE values for the SA at each iteration. The results clearly improve as the selection process mostly begins to include important predictors and discards a few of the noise columns. After approximately 120 iterations, the solution stabilizes.  This appears to be a very straightforward search process that clearly indicates when to stop the SA search. 
+The second potential problem is that we will use the same data set to determine optimal parameters and how many features to retain. This could very easily lead to overfitting and/or optimization bias, especially if our training set is not large. 
 
 ```{r}
-#| label: fig-selection-sa
+#| label: filter-tune
+#| include: false
+#| cache: true
+
+n_train <- 10^3
+n_test <- 10^5
+num_extra <- 20
+
+# ------------------------------------------------------------------------------
+
+set.seed(212)
+sim_tr <- sim_regression(n_train, method = "hooker_2004")
+sim_te <- sim_regression(n_test,  method = "hooker_2004")
+
+set.seed(348)
+sim_tr <- sim_tr %>% bind_cols(sim_noise(n_train, num_extra))
+sim_te <- sim_te %>% bind_cols(sim_noise(n_test,  num_extra))
+
+num_pred <- ncol(sim_tr) - 1
+
+set.seed(260)
+sim_rs <- vfold_cv(sim_tr)
+
+# ------------------------------------------------------------------------------
+
+sim_rec <-
+  recipe(outcome ~ ., data = sim_tr) %>%
+  step_select_forests(all_predictors(), outcome = "outcome", top_p = tune()) %>%
+  step_normalize(all_predictors())
+
+mlp_spec <-
+  mlp(hidden_units = tune(), penalty = tune(), epochs = 250,
+      activation = tune(), learn_rate = tune()) %>%
+  set_engine("brulee", stop_iter = 5) %>%
+  set_mode("regression")
+
+mlp_wflow <- workflow(sim_rec, mlp_spec)
+
+mlp_param <-
+  mlp_wflow %>%
+  extract_parameter_set_dials() %>%
+  update(
+    learn_rate = learn_rate(c(-3, - 1/ 2)),
+    top_p = top_p(c(1, num_pred)),
+    hidden_units = hidden_units(c(2, 20)),
+    activation = activation(c("relu", "tanh", "log_sigmoid")),
+  )
+
+# ------------------------------------------------------------------------------
+
+mlp_rf_sfd_res <-
+  mlp_wflow %>%
+  tune_grid(
+    resamples = sim_rs,
+    param_info = mlp_param,
+    grid = 25,
+    metrics = metric_set(rmse),
+    control = control_grid(save_workflow = TRUE)
+  )
+
+mlp_rf_fit <- fit_best(mlp_rf_sfd_res, , metric = "rmse")
+
+mlp_rf_mtr <- 
+  mlp_rf_fit %>% 
+  augment(sim_te) %>% 
+  rmse(outcome, .pred)
+```
+
+add extract, 
+
+```{r}
+#| label: fig-mlp-rf
 #| echo: false
+#| warning: false
 #| out-width: 60%
 #| fig-width: 5
-#| fig-height: 3.25
-#| fig-cap: The progress of using simualted annealing to select features for.a neural network.  
-load("../RData/nnet_sa_res.RData")
+#| fig-height: 5
+#| fig-cap: Joint tuning of model and wrapper parameters.  
 
-nnet_sa_res$internal %>% 
-  summarize(mean = mean(RMSE), .by = c(Iter)) %>% 
-  ggplot(aes(Iter, mean)) + 
-  geom_line() +
-  geom_point(cex = 1 / 2) +
-  labs(x = "SA Iteration", y = "RMSE (resampled)")
+autoplot(mlp_rf_sfd_res, metric = "rmse") + ylim(c(.25, .72))
 ```
 
+desirability functions; penalize by subset size; blend multiple criteria
 
-However, looks can be deceiving. The feature selection process is incredibly variable, and adding or removing an important predictor can cause severe changes in performance. @fig-selection-sa is showing the _average_ change in performance, and the relative smoothness of this curve is somewhat deceiving. 
-
-@fig-selection-sa-resamples shows what could have happened by visualizing each of the 10 searches. The results are much more dynamic and significantly vary from resample to resample. Most (but not all) searches contain one or two precipitous drops in the RMSE with many spikes of high errors (caused by a bad permutation of the solution). These cliffs and spikes do not reproducibly occur at the same iteration or in the same way. 
-
-
-```{r}
-#| label: fig-selection-sa-resamples
-#| echo: false
-#| out-width: 90%
-#| fig-width: 8
-#| fig-height: 6
-#| fig-cap: The individual SA runs that make up the data in @fig-selection-sa.  
-load("../RData/nnet_sa_res.RData")
-
-nnet_sa_res$internal %>% 
-  ggplot(aes(Iter, RMSE)) + 
-  geom_line() +
-  facet_wrap(~ Resample) +
-  labs(x = "SA Iteration", y = "RMSE")
-```
-
-We should keep in mind that @fig-selection-sa lets us know where, on average, the search should stop, but our actual search result (that uses the entire training set) is more likely to look like what we see in @fig-selection-sa-resamples.
-
-For this particular search, the numerically best result occurred at iteration `r nnet_sa_res$optIter` and the final model contained `r length(nnet_sa_res$optVariables)` predictors where `r xfun::numbers_to_words(sum(grepl("noise", nnet_sa_res$optVariables)))` of the twenty noise columns are still contained in the model. Our resampled estimate of the RMSE, at this iteration, was `r round(mean(nnet_sa_res$internal$RMSE[nnet_sa_res$internal$Iter == nnet_sa_res$optIter]), 3)` (a perfect model would have a value of 0.25). We also simulated a large “test set” and the RMSE for that data set was XXX with the optimized neural network.   
-
+`r round(mlp_rf_mtr$.estimate, 3)`
 
 
 ## Chapter References {.unnumbered}
