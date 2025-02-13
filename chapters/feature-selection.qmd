@@ -17,6 +17,7 @@ library(heatmaply)
 library(future)
 library(tidymodels)
 library(colino)
+library(patchwork)
 
 # ------------------------------------------------------------------------------
 # Set options
@@ -49,7 +50,7 @@ We are also motivated to remove unwanted or irrelevant predictors. This can decr
 
 We may want to remove predictors based on their distributions. Unsupervised feature selection focuses on just the predictor data. 
 
-More often, though, we are interested in supervised feature selection^[Recall that we use the terms “predictors” and “features” interchangeably. We favor the former term, but “features” is more commonly used when discussing the filtering of columns.]: the removal of predictors that do not appear to have a relationship to the outcome. This implies that we have a statistic that can compute some measure of each predictor’s importance. 
+More often, though, we are interested in supervised feature selection^[Recall that we use the terms "predictors" and "features" interchangeably. We favor the former term, but "features" is more commonly used when discussing the filtering of columns.]: the removal of predictors that do not appear to have a relationship to the outcome. This implies that we have a statistic that can compute some measure of each predictor’s importance. 
 
 While it is easy to add predictors to a model, it can be very difficult (and computationally expensive) to determine which predictors to remove properly. The reason comes back to the misuse (or over-use) of data. We’ve described the problem of using the same data to fit and evaluate a model. By naively re-predicting the training set, we can accidentally get overly optimistic performance statistics. To compensate for this, resampling repeatedly allocates some data for model fitting and other data for model evaluation. 
 
@@ -126,7 +127,7 @@ The other unaffected models are tree-based. As seen in @fig-reg-tree, the model 
 
 In summary, irrelevant columns only slightly affect ML models that automatically select features. Models that do not have this attribute can be crippled under the same circumstances. 
 
-## Different Levels of Features
+## Different Levels of Features {#sec-feature-levels}
 
 When we talk about selecting features, we should be clear about what level of computation we mean. There are often two levels: 
 
@@ -139,20 +140,17 @@ Depending on the context, our interest in feature selection could be at either l
 
 This idea will arise again in @sec-importance when we discuss _variable importance scores_ for explaining models. 
 
-
 ## Overfitting the Feature Set {#sec-selection-overfitting}
 
 Take basic linear regression sse as an example
 
 @Ambroise2002p1493
 
-
 ## Validating Feature Selection {#sec-validating-selection}
 
 diagram showing the selection is part of preprocessing so that when we validate the pipeline, we must re-run the feature selection
 
 note that the qualitative effect of selection has the largest variance compoment (compared to model-to-model etc)
-
 
 ## Unsupervised Selection {#sec-unsupervised-selection}
 
@@ -253,13 +251,13 @@ mars_df <-
 mars_active <- distinct(mars_df, predictor)
 ```
 
-To more closely demonstrate how automatic feature selection works, let’s return to the Cubist model fit to the delivery data in @sec-model-development-whole-game. That model created a series of regression trees, and converted them to rules (i.e., a path through the tree), then fit regression models for every rule. Recall that there was a very large number of rules (`r format(nrow(all_rules), big.mark = ",")`) each with its own linear regression. Despite the size of these data, only `r length(cb_active)` of the original `r length(cb_active) + cb_unused` predictors in the data set were used in rules or model fits; `r cb_unused` were judged to be irrelevant for predicting delivery times. 
+To more closely demonstrate how automatic feature selection works, let’s return to the Cubist model fit to the delivery data in @sec-model-development-whole-game. That model created a series of regression trees, and converted them to rules (i.e., a path through the tree), then fit regression models for every rule. Recall that there was a very large number of rules (`r format(nrow(all_rules), big.mark = ",")`) each with its own linear regression. Despite the size of the rule set, only `r length(cb_active)` of the original `r length(cb_active) + cb_unused` predictors in the data set were used in rules or model fits; `r cb_unused` were judged to be irrelevant for predicting delivery times. 
 
 ::: {.important-box}
 This shows that we can often reduce the number of features for free. 
 :::
 
-Different models view the training data differently, and the list of relevant predictors will likely change from model to model. When we fit a MARS model [@sec-mars-reg] to the data, only `r nrow(mars_active)` original predictors were used. If we use automatic selection methods to understand what is important, we should fit a variety of different models and create a consensus estimate of which predictors are “active” for the data set.  
+Different models view the training data differently, and the list of relevant predictors will likely change from model to model. When we fit a MARS model (@sec-mars-reg) to the data, only `r nrow(mars_active)` original predictors were used. If we use automatic selection methods to understand what is important, we should fit a variety of different models and create a consensus estimate of which predictors are "active" for the data set.  
 
 ## Wrapper Methods  {#sec-wrappers}
 
@@ -267,7 +265,7 @@ Wrapper methods use an overarching search method to optimize binary indicators, 
 
 The most popular approach is recursive feature elimination (RFE), which starts with the complete set of predictors and uses a mechanism to rank each in terms of their utility for predicting the outcome [@guyon2002gene]. Using this ordering, predictors are successively removed while performance is monitored. The performance profile determines the optimal subset size, and the most important predictors are included in the model. RFE is greedy, though; it predetermines the order of the predictors and will never consider a subset that is inconsistent with this order. 
 
-Two global search methods described in @sec-iterative, genetic algorithms and simulated annealing, can also be used. In this instance, the search space is the predictor space represented as binary indicators. The same process applies, though. For example, a GA would contain a population of different subsets, each producing a fitted model. The performance values enable the creation of the next generation via selection, reproduction, and mutation. In the case of simulated annealing, an initial subset is created and evaluated, and perturbations are created by randomly altering a small set of indicators (to create a “nearby” subset). Suboptimal subsets can be accepted similarly to our application for tuning parameters. 
+Two global search methods described in @sec-iterative, genetic algorithms and simulated annealing, can also be used. In this instance, the search space is the predictor space represented as binary indicators. The same process applies, though. For example, a GA would contain a population of different subsets, each producing a fitted model. The performance values enable the creation of the next generation via selection, reproduction, and mutation. In the case of simulated annealing, an initial subset is created and evaluated, and perturbations are created by randomly altering a small set of indicators (to create a "nearby" subset). Suboptimal subsets can be accepted similarly to our application for tuning parameters. 
 
 However, for each of these cases, the details matter. First, we should probably use separate data to 
 
@@ -304,11 +302,9 @@ nnet_sa_res$internal %>%
   geom_hline(yintercept = 0.25, col = "darkgreen", lty = 2)
 ```
 
-
 However, looks can be deceiving. The feature selection process is incredibly variable, and adding or removing an important predictor can cause severe changes in performance. @fig-selection-sa is showing the _average_ change in performance, and the relative smoothness of this curve is somewhat deceiving. 
 
 @fig-selection-sa-resamples shows what could have happened by visualizing each of the 10 searches. The results are much more dynamic and significantly vary from resample to resample. Most (but not all) searches contain one or two precipitous drops in the RMSE with many spikes of high errors (caused by a bad permutation of the solution). These cliffs and spikes do not reproducibly occur at the same iteration or in the same way. 
-
 
 ```{r}
 #| label: fig-selection-sa-resamples
@@ -329,11 +325,13 @@ nnet_sa_res$internal %>%
 
 We should keep in mind that @fig-selection-sa lets us know where, on average, the search should stop, but our actual search result (that uses the entire training set) is more likely to look like what we see in @fig-selection-sa-resamples.
 
-For this particular search, the numerically best result occurred at iteration `r nnet_sa_res$optIter` and the final model contained `r length(nnet_sa_res$optVariables)` predictors where `r xfun::numbers_to_words(sum(grepl("noise", nnet_sa_res$optVariables)))` of the twenty noise columns are still contained in the model. Our resampled estimate of the RMSE, at this iteration, was `r round(mean(nnet_sa_res$internal$RMSE[nnet_sa_res$internal$Iter == nnet_sa_res$optIter]), 3)` (a perfect model would have a value of 0.25). We also simulated a large “test set” and the RMSE for that data set was XXX with the optimized neural network.   
+For this particular search, the numerically best result occurred at iteration `r nnet_sa_res$optIter` and the final model contained `r length(nnet_sa_res$optVariables)` predictors where `r xfun::numbers_to_words(sum(grepl("noise", nnet_sa_res$optVariables)))` of the twenty noise columns are still contained in the model. Our resampled estimate of the RMSE, at this iteration, was `r round(mean(nnet_sa_res$internal$RMSE[nnet_sa_res$internal$Iter == nnet_sa_res$optIter]), 3)` (a perfect model would have a value of 0.25). We also simulated a large "test set" and the RMSE for that data set was XXX with the optimized neural network.   
 
 ## Filter Methods {#sec-filters}
 
-Filters can use any scoring function that quantifies how effectively the predictor predicts the outcome. One method is to use a univariate statistic to evaluate each predictor independently. For example, the area under the ROC curve [@sec-roc] can be computed for a binary classification outcome and a set of numeric predictors. The filter could be applied using these values by pre-defining a threshold for the statistic that defines “important enough.” Alternatively, the top $p^*$ predictors can be retained and used in the supervised model. 
+Filters can use any scoring function that quantifies how effectively the predictor predicts the outcome. One method is to use a univariate statistic to evaluate each predictor independently. For example, the area under the ROC curve (@sec-roc) can be computed for a binary classification outcome and a set of numeric predictors. The filter could be applied using these values by pre-defining a threshold for the statistic that defines "important enough." Alternatively, the top $p^*$ predictors can be retained and used in the supervised model. 
+
+TODO mention p-values and inferential statistics
 
 Multivariate methods can also be used. These simultaneously compute measures of importance for all predictors. This is usually preferred since univariate statistics can be compromised when the predictors are highly correlated and/or have important interaction effects.  
 
@@ -344,14 +342,12 @@ A variety of models have built-in methods for measuring importance. For example:
  - Similarly, partial least squares models can compute importance scores from their loading estimates [@wold1993pls;@farres2015comparison]. 
  - As mentioned in @sec-interactions-detection, BART (and H-statistics) can measure the importance of individual predictors using the same techniques to discover interaction effects. 
  
- There are also model-free tools for computing importance scores from an existing model based on permuting each predictor and measuring how performance metrics change. This approach was initially popularized by the random forest model [@sec-rand-forest-cls] but can be easily extended to any model. See @breiman2001random, @strobl2007bias, and @sec-importance for more details.  There are a few other methods worth mentioning: 
+ There are also model-free tools for computing importance scores from an existing model based on permuting each predictor and measuring how performance metrics change. This approach was initially popularized by the random forest model (@sec-rand-forest-cls) but can be easily extended to any model. See @breiman2001random, @strobl2007bias, and @sec-importance for more details.  There are a few other methods worth mentioning: 
  
- - Relief [@kira1992practical;@kononenko1994estimating] and its descendant methods randomly select training set points and use the outcome values of their nearest neighbors to aggregate statistics to measure importance. 
+ - The Relief allgorithm [@kira1992practical;@kononenko1994estimating] and its descendant methods randomly select training set points and use the outcome values of their nearest neighbors to aggregate statistics to measure importance. 
  - Minimum redundancy, maximum relevance analysis (MRMR) combines two statistics, one for importance and another for between-predictor correlation, to find a subset that has the best of both quantities [@peng2005feature]. 
  
-There are also tools to help combine multiple filters into a compound score. TODO desirability functions. penalize by subset size
-
-TODO mention p-values and inferential statistics
+There are also tools to help combine multiple filters into a compound score. For example, we may want to blend the number of active predictors and multiple performance characteristics into a single score used to rank different tuning parameter candidates. One way to do this is to use _desirability functions_. These will be described in @sec-combined-metrics, Also, Section [12.3.2](https://bookdown.org/max/FES/genetic-algorithms.html#coercing-sparsity) of @fes shows an example of how desirability functions can be incorporated into feature selection. 
 
 Once an appropriate scoring function is determined, a tuning parameter can be added for how many predictors are to be retained. This is like RFE, but we optimize all the tuning parameters simultaneously and evaluate subsets in a potentially less greedy way. 
 
@@ -387,8 +383,10 @@ sim_rs <- vfold_cv(sim_tr)
 
 sim_rec <-
   recipe(outcome ~ ., data = sim_tr) %>%
-  step_select_forests(all_predictors(), outcome = "outcome", top_p = tune(),
-                      mtry = num_pred) %>%
+  step_select_forests(
+    all_predictors(), outcome = "outcome", 
+    top_p = tune(), mtry = num_pred, trees = 1000,
+    id = "filter") %>%
   step_normalize(all_predictors())
 
 mlp_spec <-
@@ -421,6 +419,7 @@ get_rm <- function(x) {
 
 ctrl_filter <- control_grid(save_workflow = TRUE, extract = get_rm) 
 
+set.seed(152)
 mlp_rf_sfd_res <-
   mlp_wflow %>%
   tune_grid(
@@ -431,48 +430,75 @@ mlp_rf_sfd_res <-
     control = ctrl_filter
   )
 
-mlp_rf_fit <- fit_best(mlp_rf_sfd_res, , metric = "rmse")
+mlp_rf_fit <- fit_best(mlp_rf_sfd_res, metric = "rmse")
+mlp_rf_best <- select_best(mlp_rf_sfd_res, metric = "rmse")
 
 mlp_rf_mtr <- 
   mlp_rf_fit %>% 
   augment(sim_te) %>% 
   rmse(outcome, .pred)
 
-# removed_vars <- 
-#   mlp_rf_sfd_res %>% 
-#   select(id, .extracts) %>% 
-#   unnest(.extracts) %>% 
-#   inner_join(
-#     select_best(mlp_rf_sfd_res, metric = "rmse"),
-#     by = join_by(top_p, hidden_units, penalty, activation, learn_rate, .config)
-#   ) %>% 
-#   select(id, .extracts) %>% 
-#   unnest(.extracts)
-# 
-# retained_vars <- 
-#   crossing(terms = names(sim_tr)[-1], id = mlp_rf_sfd_res$id) %>% 
-#   anti_join(removed_vars, by = join_by(terms, id))
+retained_variables <- 
+  map(
+  mlp_rf_sfd_res$.extracts, 
+  ~ inner_join(.x, mlp_rf_best, 
+               by = join_by(top_p, hidden_units, penalty, activation, 
+                            learn_rate, .config))
+) %>% 
+  map(~ .x$.extracts[[1]]) %>% 
+  map(~ anti_join(tibble(terms = names(sim_tr)[-1]), .x, by = "terms")) %>% 
+  map_dfr(~ .x, .id = "fold")
+
+final_variables <- 
+  mlp_rf_fit %>% 
+  extract_mold() %>% 
+  pluck("predictors") %>% 
+  names() %>% 
+  sort()
+
+num_noise <- sum(grepl("noise", final_variables))
+non_noise <- final_variables[!grepl("noise", final_variables)]
+non_noise <- gsub("predictor_", "", non_noise)
+non_noise <- gsub("^0", "", non_noise)
+non_noise <- paste0("$x_{", non_noise, "}$")
 ```
 
-add extract, 
+We measured the predictors using the standard random forest importance score using the same data as the previous simulated annealing search. The number of features to retain was treated as an additional tuning parameter. Cross-validation was used to select the best candidate from the space-filling design with 50 candidate points. @fig-mlp-rf(a) shows the tuning results. The number of selected predictors appears to have the largest effect on the results; performance worsens as we remove too many features (which probably includes informative ones). It also appears that too much penalization has a negative effect on reducing the RMSE.
+
+The model with the smallest RMSE selected the top `r xfun::numbers_to_words(mlp_rf_best$top_p)` most important predictors, `r mlp_rf_best$hidden_units` hidden units, a penalty value of 10<sup>`r signif(log10(mlp_rf_best$penalty), 3)`</sup>, a learning rate of 10<sup>`r signif(log10(mlp_rf_best$learn_rate), 3)`</sup>, and `r gsub("_", "-", mlp_rf_best$activation)` activation. The resampled RMSE associated with the numerically best results was `r round(show_best(mlp_rf_sfd_res, metric = "rmse", n = 1)$mean, 3)`. When that model was fit on the entire traning set, the holdout RMSE estimate was `r round(mlp_rf_mtr$.estimate, 3)`.  One reason that these two estimates of performance are so close is the relatively high $n_{tr}/p$ ratio (1,000 / 29 $\approx$ 34.5).
 
 ```{r}
 #| label: fig-mlp-rf
 #| echo: false
 #| warning: false
-#| out-width: 60%
-#| fig-width: 5
+#| out-width: 100%
+#| fig-width: 10
 #| fig-height: 5
-#| fig-cap: Joint tuning of model and wrapper parameters.  
+#| fig-align: center
+#| fig-cap: "Panel (a): The results of tuning a variance importance filter and the parameters from a single-layer neural network for predicting the simulated data from @eq-hooker.  Panel (b): The frequency distribution of predictor selection in the 10 folds for the model with the smallest RMSE." 
 
-autoplot(mlp_rf_sfd_res, metric = "rmse") + 
+p_rmse <- 
+  autoplot(mlp_rf_sfd_res, metric = "rmse") + 
   ylim(c(.24, .72)) +
-  geom_hline(yintercept = 0.25, col = "darkgreen", lty = 2)
+  geom_hline(yintercept = 0.25, col = "darkgreen", lty = 2) +
+  labs(title = "(a) Resampled RMSE results")
+
+p_terms <- 
+  retained_variables %>% 
+  mutate(
+    terms = gsub("predictor", "x", terms)
+  ) %>% 
+  ggplot(aes(terms)) + 
+  geom_bar() + 
+  coord_flip() + 
+  labs(x = NULL, y = "# Selections in 10 Folds", title = "(b) Selection Frequency") +
+  scale_y_continuous(breaks = pretty_breaks())
+
+(p_rmse | p_terms) + plot_layout(widths = c(4, 3))
 ```
 
+Recall that the importance scores are computed on different analysis sets. For the best model, @fig-mlp-rf(b) contains the frequency at which each predictor was selected. For the most part, the importance scores are pretty accurate; almost all informative features are consistently selected across folds. When the final model was fit on the entire training set, `r cli::format_inline("{num_noise} noise predictor{?s} {?was/were}")`  included in the model along with predictors `r cli::format_inline("{non_noise}")`. These results are unusually clean, mostly due to the large sample size and relatively small predictor set.
 
-
-The resampled RMSE associated with the numerically best results was `r round(show_best(mlp_rf_sfd_res, metric = "rmse", n = 1)$mean, 3)`. When that model was fit on the entire traning set, the holdout RMSE estimate was `r round(mlp_rf_mtr$.estimate, 3)`. 
-One reason that these two estimates of performance are so close is the relatively high $n_{tr}/p$ ratio (1,000 / 29 $\approx$ 34.5).
+Similar to the discussion in @sec-resampling-faq, the different predictor sets discovered in the resamples can give us a sense of our results’ consistency. They are “realizations” of what _could_ have occured. Once we fit the final model, we get the _actual_ predictor set. 
 
 ## Chapter References {.unnumbered}
