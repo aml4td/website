@@ -72,7 +72,7 @@ $$
 y_i = \pi^{x_{i1} x_{i2}}  \sqrt{ 2 x_{i3} } - asin(x_{i4}) + \log(x_{i3}  + x_{i5}) - (x_{i9} / x_{i10}) \sqrt{x_{i7} / x_{i8}} - x_{i2} x_{i7} + \epsilon_i
 $$ {#eq-hooker}
 
-where predictors 1, 2, 3, 6, 7, and 9 are standard uniform while the others are uniform on `[0.6, 1.0]`. Note that $x_6$ is not used in the equation. The errors $\epsilon_i$ are Gaussian with mean zero and a standard deviation of 0.25. Training and testing data sizes where simulated to be 1,000 and 100,000, respectively. 
+where predictors 1, 2, 3, 6, 7, and 9 are standard uniform while the others are uniform on `[0.6, 1.0]`. Note that $x_6$ is not used in the equation. The errors $\epsilon_i$ are Gaussian with mean zero and a standard deviation^[For this value of the simulated standard deviation, the best possible RMSE value is also 0.25.] of 0.25. Training and testing data sizes where simulated to be 1,000 and 100,000, respectively. 
 
 To assess the effect of useless predictors, between 10 and 100 extra columns of standard normal data were generated (unrelated to the outcome). Models were fit, and the RMSE of the test set was computed for each model. Twenty simulations were run for each combination of models and extra features^[Details and code can be found at [`https://github.com/topepo/noise_features_sim `](https://github.com/topepo/noise_features_sim).]. 
 
@@ -265,7 +265,7 @@ Different models view the training data differently, and the list of relevant pr
 
 Wrapper methods use an overarching search method to optimize binary indicators, one for each potential predictor, that control which predictors are given to the model.
 
-The most popular approach is recursive feature elimination (RFE), which starts with the complete set of predictors and uses a mechanism to rank each in terms of their utility for predicting the outcome. Using this ordering, predictors are successively removed while performance is monitored. The performance profile determines the optimal subset size, and the most important predictors are included in the model. RFE is greedy, though; it predetermines the order of the predictors and will never consider a subset that is inconsistent with this order. 
+The most popular approach is recursive feature elimination (RFE), which starts with the complete set of predictors and uses a mechanism to rank each in terms of their utility for predicting the outcome [@guyon2002gene]. Using this ordering, predictors are successively removed while performance is monitored. The performance profile determines the optimal subset size, and the most important predictors are included in the model. RFE is greedy, though; it predetermines the order of the predictors and will never consider a subset that is inconsistent with this order. 
 
 Two global search methods described in @sec-iterative, genetic algorithms and simulated annealing, can also be used. In this instance, the search space is the predictor space represented as binary indicators. The same process applies, though. For example, a GA would contain a population of different subsets, each producing a fitted model. The performance values enable the creation of the next generation via selection, reproduction, and mutation. In the case of simulated annealing, an initial subset is created and evaluated, and perturbations are created by randomly altering a small set of indicators (to create a “nearby” subset). Suboptimal subsets can be accepted similarly to our application for tuning parameters. 
 
@@ -280,7 +280,7 @@ The need to optimize tuning parameters can greatly complicate this entire proces
 
 In this case, the traditional approach uses a nested resampling procedure similar to the one shown in @sec-nested-resampling. An inner resampling scheme tunes the model, and the optimized model is used to predict the assessment set from the outer resample. Even with parallel processing, this can become an onerous computational task. 
 
-However, let’s illustrate a wrapper method using an artificial data set from the simulations described in @sec-irrelevant-predictors. We’ll use @eq-hooker and supplement the nine real predictors with twenty noise columns. For simplicity, we’ll use a neural network to predict the outcome with a static set of tuning parameters. The training set consisted of 1,000 data points. 
+However, let’s illustrate a wrapper method using an artificial data set from the simulations described in @sec-irrelevant-predictors. We’ll use @eq-hooker and supplement the eight truly important predictors with twenty one noise columns. For simplicity, we’ll use a neural network to predict the outcome with a static set of tuning parameters. The training set consisted of 1,000 data points. 
 
 Since feature selection is part of the broader model pipeline, 10-fold cross-validation was used to measure the effectiveness of 150 iterations of simulated annealing. A separate SA run is created for each resample; we use the analysis set to train the model on the current subset, and the assessment set is used to measure the RMSE. 
 
@@ -292,7 +292,7 @@ Since feature selection is part of the broader model pipeline, 10-fold cross-val
 #| out-width: 60%
 #| fig-width: 5
 #| fig-height: 3.25
-#| fig-cap: The progress of using simualted annealing to select features for.a neural network.  
+#| fig-cap: The progress of using simualted annealing to select features for.a neural network. The dashed green line indicators the best RMSE value achievable for these simulated data. 
 load("../RData/nnet_sa_res.RData")
 
 nnet_sa_res$internal %>% 
@@ -300,7 +300,8 @@ nnet_sa_res$internal %>%
   ggplot(aes(Iter, mean)) + 
   geom_line() +
   geom_point(cex = 1 / 2) +
-  labs(x = "SA Iteration", y = "RMSE (resampled)")
+  labs(x = "SA Iteration", y = "RMSE (resampled)") +
+  geom_hline(yintercept = 0.25, col = "darkgreen", lty = 2)
 ```
 
 
@@ -322,7 +323,8 @@ nnet_sa_res$internal %>%
   ggplot(aes(Iter, RMSE)) + 
   geom_line() +
   facet_wrap(~ Resample) +
-  labs(x = "SA Iteration", y = "RMSE")
+  labs(x = "SA Iteration", y = "RMSE") +
+  geom_hline(yintercept = 0.25, col = "darkgreen", lty = 2)
 ```
 
 We should keep in mind that @fig-selection-sa lets us know where, on average, the search should stop, but our actual search result (that uses the entire training set) is more likely to look like what we see in @fig-selection-sa-resamples.
@@ -331,26 +333,25 @@ For this particular search, the numerically best result occurred at iteration `r
 
 ## Filter Methods {#sec-filters}
 
-Filters can use any scoring function that quantifies how effectively the predictor predicts the outcome. One method is to use a univariate statistic to evaluate each predictor independently. For example, the area under the ROC curve [@sec-roc] can be computed for a binary classification outcome and a set of numeric predictors. The filter could be applied using these values by pre-defining a threshold for the statistic that defines “important enough.” Alternatively, the top $ p*$ predictors can be retained and used in the supervised model. 
+Filters can use any scoring function that quantifies how effectively the predictor predicts the outcome. One method is to use a univariate statistic to evaluate each predictor independently. For example, the area under the ROC curve [@sec-roc] can be computed for a binary classification outcome and a set of numeric predictors. The filter could be applied using these values by pre-defining a threshold for the statistic that defines “important enough.” Alternatively, the top $p^*$ predictors can be retained and used in the supervised model. 
 
-Multivariate methods can also be used. These simultaneously compute measures of importance for all predictors. This is usually preferred since univariate statistics can be compromised when the predictors are highly correlated or have important interaction effects.  
+Multivariate methods can also be used. These simultaneously compute measures of importance for all predictors. This is usually preferred since univariate statistics can be compromised when the predictors are highly correlated and/or have important interaction effects.  
 
 A variety of models have built-in methods for measuring importance. For example: 
 
- - MARS and decision trees can compute the importance of each predictor by aggregating the improvement in the objective function when each predictor is used in a split or an artificial feature. 
- - Some neural networks can use the values of their coefficients in each layer to compute an aggregate measure of effectiveness for each feature. REFS
- - Similarly, partial least squares models can compute importance scores from their loading estimates. 
+ - MARS [@friedman1991multivariate] and decision trees can compute the importance of each predictor by aggregating the improvement in the objective function when each predictor is used in a split or an artificial feature. 
+ - Some neural networks can use the values of their coefficients in each layer to compute an aggregate measure of effectiveness for each feature [@garson1991interpreting;@gevrey2003review;@olden2004accurate].
+ - Similarly, partial least squares models can compute importance scores from their loading estimates [@wold1993pls;@farres2015comparison]. 
  - As mentioned in @sec-interactions-detection, BART (and H-statistics) can measure the importance of individual predictors using the same techniques to discover interaction effects. 
  
- There are also model-free tools for computing importance scores from an existing model based on permuting each predictor and measuring how performance metrics change. This approach was initially popularized by the random forest model [@sec-rand-forest-cls] but can be easily extended to any model. See REFS and @sec-importance for more details.  There are a few other methods worth mentioning: 
+ There are also model-free tools for computing importance scores from an existing model based on permuting each predictor and measuring how performance metrics change. This approach was initially popularized by the random forest model [@sec-rand-forest-cls] but can be easily extended to any model. See @breiman2001random, @strobl2007bias, and @sec-importance for more details.  There are a few other methods worth mentioning: 
  
- - Relief [REF] and its descendant methods randomly select training set points and use the outcome values of their nearest neighbors to aggregate statistics to measure importance. 
- - Minimum redundancy, maximum relevance analysis (MRMR) (REF ding and peng) combines two statistics, one for importance and another for between-predictor correlation, to find a subset that has the best of both quantities. 
+ - Relief [@kira1992practical;@kononenko1994estimating] and its descendant methods randomly select training set points and use the outcome values of their nearest neighbors to aggregate statistics to measure importance. 
+ - Minimum redundancy, maximum relevance analysis (MRMR) combines two statistics, one for importance and another for between-predictor correlation, to find a subset that has the best of both quantities [@peng2005feature]. 
  
-There are also tools to help combine multiple filters into a compound score. TODO desirability functions. 
+There are also tools to help combine multiple filters into a compound score. TODO desirability functions. penalize by subset size
 
 TODO mention p-values and inferential statistics
-
 
 Once an appropriate scoring function is determined, a tuning parameter can be added for how many predictors are to be retained. This is like RFE, but we optimize all the tuning parameters simultaneously and evaluate subsets in a potentially less greedy way. 
 
@@ -464,12 +465,14 @@ add extract,
 #| fig-height: 5
 #| fig-cap: Joint tuning of model and wrapper parameters.  
 
-autoplot(mlp_rf_sfd_res, metric = "rmse") + ylim(c(.25, .72))
+autoplot(mlp_rf_sfd_res, metric = "rmse") + 
+  ylim(c(.24, .72)) +
+  geom_hline(yintercept = 0.25, col = "darkgreen", lty = 2)
 ```
 
-desirability functions; penalize by subset size; blend multiple criteria
 
-`r round(mlp_rf_mtr$.estimate, 3)`
 
+The resampled RMSE associated with the numerically best results was `r round(show_best(mlp_rf_sfd_res, metric = "rmse", n = 1)$mean, 3)`. When that model was fit on the entire traning set, the holdout RMSE estimate was `r round(mlp_rf_mtr$.estimate, 3)`. 
+One reason that these two estimates of performance are so close is the relatively high $n_{tr}/p$ ratio (1,000 / 29 $\approx$ 34.5).
 
 ## Chapter References {.unnumbered}
