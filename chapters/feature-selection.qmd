@@ -72,7 +72,7 @@ $$
 y_i = \pi^{x_{i1} x_{i2}}  \sqrt{ 2 x_{i3} } - asin(x_{i4}) + \log(x_{i3}  + x_{i5}) - (x_{i9} / x_{i10}) \sqrt{x_{i7} / x_{i8}} - x_{i2} x_{i7} + \epsilon_i
 $$ {#eq-hooker}
 
-where predictors 1, 2, 3, 6, 7, and 9 are standard uniform while the others are uniform on `[0.6, 1.0]`. The errors $\epsilon_i$ are Gaussian with mean zero and a standard deviation of 0.25. Training and testing data sizes where simulated to be 1,000 and 100,000, respectively. 
+where predictors 1, 2, 3, 6, 7, and 9 are standard uniform while the others are uniform on `[0.6, 1.0]`. Note that $x_6$ is not used in the equation. The errors $\epsilon_i$ are Gaussian with mean zero and a standard deviation of 0.25. Training and testing data sizes where simulated to be 1,000 and 100,000, respectively. 
 
 To assess the effect of useless predictors, between 10 and 100 extra columns of standard normal data were generated (unrelated to the outcome). Models were fit, and the RMSE of the test set was computed for each model. Twenty simulations were run for each combination of models and extra features^[Details and code can be found at [`https://github.com/topepo/noise_features_sim `](https://github.com/topepo/noise_features_sim).]. 
 
@@ -329,126 +329,30 @@ We should keep in mind that @fig-selection-sa lets us know where, on average, th
 
 For this particular search, the numerically best result occurred at iteration `r nnet_sa_res$optIter` and the final model contained `r length(nnet_sa_res$optVariables)` predictors where `r xfun::numbers_to_words(sum(grepl("noise", nnet_sa_res$optVariables)))` of the twenty noise columns are still contained in the model. Our resampled estimate of the RMSE, at this iteration, was `r round(mean(nnet_sa_res$internal$RMSE[nnet_sa_res$internal$Iter == nnet_sa_res$optIter]), 3)` (a perfect model would have a value of 0.25). We also simulated a large “test set” and the RMSE for that data set was XXX with the optimized neural network.   
 
-
-
 ## Filter Methods {#sec-filters}
 
-```{r}
-#| label: filter-deliveries
-#| include: false
-#| cache: true
+Filters can use any scoring function that quantifies how effectively the predictor predicts the outcome. One method is to use a univariate statistic to evaluate each predictor independently. For example, the area under the ROC curve [@sec-roc] can be computed for a binary classification outcome and a set of numeric predictors. The filter could be applied using these values by pre-defining a threshold for the statistic that defines “important enough.” Alternatively, the top $ p*$ predictors can be retained and used in the supervised model. 
 
-spline_filter_rec <-
-  recipe(time_to_delivery ~ ., data = delivery_train) %>%
-  step_dummy(all_factor_predictors()) %>%
-  step_zv(all_predictors()) %>%
-  step_spline_natural(hour, distance, deg_free = 10) %>%
-  step_interact(~starts_with("hour"):starts_with("day")) %>% 
-  step_bin2factor(starts_with("item")) %>% 
-  step_select_aov(starts_with("item"), outcome = "time_to_delivery", 
-                  threshold = 0.1)
+Multivariate methods can also be used. These simultaneously compute measures of importance for all predictors. This is usually preferred since univariate statistics can be compromised when the predictors are highly correlated or have important interaction effects.  
 
-filter_wflow <-
-  workflow() %>%
-    add_model(linear_reg()) %>%
-    add_recipe(spline_filter_rec)
+A variety of models have built-in methods for measuring importance. For example: 
 
-set.seed(3838)
-filter_res <-
-  fit_resamples(
-    filter_wflow,
-    delivery_rs,
-    control = ctrl_rs,
-    metrics = reg_metrics
-  )
+ - MARS and decision trees can compute the importance of each predictor by aggregating the improvement in the objective function when each predictor is used in a split or an artificial feature. 
+ - Some neural networks can use the values of their coefficients in each layer to compute an aggregate measure of effectiveness for each feature. REFS
+ - Similarly, partial least squares models can compute importance scores from their loading estimates. 
+ - As mentioned in @sec-interactions-detection, BART (and H-statistics) can measure the importance of individual predictors using the same techniques to discover interaction effects. 
+ 
+ There are also model-free tools for computing importance scores from an existing model based on permuting each predictor and measuring how performance metrics change. This approach was initially popularized by the random forest model [@sec-rand-forest-cls] but can be easily extended to any model. See REFS and @sec-importance for more details.  There are a few other methods worth mentioning: 
+ 
+ - Relief [REF] and its descendant methods randomly select training set points and use the outcome values of their nearest neighbors to aggregate statistics to measure importance. 
+ - Minimum redundancy, maximum relevance analysis (MRMR) (REF ding and peng) combines two statistics, one for importance and another for between-predictor correlation, to find a subset that has the best of both quantities. 
+ 
+There are also tools to help combine multiple filters into a compound score. TODO desirability functions. 
 
-filter_metrics <- collect_metrics(filter_res)
-filter_mae <- filter_metrics$mean[filter_metrics$.metric == "mae"]
-
-spline_metrics <- collect_metrics(lin_reg_res)
-spline_mae <- spline_metrics$mean[spline_metrics$.metric == "mae"]
-
-# ------------------------------------------------------------------------------
-
-spline_tune_filter_rec <-
-  recipe(time_to_delivery ~ ., data = delivery_train) %>%
-  step_dummy(all_factor_predictors()) %>%
-  step_zv(all_predictors()) %>%
-  step_spline_natural(hour, distance, deg_free = 10) %>%
-  step_interact(~starts_with("hour"):starts_with("day")) %>% 
-  step_bin2factor(starts_with("item")) %>% 
-  step_select_aov(starts_with("item"), outcome = "time_to_delivery", 
-                  top_p = tune())
-
-filter_tune_wflow <-
-  workflow() %>%
-    add_model(linear_reg()) %>%
-    add_recipe(spline_tune_filter_rec)
-
-set.seed(3838)
-filter_tune_res <-
-  tune_grid(
-    filter_tune_wflow,
-    delivery_rs,
-    control = ctrl_rs,
-    grid = tibble(top_p = 1:27),
-    metrics = reg_metrics
-  )
-
-# set.seed(382)
-# filter_tune_ci <- 
-#   filter_tune_res %>% 
-#   int_pctl(times = 5000, alpha = 0.10)
-
-filter_tune_mae <- 
-  filter_tune_res %>% 
-  collect_metrics() %>% 
-  filter(.metric == "mae") %>% 
-  mutate(txt = map_chr(mean, dec_to_time))
-
-filter_tune_mae_min <- 
-  filter_tune_mae %>% 
-  slice_min(mean) %>% 
-  pluck("txt")
-
-filter_tune_mae_max <- 
-  filter_tune_mae %>% 
-  slice_max(mean) %>% 
-  pluck("txt")
-```
+TODO mention p-values and inferential statistics
 
 
-
-```{r}
-#| label: fig-tune-filter
-#| echo: false
-#| out-width: 60%
-#| fig-width: 5
-#| fig-height: 3.25
-#| fig-cap: The effect of a simple t-test filter from the delivery item predictors on performance.  
-
-autoplot(filter_tune_res, metric = "mae") +
-  labs(y = "MAE (in minutes)")
-
-# filter_tune_ci %>% 
-#   filter(.metric == "mae") %>% 
-#   ggplot(aes(top_p)) + 
-#   geom_point(aes(y = .estimate)) + 
-#   # geom_line(aes(y = .estimate), alpha = 1 / 2) +
-#   geom_errorbar(aes(ymin = .lower, ymax = .upper), width = 1 /2, alpha = 1 / 2) + 
-#   labs(y = "MAE (in minutes)", x = "# Selected Predictors")
-```
-
-The result is that, based on performance, it is best to keep almost all of the delivery items in the model. As we start to remove them, performance values decrease, although degradation is negligible (MAE ranges from `r filter_tune_mae_min` to `r filter_tune_mae_max`). The takeaway from this analysis is that these predictors matter statistically but not practically. 
-
-This is counter to the data analysis shown in @fig-delivery-increases, where many of the item predictors were found to be unlikely to affect delivery times (again, statistically).  The difference is key: @fig-delivery-increases shows a set of univariate analyses while the results shown in @fig-tune-filter evaluate the item predictors in a linear model that contains many other predictors (including others for delivery items). 
-
-This surfaces an important idea that we’ll get different results when filters (and feature selection in general) are applied in different ways. 
-
-
-## Subset Size as a Tuning Parameter {#sec-tuning-subset-size}
-
-An approach somewhere between filters and wrappers can be used. In this approach, a measure of importance for each predictor is computed, and a tuning parameter is added for how these are to be retained. This is like RFE, but we optimize all the tuning parameters simultaneously and evaluate subsets in a potentially less greedy way. 
+Once an appropriate scoring function is determined, a tuning parameter can be added for how many predictors are to be retained. This is like RFE, but we optimize all the tuning parameters simultaneously and evaluate subsets in a potentially less greedy way. 
 
 There are two potential downsides, though. First, there is still the potential for enormous computational costs, especially if the ranking process is expensive. For example, if we use a grid search, there is significant potential for the same subset size to occur more than once in the grid^[The same issue can also occur with iterative search]. In this case, we are repeating the same importance calculation multiple times. 
 
@@ -482,7 +386,8 @@ sim_rs <- vfold_cv(sim_tr)
 
 sim_rec <-
   recipe(outcome ~ ., data = sim_tr) %>%
-  step_select_forests(all_predictors(), outcome = "outcome", top_p = tune()) %>%
+  step_select_forests(all_predictors(), outcome = "outcome", top_p = tune(),
+                      mtry = num_pred) %>%
   step_normalize(all_predictors())
 
 mlp_spec <-
@@ -505,14 +410,24 @@ mlp_param <-
 
 # ------------------------------------------------------------------------------
 
+get_rm <- function(x) {
+  require(tidymodels)
+  x %>% 
+    extract_recipe() %>% 
+    tidy(id = "filter") %>% 
+    dplyr::select(terms)
+}
+
+ctrl_filter <- control_grid(save_workflow = TRUE, extract = get_rm) 
+
 mlp_rf_sfd_res <-
   mlp_wflow %>%
   tune_grid(
     resamples = sim_rs,
     param_info = mlp_param,
-    grid = 25,
+    grid = 50,
     metrics = metric_set(rmse),
-    control = control_grid(save_workflow = TRUE)
+    control = ctrl_filter
   )
 
 mlp_rf_fit <- fit_best(mlp_rf_sfd_res, , metric = "rmse")
@@ -521,6 +436,21 @@ mlp_rf_mtr <-
   mlp_rf_fit %>% 
   augment(sim_te) %>% 
   rmse(outcome, .pred)
+
+# removed_vars <- 
+#   mlp_rf_sfd_res %>% 
+#   select(id, .extracts) %>% 
+#   unnest(.extracts) %>% 
+#   inner_join(
+#     select_best(mlp_rf_sfd_res, metric = "rmse"),
+#     by = join_by(top_p, hidden_units, penalty, activation, learn_rate, .config)
+#   ) %>% 
+#   select(id, .extracts) %>% 
+#   unnest(.extracts)
+# 
+# retained_vars <- 
+#   crossing(terms = names(sim_tr)[-1], id = mlp_rf_sfd_res$id) %>% 
+#   anti_join(removed_vars, by = join_by(terms, id))
 ```
 
 add extract, 
