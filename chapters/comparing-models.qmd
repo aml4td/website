@@ -1,0 +1,383 @@
+---
+knitr:
+  opts_chunk:
+    cache.path: "../_cache/comparing-models/"
+---
+
+# Comparing Models {#sec-comparing-models}
+
+```{r}
+#| label: comparing-models-setup
+#| include: false
+
+source("../R/_common.R")
+
+# ------------------------------------------------------------------------------
+# Required packages
+library(readr)
+library(tidymodels)
+library(patchwork)
+library(kableExtra)
+library(doParallel)
+library(leaflet)
+library(ragg)
+library(bestNormalize)
+library(probably)
+library(rules) 
+library(gt)
+
+
+# Also requires: 
+# for model fitting
+# viridisLite
+
+# ------------------------------------------------------------------------------
+# Set options
+cl <- makePSOCKcluster(parallel::detectCores(logical = TRUE))
+registerDoParallel(cl)
+tidymodels_prefer()
+theme_set(theme_transparent())
+set_options()
+
+# ------------------------------------------------------------------------------
+# Load previous data sets
+
+source("../R/setup_deliveries.R")
+```
+
+```{r}
+#| label: model-options
+#| include: false
+
+ctrl_rs <-
+  control_resamples(
+    save_pred = TRUE,
+    parallel_over = "everything",
+    save_workflow = TRUE
+  )
+
+get_iters <- function(x) {
+  fit <- extract_fit_engine(x)
+  tibble::tibble(iteration = seq(along = fit$loss), 
+                 loss = fit$loss)
+}
+
+ctrl_grid <-
+  control_grid(
+    save_pred = TRUE,
+    parallel_over = "everything",
+    save_workflow = TRUE,
+    extract = get_iters
+  )
+reg_metrics <- metric_set(mae, rmse, rsq)
+
+delivery_folds <- vfold_cv(delivery_train, v=10)
+```
+
+```{r}
+#| label: rf-fit
+#| include: false
+#| cache: true
+
+rf_spec <- 
+  rand_forest(trees = 1000,
+              mtry = 10) %>% 
+  set_engine("ranger") %>% 
+  set_mode("regression")
+
+rf_wflow <- 
+  workflow() %>% 
+  add_model(rf_spec) %>%
+  add_formula(time_to_delivery ~ .)
+
+set.seed(3838)
+rf_res <-
+  tune_grid(rf_wflow,
+            resamples = delivery_folds,
+            control = ctrl_grid,
+            #grid = rf_grid,
+            metrics = reg_metrics)
+
+rf_metrics <- collect_metrics(rf_res, summarize=FALSE)
+```
+
+```{r}
+#| label: cubist-fit
+#| include: false
+#| cache: true
+
+cb_wflow <- 
+  workflow() %>% 
+  add_model(cubist_rules(committees = 5)) %>% 
+  add_formula(time_to_delivery ~ .)
+
+set.seed(3838)
+cb_res <-
+  fit_resamples(cb_wflow, 
+                resamples = delivery_folds, 
+                control = ctrl_grid, 
+                metrics = reg_metrics)
+
+cb_metrics <- collect_metrics(cb_res, summarize=FALSE)
+```
+
+```{r}
+#| label: nnet-fit-comps
+#| include: false
+#| cache: true
+
+norm_rec <- 
+  recipe(time_to_delivery ~ ., data = delivery_train) %>% 
+  step_dummy(day) %>% 
+  step_zv(all_predictors()) %>% 
+  step_normalize(all_predictors())
+
+nnet_spec <- 
+  mlp(
+    hidden_units = 19,
+    penalty = 0.01,
+    learn_rate = 0.1,
+    epochs = 5000
+  ) %>%
+  set_mode("regression") %>%
+  set_engine("brulee", stop_iter = 10, rate_schedule = "cyclic")
+
+nnet_wflow <- 
+  workflow() %>% 
+  add_model(nnet_spec) %>% 
+  add_recipe(norm_rec)
+
+set.seed(3838)
+nnet_res <-
+  fit_resamples(nnet_wflow, 
+                resamples = delivery_folds, 
+                control = ctrl_grid, 
+                metrics = reg_metrics)
+
+nnet_metrics <- collect_metrics(nnet_res, summarize=FALSE)
+```
+
+
+In chapters @sec-overfitting, @sec-resampling, and @sec-grid, we established several key fundamentals of building predictive models. To create an effective model, we must employ strategies to reduce overfitting, use resampling techniques to accurately measure predictive performance, and systematically search a tuning parameter space to identify values that optimize model accuracy. By following these approaches, we can have confidence that our model generalizes well to new, unseen data and provides a realistic estimate of its predictive performance.
+
+With this foundation in place, the next step is to select the best model for a given data set.  When presented with new data, we typically evaluate multiple machine learning models, each with different sets of tuning parameters. Our goal is to select the model and parameter combination that yields the best predictive performance. But how do we determine which model and corresponding parameters are truly the best?
+
+Making this decision requires considering several factors. As briefly discussed in Chapter @sec-whole-game, practical characteristics such as model complexity, interpretability, and deployability play an important role. These aspects are typically assessed qualitatively based on practical considerations.  Predictive performance, however, is an objective measure that can be evaluated quantitatively. However, comparing predictive performance across models raises an important question:  how can we be sure that one model's predictive performance is truly superior to another's?
+
+To address this, we will explore graphical and statistical methods for comparing the predictive performance of different models on the same dataset. These comparisons may involve evaluating different tuning parameter values within the same model or comparing entirely different types of models. As we will see, the same graphical and statistical tools can be applied in both cases.  In the first half of this chapter, we will focus on statistical techniques based on the Frequentist approach.  In the second half, we will explore Bayesian methods for making model comparisons.
+
+## Statistical Foundations
+
+Regardless of whether we use a Frequentist or Bayesian approach to comparing model performance, both methods aim to identify key factors that influence the outcome. The modeling approach is then applied to the data to quantify the impact of these factors. Specifically, we seek to determine whether their effect on the outcome is statistically significant--meaning that it is unlikely to be due to random chance. In this chapter, we focus on evaluating whether certain sets of tuning parameters perform better than others within a specific model.  Once different models have been tuned, our goal is to select the best-performing model overall.
+
+To illustrate these statistical techniques, we will use the food delivery time dataset introduced in Chapter @sec-introduction. The objective is to predict the number of minutes between when an order is placed and when it is delivered. Key predictors in this dataset include the distance from the restaurant to the delivery location, the date and time of the order, and the specific items in the order.  Chapter @sec-whole-game covered model development for a linear regression model, a neural network, and a Cubist model. In this chapter, we will focus on comparing the performance of a random forest, neural network, and Cubist model.
+
+## The Frequentist Approch to Model Comparison
+
+Let's begin by building towards a statistical model that will enable us to formally compare the predictive performance among models.  For this illustration, we will evaluate the performance of three models using 10-fold cross-validation.
+
+To begin this illustration, let's suppose that each of these models were built separately using **different** 10-fold partitions of the training data.  In this scenario, the predictive performance on the first hold-out fold would be unique, or independent, for each model.  If this was the case, then we could represent the desired performance metric with the following linear statistical model:
+
+$$
+y_{ij} = \mu_{..} + \tau_j + \epsilon_{ij}
+$$ {#eq-one-way-model}
+
+In this equation $\mu_{..}$ is the overall average model performance across all hold out sets and models.  The term $\tau_j$ represents the incremental impact on performance due to the $j^{th}$ model ($j$ = 1, 2, ..., $M$ = total number of models).  And $\epsilon_{ij}$ represents the part of the performance that is not explainable by the $i^{th}$ hold out set and $j^{th}$ model.  This is known as the residual or random error and is assumed to follow a Gaussian distribution with a mean of zero and an unknown variance.  The model along with the statistical assumption about the distribution of the residuals provides the statistical foundation for formally comparing models.  For a specific data set, $\mu_{..}$ is estimated by the overall mean of the data, and $\tau_j$ is estimated by the difference between overall mean and the mean of the $j^{th}$ model.  Figure @fig-variance-partition-one-way illustrates these separate components for the hold out set with the largest MAE value for the random forest model.
+
+```{r}
+#| label: fig-variance-partition-one-way
+#| echo: false
+#| fig-width: 6
+#| fig-height: 3.5
+#| fig-align: "center"
+#| out-width: "70%"
+#| fig-cap: An illustration of how variation is partitioned based on the effect of the model (blue) and unexplainable causes (orange) when distinct cross-validation partitions are used to train each model. 
+
+for_fig <-
+  bind_rows(rf_metrics %>% 
+              dplyr::filter(.metric == "mae") %>% 
+              dplyr::select(id, .estimate) %>% 
+              mutate(Model = "Random Forest"),
+            cb_metrics %>% 
+              dplyr::filter(.metric == "mae") %>% 
+              dplyr::select(id, .estimate) %>% 
+              mutate(Model = "Cubist"),
+            nnet_metrics %>% 
+              dplyr::filter(.metric == "mae") %>% 
+              dplyr::select(id, .estimate) %>% 
+              mutate(Model = "Neural Network")) %>%
+  rename(MAE = .estimate,
+         Fold = id) %>%
+  mutate(Model = factor(Model, levels=c("Random Forest", "Neural Network", "Cubist")),
+         Fold = factor(Fold))
+
+grand_mean <- 
+  mean(for_fig$MAE)
+
+model_means <-
+  for_fig %>%
+  group_by(Model) %>%
+  summarize(MAE = mean(MAE)) %>%
+  ungroup() %>%
+  mutate(Fold = "Fold01") %>%
+  dplyr::filter(Model == "Random Forest")
+
+fold_means <-
+  for_fig %>%
+  group_by(Fold) %>%
+  summarize(MAE = mean(MAE)) %>%
+  ungroup()
+
+max_fold_mean_segment <-
+  tibble(Model = 0.9,
+         y_begin = model_means %>% 
+           dplyr::filter(Model == "Random Forest") %>% 
+           dplyr::select(MAE) %>% pull(),
+         y_end = fold_means %>% 
+           dplyr::filter(MAE == max(MAE)) %>% 
+           pull(),
+         MAE = grand_mean,
+         Fold = "Fold01")
+
+example_point <-
+  for_fig %>%
+  dplyr::filter(Model == "Random Forest" & MAE == max(MAE))
+
+grand_mean_segment <-
+  tibble(Model = 0.9,
+         y_begin = grand_mean,
+         y_end = model_means %>% 
+           dplyr::filter(Model == "Random Forest") %>% 
+           dplyr::select(MAE) %>% pull(),
+         MAE = grand_mean) %>%
+  mutate(Fold = "Fold01")
+
+error_segment <-
+  tibble(Model = 0.9,
+         y_begin = model_means %>% 
+           dplyr::filter(Model == "Random Forest") %>% 
+           dplyr::select(MAE) %>% pull(),
+         y_end = example_point$MAE,
+         MAE = grand_mean)
+
+error_segment2 <-
+  tibble(Model = 0.9,
+         y_begin = max_fold_mean_segment$y_end,
+         y_end = example_point$MAE,
+         MAE = grand_mean,
+         Fold = "Fold10")
+  
+grand_mean_text <-
+  tibble(Model = 0.7,
+         y = mean(c(grand_mean_segment$y_begin, grand_mean_segment$y_end)),
+         Fold = "Fold01")
+
+error_text <-
+  tibble(Model = 0.7,
+         y = mean(c(error_segment$y_begin, error_segment$y_end)))
+         
+fold_text <-
+  tibble(Model = 0.7,
+         y = mean(c(max_fold_mean_segment$y_begin, max_fold_mean_segment$y_end)),
+         Fold = "Fold01")
+
+error_text2 <-
+  tibble(Model = 0.7,
+         y = mean(c(error_segment2$y_begin, error_segment2$y_end)),
+         Fold = "Fold01")
+  
+ggplot(for_fig, aes(x=Model, y=MAE)) +
+  geom_point(color="black", shape=1) +
+  geom_point(data=example_point, aes(x=Model, y=MAE), color="darkorange", shape=1, size=5) +
+  geom_hline(yintercept=grand_mean, linetype=2, color="black") +
+  geom_point(data=model_means, aes(x=Model, y=MAE), shape=95, size=10, color="royalblue") +
+  geom_errorbar(data=grand_mean_segment, aes(ymin=y_begin, ymax=y_end), color="royalblue", width=0.05) +
+  geom_errorbar(data=error_segment, aes(ymin=y_begin, ymax=y_end), color="darkorange", width=0.05) +
+  geom_text(data=grand_mean_text, aes(x=Model, y=y), label="Model", color="royalblue") +
+  geom_text(data=error_text, aes(x=Model, y=y), label="Error", color="darkorange")
+```
+
+```{r}
+#| label: anova-results
+#| include: false
+#| cache: true
+
+one_way_model <- glm(MAE ~ Model, data=for_fig)
+one_way_anova <- data.frame(anova(one_way_model))
+one_way_anova_f <- one_way_anova$F[2]
+one_way_anova_ndf <- one_way_anova$Df[2]
+one_way_anova_ddf <- one_way_anova$Resid..Df[2]
+one_way_anova_pvalue <- one_way_anova$Pr..F.[2]
+
+one_way_model_with_blocks <- glm(MAE ~ Model + Fold, data=for_fig)
+one_way_anova_with_blocks <- data.frame(anova(one_way_model_with_blocks))
+one_way_anova_with_blocks_f <- one_way_anova_with_blocks$F[2]
+one_way_anova_with_blocks_ndf <- one_way_anova_with_blocks$Df[2]
+one_way_anova_with_blocks_ddf <- one_way_anova_with_blocks$Resid..Df[2]
+one_way_anova_with_blocks_pvalue <- one_way_anova_with_blocks$Pr..F.[2]
+
+fold_improvement <- one_way_anova_pvalue/one_way_anova_with_blocks_pvalue
+```
+
+This model enables us to distinctly separate the overall variability in the data (also known as the total variability) into the variability due to the impact of the models denoted by the blue bar, and the variability due to unexplainable causes denoted by the orange bar.  The variability explained by the model is commonly referred to as the signal, while unexplained variability is referred to as the noise.  The variability which the models account for is then compared to the unexplainable variability using an $F$-test [@kutner2004applied] to determine statistical significance.  The larger the signal is relative to the noise, the greater the probability that the differences we see among models is due to differences in model performance and not due to random chance.  In this example, the $F$-statistic is `r paste0("(", round(one_way_anova_f,2), ", ", paste0(one_way_anova_ndf), ", ", paste0(one_way_anova_ddf), ")")`^[This is common notation for reporting the $F$-statistic, where the first number represents the ratio of the mean square of the model to the mean square of the error.  The second and third numbers represent the degrees of freedom of the numerator and denominator, respectively.] and has a corresponding p-value of `r paste0(round(one_way_anova_pvalue,4))`.  This indicates that there is evidence that there are significant differences in MAE among the models.
+
+In practice when tuning and training models, we use the same cross-validation sets for evaluating model performance.  This is a more efficient approach since we only need to set up the cross-validation scheme once.  Moreover, the structure that is generated by using the same hold out sets will enable us to have a better ability to detect differences in predictive performance between models.
+
+In this setting, each hold out set forms what is known as a block, which is a group of units that are similar to each other.  This grouping is an important piece of information which will aid in assessing if models have statistically different performance.  The predictive performance when tuning multiple models using the same cross-validation hold out sets can now be represented as:
+
+$$
+$y_{ij} = \mu_{..} + \gamma_i + \tau_j + \epsilon_{ij}$
+$$ {#eq-one-way-model-with-blocks}
+
+Notice that equation @eq-one-way-model-with-blocks is nearly the same as equation @eq-one-way-model, with the additional term $\gamma_i$.  This term represents the incremental impact on performance due to the $i^{th}$ hold out set ($i$ = 1, 2,..., $v$ = total number of validation folds). Figure @fig-variance-partition-one-way-with-blocks illustrates these separate components for the hold out set with the largest MAE value for the random forest model.  In this figure, the points are connected based on the fold.  Notice that the amount of variability explained by the model is identical to Figure @fig-variance-partition-one-way.  However, the unexplainable variability from Figure @fig-variance-partition-one-way-with-blocks is now partially explained by the variation due to the fold, thus reducing the unexplainable variability.  To understand if there are differences in performance among models, we again compare the variability explained by the different models with the unexplainable variability.  The signal relative to the noise is now much stronger, enabling us to more easily see differences in model performance.  The $F$-statistic from this model is `r paste0("(", round(one_way_anova_with_blocks_f,2), ", ", paste0(one_way_anova_with_blocks_ndf), ", ", paste0(one_way_anova_with_blocks_ddf), ")")` and has a corresponding p-value of `r formatC(one_way_anova_with_blocks_pvalue, format="e", digits=2)`.  By utilizing the same cross-validation scheme across models, we are able to greatly improve the significance.
+
+```{r}
+#| label: fig-variance-partition-one-way-with-blocks
+#| echo: false
+#| fig-width: 6
+#| fig-height: 3.5
+#| fig-align: "center"
+#| out-width: "70%"
+#| fig-cap: An illustration of how variation is partitioned based on the effect of the model (blue), folds (purple), and unexplainable causes (orange) when the same cross-validation partitions are used to train each model.  The lines connecting the points indicate the results for the same cross-validation fold.
+ 
+fold10 <-
+  for_fig %>%
+  dplyr::filter(Fold == "Fold10")
+
+max_fold_mean <-
+  fold_means %>%
+  dplyr::filter(MAE == max(MAE)) %>%
+  mutate(Model = "Random Forest")
+
+ggplot(for_fig, aes(x=Model, y=MAE, group=Fold)) +
+  geom_point(color="black", shape=1) +
+  geom_point(data=example_point, aes(x=Model, y=MAE), color="darkorange", shape=1, size=5) +
+  geom_line(alpha=0.1) +
+  geom_line(data=fold10, aes(x=Model, y=MAE, group=Fold), color="purple") +
+  geom_hline(yintercept=grand_mean, linetype=2, color="black") +
+  geom_point(data=model_means, aes(x=Model, y=MAE), shape=95, size=10, color="royalblue") +
+  geom_errorbar(data=grand_mean_segment, aes(ymin=y_begin, ymax=y_end), color="royalblue", width=0.05) +
+  geom_point(data=max_fold_mean, aes(x=Model, y=MAE), shape=95, size=10, color="purple") +
+  geom_errorbar(data=max_fold_mean_segment, aes(ymin=y_begin, ymax=y_end), color="purple", width=0.05) +
+  geom_errorbar(data=error_segment2, aes(ymin=y_begin, ymax=y_end), color="darkorange", width=0.05) +
+  geom_text(data=grand_mean_text, aes(x=Model, y=y), label="Model", color="royalblue") +
+  geom_text(data=fold_text, aes(x=Model, y=y), label="Fold", color="purple") +
+  geom_text(data=error_text2, aes(x=Model, y=y), label="Error", color="darkorange")
+```
+
+## Protecting against False Positive Findings
+
+
+## The Bayesian Approach to Model Comparison
+
+
+
+```{r}
+#| label: teardown-cluster
+#| include: false
+
+stopCluster(cl)
+```
+
+
+## Chapter References {.unnumbered}
