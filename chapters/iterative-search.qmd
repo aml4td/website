@@ -672,7 +672,7 @@ Bayesian optimization (BO) is a search procedure that uses an overarching statis
 
 Bayesian optimization and Gaussian proceses have been vibrant research areas and our discussions will scratch the surface. More recent surveys, @gramacy2020surrogates and @garnett2023, are comprehensive resources for these methodologies.
 
-However, before diving into the details of Gaussian proceseses, we should discuss how any Bayesian method can be used for optimization. Similar to the racing model from @eq-perf-mod-racing, the Bayesian model's outcome will be our estimated performance statistics (i.e., $\hat{Q}$). The predictors for this model will be the tuning parameter values ($\boldsymbol{\theta}$):
+However, before diving into the details of Gaussian proceseses, we should discuss how any Bayesian method can be used for optimization. Similar to the racing model from @eq-perf-mod-racing, the Bayesian model's outcome will be our estimated performance statistic (i.e., $\hat{Q}$). The predictors for this model will be the tuning parameter values ($\boldsymbol{\theta}$):
 
 $$
 Q_j = f(\boldsymbol{\theta}_j)+ \epsilon_{j}
@@ -718,25 +718,27 @@ two_cand_data %>%
 
 The second candidate has a mean RMSE that is predicted to have about a 2-fold improvement over the first but comes with considerably large uncertainty. On average, this is a better choice but there is more area to the right of the vertical line. The probability of the second candidate having worse results than the current best is `r two_cand_probs$prob[two_cand_probs$group == "# 2"]`%. 
 
-Which choice is better? The first candidate is a safer bet and the second offers higher risk with a higher reward. Which candidate to pick is often driven by our point of view. However, we should definitely consider _why_ the variance is so large for the second candidate. 
+Which option is better? The first candidate is a safer choice, while the second comes with higher risk but also a greater potential reward. The decision often depends on our perspective. However, it's important to understand why the second candidate has such a large variance in outcomes.
 
 We’ve previously discussed the variance-bias tradeoff and demonstrated that large uncertainty in the performance metric can often be explained by _model variance_. Recall that models might vary due to predictive instability caused by a model that is far more complex than is required, such as the polynomial example in @sec-variance-bias. 
 
-There is another reason that the noise in our performance statistic can be large. Back in @sec-spatial-splitting, we described _spatial autocorrelation_, where objects are more similar to closer objects than to objects further away. If our Bayesian model reflects spatial variability, the increased uncertainty can be attributed to how each candidate relates spatially to the existing set. If our model's variance in @fig-two-candidates is based on spatial effects, it implies that the first candidate is closer to the current collection of tuning parameter candidates. Conversely, the large uncertainty for the second candidate suggests that it is placed far away from  existing results. 
+However, there is another reason that the noise in our performance statistic can be large. Back in @sec-spatial-splitting, we described _spatial autocorrelation_, where objects are more similar to closer objects than to objects further away. If our Bayesian model reflects spatial variability, the increased uncertainty can be attributed to how each candidate relates spatially to the existing set. If our model's variance in @fig-two-candidates is based on spatial effects, it implies that the first candidate is closer to the current collection of tuning parameter candidates. Conversely, the large uncertainty for the second candidate suggests that it is placed far away from  existing results. 
 
-This example demonstrates different philosophies for a search: _exploitation_ and _extrapolation_. 
+This example illustrates two different search strategies: _exploitation_ and _extrapolation_. 
 
-- Exploitation expresses that we would rather keep the search near existing data and capitalize on their results to find a solution closer to the things that we know about. 
+- Exploitation involves focusing the search near existing data, leveraging known results to refine and optimize solutions within familiar territory.
 
-- Extrapolation is the notion that we should more aggressively explore new spaces to find novel candidates to improve the model. 
+- Extrapolation emphasizes exploring new, untested areas more aggressively in search of novel candidates that could lead to model improvements.
 
-Using a Bayesian model in @eq-surrogate is advantageous because it can make mean and variance predictions and these two concepts can be weighted differently for potential new candidates.  Let’s assume that our surrogate Bayesian model does significantly account for spatial effects. The next section describes the overall process of how we use it to optimize the model. 
+Using the Bayesian model in @eq-surrogate is beneficial because it allows for both mean and variance predictions, which can be weighted differently when evaluating potential new candidates. If our surrogate Bayesian model effectively captures spatial effects, we can leverage this to optimize the model. The next section outlines the overall optimization process.
 
 ### How Does Bayesian Optimization Work? {#sec-acquisition}
 
-The search routine starts with a set of $s_0$ initial candidates and corresponding performance statistics ($\hat{Q}_j$). Using these data, the metric is used as the model outcome and the candidate values as predictors. This surrogate model is used to make predictions of the mean and standard deviation of the metric at new candidate values. A new objective function, called an _acquisition function_, combines the mean and standard into a single value [@garnett2023, Chapter 7]. The next candidate that we'll evaluate on the next iteration is the one that optimizes the acquisition function (and then repeat this process). 
+The search process begins with an initial set of candidates ($s_0$) and their corresponding performance statistics (\hat{Q}_j$). These data are used to build a surrogate model, where the performance metric serves as the outcome and the candidate values act as predictors. The model then predicts the mean and standard deviation of the metric for new candidate values.
 
-One of the most well-known acquisition function is based on the notion of **expected improvement** [@jones1998efficient, Section 4]. If the current best metric value is denoted as $\hat{Q}_{opt}$, the expected impriovement is the positive part of $\delta(\hat{\boldsymbol{\theta}}) = Q_{opt} - \mu(\hat{\boldsymbol{\theta}})$, where $\mu(\hat{\boldsymbol{\theta}})$ is the mean of the posterior prediction (assuming that smaller metrics are better). They found that, probabilisticly, the expected improvement is 
+To guide the search, we use an _acquisition function_—an objective function that combines the predicted mean and standard deviation into a single value [@garnett2023, Chapter 7]. The next candidate to be evaluated is the one that optimizes this acquisition function. This process is then repeated iteratively.
+
+One of the most well-known acquisition functions is based on the notion of **expected improvement** [@jones1998efficient, Section 4]. If the current best metric value is denoted as $\hat{Q}_{opt}$, the expected improvement is the positive part of $\delta(\hat{\boldsymbol{\theta}}) = Q_{opt} - \mu(\hat{\boldsymbol{\theta}})$, where $\mu(\hat{\boldsymbol{\theta}})$ is the mean of the posterior prediction (assuming that smaller metrics are better). They found that, probabilistically, the expected improvement is 
 
 $$
 EI(\hat{\boldsymbol{\theta}}; Q_{opt}) = \delta(\hat{\boldsymbol{\theta}}) \Phi\left(\frac{\delta(\hat{\boldsymbol{\theta}})}{\sigma(\hat{\boldsymbol{\theta}})}\right) + \sigma(\hat{\boldsymbol{\theta}}) \phi\left(\frac{\delta(\hat{\boldsymbol{\theta}})}{\sigma(\hat{\boldsymbol{\theta}})}\right)
@@ -744,7 +746,7 @@ $$ {#eq-exp-improve}
 
 where $\Phi(\cdot)$ is the cumulative standard normal and $\phi(\cdot)$ is the standard normal density.
 
-Expected improvement is a blend of both mean and variance but, at different stages of the optimization, one may dominate. Imagine a parameter space where most of the regions have been sampled to some degree. If our Bayesian model is driven by spatial variation, most of the remaining space has relatively small values for $\sigma$ and one of the terms in @eq-exp-improve will drive the optimization. Conversely, at the initial iterations, the variance will be very large and, unless there is a large mean  effect, the spatial variance will dominate (and the focus is more on extrapolation). 
+Expected improvement balances both mean and variance, but their influence can shift throughout the optimization process.  Consider a parameter space where most regions have already been sampled to some extent. If the Bayesian model is influenced by spatial variation, the remaining unexplored areas will generally have low variance ($\sigma$), causing one term in @eq-exp-improve to dominate the optimization.  In contrast, during the early iterations, variance tends to be much higher. Unless there is a strong mean effect, spatial variance will dominate, leading the search to focus more on extrapolation.
 
 Additionally, the expected improvement can be altered to include a tradeoff factor $\xi$ so that improvement is the positive part of 
 
@@ -752,17 +754,17 @@ $$
 \delta(\hat{\boldsymbol{\theta}}) = Q_{opt} - \mu(\hat{\boldsymbol{\theta}}) + \xi
 $$
 
-This effectively inflates the value of the current best and resulting value of $\delta(\hat{\boldsymbol{\theta}})$ helps emphasize extrapolation. $\xi$ could be a single constant or a function that changes the tradeoff value as a function of iterations. 
+This effectively inflates the value of the current best and the resulting value of $\delta(\hat{\boldsymbol{\theta}})$ helps emphasize extrapolation. $\xi$ could be a single constant or a function that changes the tradeoff value as a function of iterations. 
 
-As with simulated annealing, we can keep sampling until a pre-specified limit on iterations or computational time is reached. An early stopping rule can be helpful where we prematurely end the search if a new best result is not found within a specific number of iterations. 
+Similar to simulated annealing, sampling continues until reaching a predefined limit on iterations or computational time. Additionally, an early stopping rule can be used to end the search early if no new best result is found within a set number of iterations.
 
-Let's see how this approach works in a single dimension. @fig-bo-example shows how expected improvement can be used to find the global minimum of $\psi(\theta) = \theta\: cos(\theta/2)$. Th light grey line in the lower panel represents the true value of $\psi(\theta)$ across the parameter space. The process starts with $s_0 = 2$ candidate points at -8.0 and 3.0. From these two points, the surrogate model is fit and the dark line in the lower panel shows the predicted objective function values across the space. The magnitude of the line represents the mean of the posterior. Notice that the predicted line fails to capture the true trend, which is not unexpected with two data points. 
+Let's see how this approach works in a single dimension. @fig-bo-example shows how expected improvement can be used to find the global minimum of $\psi(\theta) = \theta\: cos(\theta/2)$. The light grey line in the lower panel represents the true value of $\psi(\theta)$ across the parameter space. The process starts with $s_0 = 2$ candidate points at -8.0 and 3.0. From these two points, the surrogate model is fit and the dark line in the lower panel shows the predicted objective function values across the space. The magnitude of the line represents the mean of the posterior. Notice that the predicted line fails to capture the true trend, which is not unexpected with two data points. 
 
-If we were to optimize solely on the mean prediction, we would choose our next point to be close to $\theta = 3$ since that has the lowest predicted value. This is a pure exploitation approach. 
+If we optimized only on the mean prediction, we would select the next point near $\theta = 3$ since it has the lowest predicted value. This approach relies entirely on exploitation.
 
-The color of the line depicts the predicted variance, which drops to zero near the existing points and explodes in the regions in between our two points. If we were to exclusively focus on the variance of the objective function, we would choose the next point to be away from the two that have been sampled so far, such as the interval $-6 \le \theta \le 1$ or $\theta \ge 4$.
+The color of the line depicts the predicted variance, which drops to zero near the existing points and explodes in the regions in between our two points. If we focused solely on the variance of the objective function, we would choose the next point in an area far from the two sampled points, such as the interval $-6 \le \theta \le 1$ or $\theta \ge 4$.
 
-Combining the mean and variance predictions via expected improvement, we can achieve a balance. At the first iteration, two areas around (but not at) $\theta = 3.0$ are predicted to have large expected improvements. The region on the left is sampled and, once $\psi(\theta = 3)$ is evaluated, the next point is closer to the true global optimum. The process continues and alternates between sampling near the best result and filling in regions where there are no nearby candidate values. After 15 iterations, the search is very close to the true global optimum. 
+By combining the mean and variance predictions through expected improvement, we strike a balance between the two. In the first iteration, two areas near (but not exactly at) $\theta = 3.0$ are predicted to have large expected improvements. The region on the left is sampled first, and once $\psi(\theta = 3)$ is evaluated, the next point moves closer to the true global optimum. This process continues, alternating between sampling near the best result and exploring regions with few nearby candidate values. After 15 iterations, the search is very close to the true global optimum.
 
 ::: {#fig-bayes-opt}
 
@@ -872,7 +874,7 @@ An example of Bayesian optimization for the function $\psi(\theta) = \theta\: co
 
 :::
 
-Numerous other acquisition functions can be used.  For example, instead of expected improvement, can maximize the probability of improvement:
+Numerous other acquisition functions can be used.  For example, instead of expected improvement, we can maximize the probability of improvement:
 
 $$
 PI(\hat{\boldsymbol{\theta}}) = \Phi\left(\frac{\tau - \mu(\hat{\boldsymbol{\theta}})}{\sigma(\hat{\boldsymbol{\theta}})}\right) 
@@ -888,7 +890,7 @@ $$
 
 where $\kappa$ sets the confidence level and often has values that are _much_ smaller than range used for statistical inference (e.g., centered around 1.64). This multiplier also modulates between extrapolation (large $\kappa$) and exploitation (small $\kappa$) for the search. 
 
-Apart from different acquisition functions, many other variations can be used in Bayesian optimization. For example, like simulated annealing, the default is the sample one candidate at a time. This limits the computational efficiency of the search process if we can fit models in parallel. There are alterations where multiple candidates can be _simulated_. The candidate with the largest predicted acquisition value is identified, and its predicted performance statistic is treated as if it were estimated from an assessment set. A new GP is created with this imputed data point, and a new point is acquired. This process repeats until the desired number of new candidates is available. See @azimi2010batch. Alternatively, we can consider the most advantageous regions of the parameter space and sample several dissimilar points. For example, in iteration five of @fig-bayes-opt there are three peaks showing improvement. We could sample each of these peaks to create a batch of three new candidates and evaluate them as a batch instead of one at a time. 
+Bayesian optimization offers more than just different acquisition functions; there are also various other modifications that can enhance its efficiency. For instance, similar to simulated annealing, the default approach samples one candidate at a time. While this works, it can be computationally inefficient, especially when models can be fitted in parallel. To improve this, modifications allow for multiple candidates to be _simulated_ at once. In this approach, the candidate with the highest predicted acquisition value is chosen, and its predicted performance is treated as if it were derived from an actual assessment. A new GP model is then created using this imputed data point, and the process continues by acquiring the next point. This cycle repeats until the desired number of new candidates is obtained (see @azimi2010batch). Alternatively, we can focus on the most promising areas of the parameter space and sample several different points. For example, in iteration five of @fig-bayes-opt, where there are three peaks showing improvement, we could sample each of these peaks and create a batch of three new candidates to evaluate all at once, rather than individually.
 
 Now that the general optimization process has been outlined, let's focus on the most popular model associated with Bayesian optimization.
 
@@ -908,7 +910,7 @@ $$ {#eq-kernel-sq-expo}
 
 Note that this covariance function has it's own parameter $\sigma$, similar to $a$, $b$, and $q$ in @eq-kernel-poly ($\sigma$ is unrelated to $\sigma_{\epsilon}$).
 
-The squared exponential function shows that as the two vectors become more different from one another (i.e., further away), the exponentiated difference becomes large, indicating high variance (apart from $\sigma^2_{\epsilon}$). For two identical vectors, this covaraince function yeilds a variance of $\sigma^2_{\epsilon}$. Now, we can see why the previous section had a strong emphasis on spatial variability for Bayesian optimization. @fig-bayes-opt used this kernel function. 
+The squared exponential function shows that as the two vectors become more different from one another (i.e., further away), the exponentiated difference becomes large, indicating high variance (apart from $\sigma^2_{\epsilon}$). For two identical vectors, this covariance function yields a variance of $\sigma^2_{\epsilon}$. Now, we can see why the previous section had a strong emphasis on spatial variability for Bayesian optimization. @fig-bayes-opt used this kernel function. 
 
 A more general covariance function uses the Matern kernel: 
 
@@ -917,9 +919,9 @@ k_{\nu }(\delta_{ii'})=
 {\frac {2^{1-\nu }}{\Gamma (\nu )}}{\Bigg (}{\sqrt {2\nu }}{\frac {\delta_{ii'}}{\rho }}{\Bigg )}^{\nu }\mathcal{K}_{\nu }{\Bigg (}{\sqrt {2\nu }}{\frac {\delta_{ii'}}{\rho }}{\Bigg )}
 $$ {#eq-kernel-matern}
 
-where $\mathcal{K}(\cdot)$ is the Bessel function, $\Gamma(\cdot)$ is the Gamma function, and $\rho$ and $\nu$ are tuning paramters. 
+where $\mathcal{K}(\cdot)$ is the Bessel function, $\Gamma(\cdot)$ is the Gamma function, and $\rho$ and $\nu$ are tuning parameters. 
 
-So far, our covariance functions have assumed that the tuning parameters are all numeric. One fairly common but unsophisticated method to use qualitative parameters in the Gaussian process is to convert them to binary indicators and treat them as generic numeric predictors. However, it is difficult to believe that the indicators follow a Gaussian distribution. Also, if there are many levels of qualitative tuning parameters, we may quickly expand the dimension of the Gaussian space, exacerbating the computational costs of training the GP model. 
+So far, our covariance functions have assumed that all tuning parameters are numeric. A common, though simplistic, approach for incorporating qualitative parameters into a Gaussian process is to convert them into binary indicators and treat them as generic numeric predictors. However, this method is problematic because it’s unlikely that these binary indicators follow a Gaussian distribution. Additionally, if the qualitative tuning parameters have many levels, this approach can rapidly increase the dimensionality of the Gaussian space, which in turn raises the computational costs of training the GP model.
 
 Alternatively, special "categorical kernels" take integers corresponding to levels of a categorical predictor as inputs. For example, one based on an exchangeable correlation structure is: 
 
@@ -939,9 +941,9 @@ $$
 Pr[y | \boldsymbol{x}] = \frac{Pr[y] Pr[\boldsymbol{x} | y]}{Pr[\boldsymbol{x}]} = \frac{(prior)\times (likelihood)}{(evidence)}
 $$ {#eq-bayes-rule}
 
-The GP model is Bayesian because we have specified the distributions for the outcome and predictors ($Pr[y]$ and $Pr[\boldsymbol{x}]$, respectively) simultaneous way. The kernel function is the primary driver of the prior distribution of Gaussian processes. 
+The GP model is Bayesian because we have specified the distributions for the outcome and predictors ($Pr[y]$ and $Pr[\boldsymbol{x}]$, respectively) simultaneously. The kernel function is the primary driver of the prior distribution of Gaussian processes. 
 
-_In theory_, each of these is easy to compute with a simple multivariate normal. However, we don't the value of $\sigma^2_{\epsilon}$ nor do we know the values of any kernel parameters used by $k(\cdot,\cdot)$.  The error term can be estimated a variety of ways, including maximum likelihood, cross-validation, and others (see @ameli2022noise for a survey of methods). For the kernel tuning parameters, it is common to maximize the marginal likelihood to estimate these structural parameters [@williams2006gaussian, chap. 5]. The Gaussian nature of this model enables a number of relatvely strightforward procedures for these purposes (that does not involve another layer of resampling).
+_In theory_, each of these is easy to compute with a simple multivariate normal. However, we don't know the value of $\sigma^2_{\epsilon}$ nor do we know the values of any kernel parameters used by $k(\cdot,\cdot)$.  The error term can be estimated a variety of ways, including maximum likelihood, cross-validation, and others (see @ameli2022noise for a survey of methods). For the kernel tuning parameters, it is common to maximize the marginal likelihood to estimate these structural parameters [@williams2006gaussian, chap. 5]. The Gaussian nature of this model enables a number of relatively straightforward procedures for these purposes (that does not involve another layer of resampling).
 
 Howver, training Gaussian process models can be difficult and the computation cost of training these models increases _cubically_ with the number of data points. In our application, the training set size is the number of tuning parameter candidates with performance statistics. However, after the initial GP model has been trained, there are updating algorithms that can prevent the model from being completely re-estimated from scratch thus reducing training time. 
 
