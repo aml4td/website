@@ -28,8 +28,11 @@ for_analysis <-
     `annual minimum temperature` = temp_annual_min,
     `annual maximum temperature` = temp_annual_max,
     `january minimum temperature` = temp_january_min,
+    `annual mean temperature` = temp_annual_mean,
     `minimum vapor` = vapor_min,
-    `maximum vapor` = vapor_max
+    `maximum vapor` = vapor_max,
+    longitude = lon,
+    latitude = lat
   )
 
 # ------------------------------------------------------------------------------
@@ -37,7 +40,7 @@ for_analysis <-
 
 forested_sf <-
   for_analysis %>%
-  st_as_sf(coords = c("lon", "lat"), crs = st_crs("EPSG:4326"))
+  st_as_sf(coords = c("longitude", "latitude"), crs = st_crs("EPSG:4326"))
 
 
 # ------------------------------------------------------------------------------
