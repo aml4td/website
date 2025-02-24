@@ -52,11 +52,11 @@ We may want to remove predictors based on their distributions. Unsupervised feat
 
 More often, though, we are interested in supervised feature selection^[Recall that we use the terms "predictors" and "features" interchangeably. We favor the former term, but "features" is more commonly used when discussing the filtering of columns.]: the removal of predictors that do not appear to have a relationship to the outcome. This implies that we have a statistic that can compute some measure of each predictor’s importance. 
 
-While it is easy to add predictors to a model, it can be very difficult (and computationally expensive) to determine which predictors to remove properly. The reason comes back to the misuse (or over-use) of data. We’ve described the problem of using the same data to fit and evaluate a model. By naively re-predicting the training set, we can accidentally get overly optimistic performance statistics. To compensate for this, resampling repeatedly allocates some data for model fitting and other data for model evaluation. 
+While it is easy to add predictors to a model, it can be very difficult (and computationally expensive) to properly determine which predictors to remove. The reason comes back to the misuse (or over-use) of data. We’ve described the problem of using the same data to fit and evaluate a model. By naively re-predicting the training set, we can accidentally get overly optimistic performance statistics. To compensate for this, resampling repeatedly allocates some data for model fitting and other data for model evaluation. 
 
-For feature selection, we have the same problem when the same data are used to measure importance, filter the predictors, and then train the model on the smaller feature set. It is similar to repeatedly taking the same test and then measuring our knowledge using the grade for the last test repetition. It doesn’t accurately measure the quantity that is important to us.  
+For feature selection, we have the same problem when the same data are used to measure importance, filter the predictors, and then train the model on the smaller feature set. It is similar to repeatedly taking the same test and then measuring our knowledge using the grade for the last test repetition. It doesn’t accurately measure the quantity that is important to us. This is the reason that this chapter is situated here instead of in Part 2; understanding overfitting is crucial. 
 
-This chapter will summarize the most important aspects of feature selection. This is a broad topic and a more extensive discussion can be found in @fes. First, we’ll use an example to quantify the effect of irrelevant predictors on different models. Next, the three main approaches for feature selection are described and illustrated. 
+This chapter will summarize the most important aspects of feature selection. This is a broad topic and a more extensive discussion can be found in @fes. First, we’ll use an example to quantify the effect of irrelevant predictors on different models. Next, the four main approaches for feature selection are described and illustrated. 
 
 ## The Cost of Irrelevant Predictors  {#sec-irrelevant-predictors}
 
@@ -75,7 +75,7 @@ $$ {#eq-hooker}
 
 where predictors 1, 2, 3, 6, 7, and 9 are standard uniform while the others are uniform on `[0.6, 1.0]`. Note that $x_6$ is not used in the equation. The errors $\epsilon_i$ are Gaussian with mean zero and a standard deviation^[For this value of the simulated standard deviation, the best possible RMSE value is also 0.25.] of 0.25. Training and testing data sizes where simulated to be 1,000 and 100,000, respectively. 
 
-To assess the effect of useless predictors, between 10 and 100 extra columns of standard normal data were generated (unrelated to the outcome). Models were fit, and the RMSE of the test set was computed for each model. Twenty simulations were run for each combination of models and extra features^[Details and code can be found at [`https://github.com/topepo/noise_features_sim `](https://github.com/topepo/noise_features_sim).]. 
+To assess the effect of useless predictors, between 10 and 100 extra columns of standard normal data were generated (unrelated to the outcome). Models were fit, tuned, and the RMSE of the test set was computed for each model. Twenty simulations were run for each combination of models and extra features^[Details and code can be found at [`https://github.com/topepo/noise_features_sim `](https://github.com/topepo/noise_features_sim).]. 
 
 The percent difference from baseline RMSE was computed (baseline being the model with no extra columns). @fig-irrelevant-predictors shows the results for the following models: 
 
@@ -123,7 +123,7 @@ However, several other models use these same calculations without being drastica
 
  2. MARS and Cubist selectively include predictors in their regression equations, only including those specifically selected as having value. 
 
-The other unaffected models are tree-based. As seen in @fig-reg-tree, the model makes different rules by selecting predictors to _split_ the data. If a predictor was not used in any split, it is functionally independent of the outcome in the prediction equation. This provides some insensitivity to the presence of non-informative predictors, although there is slight degradation in RMSE as the number of columns increases. 
+The other unaffected models are tree-based. As seen in @fig-reg-tree, these types of models make different rules by selecting predictors to _split_ the data. If a predictor was not used in any split, it is functionally independent of the outcome in the prediction equation. This provides some insensitivity to the presence of non-informative predictors, although there is slight degradation in RMSE as the number of columns increases. 
 
 In summary, irrelevant columns only slightly affect ML models that automatically select features. Models that do not have this attribute can be crippled under the same circumstances. 
 
@@ -146,7 +146,7 @@ We’ve previously discussed overfitting, where a model finds patterns in the tr
 
 This is most likely to occur when the number of predictors ($p$) is much larger than the training set size ($n_{tr}$) or when no external validation is used to verify performance. @Ambroise2002p1493 shows reanalyses of high-dimensional biology experiments using a backward selection algorithm for removing predictors. In some cases, they could find a model and predictor subset with perfect accuracy even when the training set outcome data were randomly shuffled. 
 
-Recall back in @sec-model-pipeline an argument was made that preprocessing methods _and_ the supervised model encompassed the entire model pipeline. Technically, feature selection (supervised or unsupervised) falls into the definition of preprocessing. It is important to use data that is different from the data used to train the pipeline to select the predictors. 
+Recall back in @sec-model-pipeline an argument was made that preprocessing methods _and_ the supervised model encompassed the entire model pipeline. Technically, feature selection (supervised or unsupervised) falls into the definition of preprocessing. It is important to use data that is different from the data used to train the pipeline (i.e., select the predictors) is different from the data used to evaluate how well it worked.  
 
 For example, if we use a resampling scheme, we have to repeat the feature selection process within each resample. If we used 10-fold cross-validation, each of the 10 analysis sets (90% of the training set) would have its own set of selected predictors. 
 
@@ -162,7 +162,7 @@ There are occasions where the values of the predictors are unfavorable or possib
 
 But what about situations where only one or two rows have non-zero values? It is difficult to filter on variance values since the predictors could have different units or ranges. The underlying problem occurs when very few unique values exist (i.e., “coarse data”), and one or two predictor values capture most of the rows. Perhaps we can identify this situation. 
 
-A hypothetical example is a training set of 500 data points with a count-based predictor that has mostly zero counts. However, there are three data points with a count of 1 and one instance with a count of 2. The variance of these data is low, but it would be difficult to determine a cutpoint for removal. @kuhn2008building developed an algorithm to find **near-zero predictors**, as defined by two criteria:
+Consider a hypothetical training set of 500 data points with a count-based predictor that has mostly zero counts. However, there are three data points with a count of 1 and one instance with a count of 2. The variance of these data is low, but it would be difficult to determine a cutpoint for removal. @kuhn2008building developed an algorithm to find **near-zero predictors**, as defined by two criteria:
 
 - The _freqeuncy ratio_ is the frequency of the most prevalent value over the second most frequent value. For our example, the ratio was 496/3 = 165.3.
 - The _proportion of unique values_, which is 3 / 500 = 0.006. 
@@ -188,9 +188,9 @@ lab_0.50 <- cli::format_inline(
 )
 ```
 
-Another example of an unsupervised filter reduces between-predictor correlations. A high degree of correlation can reduce the effectiveness of many models. We can filter out predictors by choosing a threshold for the (absolute) pairwise correlations and finding the smallest subset of predictors to meet this criterion. 
+Another example of an unsupervised filter reduces between-predictor correlations. A high degree of correlation can reduce the effectiveness of some models. We can filter out predictors by choosing a threshold for the (absolute) pairwise correlations and finding the smallest subset of predictors to meet this criterion. 
 
-A good example is @fig-corr-plot, which visualizes the correlation matrix for the fifteen predictors in the forestry data set (from @sec-spatial-splitting). Predictors for the January minimum temperature and the annual mean temperature are highly correlated (corr = `r round(cor_mat["january minimum temperature", "annual mean temperature"], 2)`), and only one might be sufficient to produce a better model. Similar issues occur with other predictor pairs. It is less clear which of the predictors should removed (if any). If we apply a threshold of 0.50, then `r lab_0.50` would be removed before model training. 
+A good example is @fig-corr-plot, which visualizes the correlation matrix for the fifteen predictors in the forestry data set (from @sec-spatial-splitting). Predictors for the January minimum temperature and the annual mean temperature are highly correlated (corr = `r round(cor_mat["january minimum temperature", "annual mean temperature"], 2)`), and only one might be sufficient to produce a better model. Similar issues occur with other predictor pairs. If we apply a threshold of 0.50, then `r lab_0.50` would be removed before model training. 
 
 ```{r}
 #| label: fig-corr-plot
@@ -216,7 +216,7 @@ Similar redundancy can occur in categorical predictors. In this case, measures o
 
 Unsupervised filters are only needed in specific circumstances. Some models (such as trees) are resistant to the distributions of the predictor’s data, while others are excessively sensitive. 
 
-## The Classes of Supervised Methods {#sec-selection-methods}
+## Classes of Supervised Methods {#sec-selection-methods}
 
 There are three main strategies for _supervised_ feature selection. The first and most effective was discussed: automatic selection occurs when a subset of predictors is determined during model training. We’ll discuss this more in the next section. 
 
@@ -224,7 +224,7 @@ The second supervised strategy is called **wrappers**. In this case, a sequentia
 
 A third strategy is to use a **filter** to screen predictors before adding them to the model. For example, the analysis shown in @fig-delivery-increases computed how each item in a food order impacted the delivery time.  We could have applied a filter where we only used food item predictors whose lower confidence interval for the increase in time was greater than one. The idea behind the filter is that it is applied once prior to the model fit. 
 
-The next few sections will describe the mechanics of these methods. However, how we utilize these algorithms is tricky. We definitely want to avoid overfitting the predictor set to the training data. 
+The next few sections will describe the mechanics of these techniques. However, how we utilize these algorithms is tricky. We definitely want to avoid overfitting the predictor set to the training data. 
 
 ## Automatic Selection {#sec-automatic-selection}
 
@@ -260,9 +260,9 @@ Different models view the training data differently, and the list of relevant pr
 
 ## Wrapper Methods  {#sec-wrappers}
 
-Wrapper methods use an overarching search method to optimize binary indicators, one for each potential predictor, that control which predictors are given to the model.
+Wrapper methods [@kohavi1998wrapper] use an overarching search method to optimize binary indicators, one for each potential predictor, that control which predictors are given to the model.
 
-The most popular approach is recursive feature elimination (RFE), which starts with the complete set of predictors and uses a mechanism to rank each in terms of their utility for predicting the outcome [@guyon2002gene]. Using this ordering, predictors are successively removed while performance is monitored. The performance profile determines the optimal subset size, and the most important predictors are included in the model. RFE is greedy, though; it predetermines the order of the predictors and will never consider a subset that is inconsistent with this order. 
+The most popular approach is recursive feature elimination (RFE), which starts with the complete set of predictors and uses a mechanism to rank each in terms of their utility for predicting the outcome [@guyon2002gene]. Using this ordering, predictors are successively removed while performance is monitored. The performance profile determines the optimal subset size, and the most important predictors are included in the model. RFE is greedy, though; it predetermines the order that the predictors are eliminated and will never consider a subset that is inconsistent with this order. 
 
 Two global search methods described in @sec-iterative, genetic algorithms and simulated annealing, can also be used. In this instance, the search space is the predictor space represented as binary indicators. The same process applies, though. For example, a GA would contain a population of different subsets, each producing a fitted model. The performance values enable the creation of the next generation via selection, reproduction, and mutation. In the case of simulated annealing, an initial subset is created and evaluated, and perturbations are created by randomly altering a small set of indicators (to create a "nearby" subset). Suboptimal subsets can be accepted similarly to our application for tuning parameters. 
 
@@ -279,7 +279,7 @@ In this case, the traditional approach uses a nested resampling procedure simila
 
 However, let’s illustrate a wrapper method using an artificial data set from the simulations described in @sec-irrelevant-predictors. We’ll use @eq-hooker and supplement the eight truly important predictors with twenty one noise columns. For simplicity, we’ll use a neural network to predict the outcome with a static set of tuning parameters. The training set consisted of 1,000 data points. 
 
-Since feature selection is part of the broader model pipeline, 10-fold cross-validation was used to measure the effectiveness of 150 iterations of simulated annealing. A separate SA run is created for each resample; we use the analysis set to train the model on the current subset, and the assessment set is used to measure the RMSE. 
+Since feature selection is part of the broader model pipeline, 10-fold cross-validation was used to measure the effectiveness of 150 iterations of simulated annealing [@fes Sect 12.2]. A separate SA run is created for each resample; we use the analysis set to train the model on the current subset, and the assessment set is used to measure the RMSE. 
 
 @fig-selection-sa shows the results, where each point is the average of the 10 RMSE values for the SA at each iteration. The results clearly improve as the selection process mostly begins to include important predictors and discards a few of the noise columns. After approximately 120 iterations, the solution stabilizes.  This appears to be a very straightforward search process that clearly indicates when to stop the SA search. 
 
@@ -318,19 +318,19 @@ nnet_sa_res$internal %>%
   ggplot(aes(Iter, RMSE)) +
   geom_line() +
   facet_wrap(~Resample) +
-  labs(x = "SA Iteration", y = "RMSE") +
+  labs(x = "SA Iteration", y = "RMSE (Assessment Set)") +
   geom_hline(yintercept = 0.25, col = "darkgreen", lty = 2)
 ```
 
 We should keep in mind that @fig-selection-sa lets us know where, on average, the search should stop, but our actual search result (that uses the entire training set) is more likely to look like what we see in @fig-selection-sa-resamples.
 
-For this particular search, the numerically best result occurred at iteration `r nnet_sa_res$optIter` and the final model contained `r length(nnet_sa_res$optVariables)` predictors where `r xfun::numbers_to_words(sum(grepl("noise", nnet_sa_res$optVariables)))` of the twenty noise columns are still contained in the model. Our resampled estimate of the RMSE, at this iteration, was `r round(mean(nnet_sa_res$internal$RMSE[nnet_sa_res$internal$Iter == nnet_sa_res$optIter]), 3)` (a perfect model would have a value of 0.25). We also simulated a large "test set" and the RMSE for that data set was TODO with the optimized neural network.   
+For this particular search, the numerically best result occurred at iteration `r nnet_sa_res$optIter` and the final model contained `r length(nnet_sa_res$optVariables)` predictors where `r xfun::numbers_to_words(sum(grepl("noise", nnet_sa_res$optVariables)))` of the twenty noise columns are still contained in the model. Our resampled estimate of the RMSE, at this iteration, was `r round(mean(nnet_sa_res$internal$RMSE[nnet_sa_res$internal$Iter == nnet_sa_res$optIter]), 3)` (a perfect model would have a value of 0.25). However, the plots of the SA performance profiles indicate a range, probably above 125 iterations, where the results are equivocal.  
 
 ## Filter Methods {#sec-filters}
 
-Filters can use any scoring function that quantifies how effectively the predictor predicts the outcome. One method is to use a univariate statistic to evaluate each predictor independently. For example, the area under the ROC curve (@sec-roc) can be computed for a binary classification outcome and a set of numeric predictors. The filter could be applied using these values by pre-defining a threshold for the statistic that defines "important enough." Alternatively, the top $p^*$ predictors can be retained and used in the supervised model. 
+Filters can use any scoring function that quantifies how effectively the predictor predicts the outcome [@kohavi1998wrapper;@duch2006filter]. One method is to use a univariate statistic to evaluate each predictor independently. For example, the area under the ROC curve (@sec-roc) can be computed for a binary classification outcome and a set of numeric predictors. The filter could be applied using these values by pre-defining a threshold for the statistic that defines "important enough." Alternatively, the top $p^*$ predictors can be retained and used in the supervised model. 
 
-TODO mention p-values and inferential statistics
+The example of using ROC curves raises an interesting question. Should we rank the predictors by their area under the curve or should we convert that analysis to a p-value to see if the area under the curve is greater than 0.5 [@hanley1983method]? Our advice is to do the former. Hypothesis tests and p-values have their uses but the AUC estimates themselves are probably more numerically stable. To factor in uncertainty, we could filter on the lower confidence bound of the AUC.  This is generally true for almost any ranking statistic that has a corresponding p-value. 
 
 Multivariate methods can also be used. These simultaneously compute measures of importance for all predictors. This is usually preferred since univariate statistics can be compromised when the predictors are highly correlated and/or have important interaction effects.  
 
@@ -346,7 +346,7 @@ A variety of models have built-in methods for measuring importance. For example:
  - The Relief allgorithm [@kira1992practical;@kononenko1994estimating] and its descendant methods randomly select training set points and use the outcome values of their nearest neighbors to aggregate statistics to measure importance. 
  - Minimum redundancy, maximum relevance analysis (MRMR) combines two statistics, one for importance and another for between-predictor correlation, to find a subset that has the best of both quantities [@peng2005feature]. 
  
-There are also tools to help combine multiple filters into a compound score. For example, we may want to blend the number of active predictors and multiple performance characteristics into a single score used to rank different tuning parameter candidates. One way to do this is to use _desirability functions_. These will be described in @sec-combined-metrics, Also, Section [12.3.2](https://bookdown.org/max/FES/genetic-algorithms.html#coercing-sparsity) of @fes shows an example of how desirability functions can be incorporated into feature selection. 
+There are also tools to help combine multiple filters into a compound score [@karl2023multi]. For example, we may want to blend the number of active predictors and multiple performance characteristics into a single score used to rank different tuning parameter candidates. One way to do this is to use _desirability functions_. These will be described in @sec-combined-metrics, Also, Section [12.3.2](https://bookdown.org/max/FES/genetic-algorithms.html#coercing-sparsity) of @fes shows an example of how desirability functions can be incorporated into feature selection. 
 
 Once an appropriate scoring function is determined, a tuning parameter can be added for how many predictors are to be retained. This is like RFE, but we optimize all the tuning parameters simultaneously and evaluate subsets in a potentially less greedy way. 
 
@@ -443,7 +443,7 @@ mlp_rf_mtr <- mlp_rf_fit %>%
 
 retained_variables <- map(
   mlp_rf_sfd_res$.extracts,
-  ~inner_join(
+  ~ inner_join(
     .x,
     mlp_rf_best,
     by = join_by(
@@ -456,8 +456,8 @@ retained_variables <- map(
     )
   )
 ) %>%
-  map(~.x$.extracts[[1]]) %>%
-  map(~anti_join(tibble(terms = names(sim_tr)[-1]), .x, by = "terms")) %>%
+  map(~ .x$.extracts[[1]]) %>%
+  map(~ anti_join(tibble(terms = names(sim_tr)[-1]), .x, by = "terms")) %>%
   map_dfr(~.x, .id = "fold")
 
 final_variables <- mlp_rf_fit %>%
