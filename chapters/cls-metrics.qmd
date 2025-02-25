@@ -17,6 +17,7 @@ source("../R/_common.R")
 library(tidymodels)
 library(discrim)
 library(probably)
+library(desirability2)
 library(patchwork)
 library(kableExtra)
 library(cli)
@@ -28,12 +29,12 @@ tidymodels_prefer()
 theme_set(theme_transparent())
 
 set_options()
-```
 
-```{r}
-#| label: data-setup
-#| include: false
+# ------------------------------------------------------------------------------
+# load data 
 
+load("../RData/wordle_results.RData")
+load("../RData/one_user_data_splits.RData")
 load("../RData/mushrooms.RData")
 ```
 
@@ -117,6 +118,7 @@ over_est <- round(p_obs / p_rand, 2)
 
 
 For example, @fig-wordle-prior (left panel) shows the prior for Wordle^[[`https://www.nytimes.com/games/wordle/index.html`](https://www.nytimes.com/games/wordle/index.html)] scores as defined by one of the authors. Wordle is a game where the player has six attempts to guess a five-letter word. There are seven levels, the last (an `X`) representing the case where the player failed to guess the word. The prior for a single try should not be zero but incredibly small. There are thousands of possible words, although many players choose a starter word that they believe optimal^[This author’s starter word is `caret` - it contains two common vowels and three important consonants.]. Guessing the word on two tries is considerably fortuitous, and the author placed a 4% probability of this occurring. There is also the opinion that correctly guessing in three or four turns should consume the bulk of the probability, and values of 40% and 35% were assigned to these. Not guessing the word was also thought to be about 5%. The final prior was  (in order) 0.1%, 4%, 40%, 35%, 10%, 5.9%, and 5%. 
+
 ```{r}
 #| label: fig-wordle-prior
 #| echo: false
@@ -1114,9 +1116,6 @@ Finally, it is important to re-compute performance using the re-calibrated predi
 ```{r}
 #| label: load-wordle-results
 #| echo: false
-load("../RData/wordle_results.RData")
-load("../RData/one_user_data_splits.RData")
-
 user_dist <- table(bind_rows(bst_te_pred, bst_oob_pred)$tries)
 
 user_lab <- c("two tries", "three tries", "four tries", "five tries", 
@@ -1217,7 +1216,14 @@ For this test set, the estimate of the unweighted Kappa statistic was `r signif(
 
 @nakov2019semeval suggested ordinal versions of common regression metrics, such as the mean squared error (MSE). These use the positional “errors” between the true and predicted outcomes. For example, if a word requires two tries, but we predict that the puzzle will be solved with six tries, the error is +2. These metrics should be fairly understandable since they mimic common statistics used to evaluate models. However, there has been scant evidence that they offer a benefit over existing metrics that have been studied and evaluated for decades. The mean squared error for these data was `r signif(sqrt(mse_ordered(rule_te_pred)), 3)`. How bad is this? If we repeatedly permute the outcome classes and measure the RMSE we find that the worst case-scenario is about `r signif(sqrt(mean(mse_perm$null)), 3)`.
 
-For probability predictions, there is an extension to the Brier score called the _ranked probability score_ (RPS)[@epstein1969scoring;@constantinou2012solving]. The computations are very similar to @eq-brier but use different data. Instead of $y_{ik}$ corresponding to class $k$ only, the RPS assigns a value of 1 if the position of the true class is $\le k$. Similarly, the value of $\hat{p}_{ik}$ is the cumulative sum of the estimated probabilities corresponding to classes $\le k$. For example, with the Wordle data, $k = 3$ corresponds to four tries and $y_{i3}$ would have a value of 1.0 if the i<sup>th</sup> sample was solved in two, three, or four tries (and is zero otherwise). The corresponding cumulative probability is the sum of the individual probabilities of solving the puzzle in two, three, or four tries. The RPS inherits the same benefits as the Brier score since they are both proper scoring rules. See @stael1970family and @gneiting2007strictly.
+For probability predictions, there is an extension to the Brier score called the _ranked probability score_ (RPS)[@epstein1969scoring;@constantinou2012solving]. The computations are very similar to @eq-brier but use different data: 
+
+
+$$
+RPS = \frac{1}{N(C-1)}\sum_{i=1}^N\sum_{k=1}^C (\tilde{y}_{ik} - \tilde{p}_{ik})^2
+$$ {#eq-rps}
+
+Instead of using a binary value $y_{ik}$ corresponding to class $k$ only, the RPS assigns a value of 1 to $\tilde{y}_{ik}$ if the position of the true class is $\le k$. Similarly, the value of $\tilde{p}_{ik}$ is the cumulative sum of the estimated probabilities corresponding to classes $\le k$. For example, with the Wordle data, $k = 3$ corresponds to four tries and $\tilde{y}_{i3}$ would have a value of 1.0 if the i<sup>th</sup> sample was solved in two, three, or four tries (and is zero otherwise). The corresponding cumulative probability is the sum of the individual probabilities of solving the puzzle in two, three, or four tries. The RPS inherits the same benefits as the Brier score since they are both proper scoring rules. See @stael1970family and @gneiting2007strictly.
 
 The ranked probability score measures the correctness (and calibration) of the question: “How well am I predicting that the event occurs in $k$ or less classes?”. 
 
@@ -1236,10 +1242,87 @@ $$
 
 
 
-TODO
+Desirability functions are tools to simultaneously optimize several criteria. Original conveived by @harrington1965desirability, the versions of desirability functions defined by @derringer1980simultaneous are more commonly used. They are commonly used in statistical experimental design but also in a wide range of applications, including designing cancer combination therapy [@kuhn2000incorporating], medicinal chemistry [@wager2010moving], waste water processing [@corral2019coagulation], and others. These tools are knowledge-based; users must state specific values of their criteria that are desirable or unacceptable. 
 
--   desirability and other methods for a combined score?
+Desirability functions can be defined for any important facet of the model result to optimize ML models. For example, one might decide that a good model has a low Brier score (say, less than 0.1) and also shows good class separation with an ROC AUC greater than 0.8 but uses less than 20 of the original feature set. In each of these cases, we can define ranges of acceptable results (e.g., [0, .1], (0.8, 1.0), etc.) and define a simple relationship that relates the outcome to the best results. 
 
+
+
+```{r}
+#| label: fig-desirability
+#| echo: false
+#| out-width: 100%
+#| fig-width: 8
+#| fig-height: 3
+#| fig-cap: Examples of three desirability functions
+
+len <- 100
+
+p_brier <- 
+  tibble(Brier = seq(-0.01, 0.11, length.out = len)) %>% 
+  mutate(desirability = d_min(Brier, 0, 0.1)) %>% 
+  ggplot(aes(Brier, desirability)) + 
+  geom_line() + 
+  labs(x = "Value", title = "(a) Brier Score")
+  
+
+p_roc <- 
+  tibble(auc = seq(0.79, 1.01, length.out = len)) %>% 
+  mutate(desirability = d_max(auc, 0.8, 1.0)) %>% 
+  ggplot(aes(auc, desirability)) + 
+  geom_line() + 
+  labs(x = "Value", title = "(b) ROC AUC")
+
+p_feat <- 
+  tibble(features = 1:12) %>% 
+  mutate(
+    regular = d_min(features, 1L, 10L),
+    weak = d_min(features, 1L, 10L, scale = 1/2),
+    box = d_box(features, 1L, 10L)
+    ) %>% 
+  pivot_longer(cols = c(regular, weak, box), names_to = "Case", values_to = "Desirability") %>%
+  mutate(Scale = ifelse(Case == "regular", "1.0", "0.5")) %>% 
+  ggplot(aes(features, Desirability, col = Case, pch = Case)) + 
+  geom_point() + 
+  labs(x = "Value", title = "(c) # Active Features") + 
+  theme_bw() +
+  theme(legend.location = "right")
+
+p_brier + p_roc + p_feat
+```
+
+```{r}
+#| label: fig-desirability-overall
+#| echo: false
+#| out-width: 100%
+#| fig-width: 8
+#| fig-height: 2.8
+#| fig-cap: Overall desirability surfaces for the examples shown in @fig-desirability.
+multi_grid <- 
+  crossing(brier = seq(-0.01, 0.11, length.out = len),
+           auc = seq(0.79, 1.01, length.out = len),
+           features = c(2, 5, 9)) %>% 
+  mutate(
+    d_brier = d_min(brier, 0, 0.1),
+    d_auc = d_max(auc, 0.8, 1.0),
+    d_feat = d_min(features, 1L, 10L, scale = 1/2),
+    d_all  = d_overall(across(starts_with("d_")))
+  ) %>% 
+  mutate(`#Features` = paste("# Features:", format(features)))
+
+multi_grid %>%
+  ggplot(aes(brier, auc)) +
+  geom_contour(
+    aes(z = d_all, colour = after_stat(level)),
+    breaks = (1:6) / 7,
+    linewidth = 1,
+    alpha = 1 / 2
+  ) +
+  facet_wrap( ~ `#Features`) +
+  coord_fixed(ratio = 1/2) +
+  labs(x = "Brier Score", y = "ROC AUC") + 
+  scale_x_continuous(breaks = pretty_breaks(n = 4))
+```
 
 ## Chapter References {.unnumbered}
 
