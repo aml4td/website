@@ -1,0 +1,1347 @@
+
+R version 4.4.1 (2024-06-14) -- "Race for Your Life"
+Copyright (C) 2024 The R Foundation for Statistical Computing
+Platform: aarch64-apple-darwin20
+
+R is free software and comes with ABSOLUTELY NO WARRANTY.
+You are welcome to redistribute it under certain conditions.
+Type 'license()' or 'licence()' for distribution details.
+
+  Natural language support but running in an English locale
+
+R is a collaborative project with many contributors.
+Type 'contributors()' for more information and
+'citation()' on how to cite R or R packages in publications.
+
+Type 'demo()' for some demos, 'help()' for on-line help, or
+'help.start()' for an HTML browser interface to help.
+Type 'q()' to quit R.
+
+> suppressPackageStartupMessages(library(tidymodels))
+> suppressPackageStartupMessages(library(finetune))
+> suppressPackageStartupMessages(library(future))
+> suppressPackageStartupMessages(library(bestNormalize))
+> suppressPackageStartupMessages(library(GA))
+> suppressPackageStartupMessages(library(glue))
+> 
+> # pak::pak(c("tidymodels/tune@clear-gp"), ask = FALSE)
+> 
+> source("~/content/website/R/setup_chemometrics.R")
+> 
+> stub <- "~/content/website/RData/two_param_iter"
+> plan("multisession")
+> 
+> # ------------------------------------------------------------------------------
+> 
+> resolve_sa_path <- function(x, iter) {
++   x2 <- x %>% filter(.iter <= iter)
++   restarts <- grep("restart", x2$results[x2$.iter < iter])
++   bests <- grep("new best", x2$results)
++   
++   # delete restarted chunks
++   rm <- NULL
++   for (i in restarts) {
++     recent_best <- max(bests[bests <= i])
++     rm <- c(rm, (recent_best + 1):i)
++   }
++   rm <- sort(unique(rm))
++   if ( length(rm) > 0 ) {
++     x2 <- x2[-rm,]
++   }
++   # remove previously discarded
++   
++   discarded <- which(x2$.iter < iter & x2$results == "discard suboptimal")
++   if ( length(discarded) > 0 ) {
++     x2 <- x2[-discarded,]
++   }
++   x2 %>% rename(RMSE = mean)
++ }
+> 
+> describe_sa_result <- function(x) {
++   require(cli)
++   mtr_current <- x$RMSE[nrow(x)]
++   chr_current <- format(mtr_current, digits = 3, scientific = FALSE)
++   
++   good_verbs <- c("improvement over the last RMSE of", "decrease from the previous value of")
++   bad_verbs <- c("degradation from the previous RMSE of", "worse value than the last RMSE of")
++   
++   if (nrow(x) > 1) {
++     mtr_prev <- x$RMSE[nrow(x) - 1]
++     chr_prev <- format(mtr_prev, digits = 3, scientific = FALSE)
++     
++     pct_diff <- (mtr_prev - mtr_current) / mtr_prev * 100
++     pct_diff <- round(pct_diff, 1)  
++     if (pct_diff > 0) {
++       res <- sample(good_verbs, 1)
++     } else {
++       res <- sample(bad_verbs, 1)
++     }
++     txt <- format_inline("The current RMSE is {chr_current}, which is a {abs(pct_diff)}% {res} {chr_prev}.")
++   } else {
++     txt <- format_inline("The current RMSE is {chr_current}.")
++   }
++   txt
++ }
+> 
+> reproduce_gp_surface <- function(file) {
++   require(GPfit)
++   # The objects here show the GP fit with the current set of resampled values.
++   # We will predict what the _next_ candidate should be so we will have to
++   # use different columns for the iteration.
++   load(file)
++   
++   # cli::cli_inform("For iteration {i}, the GP had results for {nrow(x$X)} candidates.")
++   
++   pred <- predict(x, large_scaled_grid)
++   grid_predictions <-
++     large_grid %>%
++     dplyr::mutate(.mean = pred$Y_hat, .sd = sqrt(pred$MSE))
++   obj <-
++     predict(exp_improve(),
++             grid_predictions,
++             maximize = FALSE, # since we are minimizing RMSE
++             best = score_card$best_val)
++   
++   # make a normalized objective function for visualizations
++   rngs <- range(obj$objective)
++   obj$objective_scaled <- (obj$objective - rngs[1]) / (rngs[2] - rngs[1])
++   ret <- bind_cols(grid_predictions, obj)
++   
++   ret$iter <- i
++   ret$.iter <- i
++   ret$num_points <- nrow(x$X)
++   ret
++ }
+> 
+> yardstick_fitness <- function(values, wflow, param_info, metrics, ...) {
++   
++   require(tidymodels)
++   # load req packages
++   info <- as_tibble(metrics)
++   
++   values <- purrr::map2_dbl(values, param_info$object, ~ dials::value_inverse(.y, .x))
++   values <- matrix(values, nrow = 1)
++   colnames(values) <- param_info$id
++   values <- as_tibble(values)
++   ctrl <- control_grid(allow_par = FALSE)
++   
++   res <- tune_grid(
++     wflow,
++     metrics = metrics,
++     param_info = param_info,
++     grid = values,
++     control = ctrl,
++     ...
++   )
++   best_res <- show_best(res, metric = info$metric[1])
++   if (info$direction == "minimize") {
++     obj_value <- -best_res$mean
++   } else {
++     obj_value <- best_res$mean
++   }
++   obj_value
++ }
+> 
+> save_details <- function(object, ...) {
++   pop <- object@population
++   colnames(pop) <- c("cost", "scale_factor")
++   pop <- tibble::as_tibble(pop)
++   pop$fitness <- -object@fitness
++   pop$time <- lubridate::now()
++   
++   if(!exists("ga_generations", envir = globalenv())) {
++     assign("ga_generations", list(pop), envir = globalenv())
++   } else {
++     ga_res <- get("ga_generations", envir = globalenv())
++     assign("ga_generations", append(ga_generations, list(pop)), envir = globalenv()) 
++   }
++   object 
++ }
+> 
+> # ------------------------------------------------------------------------------
+> 
+> rec <-
++   recipe(barley ~ ., data = barley_train) %>%
++   step_orderNorm(all_predictors()) %>% 
++   step_pca(all_predictors(), num_comp = 10) %>%
++   step_normalize(all_predictors())
+> 
+> svm_spec <-
++   svm_poly(cost = tune(), degree = 4, scale_factor = tune()) %>%
++   set_mode("regression")
+> 
+> svm_wflow <- workflow(rec, svm_spec)
+> 
+> svm_param <-
++   svm_wflow %>%
++   extract_parameter_set_dials() %>%
++   update(
++     cost = cost(c(-10, 10)),
++     scale_factor = scale_factor(c(-10, -1/10))
++   )
+> 
+> reg_mtr <- metric_set(rmse)
+> 
+> # ------------------------------------------------------------------------------
+> 
+> init_grid <- grid_space_filling(svm_param, size = 3)
+> 
+> # used for bo plots:
+> large_grid <- grid_regular(svm_param, levels = 50)
+> large_scaled_grid <- encode_set(large_grid, svm_param, as_matrix = TRUE)
+> 
+> # ------------------------------------------------------------------------------
+> cli::cli_rule("intial SFD")
+── intial SFD ──────────────────────────────────────────────────────────────────
+> 
+> initial_time <- system.time({
++   set.seed(21)
++   initial_res <-
++     svm_wflow %>%
++     tune_grid(
++       resamples = barley_rs,
++       grid = init_grid,
++       metrics = reg_mtr,
++       control = control_grid(save_pred = TRUE)
++     )
++ })
+> 
+> initial_mtr <- collect_metrics(initial_res)
+> 
+> show_best(initial_res, metric = "rmse")
+# A tibble: 3 × 8
+         cost scale_factor .metric .estimator  mean     n std_err .config       
+        <dbl>        <dbl> <chr>   <chr>      <dbl> <int>   <dbl> <chr>         
+1    0.000977 0.794        rmse    standard    6.10     1      NA Preprocessor1…
+2 1024        0.00000891   rmse    standard    7.33     1      NA Preprocessor1…
+3    1        0.0000000001 rmse    standard   17.0      1      NA Preprocessor1…
+> 
+> save(initial_mtr, initial_time, file = glue("{stub}_initial.RData"))
+> 
+> # ------------------------------------------------------------------------------
+> 
+> # For visualization
+> 
+> # set.seed(531)
+> # svm_large_res <-
+> #   svm_wflow %>%
+> #   tune_grid(
+> #     resamples = barley_rs,
+> #     grid = grid_regular(svm_param, levels = 20),
+> #     metrics = reg_mtr,
+> #     control = control_grid(parallel_over = "everything")
+> #   )
+> 
+> # ------------------------------------------------------------------------------
+> cli::cli_rule("Bayesian optimization")
+── Bayesian optimization ───────────────────────────────────────────────────────
+> 
+> bo_time <- system.time({
++   set.seed(102)
++   bo_res <-
++     svm_wflow %>%
++     tune_bayes(
++       resamples = barley_rs,
++       initial = initial_res,
++       iter = 51,
++       param_info = svm_param,
++       metrics = reg_mtr,
++       control = control_bayes(
++         no_improve = Inf,
++         verbose_iter = TRUE,
++         verbose = FALSE,
++         save_gp_scoring = TRUE,
++         save_pred = TRUE,
++       )
++     )
++ })
+Optimizing rmse using the expected improvement
+
+── Iteration 1 ─────────────────────────────────────────────────────────────────
+
+i Current best:		rmse=6.098 (@iter 0)
+i Gaussian process model
+! The Gaussian process model is being fit using 2 features but only has 3
+  data points to do so. This may cause errors or a poor model fit.
+✓ Gaussian process model
+i Generating 5000 candidates
+i Predicted candidates
+i cost=0.00101, scale_factor=0.42
+i Estimating performance
+✓ Estimating performance
+ⓧ Newest results:	rmse=6.142
+
+── Iteration 2 ─────────────────────────────────────────────────────────────────
+
+i Current best:		rmse=6.098 (@iter 0)
+i Gaussian process model
+✓ Gaussian process model
+i Generating 5000 candidates
+i Predicted candidates
+i cost=154, scale_factor=0.0972
+i Estimating performance
+✓ Estimating performance
+ⓧ Newest results:	rmse=6.257
+
+── Iteration 3 ─────────────────────────────────────────────────────────────────
+
+i Current best:		rmse=6.098 (@iter 0)
+i Gaussian process model
+✓ Gaussian process model
+i Generating 5000 candidates
+i Predicted candidates
+i cost=41.9, scale_factor=0.00115
+i Estimating performance
+✓ Estimating performance
+ⓧ Newest results:	rmse=6.552
+
+── Iteration 4 ─────────────────────────────────────────────────────────────────
+
+i Current best:		rmse=6.098 (@iter 0)
+i Gaussian process model
+✓ Gaussian process model
+i Generating 5000 candidates
+i Predicted candidates
+i cost=0.0102, scale_factor=0.648
+i Estimating performance
+✓ Estimating performance
+♥ Newest results:	rmse=5.993
+
+── Iteration 5 ─────────────────────────────────────────────────────────────────
+
+i Current best:		rmse=5.993 (@iter 4)
+i Gaussian process model
+✓ Gaussian process model
+i Generating 5000 candidates
+i Predicted candidates
+i cost=1011, scale_factor=0.719
+i Estimating performance
+✓ Estimating performance
+ⓧ Newest results:	rmse=26.92
+
+── Iteration 6 ─────────────────────────────────────────────────────────────────
+
+i Current best:		rmse=5.993 (@iter 4)
+i Gaussian process model
+✓ Gaussian process model
+i Generating 5000 candidates
+i Predicted candidates
+i cost=67.7, scale_factor=0.33
+i Estimating performance
+✓ Estimating performance
+ⓧ Newest results:	rmse=8.776
+
+── Iteration 7 ─────────────────────────────────────────────────────────────────
+
+i Current best:		rmse=5.993 (@iter 4)
+i Gaussian process model
+✓ Gaussian process model
+i Generating 5000 candidates
+i Predicted candidates
+i cost=121, scale_factor=0.000291
+i Estimating performance
+✓ Estimating performance
+ⓧ Newest results:	rmse=6.722
+
+── Iteration 8 ─────────────────────────────────────────────────────────────────
+
+i Current best:		rmse=5.993 (@iter 4)
+i Gaussian process model
+✓ Gaussian process model
+i Generating 5000 candidates
+i Predicted candidates
+i cost=0.00367, scale_factor=0.738
+i Estimating performance
+✓ Estimating performance
+ⓧ Newest results:	rmse=6.025
+
+── Iteration 9 ─────────────────────────────────────────────────────────────────
+
+i Current best:		rmse=5.993 (@iter 4)
+i Gaussian process model
+✓ Gaussian process model
+i Generating 5000 candidates
+i Predicted candidates
+i cost=4.22, scale_factor=0.196
+i Estimating performance
+✓ Estimating performance
+♥ Newest results:	rmse=5.947
+
+── Iteration 10 ────────────────────────────────────────────────────────────────
+
+i Current best:		rmse=5.947 (@iter 9)
+i Gaussian process model
+✓ Gaussian process model
+i Generating 5000 candidates
+i Predicted candidates
+i cost=871, scale_factor=0.174
+i Estimating performance
+✓ Estimating performance
+ⓧ Newest results:	rmse=11.78
+
+── Iteration 11 ────────────────────────────────────────────────────────────────
+
+i Current best:		rmse=5.947 (@iter 9)
+i Gaussian process model
+✓ Gaussian process model
+i Generating 5000 candidates
+i Predicted candidates
+i cost=34, scale_factor=0.156
+i Estimating performance
+✓ Estimating performance
+ⓧ Newest results:	rmse=6.097
+
+── Iteration 12 ────────────────────────────────────────────────────────────────
+
+i Current best:		rmse=5.947 (@iter 9)
+i Gaussian process model
+✓ Gaussian process model
+i Generating 5000 candidates
+i Predicted candidates
+i cost=1.4, scale_factor=0.575
+i Estimating performance
+✓ Estimating performance
+ⓧ Newest results:	rmse=6.218
+
+── Iteration 13 ────────────────────────────────────────────────────────────────
+
+i Current best:		rmse=5.947 (@iter 9)
+i Gaussian process model
+✓ Gaussian process model
+i Generating 5000 candidates
+i Predicted candidates
+i cost=1018, scale_factor=0.0106
+i Estimating performance
+✓ Estimating performance
+♥ Newest results:	rmse=5.773
+
+── Iteration 14 ────────────────────────────────────────────────────────────────
+
+i Current best:		rmse=5.773 (@iter 13)
+i Gaussian process model
+✓ Gaussian process model
+i Generating 5000 candidates
+i Predicted candidates
+i cost=12.7, scale_factor=3.22e-05
+i Estimating performance
+✓ Estimating performance
+ⓧ Newest results:	rmse=7.4
+
+── Iteration 15 ────────────────────────────────────────────────────────────────
+
+i Current best:		rmse=5.773 (@iter 13)
+i Gaussian process model
+✓ Gaussian process model
+i Generating 5000 candidates
+i Predicted candidates
+i cost=0.602, scale_factor=0.000287
+i Estimating performance
+✓ Estimating performance
+ⓧ Newest results:	rmse=7.622
+
+── Iteration 16 ────────────────────────────────────────────────────────────────
+
+i Current best:		rmse=5.773 (@iter 13)
+i Gaussian process model
+✓ Gaussian process model
+i Generating 5000 candidates
+i Predicted candidates
+i cost=14.5, scale_factor=0.00711
+i Estimating performance
+✓ Estimating performance
+ⓧ Newest results:	rmse=6.222
+
+── Iteration 17 ────────────────────────────────────────────────────────────────
+
+i Current best:		rmse=5.773 (@iter 13)
+i Gaussian process model
+✓ Gaussian process model
+i Generating 5000 candidates
+i Predicted candidates
+i cost=1024, scale_factor=4.98e-05
+i Estimating performance
+✓ Estimating performance
+ⓧ Newest results:	rmse=7.019
+
+── Iteration 18 ────────────────────────────────────────────────────────────────
+
+i Current best:		rmse=5.773 (@iter 13)
+i Gaussian process model
+✓ Gaussian process model
+i Generating 5000 candidates
+i Predicted candidates
+i cost=0.0594, scale_factor=0.00302
+i Estimating performance
+✓ Estimating performance
+ⓧ Newest results:	rmse=7.515
+
+── Iteration 19 ────────────────────────────────────────────────────────────────
+
+i Current best:		rmse=5.773 (@iter 13)
+i Gaussian process model
+✓ Gaussian process model
+i Generating 5000 candidates
+i Predicted candidates
+i cost=4.01, scale_factor=1.86e-06
+i Estimating performance
+✓ Estimating performance
+ⓧ Newest results:	rmse=15.22
+
+── Iteration 20 ────────────────────────────────────────────────────────────────
+
+i Current best:		rmse=5.773 (@iter 13)
+i Gaussian process model
+✓ Gaussian process model
+i Generating 5000 candidates
+i Predicted candidates
+i cost=662, scale_factor=0.0279
+i Estimating performance
+✓ Estimating performance
+ⓧ Newest results:	rmse=5.967
+
+── Iteration 21 ────────────────────────────────────────────────────────────────
+
+i Current best:		rmse=5.773 (@iter 13)
+i Gaussian process model
+✓ Gaussian process model
+i Generating 5000 candidates
+i Predicted candidates
+i cost=0.000984, scale_factor=0.0162
+i Estimating performance
+✓ Estimating performance
+ⓧ Newest results:	rmse=13.25
+
+── Iteration 22 ────────────────────────────────────────────────────────────────
+
+i Current best:		rmse=5.773 (@iter 13)
+i Gaussian process model
+✓ Gaussian process model
+i Generating 5000 candidates
+i Predicted candidates
+i cost=0.00109, scale_factor=0.000385
+i Estimating performance
+✓ Estimating performance
+ⓧ Newest results:	rmse=16.92
+
+── Iteration 23 ────────────────────────────────────────────────────────────────
+
+i Current best:		rmse=5.773 (@iter 13)
+i Gaussian process model
+✓ Gaussian process model
+i Generating 5000 candidates
+i Predicted candidates
+i cost=1.88, scale_factor=0.00241
+i Estimating performance
+✓ Estimating performance
+ⓧ Newest results:	rmse=6.707
+
+── Iteration 24 ────────────────────────────────────────────────────────────────
+
+i Current best:		rmse=5.773 (@iter 13)
+i Gaussian process model
+✓ Gaussian process model
+i Generating 5000 candidates
+i Predicted candidates
+i cost=0.00102, scale_factor=1.54e-08
+i Estimating performance
+✓ Estimating performance
+ⓧ Newest results:	rmse=17.04
+
+── Iteration 25 ────────────────────────────────────────────────────────────────
+
+i Current best:		rmse=5.773 (@iter 13)
+i Gaussian process model
+✓ Gaussian process model
+i Generating 5000 candidates
+i Predicted candidates
+i cost=201, scale_factor=0.00683
+i Estimating performance
+✓ Estimating performance
+ⓧ Newest results:	rmse=5.95
+
+── Iteration 26 ────────────────────────────────────────────────────────────────
+
+i Current best:		rmse=5.773 (@iter 13)
+i Gaussian process model
+✓ Gaussian process model
+i Generating 5000 candidates
+i Predicted candidates
+i cost=1.3, scale_factor=0.351
+i Estimating performance
+✓ Estimating performance
+ⓧ Newest results:	rmse=6.064
+
+── Iteration 27 ────────────────────────────────────────────────────────────────
+
+i Current best:		rmse=5.773 (@iter 13)
+i Gaussian process model
+✓ Gaussian process model
+i Generating 5000 candidates
+i Predicted candidates
+i cost=909, scale_factor=9.48e-09
+i Estimating performance
+✓ Estimating performance
+ⓧ Newest results:	rmse=14.97
+
+── Iteration 28 ────────────────────────────────────────────────────────────────
+
+i Current best:		rmse=5.773 (@iter 13)
+i Gaussian process model
+✓ Gaussian process model
+i Generating 5000 candidates
+i Predicted candidates
+i cost=20.5, scale_factor=0.000133
+i Estimating performance
+✓ Estimating performance
+ⓧ Newest results:	rmse=7.285
+
+── Iteration 29 ────────────────────────────────────────────────────────────────
+
+i Current best:		rmse=5.773 (@iter 13)
+i Gaussian process model
+✓ Gaussian process model
+i Generating 5000 candidates
+i Predicted candidates
+i cost=1019, scale_factor=0.00185
+i Estimating performance
+✓ Estimating performance
+ⓧ Newest results:	rmse=6.196
+
+── Iteration 30 ────────────────────────────────────────────────────────────────
+
+i Current best:		rmse=5.773 (@iter 13)
+i Gaussian process model
+✓ Gaussian process model
+i Generating 5000 candidates
+i Predicted candidates
+i cost=0.001, scale_factor=5.68e-06
+i Estimating performance
+✓ Estimating performance
+ⓧ Newest results:	rmse=17.04
+
+── Iteration 31 ────────────────────────────────────────────────────────────────
+
+i Current best:		rmse=5.773 (@iter 13)
+i Gaussian process model
+✓ Gaussian process model
+i Generating 5000 candidates
+i Predicted candidates
+i cost=0.346, scale_factor=0.00943
+i Estimating performance
+✓ Estimating performance
+ⓧ Newest results:	rmse=6.56
+
+── Iteration 32 ────────────────────────────────────────────────────────────────
+
+i Current best:		rmse=5.773 (@iter 13)
+i Gaussian process model
+✓ Gaussian process model
+i Generating 5000 candidates
+i Predicted candidates
+i cost=78.2, scale_factor=0.0492
+i Estimating performance
+✓ Estimating performance
+ⓧ Newest results:	rmse=5.968
+
+── Iteration 33 ────────────────────────────────────────────────────────────────
+
+i Current best:		rmse=5.773 (@iter 13)
+i Gaussian process model
+✓ Gaussian process model
+i Generating 5000 candidates
+i Predicted candidates
+i cost=5.43, scale_factor=0.289
+i Estimating performance
+✓ Estimating performance
+ⓧ Newest results:	rmse=6.236
+
+── Iteration 34 ────────────────────────────────────────────────────────────────
+
+i Current best:		rmse=5.773 (@iter 13)
+i Gaussian process model
+✓ Gaussian process model
+i Generating 5000 candidates
+i Predicted candidates
+i cost=878, scale_factor=1.23e-10
+i Estimating performance
+✓ Estimating performance
+ⓧ Newest results:	rmse=17.02
+
+── Iteration 35 ────────────────────────────────────────────────────────────────
+
+i Current best:		rmse=5.773 (@iter 13)
+i Gaussian process model
+✓ Gaussian process model
+i Generating 5000 candidates
+i Predicted candidates
+i cost=0.138, scale_factor=0.717
+i Estimating performance
+✓ Estimating performance
+ⓧ Newest results:	rmse=6.285
+
+── Iteration 36 ────────────────────────────────────────────────────────────────
+
+i Current best:		rmse=5.773 (@iter 13)
+i Gaussian process model
+✓ Gaussian process model
+i Generating 5000 candidates
+i Predicted candidates
+i cost=0.000994, scale_factor=1.1e-10
+i Estimating performance
+✓ Estimating performance
+ⓧ Newest results:	rmse=17.04
+
+── Iteration 37 ────────────────────────────────────────────────────────────────
+
+i Current best:		rmse=5.773 (@iter 13)
+i Gaussian process model
+✓ Gaussian process model
+i Generating 5000 candidates
+i Predicted candidates
+i cost=979, scale_factor=3.16e-07
+i Estimating performance
+✓ Estimating performance
+ⓧ Newest results:	rmse=7.444
+
+── Iteration 38 ────────────────────────────────────────────────────────────────
+
+i Current best:		rmse=5.773 (@iter 13)
+i Gaussian process model
+✓ Gaussian process model
+i Generating 5000 candidates
+i Predicted candidates
+i cost=0.023, scale_factor=0.138
+i Estimating performance
+✓ Estimating performance
+ⓧ Newest results:	rmse=5.84
+
+── Iteration 39 ────────────────────────────────────────────────────────────────
+
+i Current best:		rmse=5.773 (@iter 13)
+i Gaussian process model
+✓ Gaussian process model
+i Generating 5000 candidates
+i Predicted candidates
+i cost=0.0407, scale_factor=0.21
+i Estimating performance
+✓ Estimating performance
+ⓧ Newest results:	rmse=5.792
+
+── Iteration 40 ────────────────────────────────────────────────────────────────
+
+i Current best:		rmse=5.773 (@iter 13)
+i Gaussian process model
+✓ Gaussian process model
+i Generating 5000 candidates
+i Predicted candidates
+i cost=936, scale_factor=1.36e-06
+i Estimating performance
+✓ Estimating performance
+ⓧ Newest results:	rmse=7.351
+
+── Iteration 41 ────────────────────────────────────────────────────────────────
+
+i Current best:		rmse=5.773 (@iter 13)
+i Gaussian process model
+✓ Gaussian process model
+i Generating 5000 candidates
+i Predicted candidates
+i cost=0.00796, scale_factor=0.222
+i Estimating performance
+✓ Estimating performance
+ⓧ Newest results:	rmse=5.866
+
+── Iteration 42 ────────────────────────────────────────────────────────────────
+
+i Current best:		rmse=5.773 (@iter 13)
+i Gaussian process model
+✓ Gaussian process model
+i Generating 5000 candidates
+i Predicted candidates
+i cost=327, scale_factor=0.0158
+i Estimating performance
+✓ Estimating performance
+♥ Newest results:	rmse=5.771
+
+── Iteration 43 ────────────────────────────────────────────────────────────────
+
+i Current best:		rmse=5.771 (@iter 42)
+i Gaussian process model
+✓ Gaussian process model
+i Generating 5000 candidates
+i Predicted candidates
+i cost=933, scale_factor=0.000583
+i Estimating performance
+✓ Estimating performance
+ⓧ Newest results:	rmse=6.453
+
+── Iteration 44 ────────────────────────────────────────────────────────────────
+
+i Current best:		rmse=5.771 (@iter 42)
+i Gaussian process model
+✓ Gaussian process model
+i Generating 5000 candidates
+i Predicted candidates
+i cost=570, scale_factor=0.0121
+i Estimating performance
+✓ Estimating performance
+♥ Newest results:	rmse=5.77
+
+── Iteration 45 ────────────────────────────────────────────────────────────────
+
+i Current best:		rmse=5.77 (@iter 44)
+i Gaussian process model
+✓ Gaussian process model
+i Generating 5000 candidates
+i Predicted candidates
+i cost=0.0194, scale_factor=0.237
+i Estimating performance
+✓ Estimating performance
+ⓧ Newest results:	rmse=5.804
+
+── Iteration 46 ────────────────────────────────────────────────────────────────
+
+i Current best:		rmse=5.77 (@iter 44)
+i Gaussian process model
+✓ Gaussian process model
+i Generating 5000 candidates
+i Predicted candidates
+i cost=127, scale_factor=2.68e-05
+i Estimating performance
+✓ Estimating performance
+ⓧ Newest results:	rmse=7.332
+
+── Iteration 47 ────────────────────────────────────────────────────────────────
+
+i Current best:		rmse=5.77 (@iter 44)
+i Gaussian process model
+✓ Gaussian process model
+i Generating 5000 candidates
+i Predicted candidates
+i cost=0.191, scale_factor=4.69e-05
+i Estimating performance
+✓ Estimating performance
+ⓧ Newest results:	rmse=14.89
+
+── Iteration 48 ────────────────────────────────────────────────────────────────
+
+i Current best:		rmse=5.77 (@iter 44)
+i Gaussian process model
+✓ Gaussian process model
+i Generating 5000 candidates
+i Predicted candidates
+i cost=0.115, scale_factor=0.0719
+i Estimating performance
+✓ Estimating performance
+ⓧ Newest results:	rmse=5.883
+
+── Iteration 49 ────────────────────────────────────────────────────────────────
+
+i Current best:		rmse=5.77 (@iter 44)
+i Gaussian process model
+✓ Gaussian process model
+i Generating 5000 candidates
+i Predicted candidates
+i cost=0.21, scale_factor=0.143
+i Estimating performance
+✓ Estimating performance
+ⓧ Newest results:	rmse=5.798
+
+── Iteration 50 ────────────────────────────────────────────────────────────────
+
+i Current best:		rmse=5.77 (@iter 44)
+i Gaussian process model
+✓ Gaussian process model
+i Generating 5000 candidates
+i Predicted candidates
+i cost=0.079, scale_factor=0.127
+i Estimating performance
+✓ Estimating performance
+ⓧ Newest results:	rmse=5.793
+
+── Iteration 51 ────────────────────────────────────────────────────────────────
+
+i Current best:		rmse=5.77 (@iter 44)
+i Gaussian process model
+✓ Gaussian process model
+i Generating 5000 candidates
+i Predicted candidates
+i cost=1.67, scale_factor=1.74e-08
+i Estimating performance
+✓ Estimating performance
+ⓧ Newest results:	rmse=17.03
+> 
+> 
+> ###
+> 
+> bo_ci <-
++   int_pctl(bo_res, times = 2000, metrics = reg_mtr, alpha = 0.1) %>%
++   select(-.metric, -.config)
+> bo_mtr <- collect_metrics(bo_res)
+> bo_gp_files <- list.files(tempdir(), pattern = "gp", full.names = TRUE)
+> bo_tile <- map_dfr(bo_gp_files, reproduce_gp_surface)
+Loading required package: GPfit
+> 
+> ###
+> 
+> old_bo_points <- new_bo_points <- NULL
+> for (i in 1:max(bo_tile$iter)) {
++   prev_iter_points <-
++     bo_mtr %>%
++     filter(.iter < i & .iter != 0) %>%
++     mutate(iter = i)
++   old_bo_points <- bind_rows(old_bo_points, prev_iter_points)
++   curr_iter_points <-
++     bo_mtr %>%
++     filter(.iter == i) %>%
++     mutate(iter = i)
++   new_bo_points <- bind_rows(new_bo_points, curr_iter_points)
++ }
+> 
+> save(bo_mtr, bo_ci, bo_tile, bo_time, init_grid, old_bo_points, new_bo_points,
++      file = glue("{stub}_bo.RData"))
+> 
+> # ------------------------------------------------------------------------------
+> cli::cli_rule("Simulated annealing")
+── Simulated annealing ─────────────────────────────────────────────────────────
+> 
+> sa_time <- system.time({
++   set.seed(381)
++   sa_res <-
++     svm_wflow %>%
++     tune_sim_anneal(
++       resamples = barley_rs,
++       initial = initial_res,
++       iter = 50,
++       param_info = svm_param,
++       metrics = reg_mtr,
++       control = control_sim_anneal(
++         no_improve = Inf,
++         verbose_iter = TRUE,
++         verbose = FALSE,
++         save_history = TRUE,
++         save_pred = TRUE
++       )
++     )
++ })
+Optimizing rmse
+Initial best: 6.09780
+ℹ The workflow being saved contains a recipe, which is 20.78 Mb in ℹ memory. If
+this was not intentional, please set the control setting ℹ `save_workflow =
+FALSE`.
+1 ♥ new best           rmse=5.9729
+ℹ The workflow being saved contains a recipe, which is 20.78 Mb in ℹ memory. If
+this was not intentional, please set the control setting ℹ `save_workflow =
+FALSE`.
+2 ─ discard suboptimal rmse=7.1956
+ℹ The workflow being saved contains a recipe, which is 20.78 Mb in ℹ memory. If
+this was not intentional, please set the control setting ℹ `save_workflow =
+FALSE`.
+3 ─ discard suboptimal rmse=6.1654
+ℹ The workflow being saved contains a recipe, which is 20.78 Mb in ℹ memory. If
+this was not intentional, please set the control setting ℹ `save_workflow =
+FALSE`.
+4 ◯ accept suboptimal  rmse=5.9973
+ℹ The workflow being saved contains a recipe, which is 20.78 Mb in ℹ memory. If
+this was not intentional, please set the control setting ℹ `save_workflow =
+FALSE`.
+5 ─ discard suboptimal rmse=11.251
+ℹ The workflow being saved contains a recipe, which is 20.78 Mb in ℹ memory. If
+this was not intentional, please set the control setting ℹ `save_workflow =
+FALSE`.
+6 ─ discard suboptimal rmse=6.3143
+ℹ The workflow being saved contains a recipe, which is 20.78 Mb in ℹ memory. If
+this was not intentional, please set the control setting ℹ `save_workflow =
+FALSE`.
+7 ◯ accept suboptimal  rmse=6.098
+ℹ The workflow being saved contains a recipe, which is 20.78 Mb in ℹ memory. If
+this was not intentional, please set the control setting ℹ `save_workflow =
+FALSE`.
+8 ─ discard suboptimal rmse=9.5545
+ℹ The workflow being saved contains a recipe, which is 20.78 Mb in ℹ memory. If
+this was not intentional, please set the control setting ℹ `save_workflow =
+FALSE`.
+9 ✖ restart from best  rmse=6.7748
+ℹ The workflow being saved contains a recipe, which is 20.78 Mb in ℹ memory. If
+this was not intentional, please set the control setting ℹ `save_workflow =
+FALSE`.
+10 ◯ accept suboptimal  rmse=5.9986
+ℹ The workflow being saved contains a recipe, which is 20.78 Mb in ℹ memory. If
+this was not intentional, please set the control setting ℹ `save_workflow =
+FALSE`.
+11 ─ discard suboptimal rmse=9.3643
+ℹ The workflow being saved contains a recipe, which is 20.78 Mb in ℹ memory. If
+this was not intentional, please set the control setting ℹ `save_workflow =
+FALSE`.
+12 ─ discard suboptimal rmse=7.346
+ℹ The workflow being saved contains a recipe, which is 20.78 Mb in ℹ memory. If
+this was not intentional, please set the control setting ℹ `save_workflow =
+FALSE`.
+13 + better suboptimal  rmse=5.9878
+ℹ The workflow being saved contains a recipe, which is 20.78 Mb in ℹ memory. If
+this was not intentional, please set the control setting ℹ `save_workflow =
+FALSE`.
+14 ♥ new best           rmse=5.8397
+ℹ The workflow being saved contains a recipe, which is 20.78 Mb in ℹ memory. If
+this was not intentional, please set the control setting ℹ `save_workflow =
+FALSE`.
+15 ♥ new best           rmse=5.8113
+ℹ The workflow being saved contains a recipe, which is 20.78 Mb in ℹ memory. If
+this was not intentional, please set the control setting ℹ `save_workflow =
+FALSE`.
+16 ─ discard suboptimal rmse=6.3972
+ℹ The workflow being saved contains a recipe, which is 20.78 Mb in ℹ memory. If
+this was not intentional, please set the control setting ℹ `save_workflow =
+FALSE`.
+17 ─ discard suboptimal rmse=6.1413
+ℹ The workflow being saved contains a recipe, which is 20.78 Mb in ℹ memory. If
+this was not intentional, please set the control setting ℹ `save_workflow =
+FALSE`.
+18 ◯ accept suboptimal  rmse=6.0505
+ℹ The workflow being saved contains a recipe, which is 20.78 Mb in ℹ memory. If
+this was not intentional, please set the control setting ℹ `save_workflow =
+FALSE`.
+19 ◯ accept suboptimal  rmse=6.1078
+ℹ The workflow being saved contains a recipe, which is 20.78 Mb in ℹ memory. If
+this was not intentional, please set the control setting ℹ `save_workflow =
+FALSE`.
+20 + better suboptimal  rmse=5.9804
+ℹ The workflow being saved contains a recipe, which is 20.78 Mb in ℹ memory. If
+this was not intentional, please set the control setting ℹ `save_workflow =
+FALSE`.
+21 ─ discard suboptimal rmse=7.0988
+ℹ The workflow being saved contains a recipe, which is 20.78 Mb in ℹ memory. If
+this was not intentional, please set the control setting ℹ `save_workflow =
+FALSE`.
+22 ─ discard suboptimal rmse=6.7979
+ℹ The workflow being saved contains a recipe, which is 20.78 Mb in ℹ memory. If
+this was not intentional, please set the control setting ℹ `save_workflow =
+FALSE`.
+23 ✖ restart from best  rmse=6.2521
+ℹ The workflow being saved contains a recipe, which is 20.78 Mb in ℹ memory. If
+this was not intentional, please set the control setting ℹ `save_workflow =
+FALSE`.
+24 ◯ accept suboptimal  rmse=5.8918
+ℹ The workflow being saved contains a recipe, which is 20.78 Mb in ℹ memory. If
+this was not intentional, please set the control setting ℹ `save_workflow =
+FALSE`.
+25 ─ discard suboptimal rmse=5.991
+ℹ The workflow being saved contains a recipe, which is 20.78 Mb in ℹ memory. If
+this was not intentional, please set the control setting ℹ `save_workflow =
+FALSE`.
+26 ◯ accept suboptimal  rmse=5.9509
+ℹ The workflow being saved contains a recipe, which is 20.78 Mb in ℹ memory. If
+this was not intentional, please set the control setting ℹ `save_workflow =
+FALSE`.
+27 ─ discard suboptimal rmse=6.7672
+ℹ The workflow being saved contains a recipe, which is 20.78 Mb in ℹ memory. If
+this was not intentional, please set the control setting ℹ `save_workflow =
+FALSE`.
+28 ─ discard suboptimal rmse=6.7015
+ℹ The workflow being saved contains a recipe, which is 20.78 Mb in ℹ memory. If
+this was not intentional, please set the control setting ℹ `save_workflow =
+FALSE`.
+29 + better suboptimal  rmse=5.8881
+ℹ The workflow being saved contains a recipe, which is 20.78 Mb in ℹ memory. If
+this was not intentional, please set the control setting ℹ `save_workflow =
+FALSE`.
+30 + better suboptimal  rmse=5.8235
+ℹ The workflow being saved contains a recipe, which is 20.78 Mb in ℹ memory. If
+this was not intentional, please set the control setting ℹ `save_workflow =
+FALSE`.
+31 ✖ restart from best  rmse=6.0292
+ℹ The workflow being saved contains a recipe, which is 20.78 Mb in ℹ memory. If
+this was not intentional, please set the control setting ℹ `save_workflow =
+FALSE`.
+32 ─ discard suboptimal rmse=6.6235
+ℹ The workflow being saved contains a recipe, which is 20.78 Mb in ℹ memory. If
+this was not intentional, please set the control setting ℹ `save_workflow =
+FALSE`.
+33 ─ discard suboptimal rmse=5.9539
+ℹ The workflow being saved contains a recipe, which is 20.78 Mb in ℹ memory. If
+this was not intentional, please set the control setting ℹ `save_workflow =
+FALSE`.
+34 ─ discard suboptimal rmse=6.6703
+ℹ The workflow being saved contains a recipe, which is 20.78 Mb in ℹ memory. If
+this was not intentional, please set the control setting ℹ `save_workflow =
+FALSE`.
+35 ─ discard suboptimal rmse=6.2676
+ℹ The workflow being saved contains a recipe, which is 20.78 Mb in ℹ memory. If
+this was not intentional, please set the control setting ℹ `save_workflow =
+FALSE`.
+36 ─ discard suboptimal rmse=6.6291
+ℹ The workflow being saved contains a recipe, which is 20.78 Mb in ℹ memory. If
+this was not intentional, please set the control setting ℹ `save_workflow =
+FALSE`.
+37 ◯ accept suboptimal  rmse=5.995
+ℹ The workflow being saved contains a recipe, which is 20.78 Mb in ℹ memory. If
+this was not intentional, please set the control setting ℹ `save_workflow =
+FALSE`.
+38 ─ discard suboptimal rmse=6.6059
+ℹ The workflow being saved contains a recipe, which is 20.78 Mb in ℹ memory. If
+this was not intentional, please set the control setting ℹ `save_workflow =
+FALSE`.
+39 ✖ restart from best  rmse=5.9074
+ℹ The workflow being saved contains a recipe, which is 20.78 Mb in ℹ memory. If
+this was not intentional, please set the control setting ℹ `save_workflow =
+FALSE`.
+40 ♥ new best           rmse=5.7838
+ℹ The workflow being saved contains a recipe, which is 20.78 Mb in ℹ memory. If
+this was not intentional, please set the control setting ℹ `save_workflow =
+FALSE`.
+41 ─ discard suboptimal rmse=6.6322
+ℹ The workflow being saved contains a recipe, which is 20.78 Mb in ℹ memory. If
+this was not intentional, please set the control setting ℹ `save_workflow =
+FALSE`.
+42 ─ discard suboptimal rmse=6.0804
+ℹ The workflow being saved contains a recipe, which is 20.78 Mb in ℹ memory. If
+this was not intentional, please set the control setting ℹ `save_workflow =
+FALSE`.
+43 ─ discard suboptimal rmse=6.0826
+ℹ The workflow being saved contains a recipe, which is 20.78 Mb in ℹ memory. If
+this was not intentional, please set the control setting ℹ `save_workflow =
+FALSE`.
+44 ─ discard suboptimal rmse=5.9273
+ℹ The workflow being saved contains a recipe, which is 20.78 Mb in ℹ memory. If
+this was not intentional, please set the control setting ℹ `save_workflow =
+FALSE`.
+45 ◯ accept suboptimal  rmse=5.791
+ℹ The workflow being saved contains a recipe, which is 20.78 Mb in ℹ memory. If
+this was not intentional, please set the control setting ℹ `save_workflow =
+FALSE`.
+46 ─ discard suboptimal rmse=6.0726
+ℹ The workflow being saved contains a recipe, which is 20.78 Mb in ℹ memory. If
+this was not intentional, please set the control setting ℹ `save_workflow =
+FALSE`.
+47 ─ discard suboptimal rmse=6.1115
+ℹ The workflow being saved contains a recipe, which is 20.78 Mb in ℹ memory. If
+this was not intentional, please set the control setting ℹ `save_workflow =
+FALSE`.
+48 ✖ restart from best  rmse=6.2825
+ℹ The workflow being saved contains a recipe, which is 20.78 Mb in ℹ memory. If
+this was not intentional, please set the control setting ℹ `save_workflow =
+FALSE`.
+49 ─ discard suboptimal rmse=5.9825
+ℹ The workflow being saved contains a recipe, which is 20.78 Mb in ℹ memory. If
+this was not intentional, please set the control setting ℹ `save_workflow =
+FALSE`.
+50 ─ discard suboptimal rmse=6.5696
+> 
+> sa_ci <-
++   int_pctl(sa_res, times = 2000, metrics = reg_mtr, alpha = 0.1) %>%
++   select(-.metric, -.config)
+> sa_mtr <- collect_metrics(sa_res)
+> load(file.path(tempdir(), "sa_history.RData"))
+> sa_history <- result_history
+> 
+> # ------------------------------------------------------------------------------
+> # Items to save for the shiny app
+> 
+> sa_init <-
++   sa_history %>%
++   filter(.iter == 0) %>%
++   rename(RMSE = mean)
+> best_init <-
++   sa_init %>%
++   slice_min(RMSE) %>%
++   select(.iter, cost, scale_factor)
+> poor_init <-
++   anti_join(sa_init, best_init, by = c(".iter", "cost", "scale_factor")) %>%
++   select(.iter, cost, scale_factor)
+> 
+> # loop over path and descriptions
+> 
+> paths <- iter_best <- iter_label <- iter_descr <- vector(mode = "list", length = 50)
+> 
+> for (i in 1:50) {
++   current_path <-
++     resolve_sa_path(sa_history, i) %>%
++     anti_join(poor_init, by = c(".iter", "cost", "scale_factor"))
++   paths[[i]] <- current_path
++ 
++   last_best <-
++     sa_history %>%
++     filter(results == "new best" & .iter < i) %>%
++     slice_max(.iter)
++   iter_best[[i]] <- last_best
++ 
++ 
++   iter_descr[[i]] <- describe_sa_result(current_path)
++ 
++   last_best_iter <-
++     last_best %>%
++     pluck(".iter")
++ 
++   res <- unique(sa_history$results[sa_history$.iter == i])
++   if (res == "restart from best") {
++     res <- paste(res, "at iteration", last_best_iter)
++   }
++ 
++   iter_label[[i]] <- paste0("iteration ", i, ": ", res)
++ }
+Loading required package: cli
+> 
+> save(sa_mtr, sa_ci, sa_history, sa_time, init_grid, paths, iter_best, iter_label,
++      iter_descr, file = glue("{stub}_sa.RData"))
+> 
+> # ------------------------------------------------------------------------------
+> cli::cli_rule("Genetic algorithm")
+── Genetic algorithm ───────────────────────────────────────────────────────────
+> 
+> min_vals <- map_dbl(svm_param$object, ~ .x$range[[1]])
+> max_vals <- map_dbl(svm_param$object, ~ .x$range[[2]])
+> 
+> pop_size <- 10
+> grid_ga <- grid_space_filling(svm_param, size = pop_size, original = FALSE)
+> grid_ga$cost <- log2(grid_ga$cost)
+> grid_ga$scale_factor <- log10(grid_ga$scale_factor)
+> 
+> ga_time <- system.time({
++   set.seed(1528)
++   ga_res <-
++     ga(
++       type = "real-valued",
++       fitness = yardstick_fitness,
++       lower = min_vals,
++       upper = max_vals,
++       popSize = pop_size,
++       suggestions = as.matrix(grid_ga),
++       maxiter = 10,
++       keepBest = TRUE,
++       seed = 39,
++       wflow = svm_wflow,
++       param_info = svm_param,
++       metrics = reg_mtr,
++       resamples = barley_rs,
++       postFitness = save_details,
++       parallel = "multicore"
++     )
++ })
+> 
+> ga_history <- 
++   map2_dfr(seq_along(ga_generations), ga_generations, ~ mutate(.y, generation = .x) %>% distinct()) %>% 
++   mutate(cost = 2^cost, scale_factor = 10^scale_factor)
+> 
+> save(ga_history, ga_time, ga_res, file = glue("{stub}_ga.RData"))
+> 
+> # ------------------------------------------------------------------------------
+> cli::cli_rule("Reproducability")
+── Reproducability ─────────────────────────────────────────────────────────────
+> 
+> sessioninfo::session_info()
+─ Session info ───────────────────────────────────────────────────────────────
+ setting  value
+ version  R version 4.4.1 (2024-06-14)
+ os       macOS 15.0.1
+ system   aarch64, darwin20
+ ui       X11
+ language (EN)
+ collate  en_US.UTF-8
+ ctype    en_US.UTF-8
+ tz       America/New_York
+ date     2024-11-08
+ pandoc   3.1.11 @ /opt/homebrew/bin/pandoc
+
+─ Packages ───────────────────────────────────────────────────────────────────
+ package       * version    date (UTC) lib source
+ backports       1.5.0      2024-05-23 [1] CRAN (R 4.4.0)
+ bestNormalize * 1.9.1      2023-08-18 [1] CRAN (R 4.4.0)
+ broom         * 1.0.7      2024-09-26 [1] CRAN (R 4.4.1)
+ butcher         0.3.4      2024-04-11 [1] CRAN (R 4.4.0)
+ class           7.3-22     2023-05-03 [2] CRAN (R 4.4.1)
+ cli           * 3.6.3      2024-06-21 [1] CRAN (R 4.4.0)
+ codetools       0.2-20     2024-03-31 [2] CRAN (R 4.4.1)
+ colorspace      2.1-1      2024-07-26 [1] CRAN (R 4.4.0)
+ crayon          1.5.3      2024-06-20 [1] CRAN (R 4.4.0)
+ curl            5.2.3      2024-09-20 [1] CRAN (R 4.4.1)
+ data.table      1.15.4     2024-03-30 [1] CRAN (R 4.4.0)
+ dials         * 1.3.0      2024-07-30 [1] CRAN (R 4.4.0)
+ DiceDesign      1.10       2023-12-07 [1] CRAN (R 4.4.0)
+ digest          0.6.36     2024-06-23 [1] CRAN (R 4.4.0)
+ doFuture        1.0.1      2023-12-20 [1] CRAN (R 4.4.0)
+ doParallel      1.0.17     2022-02-07 [1] CRAN (R 4.4.0)
+ doRNG           1.8.6      2023-01-16 [1] CRAN (R 4.4.0)
+ dplyr         * 1.1.4      2023-11-17 [1] CRAN (R 4.4.0)
+ ellipsis        0.3.2      2021-04-29 [1] CRAN (R 4.4.0)
+ fansi           1.0.6      2023-12-08 [1] CRAN (R 4.4.0)
+ finetune      * 1.2.0      2024-03-21 [1] CRAN (R 4.4.0)
+ foreach       * 1.5.2      2022-02-02 [1] CRAN (R 4.4.0)
+ fs              1.6.4      2024-04-25 [1] CRAN (R 4.4.0)
+ furrr           0.3.1      2022-08-15 [1] CRAN (R 4.4.0)
+ future        * 1.34.0     2024-07-29 [1] CRAN (R 4.4.0)
+ future.apply    1.11.2     2024-03-28 [1] CRAN (R 4.4.0)
+ GA            * 3.2.4      2024-01-28 [1] CRAN (R 4.4.0)
+ generics        0.1.3      2022-07-05 [1] CRAN (R 4.4.0)
+ ggplot2       * 3.5.1      2024-04-23 [1] CRAN (R 4.4.0)
+ globals         0.16.3     2024-03-08 [1] CRAN (R 4.4.0)
+ glue          * 1.7.0      2024-01-09 [1] CRAN (R 4.4.0)
+ gower           1.0.1      2022-12-22 [1] CRAN (R 4.4.0)
+ GPfit         * 1.0-8      2019-02-08 [1] CRAN (R 4.4.0)
+ gtable          0.3.5      2024-04-22 [1] CRAN (R 4.4.0)
+ hardhat         1.4.0.9002 2024-10-28 [1] Github (tidymodels/hardhat@78cf6d0)
+ httr            1.4.7      2023-08-15 [1] CRAN (R 4.4.0)
+ infer         * 1.0.7      2024-03-25 [1] CRAN (R 4.4.0)
+ ipred           0.9-15     2024-07-18 [1] CRAN (R 4.4.0)
+ iterators     * 1.0.14     2022-02-05 [1] CRAN (R 4.4.0)
+ kernlab         0.9-33     2024-08-13 [1] CRAN (R 4.4.0)
+ lattice         0.22-6     2024-03-20 [2] CRAN (R 4.4.1)
+ lava            1.8.0      2024-03-05 [1] CRAN (R 4.4.0)
+ lhs             1.2.0      2024-06-30 [1] CRAN (R 4.4.0)
+ lifecycle       1.0.4      2023-11-07 [1] CRAN (R 4.4.0)
+ listenv         0.9.1      2024-01-29 [1] CRAN (R 4.4.0)
+ lubridate       1.9.3      2023-09-27 [1] CRAN (R 4.4.0)
+ magrittr        2.0.3      2022-03-30 [1] CRAN (R 4.4.0)
+ MASS            7.3-61     2024-06-13 [1] CRAN (R 4.4.0)
+ Matrix          1.7-0      2024-04-26 [2] CRAN (R 4.4.1)
+ modeldata     * 1.4.0      2024-06-19 [1] CRAN (R 4.4.0)
+ modeldatatoo  * 0.3.0      2024-03-29 [1] CRAN (R 4.4.0)
+ munsell         0.5.1      2024-04-01 [1] CRAN (R 4.4.0)
+ nnet            7.3-19     2023-05-03 [2] CRAN (R 4.4.1)
+ parallelly      1.38.0     2024-07-27 [1] CRAN (R 4.4.0)
+ parsnip       * 1.2.1.9003 2024-11-08 [1] Github (tidymodels/parsnip@a212f78)
+ pillar          1.9.0      2023-03-22 [1] CRAN (R 4.4.0)
+ pins            1.3.0      2023-11-09 [1] CRAN (R 4.4.0)
+ pkgconfig       2.0.3      2019-09-22 [1] CRAN (R 4.4.0)
+ prodlim         2024.06.25 2024-06-24 [1] CRAN (R 4.4.0)
+ purrr         * 1.0.2      2023-08-10 [1] CRAN (R 4.4.0)
+ R6              2.5.1      2021-08-19 [1] CRAN (R 4.4.0)
+ rappdirs        0.3.3      2021-01-31 [1] CRAN (R 4.4.0)
+ Rcpp            1.0.13     2024-07-17 [1] CRAN (R 4.4.0)
+ recipes       * 1.1.0.9001 2024-11-08 [1] Github (tidymodels/recipes@28e3e4d)
+ rlang           1.1.4      2024-06-04 [1] CRAN (R 4.4.0)
+ rngtools        1.5.2      2021-09-20 [1] CRAN (R 4.4.0)
+ rpart           4.1.23     2023-12-05 [1] CRAN (R 4.4.0)
+ rsample       * 1.2.1.9000 2024-10-04 [1] Github (tidymodels/rsample@f799dba)
+ rstudioapi      0.16.0     2024-03-24 [1] CRAN (R 4.4.0)
+ scales        * 1.3.0      2023-11-28 [1] CRAN (R 4.4.0)
+ sessioninfo     1.2.2      2021-12-06 [1] CRAN (R 4.4.0)
+ sfd             0.1.0      2024-01-08 [1] CRAN (R 4.4.0)
+ survival        3.7-0      2024-06-05 [1] CRAN (R 4.4.0)
+ tibble        * 3.2.1      2023-03-20 [1] CRAN (R 4.4.0)
+ tidymodels    * 1.2.0      2024-03-25 [1] CRAN (R 4.4.0)
+ tidyr         * 1.3.1      2024-01-24 [1] CRAN (R 4.4.0)
+ tidyselect      1.2.1      2024-03-11 [1] CRAN (R 4.4.0)
+ timechange      0.3.0      2024-01-18 [1] CRAN (R 4.4.0)
+ timeDate        4032.109   2023-12-14 [1] CRAN (R 4.4.0)
+ tune          * 1.2.1.9000 2024-11-08 [1] Github (tidymodels/tune@f61099c)
+ utf8            1.2.4      2023-10-22 [1] CRAN (R 4.4.0)
+ vctrs           0.6.5      2023-12-01 [1] CRAN (R 4.4.0)
+ withr           3.0.1      2024-07-31 [1] CRAN (R 4.4.0)
+ workflows     * 1.1.4.9000 2024-11-08 [1] Github (tidymodels/workflows@8902b3e)
+ workflowsets  * 1.1.0      2024-03-21 [1] CRAN (R 4.4.0)
+ yaml            2.3.8      2023-12-11 [1] CRAN (R 4.4.0)
+ yardstick     * 1.3.1      2024-03-21 [1] CRAN (R 4.4.0)
+
+ [1] /Users/max/Library/R/arm64/4.4/library
+ [2] /Library/Frameworks/R.framework/Versions/4.4-arm64/Resources/library
+
+──────────────────────────────────────────────────────────────────────────────
+> 
+> # ------------------------------------------------------------------------------
+> 
+> if (!interactive()) {
++   q("no")
++ }
+> proc.time()
+    user   system  elapsed 
+2587.515  330.804 5985.240 

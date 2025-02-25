@@ -228,7 +228,7 @@ ames_missing_long %>%
 
 The figure highlights several characteristics. The most noteworthy: missing data affects *every* property (i.e., row) in the data. Pool quality is missing for nearly every property, while the columns for types of alleys, basements, and fences as well as the quality of fireplaces are missing for the vast majority of properties. Second, there are specific patterns of missing information that are visually apparent. For example, when missing data occurs in one garage variable, it likely occurs across other garage variables (condition, finish, quality, type, and year built). The same is true for basement variables (condition, exposure, quality, type 1, and type 2). Other variables, like fence, fireplace quality, and lot frontage do not appear to have any visual structure to their missingness.
 
-An “upset plot” is a method for visualizing high-dimensional Venn diagrams [@lex2014upset]. We can use this to explore potential patterns of missingness across predictors. For example, @fig-ames-patterns shows that the majority of the properties in Ames are missing values for ally, fence, or pool.
+An "upset plot" is a method for visualizing high-dimensional Venn diagrams [@lex2014upset]. We can use this to explore potential patterns of missingness across predictors. For example, @fig-ames-patterns shows that the majority of the properties in Ames are missing values for ally, fence, or pool.
 
 ```{r}
 #| label: fig-ames-patterns
@@ -311,11 +311,13 @@ This is not a good place to be: we cannot explain the existence of two of our ma
 Understanding these mechanisms will guide us in choosing appropriate techniques for handling missing data appropriately.
 :::
 
-## Approaches for Resolving Missing Data
+`r r_comp("missing-data.html#sec-missing-eda")`
+
+## Approaches for Resolving Missing Data {#sec-resolve-missing-data}
 
 There are three general ways to resolve missing values: removal, imputation, or encoding. Each approach has advantages and disadvantages, and which we choose should depend on the specific problem context and data set. We will review these approaches in the subsections below and provide guidance on when each would be appropriate.
 
-### Models that Tolerate Missing Data
+### Models that Tolerate Missing Data {#sec-missing-robustness}
 
 Instead of directly addressing the missing values, we could sidestep it by using models that tolerate missingness. Let's examine a few. 
 
@@ -399,7 +401,7 @@ The bottom set of densities reflects the observed data. The density for class le
 
 This demonstrates that a model being agnostic to missing values does not mean that the missing value problem does not go away. 
 
-### Removal
+### Removal {#sec-removing-missing-data}
 
 The simplest method for managing missing data is to eliminate the predictors *or* samples that contain them. However, the deletion of data requires careful consideration of several factors within the dataset. When deleting data, the order in which we assess the proportion of missing values (in columns or rows) is important to consider. In some scenarios, there are many more predictors than samples; samples are often difficult or expensive to collect. In this case, it would be wise to first identify predictors that should be removed due to excessive missing values, then proceed to identify and possibly remove samples that have excessive missing values. If, on the other hand, the data contain many more samples than predictors, then the removal procedure could be reversed. In any case, however, we need to remember that the samples are our currency for tuning models and assessing model performance. Therefore, we will often place a higher priority on preserving samples over predictors. 
 
@@ -428,7 +430,9 @@ After removing _predictors_ with excessive missing data, we can then consider re
 
 There are a couple of caveats to removing predictors or samples based on missing information. First, the missing information in a predictor may be informative for predicting the response. For the hotel rate data, the missing status of the agent variable is associated with the response. Therefore, it may be better to encode the missing status for this variable rather than eliminate the variable altogether. This approach will be discussed below. Second, as seen in @fig-missing-naive-bayes, removing samples may create a bias in the remaining data which would impact the predictive ability of the model on future samples.
 
-### Imputation
+`r r_comp("missing-data.html#sec-removing-missing-rows")` `r r_comp("missing-data.html#sec-removing-missing-cols")`
+
+### Imputation {#sec-imputation}
 
 ```{r}
 #| label: missing-data-nonlinear-simulation
@@ -556,7 +560,6 @@ impute_bag_data <-
          `Predictor 2` = Predictor_2) %>%
   dplyr::filter(row_number() %in% missing_samples)
 
-
 imputation_simulation_comparison <-
   bind_rows(simulation_nonlinear_original_data,
             impute_mean_data,
@@ -666,6 +669,8 @@ p_lin + p_nonlin + plot_layout(guides = 'collect')
 
 ```
 
+`r r_comp("missing-data.html#imputation")`
+
 ### Encoding Missing Data {#sec-encoding-missing-data}
 
 When a predictor takes categorical values, an alternative approach to imputation is encoding. Consider the basement exposure variable in the original Ames data set. Possible exposure values are: "good," "average," "minimum," and "no exposure" and contains `r sum(is.na(ames_original["basement exposure"]))` missing values. The most likely value approach would impute the missing values with the "no exposure" category since this is the most frequent category. A model-based approach would utilize information across the rest of the variables to predict which of the 4 available categories would be best. Would imputing with one of the 4 available categories be a good approach for the missing samples?  In this case, the answer is "no!". With a little more investigation, we can see that the reason the exposure variable contains missing values for these houses is because these houses _do not have basements_.
@@ -674,11 +679,11 @@ When a value is missing for a specific reason like we see with the basement expo
 
 The encoding procedure is mostly used for categorical variables. However, there are times when encoding can be applied to continuous variables. In many analytical procedures, an instrument cannot reliably provide measurements below a specified limit. Measurements of samples above the limit are returned as numeric values, but measurements below the limit are returned as either "BLQ" (below lower limit of quantitation) or "< 3.2", where 3.2 is the lower limit of quantitation. These values cannot be included with the continuous values. What can we do in this situation?  One approach would be to impute the BLQ values with a reasonable numeric value less than lower limit of quantitation^[One approach is to generate a random uniform predictor value between zero and the limit of quantitation).]. This information could also be encoded by creating a new variable that contains two values, "ALQ" and "BLQ", which would identify samples that could and could not be measured. If this variable is related to the outcome, then the ability to measure the quantity may be predictively informative.
 
-## Specific Imputation Methods
+## Specific Imputation Methods {#sec-imputation-methods}
 
 Technically, almost any model that can make a prediction is a potential candidate for imputing data. However, some are better than others and we summarize a few of the most used below. 
 
-### Most Likely Value
+### Most Likely Value {#sec-imputation-most-likely}
 
 The simplest approach to imputation is to replace a missing value with its most likely value based on that predictor's non-missing values. For numeric data, the most likely value can be summarized by the mean or median. For categorical data, the most likely value is the mode (or most frequent value). Most likely value imputation meets many of the desirable characteristics for imputation. They can tolerate missing values from other predictors (because they operate one-predictor-at-a-time) and can handle different predictor types while also producing efficient prediction equations. Furthermore, achieving a robust imputation can be done using either the median or the trimmed mean [@barnett1994outliers]. The trimmed mean is the mean of the middle-most samples. For example, we could compute the mean of the samples with 5% of the the most extreme (smallest and largest) samples removed. Doing this would minimize the impact of any extreme sample values on the computation of the mean. However, imputing with the most likely value for a single predictor may not produce an imputed value that is close to the true value.
 
@@ -715,8 +720,7 @@ A visualization of the four new features for different linear embedding methods.
 
 :::
 
-
-### Linear Methods
+### Linear Methods {#sec-imputation-linear}
 
 When a data set has many predictors and the predictors have some correlation with each other, then multiple linear regression can be a more effective imputation technique than the most likely value methods. That is, multiple linear regression will utilize the information contained in other predictors to estimate an imputed value that will be closer to what the actual value would have been. Multiple linear regression also produces a straightforward, compact prediction equation for each predictor with missing values which is computationally efficient when applied to new samples. However, this technique cannot naturally handle missing values in the predictors used to develop the imputation model. In practice, therefore, the imputation approach utilizes a complete case analysis.
 
@@ -726,7 +730,7 @@ Selecting the nonlinear data set in @fig-imputation-exploration illustrates the 
 
 However, if these predictors were linearly related, then this technique would generate values closer to the actual values. This can be seen by choosing the linear data set in @fig-imputation-exploration.
 
-Since this imputation method is basically linear regression, we can use it for slightly more sophisticated results. For example, if we want to impute a predictor’s values based on some other predictors categories, linear regression can achieve this. There is also the possibility of interactions, splines, and so on (as long as the “predictors” in the imputation model are not missing themselves). 
+Since this imputation method is basically linear regression, we can use it for slightly more sophisticated results. For example, if we want to impute a predictor’s values based on some other predictors categories, linear regression can achieve this. There is also the possibility of interactions, splines, and so on (as long as the "predictors" in the imputation model are not missing themselves). 
 
 When the predictor that requires imputation is categorical, then logistic or multinomial regression can be used to generate an imputed category.
 
@@ -748,14 +752,13 @@ ggplot(imputation_distance_comparison, aes(x = Method, y = Distance)) +
   labs(x = NULL)
 ```
 
-
-### Nearest Neighbors
+### Nearest Neighbors  {#sec-imputation-knn}
 
 $K$-nearest neighbor calculations will be discussed in @sec-mds, where it will be used in some multidimensional scaling methods, and in @sec-knn-cls in the context of a supervised model. In short, when imputing a missing predictor value for a new sample, the $K$ most similar samples from the training set are determined (using all complete predictor values). The $K$ predictor values for the predictor of interest are summarized via the mean (for numeric outcomes) or the mode. This summary statistic is used to fill in the missing value. This is a localized version of the most likely value approach.
 
 @fig-imputation-exploration shows that a nearest-neighbor approach generally increases the accuracy of the imputation, especially for the first predictor. For the linear case, both predictors have high-quality imputations. 
 
-### Trees
+### Trees {#sec-imputation-trees}
 
 As mentioned earlier, tree-based models are a reasonable choice for imputation techniques because many types of trees do not require complete data themselves. They generally provide good accuracy and do not extrapolate values beyond the bounds of the training data. While a single tree can be used for imputation, it will likely have low bias but high variance. Ideally, we would like imputed values to have low bias as well as low variance.
 
@@ -765,6 +768,7 @@ Like nearest-neighbor imputation, the bagged tree places most of the imputed val
 
 Which imputation technique we choose depends on the problem. If a few predictors have missing values, then using $K$-NN or bagged imputation may not add much computational burden to the modeling process. However, if many predictors have missing values and the data set is large, then the model-based imputation techniques may become cumbersome. In this case, beginning with a most likely value imputation approach may be prudent. If the predictive performance of the optimally tuned machine learning technique is high, then the imputation approach was sufficient. However, if predictive performance lags, we could implement a different imputation technique while training models. 
 
+`r r_comp("missing-data.html#imputation")`
 
 ## When to Address Missing Data {#sec-when-to-address-missing-data}
 
