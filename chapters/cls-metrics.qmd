@@ -1162,7 +1162,7 @@ wordle_conf_mat <-
   as_tibble() %>% 
   mutate(
     n2 = case_when(
-      Prediction == Truth ~ cell_spec(n, format = "html", bold = TRUE, color = "darkgreen"), 
+      Prediction == Truth ~ cell_spec(n, format = "html", bold = TRUE, color = "green"), 
       n == 0              ~ cell_spec(n, format = "html", color = "grey75"),
       TRUE                ~ cell_spec(n, format = "html", bold = FALSE)
     )
@@ -1219,7 +1219,7 @@ There are metrics that use hard classification predictions from ordinal models. 
 
 A linear weighting for the Kappa statistic is shown in @tbl-confusion-matrix-costs. There are bands of diagonal integer weights that are 0, 1, 2, $\ldots$, 5. Weight Kappa statistics enable "more incorrect" errors more than others.
 
-For this test set, the estimate of the unweighted Kappa statistic was `r signif(rule_mtr$test[rule_mtr$.metric == "kap"], 3)`, which is outstanding. If we increase the penalty for more disparate errors, the performance values for linear and quadratic weights were `r signif(rule_mtr$test[rule_mtr$.metric == "kap_lin"], 3)` and `r signif(rule_mtr$test[rule_mtr$.metric == "kap_quad"], 3)`, respectively. 
+For this test set, the estimate of the unweighted Kappa statistic was `r signif(rule_mtr$test[rule_mtr$.metric == "kap"], 3)`, which is outstanding. If we increase the penalty for more disparate errors, the performance values for linear and quadratic weights were `r signif(rule_mtr$test[rule_mtr$.metric == "kap_lin"], 3)` and `r signif(rule_mtr$test[rule_mtr$.metric == "kap_quad"], 3)`, respectively. Notice that the Kappa values _increase_ as the weights become more severe. In these data, the “cost” of the errors inceases faster in the exepected agreement than in the observed agreement. This is not often the case. 
 
 @nakov2019semeval suggested ordinal versions of common regression metrics, such as the mean squared error (MSE). These use the positional "errors" between the true and predicted outcomes. For example, if a word requires two tries, but we predict that the puzzle will be solved with six tries, the error is +2. These metrics should be fairly understandable since they mimic common statistics used to evaluate models. However, there has been scant evidence that they offer a benefit over existing metrics that have been studied and evaluated for decades. The mean squared error for these data was `r signif(sqrt(mse_ordered(rule_te_pred)), 3)`. How bad is this? If we repeatedly permute the outcome classes and measure the RMSE we find that the worst case-scenario is about `r signif(sqrt(mean(mse_perm$null)), 3)`.
 
@@ -1237,59 +1237,55 @@ The test set probabilities associated with the test set were used to compute the
 
 ## Multi-Objective Assessments {#sec-multi-objectives}
 
-Pareto optimal; desirability functions. J statistic
+It may be diffiuclt to choose a single metric that captures all of the goals of the model. When hard class predictions are important, the choice of the probability cutoff should be driven by measures such as sensativity, specificity, or precision. We might want to optimize on a function of multiple metrics (e.g., the ratio of senstivity and specificity, etc.). Additionally, these metrics don’t consider model calibration and other asepcts of the model.  
+
+In some cases, a joint metrics like the F-score can be used if it aligns with the porject goals. Similarly, the J-index might also suffice: 
 
 $$
 J = Sensitivity + Specificity - 1
 $$
 
-Desirability functions are tools to simultaneously optimize several criteria. Original conveived by @harrington1965desirability, the versions of desirability functions defined by @derringer1980simultaneous are more commonly used. They are extensively used in statistical experimental design but also in a wide range of applications, including designing cancer combination therapy [@kuhn2000incorporating], medicinal chemistry [@wager2010moving], waste water processing [@corral2019coagulation], and others. These tools are knowledge-based; users must state specific values of their criteria that are desirable or unacceptable. 
+Additionally, we might want to factor in characteristics of our model. For example, we’ve previously seen that the number of active features in the model can help make better choices about which candidate to select. As another example, if we are chooing between different tuning parameters in a neural nbetwork, we might be interesting in seeing how the total number of model parameters and the primary performance metric. There might be an advantageous trade-off between model complexity and performance. 
 
-Desirability functions can be defined for any important facet of the model result to optimize ML models. For example, one might decide that a good model has a low Brier score (say, less than 0.1) and also shows good class separation with an ROC AUC greater than 0.8 but uses less than 20 of the original feature set. In each of these cases, we can define ranges of acceptable results (e.g., [0, .1), (0.8, 1.0], etc.) and define a simple relationship that relates the outcome to the best results. 
+
+However, in general, a more advanced _multiparameter optimization_ may be required. There are many different methods for accomplishing this which are well summarized in REF. If we have $s$ cancidate models, some approaches require the full set of metrics and characteristics to make a decision (e.g. Pareto optimality). Alternatively, we might be more interested in coming up with a single objective function that combines metrics in a meaningful way that can measure a single candidate. Iterative optimization (or racing methods) would require a combined performance metric in real time. 
+
+We’ll focus on one method to blend multiple criertia into a single composite value called “desirability functions.” Original conveived by @harrington1965desirability, the versions of desirability functions defined by @derringer1980simultaneous are more commonly used. They are extensively used in statistical experimental design but also in a wide range of applications, including designing cancer combination therapy [@kuhn2000incorporating], medicinal chemistry [@wager2010moving], waste water processing [@corral2019coagulation], and others. These tools are knowledge-based; users must state specific values of their criteria that are desirable or unacceptable. 
+
+Desirability functions can be defined for any important facet of the model result to optimize ML models. For example, we could articulate that we should *minimize the Brier score* such that
+
+1. Fewer than 20 active predictors are used. 
+2. Specificity is at least 80%
+3. Sensitivity is maximized
+
+In each of these cases, we can define ranges of acceptable results (e.g., Brier $\in [0, .1)$, sensitivity $\in (0.8, 1.0]$, etc.) 
 
 ```{r}
 #| label: fig-desirability
 #| echo: false
 #| out-width: 100%
-#| fig-width: 11
-#| fig-height: 3
-#| fig-cap: Examples of three desirability functions
+#| fig-width: 8
+#| fig-height: 4
+#| fig-cap: Examples of desirability functions for four characteristics.
 
-len <- 100
+len <- 500
+lvls <- c("Brier Score", "Sensitivity", "Specificity", "Active Features")
 
-p_brier <- 
-  tibble(Brier = seq(-0.01, 0.11, length.out = len)) %>% 
-  mutate(desirability = d_min(Brier, 0, 0.1)) %>% 
-  ggplot(aes(Brier, desirability)) + 
+bind_rows(
+  tibble(value = seq(-0.01, 0.11, length.out = len), metric = "Brier Score") %>% 
+    mutate(desirability = d_min(value, 0, 0.1)),
+  tibble(value = seq(0.5, 1.0, length.out = len), metric = "Sensitivity") %>% 
+    mutate(desirability = d_max(value, 0.5, 1.0)),
+  tibble(value = seq(.5, 1.0, length.out = len), metric = "Specificity") %>% 
+    mutate(desirability = d_box(value, 0.8, 1.0)),
+  tibble(value = seq(1, 50, length.out = len), metric = "Active Features") %>% 
+    mutate(desirability = d_min(value, 1, 20))
+) %>% 
+  mutate(metric = factor(metric, levels = lvls)) %>% 
+  ggplot(aes(value, desirability)) + 
   geom_line() + 
-  geom_vline(xintercept = c(0, 0.1), lty = 3) +
-  labs(x = "Value", title = "(a) Brier Score")
-
-p_roc <- 
-  tibble(auc = seq(0.79, 1.01, length.out = len)) %>% 
-  mutate(desirability = d_max(auc, 0.8, 1.0)) %>% 
-  ggplot(aes(auc, desirability)) + 
-  geom_line() + 
-  geom_vline(xintercept = c(0.8, 1.0), lty = 3) + 
-  labs(x = "Value", title = "(b) ROC AUC")
-
-p_feat <- 
-  tibble(features = 1:12) %>% 
-  mutate(
-    regular = d_min(features, 1L, 10L),
-    weak = d_min(features, 1L, 10L, scale = 1/2),
-    box = d_box(features, 1L, 10L)
-    ) %>% 
-  pivot_longer(cols = c(regular, weak, box), names_to = "Case", values_to = "Desirability") %>%
-  mutate(Scale = ifelse(Case == "regular", "1.0", "0.5")) %>% 
-  ggplot(aes(features, Desirability, col = Case, pch = Case)) + 
-  geom_point(cex = 3, alpha = 3/4)  + 
-  geom_vline(xintercept = c(1, 10), lty = 3)+ 
-  labs(x = "Value", title = "(c) # Active Features") + 
-  theme_bw() +
-  theme(legend.location = "right")
-
-p_brier + p_roc + p_feat
+  facet_wrap(~ metric, scale = "free_x") +
+  labs(x = "Value")
 ```
 
 ## Chapter References {.unnumbered}
