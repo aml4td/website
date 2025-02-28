@@ -1237,20 +1237,19 @@ The test set probabilities associated with the test set were used to compute the
 
 ## Multi-Objective Assessments {#sec-multi-objectives}
 
-It may be diffiuclt to choose a single metric that captures all of the goals of the model. When hard class predictions are important, the choice of the probability cutoff should be driven by measures such as sensativity, specificity, or precision. We might want to optimize on a function of multiple metrics (e.g., the ratio of senstivity and specificity, etc.). Additionally, these metrics don’t consider model calibration and other asepcts of the model.  
+It may be challenging to choose a single metric that captures all of the model’s goals. When hard class predictions are important, the choice of the probability cutoff should be driven by measures such as sensitivity, specificity, or precision. We might want to optimize on a function of multiple metrics (e.g., the ratio of sensitivity and specificity, etc.). Additionally, these metrics don’t consider model calibration and other aspects of the model.  
 
-In some cases, a joint metrics like the F-score can be used if it aligns with the porject goals. Similarly, the J-index might also suffice: 
+In some cases, a joint metric like the F-score can be used if it aligns with the project goals. Similarly, the J-index might also suffice: 
 
 $$
 J = Sensitivity + Specificity - 1
 $$
 
-Additionally, we might want to factor in characteristics of our model. For example, we’ve previously seen that the number of active features in the model can help make better choices about which candidate to select. As another example, if we are chooing between different tuning parameters in a neural nbetwork, we might be interesting in seeing how the total number of model parameters and the primary performance metric. There might be an advantageous trade-off between model complexity and performance. 
+Additionally, we might want to factor in the characteristics of our model. For example, we’ve previously seen that the number of active features in the model can help us make better choices about which candidate to select. As another example, if we are choosing between different tuning parameters in a neural network, we might be interested in seeing how the total number of model parameters affects the primary performance metric. There might be an advantageous trade-off between model complexity and performance. 
 
+However, in general, a more advanced _multiparameter optimization_ may be required. Many different methods for accomplishing this are well summarized in REF. If we have $s$ candidate models, some approaches require the full set of metrics and characteristics to decide (e.g., Pareto optimality). Alternatively, we might be more interested in developing a single objective function that combines metrics in a meaningful way that can measure a single candidate. Iterative optimization (or racing methods) would require a combined performance metric in real-time. 
 
-However, in general, a more advanced _multiparameter optimization_ may be required. There are many different methods for accomplishing this which are well summarized in REF. If we have $s$ cancidate models, some approaches require the full set of metrics and characteristics to make a decision (e.g. Pareto optimality). Alternatively, we might be more interested in coming up with a single objective function that combines metrics in a meaningful way that can measure a single candidate. Iterative optimization (or racing methods) would require a combined performance metric in real time. 
-
-We’ll focus on one method to blend multiple criertia into a single composite value called “desirability functions.” Original conveived by @harrington1965desirability, the versions of desirability functions defined by @derringer1980simultaneous are more commonly used. They are extensively used in statistical experimental design but also in a wide range of applications, including designing cancer combination therapy [@kuhn2000incorporating], medicinal chemistry [@wager2010moving], waste water processing [@corral2019coagulation], and others. These tools are knowledge-based; users must state specific values of their criteria that are desirable or unacceptable. 
+We’ll focus on one method to blend multiple criteria into a single composite value called “desirability functions.” Originally conceived by @harrington1965desirability, the versions of desirability functions defined by @derringer1980simultaneous are more commonly used. They are extensively used in statistical experimental design but also in a wide range of applications, including designing cancer combination therapy [@kuhn2000incorporating], medicinal chemistry [@wager2010moving], wastewater processing [@corral2019coagulation], and others. These tools are knowledge-based; users must state specific values of their criteria that are desirable or unacceptable. 
 
 Desirability functions can be defined for any important facet of the model result to optimize ML models. For example, we could articulate that we should *minimize the Brier score* such that
 
@@ -1260,11 +1259,13 @@ Desirability functions can be defined for any important facet of the model resul
 
 In each of these cases, we can define ranges of acceptable results (e.g., Brier $\in [0, .1)$, sensitivity $\in (0.8, 1.0]$, etc.) 
 
+Desirability functions map values to a unit range where a value of 1.0 is the most desirable situation while a value of zero is a dealbreaker. @fig-desirability shows an example mapping for each of the four hypothetical characteristics given above. Three of the four mappings are linear between the best and worst cases and the other is a “box” constraint that indicates that any value in the range is acceptable. 
+
 ```{r}
 #| label: fig-desirability
 #| echo: false
-#| out-width: 100%
-#| fig-width: 8
+#| out-width: 60%
+#| fig-width: 6
 #| fig-height: 4
 #| fig-cap: Examples of desirability functions for four characteristics.
 
@@ -1287,6 +1288,48 @@ bind_rows(
   facet_wrap(~ metric, scale = "free_x") +
   labs(x = "Value")
 ```
+
+The Brier score and active features use a minimization strategy that is encoded as 
+
+$$
+d_i=
+\begin{cases}
+	0		&\text{if $x> B$}	\\
+	\left(\frac{x-B}{A - B}\right)^{\gamma}		
+			&\text{if $A \leq x \leq B$}	\\
+	1		&\text{if $x<A$}
+\end{cases}
+$$ {#eq-d-min}
+
+where $A$ and $B$ are the low and high values, respectively. The $\gamma$ parameter is a scaling factor that modulates of easy (or difficult) it should be to satisfy the goal. 
+
+The sensitivity curve in @fig-desirability is meant to maximize the characteristic using the equations: 
+
+$$
+d_i=
+\begin{cases}
+	0		&\text{if $x < A$}	\\
+	\left(\frac{x-A}{B-A}\right)^{\gamma}		
+			&\text{if $A \leq x \leq B$}	\\
+	1		&\text{if $x>B$}
+\end{cases}
+$$ {#eq-d-max}
+
+There are many different types of desirability functions for different goals (box constraints, qualitative values, etc.). 
+
+Once we have defined a function for each of the $q$ important characteristics, the _overall desirability_ is a combination of each using a geometric mean: 
+
+$$ 
+D = \left(\prod_{i=1}^q d_j\right)^{1/q} 
+$$
+
+After these computations, the candidates can be ranked by $D$. Note that the geometric mean has the effect that if any single characteristic has an unacceptable value (i.e., zero), the overall combination is unacceptable. 
+
+
+
+
+
+
 
 ## Chapter References {.unnumbered}
 
