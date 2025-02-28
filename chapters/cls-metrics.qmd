@@ -747,11 +747,7 @@ also called "mean probability score"
 
 Stanski adjustment of 2 for multiclass to normalize range
 
-@kruppa2014probability: 
-
-> The Brier score is a strictly proper score [@gneiting2007strictly], which means that it takes its minimal value only when the true probabilities are inserted as predictions. Phrased differently, it is not possible to improve the Brier score by systematically predicting probability values other than the best estimate.
-
-Another performance metric that uses the predicted class probabilities is the Brier score [@brier1950verification; @bella2013effect]. Suppose that the value $y_{ik}$ is a 0/1 indicator for whether the observed outcome $i$ corresponds to class $k$. Using this the score is:
+Another performance metric that uses the predicted class probabilities is the Brier score^[Also called "mean probability score."] [@brier1950verification; @bella2013effect]. Suppose that the value $y_{ik}$ is a 0/1 indicator for whether the observed outcome $i$ corresponds to class $k$. Using this the score is:
 
 $$
 Brier = \frac{1}{N}\sum_{i=1}^N\sum_{k=1}^C (y_{ik} - \hat{p}_{ik})^2
@@ -769,11 +765,15 @@ brier_decomp_2cls <-
   summarize(cal = mean(cal), refine = mean(refine), .groups = "drop")
 ```
 
-This is the mean squared error of the predicted class probabilities $\hat{p}_{ik}$. The Brier score can range between zero and two, but for two class problems, it is often rescaled to range between zero and one. A perfect model has a score of zero. If a performance metric achieves its smallest value when the probability estimate is perfect, it is called a *proper scoring rule*. There are theoretical benefits to using such a metric and, in the case of the Brier score, it also measures how well a model is calibrated (see @sec-calibration). In fact, the Brier score can be decomposed into different components, one of which specifically measures calibration. However, this can only be computed when the estimated probability values are not unique. 
+This is the mean squared error of the predicted class probabilities $\hat{p}_{ik}$. The Brier score can range between zero and two, but for two class problems, it is often rescaled to range between zero and one. A perfect model has a score of zero. If a performance metric achieves its smallest value when the probability estimate is perfect, it is called a *proper scoring rule*. There are theoretical benefits to using such a metric which @kruppa2014probability describe well: 
+
+> The Brier score is a strictly proper score [@gneiting2007strictly], which means that it takes its minimal value only when the true probabilities are inserted as predictions. Phrased differently, it is not possible to improve the Brier score by systematically predicting probability values other than the best estimate.
+
+The Brier score also measures how well a model is calibrated (see @sec-calibration). In fact, the Brier score can be decomposed into different components, one of which specifically measures calibration. However, this can only be computed when the estimated probability values are not unique. 
 
 For the naive Bayes model, the Brier score value was `r signif(nb_mtr$mean[nb_mtr$.metric == "brier_class"], 3)`.
 
-We know that Brier scores near zero are best but What is the worst possible value? If we suppose that an ineffective model would produce completely equivocal predictions of $p_{ik} = 1/C$, the worst-case Brier score is $(1 - (1/C))^2$. For example, in a two-class problem, a Brier score of 0.25 would indicate an ineffective model. However, there are many possible distributions of predictive probabilities for bad models. A better (but more complex) approach is via the permutation method previously described. With our mushroom example, the permutation estimate of the worst-case Brier score was `r signif(nb_mtr_perm$mean[nb_mtr$.metric == "brier_class"], 3)`.
+We know that Brier scores near zero are best but what is the worst possible value? If we suppose that an ineffective model would produce completely equivocal predictions of $p_{ik} = 1/C$, the worst-case Brier score is $(1 - (1/C))^2$. For example, in a two-class problem, a Brier score of 0.25 would indicate an ineffective model. However, there are many possible distributions of predictive probabilities for bad models. A better (but more complex) approach is via the permutation method previously described. With our mushroom example, the permutation estimate of the worst-case Brier score was `r signif(nb_mtr_perm$mean[nb_mtr$.metric == "brier_class"], 3)`.
 
 ### Reciever Operating Characteristic Curves {#sec-roc}
 
@@ -1067,7 +1067,9 @@ An example of calculations for calibration via isotonic regression.
 :::
 :::::::
 
-The nice feature of this tool is that it is nonparametric and makes almost no distributional assumptions. However, one downside is that there are a small number of unique recalibrated probability estimates. For this reason, it is advised to use isotonic regression for large data sets. For example, for the naive Bayes data used for calibration, there were originally `r num_logistic_vals` unique probability estimates while, after isotonic regression is applied, there are only `r num_isotonic_vals` possible values.
+The nice feature of this tool is that it is nonparametric and makes almost no distributional assumptions. However, one downside is that there are a small number of unique recalibrated probability estimates. For this reason, it is advised to use isotonic regression for large data sets. For example, for the naive Bayes data used for calibration, there were originally `r format(num_logistic_vals, big.mark = ",")` unique probability estimates while, after isotonic regression is applied, there are only `r num_isotonic_vals` possible values. @fig-recal-iso-curves(a) shows the calibration curve after isotonic regression is applied. 
+
+We can improve the isotonic regression results using _bagging_. As discussed later in @sec-cls-bagging, bagging creates an ensemble of models by taking $B$ bootstrap samples used to build $B$ discinct models. The final model prediction is the average of the $B$ model predictions. For isotonic regression, this has the effect of reducing the variability in the predicted (i.e., recalibrated) probabilities and also increases the number of unique probability values. Using 1,000 bootstrap samples, we end up with `r num_isotonic_boot_vals` unique probability estimates. 
 
 ```{r}
 #| label: fig-recal-iso-curves
@@ -1090,9 +1092,11 @@ cal_plot_6 <-
 cal_plot_5 + cal_plot_6
 ```
 
+@fig-recal-iso-curves(b) shows the ensemble results. The curve is slightly closer to the line, and there is far less "wiggle" around the values. 
+
 There are many other tools in the calibration toolbox, such as beta calibration [@betacal]. There are also methods for calibrating classification models with three or more classes [@NIPS2001abdbeb4d; @johansson21a; @NEURIPS2021bbc92a64].
 
-It is important to recompute performance using the recalibrated predictions. Also note that, since the class probabilities have been altered, any hard predictions should be recomputed since some values may have moved across the chosen probability threshold. Using the set of `r nrow(pred_cal)` data points that have been recalibrated, the reestimated sensitivity and specificity were `r round(re_class_stats$.estimate[re_class_stats$.metric == "sensitivity"] * 100, 1)`{{< pct >}} and `r round(re_class_stats$.estimate[re_class_stats$.metric == "specificity"] * 100, 1)`{{< pct >}}, respectively and the area under the ROC curve was `r signif(re_class_stats$.estimate[re_class_stats$.metric == "roc_auc"], 3)`
+It is important to recompute performance using the recalibrated predictions. Also note that, since the class probabilities have been altered, any hard predictions should be recomputed since some values may have moved across the chosen probability threshold. Using the set of `r format(nrow(pred_cal), big.mark = ",")` data points that have been recalibrated, the reestimated sensitivity and specificity were `r round(re_class_stats$.estimate[re_class_stats$.metric == "sensitivity"] * 100, 1)`{{< pct >}} and `r round(re_class_stats$.estimate[re_class_stats$.metric == "specificity"] * 100, 1)`{{< pct >}}, respectively and the area under the ROC curve was `r signif(re_class_stats$.estimate[re_class_stats$.metric == "roc_auc"], 3)`
 
 ::: {.note-box}
 The user should not set expectations very high; recalibration methods often have limited ability to correct predictions. In our example, a large amount of data was set aside for calibration, and we were able to fix a minor issue with the original model’s predictions. In most cases, recalibration might be able to fix gross miscalibration trends. 
@@ -1219,7 +1223,7 @@ There are metrics that use hard classification predictions from ordinal models. 
 
 A linear weighting for the Kappa statistic is shown in @tbl-confusion-matrix-costs. There are bands of diagonal integer weights that are 0, 1, 2, $\ldots$, 5. Weight Kappa statistics enable "more incorrect" errors more than others.
 
-For this test set, the estimate of the unweighted Kappa statistic was `r signif(rule_mtr$test[rule_mtr$.metric == "kap"], 3)`, which is outstanding. If we increase the penalty for more disparate errors, the performance values for linear and quadratic weights were `r signif(rule_mtr$test[rule_mtr$.metric == "kap_lin"], 3)` and `r signif(rule_mtr$test[rule_mtr$.metric == "kap_quad"], 3)`, respectively. Notice that the Kappa values _increase_ as the weights become more severe. In these data, the “cost” of the errors inceases faster in the exepected agreement than in the observed agreement. This is not often the case. 
+For this test set, the estimate of the unweighted Kappa statistic was `r signif(rule_mtr$test[rule_mtr$.metric == "kap"], 3)`, which is outstanding. If we increase the penalty for more disparate errors, the performance values for linear and quadratic weights were `r signif(rule_mtr$test[rule_mtr$.metric == "kap_lin"], 3)` and `r signif(rule_mtr$test[rule_mtr$.metric == "kap_quad"], 3)`, respectively. Notice that the Kappa values _increase_ as the weights become more severe. In these data, the "cost" of the errors inceases faster in the exepected agreement than in the observed agreement. This is not often the case. 
 
 @nakov2019semeval suggested ordinal versions of common regression metrics, such as the mean squared error (MSE). These use the positional "errors" between the true and predicted outcomes. For example, if a word requires two tries, but we predict that the puzzle will be solved with six tries, the error is +2. These metrics should be fairly understandable since they mimic common statistics used to evaluate models. However, there has been scant evidence that they offer a benefit over existing metrics that have been studied and evaluated for decades. The mean squared error for these data was `r signif(sqrt(mse_ordered(rule_te_pred)), 3)`. How bad is this? If we repeatedly permute the outcome classes and measure the RMSE we find that the worst case-scenario is about `r signif(sqrt(mean(mse_perm$null)), 3)`.
 
@@ -1239,7 +1243,7 @@ The test set probabilities associated with the test set were used to compute the
 
 It may be challenging to choose a single metric that captures all of the model’s goals. When hard class predictions are important, the choice of the probability cutoff should be driven by measures such as sensitivity, specificity, or precision. We might want to optimize on a function of multiple metrics (e.g., the ratio of sensitivity and specificity, etc.). Additionally, these metrics don’t consider model calibration and other aspects of the model.  
 
-In some cases, a joint metric like the F-score can be used if it aligns with the project goals. Similarly, the J-index might also suffice: 
+In some cases, a joint metric like the F-score can be used if it aligns with the project goals. Similarly, the J-index [@Youdencs] might also suffice: 
 
 $$
 J = Sensitivity + Specificity - 1
@@ -1249,7 +1253,7 @@ Additionally, we might want to factor in the characteristics of our model. For e
 
 However, in general, a more advanced _multiparameter optimization_ may be required. Many different methods for accomplishing this are well summarized in REF. If we have $s$ candidate models, some approaches require the full set of metrics and characteristics to decide (e.g., Pareto optimality). Alternatively, we might be more interested in developing a single objective function that combines metrics in a meaningful way that can measure a single candidate. Iterative optimization (or racing methods) would require a combined performance metric in real-time. 
 
-We’ll focus on one method to blend multiple criteria into a single composite value called “desirability functions.” Originally conceived by @harrington1965desirability, the versions of desirability functions defined by @derringer1980simultaneous are more commonly used. They are extensively used in statistical experimental design but also in a wide range of applications, including designing cancer combination therapy [@kuhn2000incorporating], medicinal chemistry [@wager2010moving], wastewater processing [@corral2019coagulation], and others. These tools are knowledge-based; users must state specific values of their criteria that are desirable or unacceptable. 
+We’ll focus on one method to blend multiple criteria into a single composite value called "desirability functions." Originally conceived by @harrington1965desirability, the versions of desirability functions defined by @derringer1980simultaneous are more commonly used. They are extensively used in statistical experimental design but also in a wide range of applications, including designing cancer combination therapy [@kuhn2000incorporating], medicinal chemistry [@wager2010moving], wastewater processing [@corral2019coagulation], and others. These tools are knowledge-based; users must state specific values of their criteria that are desirable or unacceptable. 
 
 Desirability functions can be defined for any important facet of the model result to optimize ML models. For example, we could articulate that we should *minimize the Brier score* such that
 
@@ -1259,7 +1263,7 @@ Desirability functions can be defined for any important facet of the model resul
 
 In each of these cases, we can define ranges of acceptable results (e.g., Brier $\in [0, .1)$, sensitivity $\in (0.8, 1.0]$, etc.) 
 
-Desirability functions map values to a unit range where a value of 1.0 is the most desirable situation while a value of zero is a dealbreaker. @fig-desirability shows an example mapping for each of the four hypothetical characteristics given above. Three of the four mappings are linear between the best and worst cases and the other is a “box” constraint that indicates that any value in the range is acceptable. 
+Desirability functions map values to a unit range where a value of 1.0 is the most desirable situation while a value of zero is a dealbreaker. @fig-desirability shows an example mapping for each of the four hypothetical characteristics given above. Three of the four mappings are linear between the best and worst cases and the other is a "box" constraint that indicates that any value in the range is acceptable. 
 
 ```{r}
 #| label: fig-desirability
@@ -1324,12 +1328,6 @@ D = \left(\prod_{i=1}^q d_j\right)^{1/q}
 $$
 
 After these computations, the candidates can be ranked by $D$. Note that the geometric mean has the effect that if any single characteristic has an unacceptable value (i.e., zero), the overall combination is unacceptable. 
-
-
-
-
-
-
 
 ## Chapter References {.unnumbered}
 
