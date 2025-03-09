@@ -44,21 +44,40 @@ load("../RData/mushrooms.RData")
 #| warnnig: false
 #| cache: true
 
-shroom_n <- nrow(shroom_train) + nrow(shroom_val) + nrow(shroom_cal) + nrow(shroom_test)
-shroom_xtab <- round(table(shroom_train$class)/nrow(shroom_train)* 100, 1)
+shroom_n <- nrow(shroom_train) +
+  nrow(shroom_val) +
+  nrow(shroom_cal) +
+  nrow(shroom_test)
+shroom_xtab <- round(table(shroom_train$class) / nrow(shroom_train) * 100, 1)
 obs_prev <- round(mean(shroom_train$class == "poisonous") * 100, 1)
 
-cls_mtr <- 
-  metric_set(accuracy, bal_accuracy, detection_prevalence, f_meas, j_index, 
-             kap, mcc, npv, ppv, precision, recall, sensitivity, specificity, 
-             brier_class, mn_log_loss, pr_auc, roc_auc)
+cls_mtr <-
+  metric_set(
+    accuracy,
+    bal_accuracy,
+    detection_prevalence,
+    f_meas,
+    j_index,
+    kap,
+    mcc,
+    npv,
+    ppv,
+    precision,
+    recall,
+    sensitivity,
+    specificity,
+    brier_class,
+    mn_log_loss,
+    pr_auc,
+    roc_auc
+  )
 
-nb_res <- 
-  naive_Bayes() %>% 
+nb_res <-
+  naive_Bayes() %>%
   fit_resamples(
-    class ~ ., 
+    class ~ .,
     resamples = shroom_rs,
-    metrics = cls_mtr, 
+    metrics = cls_mtr,
     control = control_resamples(save_pred = TRUE, save_workflow = TRUE)
   )
 
@@ -69,21 +88,37 @@ nb_val_roc <- roc_curve(nb_val_pred, class, .pred_poisonous)
 nb_val_pr <- pr_curve(nb_val_pred, class, .pred_poisonous)
 nb_val_gain <- gain_curve(nb_val_pred, class, .pred_poisonous)
 
-nb_test_pred <- augment(nb_fit, shroom_test) %>% dplyr::select(class, starts_with(".pred"))
-nb_cal_pred <- augment(nb_fit, shroom_cal)   %>% dplyr::select(class, starts_with(".pred"))
+nb_test_pred <- augment(nb_fit, shroom_test) %>%
+  dplyr::select(class, starts_with(".pred"))
+nb_cal_pred <- augment(nb_fit, shroom_cal) %>%
+  dplyr::select(class, starts_with(".pred"))
 
 recompute <- function(split) {
   dat <- analysis(split)
   cls_mtr(dat, truth = class, estimate = .pred_class, .pred_poisonous)
 }
 
+set.seed(364)
+orig_brier <-
+  nb_val_pred |>
+  bootstraps(times = 2000) |>
+  mutate(
+    dat = map(splits, analysis),
+    brier = map(dat, ~ brier_class(.x, truth = class, .pred_poisonous)),
+    brier = map(
+      brier,
+      ~ dplyr::select(.x, term = .metric, estimate = .estimate)
+    )
+  ) |>
+  int_pctl(brier, alpha = .10)
+
 set.seed(382)
-nb_mtr_perm <- 
-  nb_val_pred %>% 
-  permutations(permute = "class", times = 100) %>% 
-  mutate(.metrics = map(splits, recompute)) %>% 
-  dplyr::select(.metrics) %>% 
-  unnest(.metrics) %>% 
+nb_mtr_perm <-
+  nb_val_pred %>%
+  permutations(permute = "class", times = 100) %>%
+  mutate(.metrics = map(splits, recompute)) %>%
+  dplyr::select(.metrics) %>%
+  unnest(.metrics) %>%
   dplyr::summarize(mean = mean(.estimate), .by = c(.metric))
 ```
 
@@ -172,11 +207,13 @@ The second example contrasts the concepts of _discrimination_ and _calibration_.
 
 - A classification model is well-calibrated when the estimated probability predictions are close to their real theoretical counterparts.  In other words, if we estimate a probability to be 55{{< pct >}}, the event should occur at this same rate if realized multiple times (on average).   
 
-Some metrics favor one of these characteristics over the other. For example, neural networks for classification use binary indicators for their outcome data and try to produce models so that their predictions are near these values. To ensure that the results are "probability like," meaning that they add up to one and are on `[0, 1]`, the softmax transformation  [@Bridle1990] is applied to the raw predictions:
+Some metrics favor one of these characteristics over the other. For example, neural networks for classification use binary indicators for their outcome data and try to produce models so that their predictions are near these values. To ensure that the results are "probability like," meaning that they add up to one and are on [0, 1], the softmax transformation  [@Bridle1990] is applied to the raw predictions:
 
 $$
-\hat{p}_k^* = \frac{e^{\hat{y}_k}}{{\displaystyle  \sum_{l=1}^Ce^{\hat{y}_l}}}
+\hat{p}_k = \frac{e^{\hat{y}_k}}{{\displaystyle  \sum_{l=1}^Ce^{\hat{y}_l}}}
 $$
+
+where $C$ is the number of classes, and $\hat{y}_k$ is a predicted score for class $k$. 
 
 ```{r}
 #| label: discrim-vs-cal
@@ -280,7 +317,7 @@ nb_val_pred %>%
   geom_vline(xintercept = 1 / 2, col = "blue", lty = 3) +
   geom_histogram(col = "white", binwidth = 0.02) + 
   facet_wrap(~ class, ncol = 1, labeller = "label_both") + 
-  labs(x = "Probability of Being oisonous")
+  labs(x = "Probability of Being Poisonous")
 ```
 
 ## Assessing Hard Class Predictions {#sec-cls-hard-metrics}
@@ -342,7 +379,7 @@ $$
 accuracy = \frac{1}{n}\sum_{k=1}^Cn_{kk}
 $$
 
-where $n_{ij}$ are the number of counts in the *i* th row and the *j* th column of the confusion matrix, $n$ is the total number of data points, and $C$ is the number of classes. 
+where $n_{ij}$ are the number of counts in the *i* th row and the *j* th column of the confusion matrix, $n$ is the total number of data points. 
 
 Many of the metrics in this section are in the form of a proportion. For each, confidence intervals can be computed using typical methods for binomial proportions. We suggest using asymmetric intervals, such as the "exact" technique in @clopper1934use. See @newcombe1998two and @meeker2017statistical for discussions of different methods for computing intervals on proportions. For the validation set results, the 90{{< pct >}} confidence interval was (`r round(acc_int$conf.int[1]*100, 1)`{{< pct >}}, `r round(acc_int$conf.int[2]*100, 1)`{{< pct >}}). For other types of metrics, we can use the bootstrap methods described in @sec-bootstrap-ci to obtain confidence limits.
 
@@ -505,7 +542,7 @@ ui <- fluidPage(
         max = 1,
         value = 1/2,
         width = "100%",
-        step = 1/10
+        step = 1/20
       )
     )
   ),
@@ -619,11 +656,17 @@ More generally, the F-score can be written as
 
 $$
 F_{\beta}=(1+\beta_2)\left(\frac{precision \times recall}{(\beta^2 \times precision) + recall}\right)
+$$ {#eq-f-score}
+
+Statistics called _gain_ (or sometimes _lift_) quantify the number of relevant data points found relative to chance. These depend on a probability cutoff defining which samples are retrieved. For a set of $n$ samples, suppose that $n_{prev}$ is the number expected to be relevant by chance. If some threshold $t$, let $n_t$ be the number of retrieved documents that are truly relevant. The gain at threshold $t$ is then
+
 $$
+Gain_t = n_t / n_{prev}
+$$  {#eq-gain}
 
-TODO gain 
+so that $Gain_0 = 0$ and $Gain_1 = 1$. We'll consider this metric again in @sec-gain. 
 
-It is worth reiterating that precision and recall serve a completely different goal than sensitivity and specificity. They are focused on finding events in the data, while sensitivity and specificity are concerned with overall model quality by balancing the two possible error types. 
+It is worth reiterating that precision, recall, F, and Gain serve a completely different goal than sensitivity and specificity. They are focused on finding events in the data, while sensitivity and specificity are concerned with overall model quality by balancing the two possible error types. 
 
 ## Weighted Performance Metrics {#sec-cls-metrics-wts}
 
@@ -901,36 +944,50 @@ When choosing between these two curves, we should consider how aligned our goals
 
 ### Gain Charts {#sec-gain}
 
-Cumulative Accuracy Profile
+Gain charts (a.k.a. lift charts, a.k.a. cumulative accuracy profiles) create a curve that modulates the probability threshold $t$ described in @eq-gain. If we are looking for relevant documents, we can determine how many (or what percentage of) our unknown samples we should retrieve to achieve our goals. 
+
+@fig-gain-curve shows the results where the x-axis is the percentage of data points retrieved, and the y-axis is the percentage of relevant retrieved samples. The grey background reflects the feasible region that contains possible curve values^[The curve can fall slightly lower than the lower diagonal boundary by chance.]. 
+
+In this example, the curve is close to the best possible results until roughly 25{{< pct >}} of the samples have been retrieved. The dotted lines show that we would need to retrieve about 30{{< pct >}} of the data set to acquire half of the truly relevant samples (on average)
 
 ```{r}
 #| label: fig-gain-curve
 #| echo: false
-#| out-width: 50%
+#| out-width: 45%
 #| fig-width: 5
 #| fig-height: 5
-#| fig-cap: "A gain curve based on the validation set. The dotted linear indicates the percentage of samples to query in order to capture 30{{< pct >}} of the samples from the first class."
+#| fig-cap: "A gain curve based on the validation set. The dotted linear indicates the percentage of samples to query/acquire in order to capture 30{{< pct >}} of the relevant samples."
 
 nb_val_gain %>%
   autoplot() +
   geom_segment(
     data = gain_point,
     aes(
-      x = .percent_tested, xend = .percent_tested,
-      y = 0, yend = .percent_found
+      x = .percent_tested,
+      xend = .percent_tested,
+      y = 0,
+      yend = .percent_found
     ),
-    col = "purple", linewidth = 1, lty = 3
+    col = "purple",
+    linewidth = 1,
+    lty = 3
   ) +
   geom_segment(
     data = gain_point,
     aes(
-      x = 0, xend = .percent_tested,
-      y = .percent_found, yend = .percent_found
+      x = 0,
+      xend = .percent_tested,
+      y = .percent_found,
+      yend = .percent_found
     ),
-    col = "purple", linewidth = 1, lty = 3
+    col = "purple",
+    linewidth = 1,
+    lty = 3
   ) +
   coord_obs_pred()
 ```
+
+One could summarize this curve by computing how much of the feasible region is covered by the curve. 
 
 ## Measuring and Improving Calibration {#sec-calibration}
 
@@ -972,17 +1029,50 @@ Another alternative is to fit a model to the data. Logistic regression is a rela
 #| include: false
 #| cache: true
 
-logistic_cal <- nb_cal_pred %>% cal_estimate_logistic(truth = class, smooth = TRUE)
+logistic_cal <- nb_cal_pred %>%
+  cal_estimate_logistic(truth = class, smooth = TRUE)
 pred_cal <- nb_val_pred %>% cal_apply(logistic_cal)
 
-num_logistic_vals <-  nb_cal_pred %>% distinct(.pred_poisonous) %>% nrow()
+num_logistic_vals <- nb_cal_pred %>% distinct(.pred_poisonous) %>% nrow()
 iso_cal <- nb_cal_pred %>% cal_estimate_isotonic(truth = class)
 pred_cal_iso <- nb_val_pred %>% cal_apply(iso_cal)
 num_isotonic_vals <- vctrs::vec_unique_count(pred_cal_iso$.pred_poisonous)
 
-iso_boot_cal <- nb_cal_pred %>% cal_estimate_isotonic_boot(truth = class, times = 1000)
+iso_boot_cal <- nb_cal_pred %>%
+  cal_estimate_isotonic_boot(truth = class, times = 1000)
 pred_cal_iso_boot <- nb_val_pred %>% cal_apply(iso_boot_cal)
-num_isotonic_boot_vals <- vctrs::vec_unique_count(pred_cal_iso_boot$.pred_poisonous)
+num_isotonic_boot_vals <- vctrs::vec_unique_count(
+  pred_cal_iso_boot$.pred_poisonous
+)
+
+set.seed(364)
+lr_brier <-
+  pred_cal |>
+  bootstraps(times = 2000) |>
+  mutate(
+    dat = map(splits, analysis),
+    brier = map(dat, ~ brier_class(.x, truth = class, .pred_poisonous)),
+    brier = map(
+      brier,
+      ~ dplyr::select(.x, term = .metric, estimate = .estimate)
+    )
+  ) |>
+  int_pctl(brier, alpha = .10)
+
+
+set.seed(364)
+iso_brier <-
+  pred_cal_iso_boot |>
+  bootstraps(times = 2000) |>
+  mutate(
+    dat = map(splits, analysis),
+    brier = map(dat, ~ brier_class(.x, truth = class, .pred_poisonous)),
+    brier = map(
+      brier,
+      ~ dplyr::select(.x, term = .metric, estimate = .estimate)
+    )
+  ) |>
+  int_pctl(brier, alpha = .10)
 ```
 
 What can be done with poorly calibrated predictions? There are approaches for postprocessing the predicted probabilities to have higher fidelity to the observed data. The customary method is to use a logistic regression fit, as seen in @fig-cal-curves (b), to recalibrate the predictions. First a suitable logistic regression model is created in the same manner as the one used for diagnosis. Recall that the original predictions are used as predictors of the model. To recalibrate a set of predictions, the original values are pushed through the model and the resulting logistic regression values are used as the new probability predictions.
@@ -993,7 +1083,7 @@ This brings up questions about which data should be used to fit the calibration 
 
 TODO change below
 
-We were ablr to set aside `r format(nrow(pred_cal), big.mark = ",")` samples for the calibration set and we will use these to fit the calibration model. @fig-re-cal-curves shows the results where panel (a) uses a sliding window to assess the smaller data set using a window size of 20{{< pct >}} that moves in 5{{< pct >}} increments. From these figures, the class probabilities appear to have been improved. Note that these values now encompass the entire probability range.
+We were able to set aside `r format(nrow(pred_cal), big.mark = ",")` samples for the calibration set and we will use these to fit the calibration model. @fig-re-cal-curves shows the results where panel (a) uses a sliding window to assess the smaller data set using a window size of 20{{< pct >}} that moves in 5{{< pct >}} increments. From these figures, the class probabilities appear to have been improved. Note that these values now encompass the entire probability range.
 
 ```{r}
 #| label: fig-re-cal-curves
@@ -1019,10 +1109,14 @@ cal_plot_3 + cal_plot_4
 ```{r}
 #| label: re-cal
 #| echo: false
-re_class_stats <- pred_cal %>% cls_mtr(class, estimate = .pred_class, .pred_poisonous)
+re_class_stats <- pred_cal %>%
+  cls_mtr(class, estimate = .pred_class, .pred_poisonous)
+
+re_class_iso_stats <- pred_cal_iso_boot %>%
+  cls_mtr(class, estimate = .pred_class, .pred_poisonous)
 ```
 
-Using this approach to calibration, the new probability estimates have a Brier score of `r signif(re_class_stats$.estimate[re_class_stats$.metric == "brier_class"], 3)`. While this is smaller than the value (`r signif(nb_mtr$mean[nb_mtr$.metric == "brier_class"], 3)`) prior to calibration, the exact same data were not used. This makes it difficult to say that the improvement is real.
+Using this approach to calibration, the new probability estimates have a Brier score of `r signif(re_class_stats$.estimate[re_class_stats$.metric == "brier_class"], 3)` with 90{{< pct >}} confidence limits (`r signif(lr_brier$.lower, 3)`, `r signif(lr_brier$.upper, 3)`). While this is smaller than the value (`r signif(nb_mtr$mean[nb_mtr$.metric == "brier_class"], 3)`) prior to calibration, it difficult to believe that the improvement is real since the confidence internal for the original unaltered predictions was (`r signif(orig_brier$.lower, 3)`, `r signif(orig_brier$.upper, 3)`). 
 
 There other approaches for recalibrating. First, is isotonic regression [@isotonic]. This tool fits a model that will generate monotonic, non-decreasing, predictions: $\hat{y}_i \le \hat{y}_{i+ 1}$ when $x_i \le x_{i+ 1}$. There are multiple methods to create such models but the most straightforward approach is the pooled-adjacent violators algorithm (PAVA) of @pava. This method adjusts a sequence of data points that are not monotonically increasing to be so. For example, @tbl-isotonic shows an example where the rows are ordered by their model's predicted probabilities. One column shows a binary indicator for class `A`. The first three rows have the same outcome (`B`) but the fourth row is actually class `A`. The PAVA algorithm then takes the averages of the binary indicators that bracket the discordant value and all of these probability estimates are given a value of 1/3. From the table, it is clear that there are three possible probability estimates after isotonic regression is used. 
 
@@ -1092,11 +1186,11 @@ cal_plot_6 <-
 cal_plot_5 + cal_plot_6
 ```
 
-@fig-recal-iso-curves(b) shows the ensemble results. The curve is slightly closer to the line, and there is far less "wiggle" around the values. 
+@fig-recal-iso-curves(b) shows the ensemble results. The curve is slightly closer to the line, and there is far less "wiggle" around the values. The bootstrapping method reduces the Brier score from `r signif(nb_mtr$mean[nb_mtr$.metric == "brier_class"], 3)` to `r signif(re_class_stats$.estimate[re_class_stats$.metric == "brier_class"], 3)` but the with 90{{< pct >}} confidence limits (`r signif(iso_brier$.lower, 3)`, `r signif(iso_brier$.upper, 3)`) suggest that the improvement is within the experimental noise of the system. 
 
 There are many other tools in the calibration toolbox, such as beta calibration [@betacal]. There are also methods for calibrating classification models with three or more classes [@NIPS2001abdbeb4d; @johansson21a; @NEURIPS2021bbc92a64].
 
-It is important to recompute performance using the recalibrated predictions. Also note that, since the class probabilities have been altered, any hard predictions should be recomputed since some values may have moved across the chosen probability threshold. Using the set of `r format(nrow(pred_cal), big.mark = ",")` data points that have been recalibrated, the reestimated sensitivity and specificity were `r round(re_class_stats$.estimate[re_class_stats$.metric == "sensitivity"] * 100, 1)`{{< pct >}} and `r round(re_class_stats$.estimate[re_class_stats$.metric == "specificity"] * 100, 1)`{{< pct >}}, respectively and the area under the ROC curve was `r signif(re_class_stats$.estimate[re_class_stats$.metric == "roc_auc"], 3)`
+It is important to recompute _all_ metrics using the recalibrated predictions. Also note that, since the class probabilities have been altered, any hard predictions should be recomputed since some values may have moved across the chosen probability threshold. Using the set of `r format(nrow(pred_cal), big.mark = ",")` data points that have been recalibrated, the reestimated sensitivity and specificity were `r round(re_class_stats$.estimate[re_class_stats$.metric == "sensitivity"] * 100, 1)`{{< pct >}} and `r round(re_class_stats$.estimate[re_class_stats$.metric == "specificity"] * 100, 1)`{{< pct >}}, respectively and the area under the ROC curve was `r signif(re_class_stats$.estimate[re_class_stats$.metric == "roc_auc"], 3)`.
 
 ::: {.note-box}
 The user should not set expectations very high; recalibration methods often have limited ability to correct predictions. In our example, a large amount of data was set aside for calibration, and we were able to fix a minor issue with the original model’s predictions. In most cases, recalibration might be able to fix gross miscalibration trends. 
@@ -1171,7 +1265,7 @@ wordle_conf_mat <-
       TRUE                ~ cell_spec(n, format = "html", bold = FALSE)
     )
   ) %>% 
-  select(-n) %>% 
+  dplyr::select(-n) %>% 
   pivot_wider(id_cols = c(Prediction), names_from = c(Truth), values_from = n2) %>% 
   mutate(blank = "  ") %>% 
   relocate(blank, .after = "Prediction")
