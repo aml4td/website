@@ -783,30 +783,27 @@ $$
 CE = -\frac{1}{N}\sum_{i=1}^N \left[y_{i1}\log(\hat{p}_{i1}) + y_{i2}\log(1 - \hat{p}_{i1})\right]
 $$ {#eq-cross-entropy-binary}
 
-since $\hat{p}_{i2} = 1 - \hat{p}_{i1}$.
+since $\hat{p}_{i2} = 1 - \hat{p}_{i1}$. A good model minimizes cross-entropy.
 
-It turns out that if we assume the data points independently arise from a Bernoulli distribution with probability $\pi$, the likelihood statistic is 
+There is an alternative way to view this statistic. It turns out that if we assume the outcome data independently arise from a Bernoulli distribution with an event probability of $\pi$, the corresponding likelihood statistic is 
 
 $$
 \ell(y_{ik}; \pi) = \prod_{i=1}^n \pi^{y_{i1}} (1 - \pi)^{y_{i2}}
 $$ {#eq-binomial-lh}
 
-We typically try to optimize the negative log-likelihood. Logging the function and subtituting our estimate $\hat{p}_{i1}$ for $\pi$, we also arrive at: 
+We've described that, by maximizing the likelihood, we find values(s) of the parameter(s) that explain the data best. To improve numerical stabiklity, we typically try to minimize the negative log-likelihood. Logging the $\ell(y_{ik}; \pi)$ and subtituting our estimate $\hat{p}_{i1}$ for $\pi$, we also arrive at: 
 
 $$
 -\log \ell(y_{ik}; \hat{p}_{i1}) = -\sum_{i=1}^n \left[y_{i1}\log(\hat{p}_{i1}) + y_{i2}\log(1 - \hat{p}_{i1})\right]
 $$ {#eq-binomial-neg-llh}
 
-When there are more than two classes, the same equivalence can be shown to the multinomial log-likelihood. 
+which is the same as cross-entropy. When there are more than two classes, the same equivalence can be shown to the multinomial log-likelihood. Often, with classification models, this statistic will be referred to as "log loss^[This does lead to confusion since the loss function in question, the likelihood, is different for different data types (e.g., real numbers, counts, etc). In linear regression, "log loss" also corresponds to the sum of squared errors.]. 
 
-Recall that the likelihood is the probability of our data occurring given a set of parameter values (in this case, the $\hat{p}_{ik}$). It measures how well our model explains observed data. If the likelihood is to be maximized, the negative log-likelihood (i.e., cross-entropy) is minimized. Often, with classification models, this statistic will be referred to as "log loss^[This does lead to confusion since the loss function in question, the likelihood, is different for different data types (e.g., real numbers, counts, etc). In linear regression, "log loss" also corresponds to the sum of squared errors.]. 
+The attractive aspect of this statistic is that can produce models that fit the data well. On the theoretical side, it also has the characteristic of being a _proper scoring rule_; it is optimized at the true probability distribution. We’ll see a little more about this below when Brier scores are discussed. 
 
-One issues is that the scale of the value is not interpretable. For example, knowing that the cross-entropy value for our naive Bayes model is `r signif(nb_mtr$mean[nb_mtr$.metric == "mn_log_loss"], 3)` does indicate whether that value is good or bad. We can determine what a poor value of cross-entropy is for this data set by repeatedly permuting the true class column of the validation set, recomputing the metrics, and taking the average. This gives us an estimate of the metrics when there is no connection between the observed classes and their predictions. Following this approach with 100 permutations, the baseline cross-entropy of a poor model was `r signif(nb_mtr_perm$mean[nb_mtr$.metric == "mn_log_loss"], 3)`.
+One issue is that the scale of the value is not interpretable. For example, knowing that the cross-entropy value for our naive Bayes model is `r signif(nb_mtr$mean[nb_mtr$.metric == "mn_log_loss"], 3)` does indicate whether that value is good or bad. We can determine what a poor value of cross-entropy is for this data set by repeatedly permuting the true class column of the validation set, recomputing the metrics, and taking the average. This gives us an estimate of the metrics when there is no connection between the observed classes and their predictions. Following this approach with 100 permutations, the baseline cross-entropy of a poor model was `r signif(nb_mtr_perm$mean[nb_mtr$.metric == "mn_log_loss"], 3)`.
 
-also logging things near zero makes them explode; impossible results when p = 0
-
-
-like brier, strictly proper scoring rule in the sense that it is optimized at the true probability distribution.
+Also, there can be numerical issues when some probability estimates are at or near zero; $\log(\hat{p}_{ik})$ can diverge quickly to a large number and is undefined as zero. The common correction for these issues is to cap the probability estimates to a very small number. This helps avoid $\log(0)$ but there is still the issue that extremes of the probability scale have more dramatic emphasis (and influence) on the metric. 
 
 ### Brier Scores {#sec-brier}
 
@@ -838,24 +835,71 @@ Additionally, the Brier score can be partitioned into smaller components that me
 
 ```{r}
 #| label: decomp
-#| eval: false
+#| eval: TRUE
 #| include: false
-brier_decomp_2cls <-
+
+nb_val_round <-
   nb_val_pred %>%
-  mutate(.pred_poisonous = round(.pred_poisonous, 2)) %>%
+  mutate(.pred_poisonous = round(.pred_poisonous, 2))
+
+brier_decomp_data <-
+  nb_val_round %>%
   group_by(.pred_poisonous) %>%
-  summarize(n = n(), r = sum(class == "poisonous"), .groups = "drop") %>%
-  mutate(cal = n * (r - .pred_poisonous)^2, refine = n * r * (1 - r)) %>%
-  summarize(cal = mean(cal), refine = mean(refine), .groups = "drop")
+  summarize(n_j = n(), y_j = mean(class == "poisonous"), .groups = "drop") %>%
+  mutate(
+    cal = n_j * (y_j - .pred_poisonous)^2,
+    cal = cal / nrow(nb_val_round),
+    refine = n_j * y_j * (1 - y_j),
+    refine = refine / nrow(nb_val_round)
+  )
 
-brier_decomp_2cls
+brier_decomp_2cls <- summarize(
+  brier_decomp_data,
+  cal = mean(cal),
+  refine = mean(refine)
+)
 ```
-
-
 
 The Brier score also measures how well a model is calibrated (see @sec-calibration). In fact, the Brier score can be decomposed into different components, one of which specifically measures calibration. However, this can only be computed when the estimated probability values are not unique. 
 
+Suppose $C = 2$. Let $n_p$ be the number of unique values of $\hat{p}_{i1}$ denoted as $\hat{p}_{j}$ ($j=1, \ldots, n_p$). We'll also denote $n_j$ to indicate the number of data points with value $\hat{p}_{j}$, and the rate of events in group $j$ as $\bar{y}_j$. From this, we can partition that statistic as: 
+
+\begin{align}
+Brier &= \frac {1}{n_p} \sum_{j=1}^{n_p}n_{j}(\hat{p}_{j} - \bar{y}_j)^2 + \frac {1}{n_p} \sum_{j=1}^{n_p}n_{j} \bar{y}_j (1 - \bar{y}_j) \label{eq-brier-cal} \\
+ &= \text{calibration} + \text{refinement} \notag \\
+\end{align}
+
+
 the log-loss puts more dramatic emphasis on the extremes of the probability scale than does the Brier loss. 
+
+
+```{r}
+#| label: fig-brier-decomp
+#| echo: false
+#| warning: false
+#| out-width: 80%
+#| fig-width: 8
+#| fig-height: 4
+#| fig-cap: The data making up the two-component partition of the Brier score (calibration and refinement). The left panel plots $\hat{p}_{j}$ versus $\bar{y}_j$ and the right panels plots $\hat{p}_{j}$ versus $n_{j} \bar{y}_j (1 - \bar{y}_j)$.
+
+p_cal <-
+  brier_decomp_data |>
+  ggplot(aes(.pred_poisonous, y_j, size = n_j)) +
+  geom_abline(col = "green", lty = 2) +
+  geom_point(alpha = 1 / 4, show_legend = FALSE) +
+  coord_obs_pred() +
+  labs(x = "Predicted Probability", y = "Observed Rate")
+
+p_refine <-
+  brier_decomp_data |>
+  ggplot(aes(.pred_poisonous, refine, size = n_j)) +
+  geom_point(alpha = 1 / 4) +
+  labs(x = "Predicted Probability", y = expression(paste(n, y, (1 - y)))) +
+  theme(legend.poistion = "right")
+
+(p_cal + p_refine) + plot_layout(guides = 'collect')
+```
+
 
 
 ### Reciever Operating Characteristic Curves {#sec-roc}
