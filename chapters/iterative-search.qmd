@@ -116,6 +116,7 @@ reg_mtr <- metric_set(rmse)
 #| fig-height: 5
 #| out-width: 50%
 #| fig-cap: "A visualization of model performance when only the SVM cost and scaling factor parameters are optimized. It shows the combination with the smallest RMSE and a ridge of candidate values with nearly equivalent performance."
+#| fig-altalt: "Heatmap showing optimization results for SVM parameters. A dark red diagonal ridge indicates optimal performance zones where cost and scaling factors are inversely related. The brightest point marks the lowest RMSE value at high scaling factor and low cost."
 
 load("../RData/two_param_iter_large.RData")
 x_rng <- 10^extendrange(c(-10, -1/10))
@@ -196,9 +197,9 @@ library(ggplot2)
 library(dplyr)
 
 source("https://raw.githubusercontent.com/aml4td/website/main/R/shiny-setup.R")
-# source("https://raw.githubusercontent.com/aml4td/website/main/R/shiny-gd.R")
-# 
-# app
+source("https://raw.githubusercontent.com/aml4td/website/main/R/shiny-gd.R")
+
+app
 ```
 
 :::
@@ -365,6 +366,7 @@ The initial set of candidates used for iterative search with the toy example fro
 #| viewerHeight: 600
 #| viewerWidth: "100%"
 #| standalone: true
+#| fig-alt: A two-dimensional parameter space with axes for the scale parameter and the SVM cost is shown. Three initial points are shown. The SA algorithm progresses from a point with low cost and a large value of the scale factor to meander to the ridge of optimal performance, starting several times along the way. 
 library(shiny)
 library(bslib)
 library(ggplot2)
@@ -373,9 +375,9 @@ library(purrr)
 library(scales)
 
 source("https://raw.githubusercontent.com/aml4td/website/main/R/shiny-setup.R")
-# source("https://raw.githubusercontent.com/aml4td/website/main/R/shiny-sa.R")
-# 
-# app
+source("https://raw.githubusercontent.com/aml4td/website/main/R/shiny-sa.R")
+
+app
 ```
 
 :::
@@ -490,6 +492,7 @@ To illustrate genetic algorithms in two dimensions, a population size of 8 was u
 #| viewerHeight: 600
 #| viewerWidth: "100%"
 #| standalone: true
+#| fig-alt: A two-dimensional parameter space with axes for the scale parameter and the SVM cost is shown. Eight initial points are shown, one near the ridge of best results. As generations increase, new generations are gathered around the ridge. 
 library(shiny)
 library(bslib)
 library(ggplot2)
@@ -498,9 +501,9 @@ library(purrr)
 library(scales)
 
 source("https://raw.githubusercontent.com/aml4td/website/main/R/shiny-setup.R")
-# source("https://raw.githubusercontent.com/aml4td/website/main/R/shiny-ga.R")
-# 
-# app
+source("https://raw.githubusercontent.com/aml4td/website/main/R/shiny-ga.R")
+
+app
 ```
 
 :::
@@ -620,6 +623,7 @@ From these answers, we would experiment with different values of $\alpha$ and $\
 #| fig-width: 6
 #| fig-height: 3
 #| fig-cap: Examples of the Beta distribution for different values of $\alpha$ and $\beta$.
+#| fig-altalt: "Three panel plot showing Beta distributions with varying parameters. Left panel (beta=1): curves showing increasing probability density as alpha increases from 1 to 5, with steeper growth near probability=1. Center panel (beta=3): several curves peaking at different points with means near 0.5. Right panel (beta=5): curves skewed left, with peaks shifting leftward as alpha increases. X-axis shows probability of forestation from 0 to 1, Y-axis shows probability density."
 
 crossing(
   value = seq(0, 1, length.out = 100),
@@ -661,5 +665,762 @@ To summarize:
 We’ll encounter even more Bayesian methods in subsequent chapters. In @sec-cls-metrics, we'll describe the process of developing a prior for muticlass problem based on Wordle scores.
 
 Now that we know more about Bayesian statistics, let's see how they can be used to tune models.
+
+## Bayesian Optimization {#sec-bayes-opt}
+
+Bayesian optimization (BO) is a search procedure that uses an overarching statistical model to predict the next set of candidate values based on past performance. It is currently the most used iterative search routine for optimizing models. The technique originated with @movckus1975bayesian and was further developed by @jones1998efficient. It is often tied to a particular Bayesian predictive model: the Gaussian process (GP) regression model [@binois2022survey]. 
+
+Bayesian optimization and Gaussian proceses have been vibrant research areas and our discussions will scratch the surface. More recent surveys, @gramacy2020surrogates and @garnett2023, are comprehensive resources for these methodologies.
+
+However, before diving into the details of Gaussian proceseses, we should discuss how any Bayesian method can be used for optimization. Similar to the racing model from @eq-perf-mod-racing, the Bayesian model's outcome will be our estimated performance statistic (i.e., $\hat{Q}$). The predictors for this model will be the tuning parameter values ($\boldsymbol{\theta}$):
+
+$$
+Q_j = f(\boldsymbol{\theta}_j)+ \epsilon_{j}
+$$ {#eq-surrogate}
+
+where $j$ is the iteration number, $f(\cdot)$ is a _surrogate model_, and $\epsilon$ is an error term. For the barley data, we’ve used RMSE as our primary metric. Using a Bayesian model for $f(\cdot)$ enables us to predict what we expected the RMSE to be for different candidate points. 
+
+```{r}
+#| label: fig-two-candidates-dist
+#| include: false
+
+set.seed(28383)
+num_points <- 5000
+two_cand_data <- 
+  tibble(RMSE = c(rnorm(num_points, 5.75, 1/4), rnorm(num_points, 5.5, 3/4)),
+         `Candidate:` = rep(paste("#", 1:2), each = num_points))
+
+two_cand_probs <- 
+  two_cand_data %>% 
+  mutate(group = `Candidate:`) %>% 
+  summarize(prob = round(mean(RMSE >= 6) * 100, 0), .by = c(group))
+```
+
+Since a Bayesian model produces a posterior (predictive) distribution, we can obtain the distribution of the performance metric for a potential new candidate. We often summarize this predictive distribution with the mean and standard deviation. @fig-two-candidates shows two hypothetical candidates and their respective predictive distributions. The first candidate has a slightly better predicted RMSE (on average). The area under the distribution curve to the right of the vertical line reflects the probability of being worse than the current solution which, for this candidate, is `r two_cand_probs$prob[two_cand_probs$group == "# 1"]`%.
+
+```{r}
+#| label: fig-two-candidates
+#| echo: false
+#| out-width: 55%
+#| fig-width: 6
+#| fig-height: 4
+#| fig-cap: An example of a choice between two candidates where performance is gauged by RMSE. One candidate has slightly better predicted mean performance and another where the mean RMSE is predicted to be much lower but with high uncertainty. 
+#| fig-altalt: Line graph comparing two candidates' performance distributions across RMSE values (ranging from 3 to 9). Candidate 1 shows a wider, flatter curve centered around RMSE of 5.75, while Candidate 2 displays a narrow, tall peak at an RMSE of 5.5. A vertical dashed line marks the 'Current best' position at an RMSE of 6.0.
+
+two_cand_data %>% 
+  ggplot(aes(RMSE, col = `Candidate:`)) + 
+  geom_line(stat = "density", adjust = 1.5, trim = TRUE, linewidth = 1) +
+  geom_vline(mapping = aes(xintercept = 6), lty = 2) +
+  theme(legend.position = "top") +
+  annotate("text", x = 6.5, y = 1.25, label = "Current\nbest") + 
+  labs(y = "Posterior Density")
+```
+
+The second candidate has a mean RMSE that is predicted to have about a 2-fold improvement over the first but comes with considerably large uncertainty. On average, this is a better choice but there is more area to the right of the vertical line. The probability of the second candidate having worse results than the current best is `r two_cand_probs$prob[two_cand_probs$group == "# 2"]`%. 
+
+Which option is better? The first candidate is a safer choice, while the second comes with higher risk but also a greater potential reward. The decision often depends on our perspective. However, it's important to understand why the second candidate has such a large variance in outcomes.
+
+We’ve previously discussed the variance-bias tradeoff and demonstrated that large uncertainty in the performance metric can often be explained by _model variance_. Recall that models might vary due to predictive instability caused by a model that is far more complex than is required, such as the polynomial example in @sec-variance-bias. 
+
+However, there is another reason that the noise in our performance statistic can be large. Back in @sec-spatial-splitting, we described _spatial autocorrelation_, where objects are more similar to closer objects than to objects further away. If our Bayesian model reflects spatial variability, the increased uncertainty can be attributed to how each candidate relates spatially to the existing set. If our model's variance in @fig-two-candidates is based on spatial effects, it implies that the first candidate is closer to the current collection of tuning parameter candidates. Conversely, the large uncertainty for the second candidate suggests that it is placed far away from  existing results. 
+
+This example illustrates two different search strategies: _exploitation_ and _extrapolation_. 
+
+- Exploitation involves focusing the search near existing data, leveraging known results to refine and optimize solutions within familiar territory.
+
+- Extrapolation emphasizes exploring new, untested areas more aggressively in search of novel candidates that could lead to model improvements.
+
+Using the Bayesian model in @eq-surrogate is beneficial because it allows for both mean and variance predictions, which can be weighted differently when evaluating potential new candidates. If our surrogate Bayesian model effectively captures spatial effects, we can leverage this to optimize the model. The next section outlines the overall optimization process.
+
+### How Does Bayesian Optimization Work? {#sec-acquisition}
+
+The search process begins with an initial set of candidates ($s_0$) and their corresponding performance statistics (\hat{Q}_j$). These data are used to build a surrogate model, where the performance metric serves as the outcome and the candidate values act as predictors. The model then predicts the mean and standard deviation of the metric for new candidate values.
+
+To guide the search, we use an _acquisition function_—an objective function that combines the predicted mean and standard deviation into a single value [@garnett2023, Chapter 7]. The next candidate to be evaluated is the one that optimizes this acquisition function. This process is then repeated iteratively.
+
+One of the most well-known acquisition functions is based on the notion of **expected improvement** [@jones1998efficient, Section 4]. If the current best metric value is denoted as $\hat{Q}_{opt}$, the expected improvement is the positive part of $\delta(\hat{\boldsymbol{\theta}}) = Q_{opt} - \mu(\hat{\boldsymbol{\theta}})$, where $\mu(\hat{\boldsymbol{\theta}})$ is the mean of the posterior prediction (assuming that smaller metrics are better). They found that, probabilistically, the expected improvement is 
+
+$$
+EI(\hat{\boldsymbol{\theta}}; Q_{opt}) = \delta(\hat{\boldsymbol{\theta}}) \Phi\left(\frac{\delta(\hat{\boldsymbol{\theta}})}{\sigma(\hat{\boldsymbol{\theta}})}\right) + \sigma(\hat{\boldsymbol{\theta}}) \phi\left(\frac{\delta(\hat{\boldsymbol{\theta}})}{\sigma(\hat{\boldsymbol{\theta}})}\right)
+$$ {#eq-exp-improve}
+
+where $\Phi(\cdot)$ is the cumulative standard normal and $\phi(\cdot)$ is the standard normal density.
+
+Expected improvement balances both mean and variance, but their influence can shift throughout the optimization process.  Consider a parameter space where most regions have already been sampled to some extent. If the Bayesian model is influenced by spatial variation, the remaining unexplored areas will generally have low variance ($\sigma$), causing one term in @eq-exp-improve to dominate the optimization.  In contrast, during the early iterations, variance tends to be much higher. Unless there is a strong mean effect, spatial variance will dominate, leading the search to focus more on extrapolation.
+
+Additionally, the expected improvement can be altered to include a tradeoff factor $\xi$ so that improvement is the positive part of 
+
+$$
+\delta(\hat{\boldsymbol{\theta}}) = Q_{opt} - \mu(\hat{\boldsymbol{\theta}}) + \xi
+$$
+
+This effectively inflates the value of the current best and the resulting value of $\delta(\hat{\boldsymbol{\theta}})$ helps emphasize extrapolation. $\xi$ could be a single constant or a function that changes the tradeoff value as a function of iterations. 
+
+Similar to simulated annealing, sampling continues until reaching a predefined limit on iterations or computational time. Additionally, an early stopping rule can be used to end the search early if no new best result is found within a set number of iterations.
+
+Let's see how this approach works in a single dimension. @fig-bo-example shows how expected improvement can be used to find the global minimum of $\psi(\theta) = \theta\: cos(\theta/2)$. The light grey line in the lower panel represents the true value of $\psi(\theta)$ across the parameter space. The process starts with $s_0 = 2$ candidate points at -8.0 and 3.0. From these two points, the surrogate model is fit and the dark line in the lower panel shows the predicted objective function values across the space. The magnitude of the line represents the mean of the posterior. Notice that the predicted line fails to capture the true trend, which is not unexpected with two data points. 
+
+If we optimized only on the mean prediction, we would select the next point near $\theta = 3$ since it has the lowest predicted value. This approach relies entirely on exploitation.
+
+The color of the line depicts the predicted variance, which drops to zero near the existing points and explodes in the regions in between our two points. If we focused solely on the variance of the objective function, we would choose the next point in an area far from the two sampled points, such as the interval $-6 \le \theta \le 1$ or $\theta \ge 4$.
+
+By combining the mean and variance predictions through expected improvement, we strike a balance between the two. In the first iteration, two areas near (but not exactly at) $\theta = 3.0$ are predicted to have large expected improvements. The region on the left is sampled first, and once $\psi(\theta = 3)$ is evaluated, the next point moves closer to the true global optimum. This process continues, alternating between sampling near the best result and exploring regions with few nearby candidate values. After 15 iterations, the search is very close to the true global optimum.
+
+::: {#fig-bayes-opt}
+
+::: {.figure-content}
+
+```{shinylive-r}
+#| label: fig-bayes-opt
+#| viewerHeight: 600
+#| viewerWidth: "100%"
+#| standalone: true
+#| fig-alt: A single curve is shown with alternating peaks and valleys. The x-axis is the parameter, and the y-axis shows the objective function. Above this is another curve where the y-axis is expected improvement. As the optimization proceeds, the top curve shows several peaks of expected improvement, and the candidate points begin to cluster around the global minimum. 
+library(shiny)
+library(bslib)
+library(ggplot2)
+library(patchwork)
+library(dplyr)
+
+load(url("https://raw.githubusercontent.com/aml4td/website/main/RData/bayesian_opt_1d.RData"))
+
+light_bg <- "#fcfefe" # from aml4td.scss
+grid_theme <- bs_theme(
+  bg = light_bg, fg = "#595959"
+)
+
+theme_light_bl<- function(...) {
+  
+  ret <- ggplot2::theme_bw(...)
+  
+  col_rect <- ggplot2::element_rect(fill = light_bg, colour = light_bg)
+  ret$panel.background  <- col_rect
+  ret$plot.background   <- col_rect
+  ret$legend.background <- col_rect
+  ret$legend.key        <- col_rect
+  
+  ret$legend.position <- "top"
+  
+  ret
+}
+
+ui <- page_fillable(
+  theme = bs_theme(bg = "#fcfefe", fg = "#595959"),
+  sliderInput(
+    "iteration",
+    label = "Iterations",
+    min = 1L,
+    max = 15L,
+    step = 1L,
+    value = 1L,
+    width = "100%"
+  ),
+  as_fill_carrier(plotOutput("iterations"))
+)
+
+server <- function(input, output) {
+  
+  y_rng <- extendrange(true_curve$y)
+  p_base <- 
+    ggplot(true_curve, aes(x = x)) +
+    geom_line(aes(y = y), alpha = 1 / 10, linewidth = 1) +
+    labs(x = "Parameter", y = "Objective Function") +
+    lims(y = y_rng) +
+    theme_bw()
+  
+  output$iterations <-
+    renderPlot({
+      
+      plot_data <- obs_dat[obs_dat$iteration < input$iteration, ]
+      next_data <- obs_dat[obs_dat$iteration == input$iteration, ]
+      plot_curve <- gp_pred[[input$iteration]]
+      plot_curve$`Std Dev` <- plot_curve$.sd
+      
+      p <- 
+        p_base +
+        geom_line(data = plot_curve, aes(y = .mean, col = `Std Dev`), 
+                  alpha = 1, linewidth = 1.2) +
+        geom_point(data = plot_data, aes(y = y), cex = 2) +
+        geom_vline(xintercept = next_data$x, col = "red", lty = 2) +
+        scale_colour_viridis_c(option = "mako", direction = -1) +
+        theme(
+          plot.margin = margin(t = 0.0, r = 5.5, b = 5.5, l = 5.5, unit = "pt")
+        )
+      
+      p_ei <- 
+        ggplot(plot_curve, aes(x = x, y = objective)) + 
+        geom_line() +
+        geom_vline(xintercept = next_data$x, col = "red", lty = 2) + 
+        lims(y = 0:1) + 
+        labs(y = "Expected Imp.", x = NULL) + 
+        theme_bw() +
+        theme(
+          axis.text.x = element_blank(), axis.ticks.x = element_blank(),
+          plot.margin = margin(t = 5.5, r = 5.5, b = 0.0, l = 5.5, unit = "pt")
+        ) 
+      
+      print((p_ei / p) + plot_layout(heights = c(2, 3)))
+      
+    }, res = 100)
+}
+
+app <- shinyApp(ui, server)
+app
+```
+
+:::
+
+An example of Bayesian optimization for the function $\psi(\theta) = \theta\: cos(\theta/2)$. The top plot shows the expected improvement for the current iteration. The bottom panel shows the true curve in grey and the mean prediction line (colored by the predicted standard deviation). The vertical line indicates the location of the next candidate. 
+
+:::
+
+Numerous other acquisition functions can be used.  For example, instead of expected improvement, we can maximize the probability of improvement:
+
+$$
+PI(\hat{\boldsymbol{\theta}}) = \Phi\left(\frac{\tau - \mu(\hat{\boldsymbol{\theta}})}{\sigma(\hat{\boldsymbol{\theta}})}\right) 
+$$
+
+where $\tau$ is some performance metric goal (e.g., an _R_<sup>2</sup> of 80%). This is generally deprecated in favor of EI for a few reasons. Most importantly, PI does not directly incorporate the current best value. Additionally, the value of $\tau$ is arbitrary and the search can be inconsistent across values of $\tau$ [@jones2001taxonomy].
+
+Another acquisition function is based on confidence bounds [@cox1992statistical]. For minimizing the performance statistic, the lower bound would be computed:
+ 
+$$
+CB(\hat{\boldsymbol{\theta}}) = \mu(\hat{\boldsymbol{\theta}}) - \kappa\: \sigma(\hat{\boldsymbol{\theta}})
+$$
+
+where $\kappa$ sets the confidence level and often has values that are _much_ smaller than range used for statistical inference (e.g., centered around 1.64). This multiplier also modulates between extrapolation (large $\kappa$) and exploitation (small $\kappa$) for the search. 
+
+Bayesian optimization offers more than just different acquisition functions; there are also various other modifications that can enhance its efficiency. For instance, similar to simulated annealing, the default approach samples one candidate at a time. While this works, it can be computationally inefficient, especially when models can be fitted in parallel. To improve this, modifications allow for multiple candidates to be _simulated_ at once. In this approach, the candidate with the highest predicted acquisition value is chosen, and its predicted performance is treated as if it were derived from an actual assessment. A new GP model is then created using this imputed data point, and the process continues by acquiring the next point. This cycle repeats until the desired number of new candidates is obtained (see @azimi2010batch). Alternatively, we can focus on the most promising areas of the parameter space and sample several different points. For example, in iteration five of @fig-bayes-opt, where there are three peaks showing improvement, we could sample each of these peaks and create a batch of three new candidates to evaluate all at once, rather than individually.
+
+Now that the general optimization process has been outlined, let's focus on the most popular model associated with Bayesian optimization.
+
+### Gaussian Process Models {#sec-gp}
+
+GPs [@williams2006gaussian;@garnett2023] are often motivated as special cases of stochastic processes, which are the collection of random variables that are indexed by one or more variables. The most common example of a stochastic process is the stock market. A stock price is a random variable that is indexed by time. A Gaussian process is just a stochastic process whose data are assumed to be multivariate normal. 
+
+Gaussian processes are different from basic multivariable normal distributions. Let's say that we collected the heights and weights of 100 students in a specific grade. If we collect the heights and weights into a two-dimensional vector $\boldsymbol{x} = [height, weight]$, we might assume that the data is multivariate normal, with a 2D population mean _vector_ and a 2 $\times$ 2 covariance matrix, i.e., $\boldsymbol{x} \sim N(\boldsymbol{\mu}, \Sigma)$. In this case, the data are a sample of people at a static time point. 
+
+However, a Gaussian process is a **sequence of data** so we have to specify their means and covariances dynamically; there are mean and covariance _functions_ instead of vectors and matrices. The mean function is often denoted as  $\mu(\boldsymbol{x})$. One way of writing the covariance function is $\Sigma(\boldsymbol{x}, \boldsymbol{x}') = k(\boldsymbol{x}, \boldsymbol{x}') + \sigma^2_{\epsilon}I$ where $k(\cdot, \cdot)$ is a **kernel function** and $\sigma_{\epsilon}$ is a constant error term.
+
+We've seen kernels before, back in @eq-kernel-poly when they were associated with support vector machine models. For Gaussian processes, the kernel will define the variance between two data points in the process. Some kernels can be written as a function of the difference $\delta_{ii'} = ||\boldsymbol{x} - \boldsymbol{x}'||$. A common kernel is the squared exponential:
+
+$$
+k(\boldsymbol{x}, \boldsymbol{x}') = \exp\left(-\sigma d_{ii'}^2 \right)
+$$ {#eq-kernel-sq-expo}
+
+Note that this covariance function has it's own parameter $\sigma$, similar to $a$, $b$, and $q$ in @eq-kernel-poly ($\sigma$ is unrelated to $\sigma_{\epsilon}$).
+
+The squared exponential function shows that as the two vectors become more different from one another (i.e., further away), the exponentiated difference becomes large, indicating high variance (apart from $\sigma^2_{\epsilon}$). For two identical vectors, this covariance function yields a variance of $\sigma^2_{\epsilon}$. Now, we can see why the previous section had a strong emphasis on spatial variability for Bayesian optimization. @fig-bayes-opt used this kernel function. 
+
+A more general covariance function uses the Matern kernel: 
+
+$$
+k_{\nu }(\delta_{ii'})=
+{\frac {2^{1-\nu }}{\Gamma (\nu )}}{\Bigg (}{\sqrt {2\nu }}{\frac {\delta_{ii'}}{\rho }}{\Bigg )}^{\nu }\mathcal{K}_{\nu }{\Bigg (}{\sqrt {2\nu }}{\frac {\delta_{ii'}}{\rho }}{\Bigg )}
+$$ {#eq-kernel-matern}
+
+where $\mathcal{K}(\cdot)$ is the Bessel function, $\Gamma(\cdot)$ is the Gamma function, and $\rho$ and $\nu$ are tuning parameters. 
+
+So far, our covariance functions have assumed that all tuning parameters are numeric. A common, though simplistic, approach for incorporating qualitative parameters into a Gaussian process is to convert them into binary indicators and treat them as generic numeric predictors. However, this method is problematic because it’s unlikely that these binary indicators follow a Gaussian distribution. Additionally, if the qualitative tuning parameters have many levels, this approach can rapidly increase the dimensionality of the Gaussian space, which in turn raises the computational costs of training the GP model.
+
+Alternatively, special "categorical kernels" take integers corresponding to levels of a categorical predictor as inputs. For example, one based on an exchangeable correlation structure is: 
+
+$$
+k(x, x') = \rho I(x \ne x') + I(x = x')
+$$ {#eq-kernel-categorical}
+
+where $\rho < 1$ [@joseph2007functionally]. More extensive discussions of models with _mixed types_ can be found in @qian2008bayesian, @zhou2011simple, and @saves2023mixed.
+
+Multiple kernels can be used to accommodate a pipeline with both quantitative and qualitative tuning parameters. Depending on the situation, an overall kernel can be created via addition or multiplication. 
+
+@genton2001classes, Part II of @cristianini2004, and Chapter 4 of @garnett2023 contain overviews of kernel functions, their different classes, and how they can be used and combined for data analysis.
+
+How does this relate to iterative tuning parameter optimization? Suppose that our multivariate random variable is the concatenation of an outcome variable and one or more predictors, our vector of random variable could be thought of as $\boldsymbol{d} = [y, x_1, ..., x_p]$. In a model, we'd like to predict the value of $y$ is for a specific set of $x$ values. Mathematically, this is $Pr[y | \boldsymbol{x}]$ and, since this collection of data is multivariate normal, there are some nice linear algebra equations that can be used to compute this. This ties into Bayesian analysis since we can write @eq-bayes-rule-distr in terms of probabilities: 
+
+$$
+Pr[y | \boldsymbol{x}] = \frac{Pr[y] Pr[\boldsymbol{x} | y]}{Pr[\boldsymbol{x}]} = \frac{(prior)\times (likelihood)}{(evidence)}
+$$ {#eq-bayes-rule}
+
+The GP model is Bayesian because we have specified the distributions for the outcome and predictors ($Pr[y]$ and $Pr[\boldsymbol{x}]$, respectively) simultaneously. The kernel function is the primary driver of the prior distribution of Gaussian processes. 
+
+_In theory_, each of these is easy to compute with a simple multivariate normal. However, we don't know the value of $\sigma^2_{\epsilon}$ nor do we know the values of any kernel parameters used by $k(\cdot,\cdot)$.  The error term can be estimated a variety of ways, including maximum likelihood, cross-validation, and others (see @ameli2022noise for a survey of methods). For the kernel tuning parameters, it is common to maximize the marginal likelihood to estimate these structural parameters [@williams2006gaussian, chap. 5]. The Gaussian nature of this model enables a number of relatively straightforward procedures for these purposes (that does not involve another layer of resampling).
+
+Howver, training Gaussian process models can be difficult and the computation cost of training these models increases _cubically_ with the number of data points. In our application, the training set size is the number of tuning parameter candidates with performance statistics. However, after the initial GP model has been trained, there are updating algorithms that can prevent the model from being completely re-estimated from scratch thus reducing training time. 
+
+::: {.note-box}
+In summary, Gaussian process models are nonlinear models that can use tuning parameter values to make predictions on future performance statistics. They can predict the mean and variance of performance, the latter being mostly driven by spatial variability.  
+:::
+
+In @fig-bayes-opt we've seen how well Bayesian optimization works for a simple one-dimensional function. Let’s apply it in context by using it to optimize our two SVM tuning parameters. 
+
+### A Two Dimensional Illustration {#sec-ba-2D}
+
+```{r}
+#| label: bo-example-calcs
+#| echo: false
+load(url("https://raw.githubusercontent.com/aml4td/website/main/RData/two_param_iter_bo.RData"))
+
+bo_best <- numeric(0)
+
+rmse_best <- min(bo_mtr$mean[bo_mtr$.iter == 0])
+for (i in 1:max(bo_mtr$.iter)) {
+  new_rmse <- bo_mtr$mean[bo_mtr$.iter == i]
+  if (new_rmse < min(rmse_best)) {
+    bo_best <- c(bo_best, i)
+    rmse_best <- c(rmse_best, new_rmse)
+  }
+}
+
+bo_best_chr <- cli::format_inline("iterations {bo_best}")
+rmse_best_chr <- cli::format_inline("{paste0(signif(rmse_best, 4), '%')}")
+```
+
+Returning the the SVM example, we initialize the GP model using the same three points shown in @tbl-svm-initial. We again use the squared exponential kernel in @eq-kernel-sq-expo to measure variability. 
+
+@fig-bo-example shows the results that help us select the first new candidate value. Due to the small number of points used to fit the GP, the EI surface is virtually flat. The flatness of the acquisition function results in a fairly uninformative choice: the first point is very close to the best candidate in the initial set.
+
+Once this new point is sampled, the surrogate GP model produces a clear trend in EI indicating a strong preference for higher cost values (and no effect of the scale parameter). The selected candidate is closer to the ridge of optimal performance. After acquiring this point, the next iteration shows that EI is focused on the scale parameter value and ignores the cost parameter. By iteration 13, a candidate is chosen that is nearly optimal. 
+
+This example shows that Bayesian optimization can make enormous leaps in parameter space, frequently choosing values of parameters at their minimum or maximum values. This is the opposite of SA, which meanders through local parameter space. 
+
+:::: {.columns}
+
+::: {.column width="15%"}
+:::
+
+::: {.column width="70%"}
+
+::: {#fig-bo-example}
+
+::: {.figure-content}
+
+```{shinylive-r}
+#| label: fig-bo-example
+#| viewerHeight: 630
+#| viewerWidth: "100%"
+#| standalone: true
+#| fig-alt: A two-dimensional parameter space with axes for the scale parameter and the SVM cost is shown. Three initial points are shown. The BO algorithm progresses from a point with low cost and a large scale factor value, making large jumps to different regions of the parameter space; several iterations come close to the optimal ridge. 
+library(shiny)
+library(bslib)
+library(ggplot2)
+library(dplyr)
+library(purrr)
+library(scales)
+
+source("https://raw.githubusercontent.com/aml4td/website/main/R/shiny-setup.R")
+
+ui <- page_fillable(
+  theme = bs_theme(bg = "#fcfefe", fg = "#595959"),
+  sliderInput(
+    "iter",
+    label = "Iteration",
+    min = 1L,
+    max = 50L,
+    step = 1L,
+    value = 1L,
+    width = "100%"
+  ),
+  radioButtons(
+    inputId = "objective",
+    label = "Objective Function",
+    inline = TRUE,
+    choices = list("Exp. Improivement" = "objective", "Mean" = ".mean", 
+                   "Std. Dev" = ".sd")
+  ),
+  as_fill_carrier(plotOutput("path"))
+)
+
+server <- function(input, output) {
+  
+  load(url("https://raw.githubusercontent.com/aml4td/website/main/RData/two_param_iter_bo.RData"))
+  load(url("https://raw.githubusercontent.com/aml4td/website/main/RData/two_param_iter_large.RData"))
+  
+  # ------------------------------------------------------------------------------
+  
+  x_rng <- 10^extendrange(c(-10, -1/10))
+  y_rng <- 2^extendrange(c(-10, 10))
+  
+  log10_labs <- trans_format("log10", math_format(10^.x, function(x) format(x, digits = 3)))
+  log2_labs <- trans_format("log2", math_format(2^.x, function(x) format(x, digits = 3)))
+  
+  # ------------------------------------------------------------------------------
+  
+  best_init <- 
+    bo_mtr %>% 
+    filter(.iter == 0) %>% 
+    slice_min(mean) %>% 
+    select(cost, scale_factor, .iter)
+  
+  initial_plot <- 
+    regular_mtr %>%
+    ggplot(aes(scale_factor, cost)) +
+    geom_point(data = init_grid, cex = 3, pch = 1) +
+    scale_x_log10(limits = x_rng,
+                  labels = log10_labs,
+                  expand = expansion(add = c(-1 / 5, -1 / 5))) +
+    scale_y_continuous(limits = y_rng, trans = "log2", labels = log2_labs,
+                       expand = expansion(add = c(-1/2, -1/2))) +
+    theme_bw() +
+    labs(x = "Scaling Factor", y = "Cost") +
+    coord_fixed(ratio = 1/2)
+  
+  bo_tile <- tidyr::pivot_longer(
+    bo_tile,
+    cols = c(.mean, .sd, objective),
+    names_to = "metric",
+    values_to = "value"
+  )
+  
+  # ------------------------------------------------------------------------------
+  
+  output$path <-
+    renderPlot({
+      
+      tile <- bo_tile %>% filter(.iter == input$iter & metric == input$objective)
+      last_best <- bo_mtr %>% filter(.iter < input$iter) %>% slice_min(mean)
+      path <- 
+        bo_mtr %>% 
+        filter(.iter <= input$iter & .iter > 0) %>% 
+        select(cost, scale_factor, .iter) %>% 
+        bind_rows(best_init) %>% 
+        arrange(.iter)
+
+      rc_pal <- switch(
+        input$objective,
+        "objective" = "Greens",
+        ".mean" = "OrRd",
+        ".sd" = "Blues"
+      )
+      
+      hist_alpha <- 
+        case_when(
+          input$iter < 5 ~ 1/2, 
+          input$iter >= 5 & input$iter < 10 ~ 1/3,  
+          input$iter >= 10 & input$iter < 20 ~ 1/4, 
+          input$iter >= 20 & input$iter < 30 ~ 1/5, 
+          TRUE ~ 1 / 10)
+      hist_alpha <- 2 * hist_alpha
+      
+      col_dir <- if_else(input$objective == ".mean", -1, 1)
+      col_tr <- "identity"
+
+      current_plot <- 
+        initial_plot + 
+        geom_tile(data = tile, aes(fill = value), alpha = 1 / 2) +
+        geom_line(
+          data = regular_mtr %>% slice_min(mean, n = 18),
+          stat = "smooth",
+          col = "black",
+          method = lm,
+          se = FALSE,
+          formula = y ~ x,
+          alpha = 1 / 4,
+          linewidth = 2
+        ) +
+        geom_path(data = path, col = "black", alpha = hist_alpha, lty = 3) +
+        geom_point(data = new_bo_points %>% filter(iter == input$iter), 
+                   col = "black", pch = 16, cex = 4) +
+        geom_point(data = last_best, cex = 4, col = "black", pch = 8) + 
+        scale_fill_distiller(palette = rc_pal, type = "seq", 
+                             direction = col_dir, transform = col_tr) +
+        theme(legend.title = element_blank(), legend.text = element_blank())
+      print(current_plot)
+      
+    }, res = 100)
+
+}
+
+app <- shinyApp(ui, server)
+app
+```
+
+:::
+
+An illustration of Bayesian optimization. The open circles represent a small initial grid. The thick diagonal grey light is a ridge where the model has the smallest RMSE. The asterisk denotes the current best candidate.
+
+:::
+
+:::
+
+::: {.column width="15%"}
+:::
+
+:::: 
+
+The complete search produced new optimal values at iterations `r bo_best_chr`. The decrease in RMSE shows few meaningful improvements among negligible decreases: `r rmse_best_chr`. The search process was able to effectively tune the SVM model and find very good parameters. 
+
+The cost of the Gaussian process fit does become more expensive as new candidates are sampled, making the process somewhat less efficient than the previous approaches. The average time to compute each candidate was `r prettyunits::pretty_sec((initial_time[3] + bo_time[3])/nrow(bo_mtr))`, although the cost of each increases with iterations. 
+
+## Example: Tuning a Neural Network {#sec-bayes-opt-nnet}
+
+We revisit the barley data, where the percentage of barley oil in a mixture is estimated using spectrographic measurements. Our previous work on these data  addressed the high correlation between predictors via feature engineering with principal components. 
+
+In this chapter, we’ll take a more sophisticated approach to preprocessing this type of data using signal processing techniques, specifically the **Savitzky-Golay** (SG) method [@Schafer2011;@rinnan2009review]. This technique incorporates two main goals: to smooth the data from location to location (i.e., across the x-axis in @fig-barley-data(b)) and to difference the data. Smoothing attempts to reduce measurement noise without diminishing the data patterns that could predict the outcome. Differencing can remove the correlation between locations and might also mitigate other issues, such as systematic background noise. 
+
+For smoothing, the SG procedure uses a moving window across a sample’s location and, within each window, uses a polynomial basis expansion to produce a smoother representation of the data. The window width and the polynomial degree are both tuning parameters. 
+
+Differencing has a single tuning parameter: the difference order. A zero-order difference leaves the data as-is (after smoothing). A first-order difference is the smoothed value minus the smoothed value for the next location (and so on). Savitzky and Golay's method uses the polynomial estimates to estimate the differences/derivatives, instead of manually subtracting columns after smoothing. 
+
+@fig-savitzky-golay shows an example of a small set of locations from a single spectra in @fig-barley-data. The top row shows the effect of smoothing when differencing is not used. For a linear smoother (i.e., a polynomial degree of one), the process can over-smooth the data such that the nonlinear portions of the raw data lose significant amounts of information. This issue goes away as the polynomial order is increased. However, the higher degree polynomial nearly interpolates between data points and may not be smoothing the data in any meaningful way. 
+
+The bottom panel shows the data when a first-order difference is used. The pattern is completely different since the data now represent the rate of change in the outcome rather than the absolute measurement. Again, larger window sizes oversmooth the data, and the highest degree of polynomial provides minimal smoothing. 
+
+```{r}
+#| label: fig-savitzky-golay
+#| echo: false
+#| fig-width: 8.5
+#| fig-height: 6
+#| out-width: 100%
+#| warning: false
+#| fig-cap: "Demonstrations of the Savitzky-Golay preprocessing method for a small region for one specific sample previously shown in @fig-barley-data."
+#| fig-altalt: "Six panel figure showing Savitzky-Golay smoothing analysis of spectral data. Top row displays original values with fitted curves for polynomial degrees 1, 2, and 5 (windows: 3, 7, 11). Bottom row shows corresponding first differences. Each panel plots wavelength against signal intensity, demonstrating increasing smoothing complexity across polynomial degrees."
+
+load("../RData/savitzky_golay_demo.RData")
+
+smoothed_p <-
+  smoothed_plot_data %>%
+  mutate(.location = .location + (`window size`/2) - 1/2) %>%
+  ggplot(aes(.location, .measure)) +
+  geom_point(data = raw_plot_data, cex = 1/2) +
+  geom_path(aes(col = window), alpha = 3 / 4) +
+  facet_wrap(~ `polynomial degree`, labeller = label_both) +
+  lims(y = c(0.595, 0.606), x = c(505, 544)) +
+  labs(y = "Original Value", x = NULL) +
+  theme(legend.position = "top")
+
+diff_p <- diff_plot_data %>%
+  mutate(.location = .location + (`window size`/2)) %>%
+  ggplot(aes(.location, .measure)) +
+  geom_hline(yintercept = 0, lty = 2, alpha = 1 / 2) +
+  geom_point(data = raw_diff_plot_data, cex = 1/2) +
+  geom_path(aes(col = window), alpha = 3 / 4) +
+  facet_wrap(~ `polynomial degree`, labeller = label_both) +
+  lims(y = c(-0.0012, 0.0014), x = c(505, 544)) +
+  labs(y = "1st Difference", x = "Wavelength (nm)") +
+  theme(legend.position = "none")
+
+smoothed_p / diff_p
+```
+
+We’ll want to optimize these preprocessing parameters simultaneously with the parameters for the supervised model. With this example, the supervised model of choice is a neural network with a single layer of hidden units. We’ll tune over the following parameters, described at length in @sec-cls-nnet:
+
+```{r}
+#| label: collect-iterative
+#| include: false
+load("../RData/barley_iterative.RData")
+
+iters <- max(mlp_sfd_bo_ci$.iter)
+rmse_rng <- extendrange(c(mlp_sfd_bo_ci$.lower, mlp_sfd_bo_ci$.upper, 
+                          mlp_sfd_sa_ci$.lower, mlp_sfd_sa_ci$.upper))
+
+init_rng <- paste0(round(range(mlp_sfd_bo_ci$.estimate[mlp_sfd_bo_ci$.iter == 0]), 1), "%")
+init_rng <- cli::format_inline("{init_rng}")
+
+mlp_sfd_bo_best_ci <- 
+  mlp_sfd_bo_ci %>% 
+  filter(.iter == max(mlp_sfd_bo_best))
+
+mlp_sfd_bo_ci$is_best <- "no"
+mlp_sfd_bo_ci$is_best[mlp_sfd_bo_ci$.iter %in% mlp_sfd_bo_best] <- "yes"
+
+mlp_sfd_bo_ci <- mlp_sfd_bo_ci %>% arrange(.iter)
+
+bo_best_iter <- bo_best <- Inf
+
+for (i in 1:nrow(mlp_sfd_bo_ci)) {
+  if (mlp_sfd_bo_ci$.estimate[i] < bo_best) {
+    bo_best <- mlp_sfd_bo_ci$.estimate[i]
+    bo_best_iter <- c(bo_best_iter, mlp_sfd_bo_ci$.iter[i])
+  }
+}
+bo_best_iter <- bo_best_iter[bo_best_iter > 0 & is.finite(bo_best_iter)]
+
+mlp_sfd_sa_best_ci <- 
+  mlp_sfd_sa_ci %>% 
+  filter(.iter == max(mlp_sfd_sa_best))
+
+mlp_sfd_sa_ci$is_best <- "no"
+mlp_sfd_sa_ci$is_best[mlp_sfd_sa_ci$.iter %in% mlp_sfd_sa_best] <- "yes"
+
+mthds <- c("Simulated Annealing", "Bayesian Optimization")
+restarts <- result_history$.iter[result_history$results == "restart from best"]
+restarts <- tibble(Method = factor("Simulated Annealing", levels = mthds), 
+                   .iter = restarts)
+sa_best <- result_history$.iter[result_history$results == "new best"]
+
+num_range <- function(x) {
+  prm <- mlp_param$object[[which(mlp_param$id == x)]]
+  rng <- prm$range
+  rng <- map(rng, format, digits = 3, big.mark = ",")
+  if (is.null(prm$trans)) {
+    trns <- ""
+  } else {
+    trns <- cli::format_inline(", in {prm$trans$name} units")
+  }
+  cli::format_inline("({rng[[1]]} to {rng[[2]]}{trns})")
+
+}
+
+init_best_ci <- 
+  mlp_sfd_bo_ci %>% 
+  filter(.iter == 0) %>% 
+  slice_min(.estimate, n = 1) %>% 
+  mutate(method = "Initial Grid") %>% 
+  select(-is_best)
+```
+
+- The number of hidden units in the layer `r num_range("hidden_units")`. 
+- The type of nonlinear function that connects the input layer and the hidden layer, called the "activation function". Possible functions are "tanh", exponential linear unit  ("ELU") functions, rectified linear unit ("ReLU") functions, and log-sigmoidal functions. 
+- The number of epochs of degraded performance before early stopping is enacted `r num_range("stop_iter")`. 
+- The total amount of penalization for the model `r num_range("penalty")`. 
+- The proportion of $L_1$ penalty (a.k.a. Lasso penalization) `r num_range("mixture")`. 
+- The initial learning rate used during gradient descent `r num_range("learn_rate")`. 
+- The "scheduling" function to adjust the learning rate over iterations: "constant", "cyclic", or "exponential decay".
+
+In all, there are `r xfun::numbers_to_words(length(mlp_param$id))` tuning parameters, two of which are qualitative. 
+
+A space-filling design with `r mlp_sfd_bo_ci %>% filter(.iter == 0) %>% nrow()` candidate points were initially processed to use as the starting point for Bayesian optimization and simulated annealing. When constructing the grid, there are two constraints on the preprocessing parameters: 
+
+ - The smoothing polynomial degree must be greater or equal to the differentiation order. 
+ - The window size must be greater than the polynomial degree.
+
+An initial grid was created without constraints, and candidates who violated these rules were eliminated. The two constraints will also be applied when simulated annealing and Bayesian optimization create new candidates. 
+
+@tbl-nnet-initial shows the settings and their corresponding validation set RMSE values, which ranged between `r init_rng`. At least two of the settings show good performance results, especially compared to the RMSE values previously achieved when embeddings and/or SVMs were used.   
+
+::: {#tbl-nnet-initial}
+
+```{r}
+#| label: tbl-nnet-initial
+#| echo: false
+mlp_sfd_bo_ci %>% 
+  filter(.iter == 0) %>% 
+  mutate(
+    `window size` = 2 * window_side + 1,
+    mixture = mixture * 100,
+    `penalty (log-10)` = log10(penalty),
+    `learn rate (log-10)` = log10(learn_rate),
+    activation = gsub("_", " ", activation),
+    rate_schedule = gsub("(decay_time)|(decay_expo)", "decay", rate_schedule)
+    ) %>% 
+  arrange(.estimate) %>% 
+  select(`RMSE (%)` = .estimate, `window size`, differentiation_order, degree,
+         hidden_units, `penalty (log-10)`, activation, `learn rate (log-10)`,
+         rate_schedule, stop_iter, mixture) %>% 
+  kable(
+    digits = 2,
+    col.names  = c(
+     "RMSE (%)", "Window", "Diff. Order", "Degree", "Units", "Penalty (log-10)", 
+     "Activation", "Learn Rate (log-10)", "Rate Schedule", "Stop Iter.", 
+     "L1 Mixture"
+    )
+  ) %>% 
+  kable_styling(bootstrap_options = "responsive", full_width = FALSE)
+```
+
+The initial set of candidates used for iterative search methods.
+ 
+:::
+
+Can we improve on these results using iterative optimization? To begin, a simulated annealing search was initialized using the best results in @tbl-nnet-initial and ran for `r iters` iterations with no early stopping. If a new globally best result was not found within eight iterations, the search restarted from the previously best candidate. `r cli::format_inline("The search was restarted {length(restarts$.iter)} time{?s} at iterations {restarts$.iter}")` and improved candidates were found at iterations `r sa_best`. The overall best candidate had an RMSE value of `r round(mlp_sfd_sa_best_ci$.estimate, 2)`%, with a 90% confidence interval of (`r round(mlp_sfd_sa_best_ci$.lower, 2)`%, `r round(mlp_sfd_sa_best_ci$.upper, 2)`%).  The improvement appears to be a legitimate improvement over the initial best configuration. The top panel of @fig-nnet-sg-iterations shows the RMSE values over iterations and @tbl-nnet-sg-best lists the best candidate value.
+
+```{r}
+#| label: fig-nnet-sg-iterations
+#| echo: false
+#| fig-width: 6
+#| fig-height: 5
+#| out-width: 70%
+#| fig-cap: "Validation set RMSE results for the optimization. The validation set RMSE is shown on the y-axis with 90% confidence intervals. Orange points indicate iterations where a new optimal value was found and vertical lines indicate where the algorithm restarted from the previous best candidate."
+#| fig-altalt: "Comparison of two optimization methods - SA (top) and BO (bottom) - showing RMSE values over 50 iterations. Both plots display RMSE (3-15 scale) vs. iteration number with error bars. Orange points mark new optimal values. Both methods show gradual error reduction, with Bayesian Optimization achieving lower and more stable RMSE values."
+#| warning: false
+
+mlp_sfd_sa_ci %>% 
+  mutate(Method = "Simulated Annealing") %>% 
+  bind_rows(
+    mlp_sfd_bo_ci %>% mutate(Method = "Bayesian Optimization")
+  ) %>% 
+  mutate(Method = factor(Method, levels = mthds)) %>% 
+  filter(.iter > 0) %>% 
+  ggplot(aes(.iter, col = is_best)) + 
+  geom_point(aes(y = .estimate), show.legend = FALSE, cex = 1 / 2) +
+  geom_errorbar(
+    aes(ymin = .lower, ymax = .upper), 
+    width = 1/2, 
+    show.legend = FALSE
+  ) +
+  geom_vline(data = restarts, aes(xintercept = .iter), col = "darkred", lty = 3) +
+  facet_wrap(~ Method, ncol = 1) +
+  labs(x = "Iteration", y = "RMSE") +
+  scale_color_manual(values = c("black", "#FF7F00"))
+```
+
+A Bayesian optimization was also used with a squared exponential kernel for the covariance function and used expected improvement to select candidates at each of the `r iters` iterations. This search found new best results at `r cli::format_inline("{length(bo_best_iter)} iteration{?s}: {bo_best_iter}")`. Like the SA search, the best RMSE was substantially different than the one found in the initial grid: `r round(mlp_sfd_bo_best_ci$.estimate, 2)`% with 90% confidence interval, (`r round(mlp_sfd_bo_best_ci$.lower, 2)`%, `r round(mlp_sfd_bo_best_ci$.upper, 2)`%). The iterations and final values also be seen in @fig-nnet-sg-iterations and @tbl-nnet-sg-best, respectively. 
+
+:::: {.columns}
+
+::: {.column width="15%"}
+:::
+
+::: {.column width="70%"}
+
+::: {#tbl-nnet-sg-best}
+
+```{r}
+#| label: tbl-nnet-sg-best
+#| echo: false
+iter_rows <- 
+  c("Differentiation Order", "Polynomial Degree", "Window Size",
+    "Hidden Units", "Activation", "Penalty (log10)", "L1 Proportion", 
+    "Learning Rate (log10)", "Rate Schedule", "Stopping Rule", "RMSE", 
+    "Conf. Int."
+    )
+
+bind_rows(init_best_ci, mlp_sfd_sa_best_ci, mlp_sfd_bo_best_ci) %>% 
+  mutate(
+    `Penalty (log10)` = log10(penalty),
+    `Learning Rate (log10)` = log10(learn_rate),
+    `Conf. Int.` = map2_chr(.lower, .upper, 
+                       ~ cli::format_inline("({round(.x, 2)}%, {round(.y, 2)}%)")),
+    RMSE = map_chr(.estimate, ~ cli::format_inline("{round(.x, 2)}%")),
+    `Window Size` = 1 + 2 * window_side,
+    across(where(is.numeric), ~ format(.x, digits = 3))
+  ) %>% 
+  select(-.metric, -.estimator, -.config, -penalty, -learn_rate, 
+         -.lower, -.upper, -.estimate, -window_side, -.iter) %>% 
+  rename(`Hidden Units` = hidden_units, Activation = activation,
+         `Stopping Rule` = stop_iter, `L1 Proportion` = mixture, 
+         `Rate Schedule` = rate_schedule, `Polynomial Degree` = degree,
+         `Differentiation Order` = differentiation_order) %>% 
+  pivot_longer(cols = c(-method), names_to = "Parameter", values_to = "Value") %>% 
+  pivot_wider(id_cols = c(Parameter), names_from = "method", values_from = "Value") %>% 
+  mutate(
+    Parameter = factor(Parameter, levels = iter_rows)
+  ) %>% 
+  arrange(Parameter) %>% 
+  kable(
+    col.names  = c(" ", "Initial Grid", "Simulated Annealing", "Bayesian Optimzation")
+  ) %>% 
+  kable_styling(bootstrap_options = "responsive", full_width = FALSE)
+
+```
+
+The best results from the initial space-filling design and the two iterative searches for a neural network using Savitzky-Golay preprocessing. 
+
+:::
+
+:::
+
+::: {.column width="15%"}
+:::
+
+:::: 
+
+Many of the parameter values for the final candidates from each search are very similar. In particular, the learning rates, regularization penalties, and SG window sizes where nearly the same. 
+
+In terms of computing time, simulated annealing took `r prettyunits::pretty_sec(mlp_sa_time[3] / iters)` on average for each candidate and compared to `r prettyunits::pretty_sec(mlp_bo_time[3] / iters)` required for BO (a `r round(mlp_bo_time[3]/mlp_sa_time[3], 1)`-fold difference). 
+
+## Summary {#sec-iterative-summary}
+
+There are several different ways to tune models sequentially. For tabular data, these approaches are rarely the only efficient method for model optimization, but they may be preferable for certain models and large data sets.  
 
 ## Chapter References {.unnumbered}
