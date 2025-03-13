@@ -18,17 +18,16 @@ library(readr)
 library(tidymodels)
 library(patchwork)
 library(kableExtra)
-library(doParallel)
+library(future)
 library(leaflet)
 
-# Also requires: 
+# Also requires:
 # for model fitting
 # viridisLite
 
 # ------------------------------------------------------------------------------
 # Set options
-cl <- makePSOCKcluster(parallel::detectCores(logical = TRUE))
-registerDoParallel(cl)
+plan("multisession")
 tidymodels_prefer()
 theme_set(theme_transparent())
 set_options()
@@ -55,12 +54,12 @@ rng_bias <- range(c(metric_data$bias, 0))
 rng_std_err <- range(metric_data$std_err, na.rm = TRUE)
 rng_std_err[1] <- 0
 
-br_lr <- 
-  stats_bootstraps %>% 
+br_lr <-
+  stats_bootstraps %>%
   filter(model == "logistic" & .metric == "brier_class" & times == 100)
 
-br_1nn <- 
-  stats_bootstraps %>% 
+br_1nn <-
+  stats_bootstraps %>%
   filter(model == "knn" & .metric == "brier_class" & times == 100)
 ```
 
@@ -81,7 +80,7 @@ Like the training and test sets, the analysis and assessment sets are mutually e
 #| label: fig-resampling-scheme
 #| echo: false
 #| out-width: 80%
-#| fig-align: "center" 
+#| fig-align: "center"
 #| fig-cap: "A general data usage scheme that includes resampling. The colors denote the data used to train the model (in tan) and the separate data sets for evaluating the model (colored periwinkle)."
 
 knitr::include_graphics("../premade/resampling.svg")
@@ -184,8 +183,8 @@ We’ve already described a validation set; it is typically created via a three-
 #| label: fig-validation
 #| echo: false
 #| out-width: 45%
-#| fig-align: "center" 
-#| fig-cap: An initial data splitting scheme that incorporates a validation set. 
+#| fig-align: "center"
+#| fig-cap: An initial data splitting scheme that incorporates a validation set.
 
 knitr::include_graphics("../premade/validation.svg")
 ```
@@ -231,7 +230,7 @@ The simulation created 500 realizations of this 200 sample training set^[The sim
 #| fig-height: 3.5
 #| fig-align: "center"
 #| out-width: "70%"
-#| fig-cap: Variance and bias statistics for simulated data using different configurations for Monte Carlo cross-validation. The range of the y-axes are common across similar plots below for different resampling techniques.  
+#| fig-cap: Variance and bias statistics for simulated data using different configurations for Monte Carlo cross-validation. The range of the y-axes are common across similar plots below for different resampling techniques.
 
 mc_bias <-
   stats_mc_cv %>%
@@ -255,7 +254,8 @@ mc_prec <-
   labs(y = "Std. Error", x = "Number of Resamples") +
   scale_color_brewer(palette = "Set1")
 
-mc_bias + mc_prec +
+mc_bias +
+  mc_prec +
   plot_layout(guides = 'collect') &
   theme(legend.position = "top")
 ```
@@ -299,18 +299,24 @@ Compared to other resampling methods, _V_-fold cross-validation generally has a 
 #| label: cv-stats
 #| include: false
 
-cv_5_bias <- 
+cv_5_bias <-
   median(
     stats_v_fold_cv$bias[
-      stats_v_fold_cv$model == "logistic" & 
-        stats_v_fold_cv$folds == " 5" & 
-        stats_v_fold_cv$.metric == "brier_class"]) * 100
-cv_10_bias <- 
+      stats_v_fold_cv$model == "logistic" &
+        stats_v_fold_cv$folds == " 5" &
+        stats_v_fold_cv$.metric == "brier_class"
+    ]
+  ) *
+  100
+cv_10_bias <-
   median(
     stats_v_fold_cv$bias[
-      stats_v_fold_cv$model == "logistic" & 
-        stats_v_fold_cv$folds == "10" & 
-        stats_v_fold_cv$.metric == "brier_class"]) * 100
+      stats_v_fold_cv$model == "logistic" &
+        stats_v_fold_cv$folds == "10" &
+        stats_v_fold_cv$.metric == "brier_class"
+    ]
+  ) *
+  100
 ```
 
 To understand the trade-off, the same simulation approach from the previous section is used. 
@@ -323,7 +329,7 @@ To understand the trade-off, the same simulation approach from the previous sect
 #| fig-height: 3.5
 #| fig-align: "center"
 #| out-width: "70%"
-#| fig-cap: Variance and bias statistics for simulated data using different configurations for $V$-fold cross-validation. 
+#| fig-cap: Variance and bias statistics for simulated data using different configurations for $V$-fold cross-validation.
 
 vfold_bias <-
   stats_v_fold_cv %>%
@@ -331,7 +337,7 @@ vfold_bias <-
   ggplot(aes(times, bias, col = folds, pch = folds)) +
   geom_point() +
   geom_line() +
-  scale_y_continuous(labels = scales::percent, limits = rng_bias)  + #
+  scale_y_continuous(labels = scales::percent, limits = rng_bias) + #
   scale_color_brewer(palette = "Dark2") +
   geom_hline(yintercept = 0, lty = 2) +
   labs(y = "Bias", x = "Number of Resamples")
@@ -344,10 +350,11 @@ vfold_prec <-
   geom_line() +
   lims(y = rng_std_err) +
   geom_hline(yintercept = 0, lty = 2) +
-  labs(y = "Std. Error", x = "Number of Resamples")  +
+  labs(y = "Std. Error", x = "Number of Resamples") +
   scale_color_brewer(palette = "Dark2")
 
-vfold_bias + vfold_prec +
+vfold_bias +
+  vfold_prec +
   plot_layout(guides = 'collect') &
   theme(legend.position = "top")
 ```
@@ -393,7 +400,7 @@ However, the precision is extremely good, even with very few resamples.
 #| fig-height: 3.5
 #| fig-align: "center"
 #| out-width: "70%"
-#| fig-cap: Variance and bias statistics for simulated data using different configurations for the bootstrap. 
+#| fig-cap: Variance and bias statistics for simulated data using different configurations for the bootstrap.
 
 bt_est <- c("standard", "bootstrap 632", "bootstrap 632+")
 
@@ -401,7 +408,7 @@ boot_bias <-
   stats_bootstraps %>%
   filter(model == sel_model & .metric == sel_metric) %>%
   rename(estimator = .estimator) %>%
-  mutate(estimator = factor(estimator, levels = bt_est)) %>% 
+  mutate(estimator = factor(estimator, levels = bt_est)) %>%
   ggplot(aes(times, bias, col = estimator, pch = estimator)) +
   geom_point() +
   geom_line() +
@@ -421,7 +428,8 @@ boot_prec <-
   geom_hline(yintercept = 0, lty = 2) +
   labs(y = "Std. Error", x = "Number of Resamples")
 
-boot_bias + boot_prec +
+boot_bias +
+  boot_prec +
   plot_layout(guides = 'collect') &
   theme(legend.position = "top")
 ```
@@ -432,27 +440,36 @@ boot_bias + boot_prec +
 #| label: bootstrap-bias
 #| include: false
 
-c_632 <-  1 - exp(-1)
+c_632 <- 1 - exp(-1)
 c_368 <- exp(-1)
 
 table_boot_632 <-
-stats_bootstraps %>%
-  filter(.metric %in% c("accuracy", "brier_class") & times == 100 &
-           .estimator == "standard") %>%
-  select(model, .metric, mean = estimate,
-         `no information rate` = permuted, truth = large_sample,
-         resubstitution = resub) %>%
+  stats_bootstraps %>%
+  filter(
+    .metric %in%
+      c("accuracy", "brier_class") &
+      times == 100 &
+      .estimator == "standard"
+  ) %>%
+  select(
+    model,
+    .metric,
+    mean = estimate,
+    `no information rate` = permuted,
+    truth = large_sample,
+    resubstitution = resub
+  ) %>%
   mutate(
     ror = (mean - resubstitution) / (`no information rate` - resubstitution),
     ror = ifelse(ror < 0, 0, ror),
     weights = c_632 / (1 - c_368 * ror),
-    `632`  =     c_632 * mean +    c_368 * resubstitution,
-    `632+` =    weights * mean + (1 - weights) * resubstitution,
+    `632` = c_632 * mean + c_368 * resubstitution,
+    `632+` = weights * mean + (1 - weights) * resubstitution,
     `(truth)` = truth,
-  )  %>%
+  ) %>%
   rename(`simple mean` = mean, `relative overfitting rate` = ror) %>%
   pivot_longer(
-    cols = c(-model,-.metric),
+    cols = c(-model, -.metric),
     names_to = "statistic",
     values_to = "value"
   ) %>%
@@ -464,46 +481,73 @@ stats_bootstraps %>%
   filter(statistic != "truth") %>%
   mutate(
     type = ifelse(grepl("632", statistic), "final estimates", "estimates"),
-    type = ifelse(statistic %in% c("relative overfitting rate", "weights", "no information rate"),
-                  "intermediates", type),
+    type = ifelse(
+      statistic %in%
+        c("relative overfitting rate", "weights", "no information rate"),
+      "intermediates",
+      type
+    ),
     blank = "   "
   ) %>%
-  select(type, statistic, accuracy_knn, accuracy_logistic, blank,
-         brier_class_knn, brier_class_logistic)
+  select(
+    type,
+    statistic,
+    accuracy_knn,
+    accuracy_logistic,
+    blank,
+    brier_class_knn,
+    brier_class_logistic
+  )
 
-Q_bt    <- br_lr$estimate[br_lr$.estimator == "standard"]
+Q_bt <- br_lr$estimate[br_lr$.estimator == "standard"]
 Q_resub <- br_lr$resub[1]
-Q_true  <- br_lr$large_sample[1]
-Q_nir   <- br_lr$permuted[1]
-Q_632   <- table_boot_632$brier_class_logistic[table_boot_632$statistic == "632"]
-Q_632p  <- table_boot_632$brier_class_logistic[table_boot_632$statistic == "632+"]
+Q_true <- br_lr$large_sample[1]
+Q_nir <- br_lr$permuted[1]
+Q_632 <- table_boot_632$brier_class_logistic[table_boot_632$statistic == "632"]
+Q_632p <- table_boot_632$brier_class_logistic[
+  table_boot_632$statistic == "632+"
+]
 
 denom <- Q_nir - Q_resub
 numer <- Q_bt - Q_resub
-ror    <- table_boot_632$brier_class_logistic[table_boot_632$statistic == "relative overfitting rate"]
-wt_632p <- table_boot_632$brier_class_logistic[table_boot_632$statistic == "weights"]
+ror <- table_boot_632$brier_class_logistic[
+  table_boot_632$statistic == "relative overfitting rate"
+]
+wt_632p <- table_boot_632$brier_class_logistic[
+  table_boot_632$statistic == "weights"
+]
 
-Q_knn_bt    <- br_1nn$estimate[br_1nn$.estimator == "standard"]
+Q_knn_bt <- br_1nn$estimate[br_1nn$.estimator == "standard"]
 Q_knn_resub <- br_1nn$resub[1]
-Q_knn_true  <- br_1nn$large_sample[1]
-Q_knn_nir   <- br_1nn$permuted[1]
-Q_knn_632   <- table_boot_632$brier_class_knn[table_boot_632$statistic == "632"]
-Q_knn_632p  <- table_boot_632$brier_class_knn[table_boot_632$statistic == "632+"]
-ror_knn    <- table_boot_632$brier_class_knn[table_boot_632$statistic == "relative overfitting rate"]
-wt_632p_knn <- table_boot_632$brier_class_knn[table_boot_632$statistic == "weights"]
+Q_knn_true <- br_1nn$large_sample[1]
+Q_knn_nir <- br_1nn$permuted[1]
+Q_knn_632 <- table_boot_632$brier_class_knn[table_boot_632$statistic == "632"]
+Q_knn_632p <- table_boot_632$brier_class_knn[table_boot_632$statistic == "632+"]
+ror_knn <- table_boot_632$brier_class_knn[
+  table_boot_632$statistic == "relative overfitting rate"
+]
+wt_632p_knn <- table_boot_632$brier_class_knn[
+  table_boot_632$statistic == "weights"
+]
 
-cv_5_bias <- 
+cv_5_bias <-
   median(
     stats_v_fold_cv$bias[
-      stats_v_fold_cv$model == "logistic" & 
-        stats_v_fold_cv$folds == " 5" & 
-        stats_v_fold_cv$.metric == "brier_class"]) * 100
-cv_10_bias <- 
+      stats_v_fold_cv$model == "logistic" &
+        stats_v_fold_cv$folds == " 5" &
+        stats_v_fold_cv$.metric == "brier_class"
+    ]
+  ) *
+  100
+cv_10_bias <-
   median(
     stats_v_fold_cv$bias[
-      stats_v_fold_cv$model == "logistic" & 
-        stats_v_fold_cv$folds == "10" & 
-        stats_v_fold_cv$.metric == "brier_class"]) * 100
+      stats_v_fold_cv$model == "logistic" &
+        stats_v_fold_cv$folds == "10" &
+        stats_v_fold_cv$.metric == "brier_class"
+    ]
+  ) *
+  100
 ```
 
 There have been some attempts to de-bias the ordinary bootstrap estimate. The "632 estimator" [@Efron1983p51] uses the ordinary bootstrap estimate ($\hat{Q}_{bt}$) and the resubstitution estimate ($\hat{Q}_{rsub}$) together: 
@@ -547,19 +591,24 @@ Plugging in our values, the final weight on the ordinary estimator ($w$ = `r sig
 
 table_boot_632_sub <-
   table_boot_632 %>%
-  select(-contains("accuracy")) %>% 
-  mutate(type = factor(type, levels = c("estimates", "intermediates", "final estimates"))) %>% 
+  select(-contains("accuracy")) %>%
+  mutate(
+    type = factor(
+      type,
+      levels = c("estimates", "intermediates", "final estimates")
+    )
+  ) %>%
   arrange(type, statistic)
 ind_est <- range(which(table_boot_632_sub$type == "estimates"))
 int_est <- range(which(table_boot_632_sub$type == "intermediates"))
 fin_est <- range(which(table_boot_632_sub$type == "final estimates"))
 
-table_boot_632_sub %>% 
-  select(statistic, brier_class_logistic, brier_class_knn) %>% 
-  kbl(digits = 3, escape = TRUE, col.names = c(" ", "Logistic", "1 NN")) %>% 
-  add_header_above(c(" " = 1, "Brier Score" = 2)) %>% 
-  pack_rows("Estimates", start_row = ind_est[1], end_row = ind_est[2]) %>% 
-  pack_rows("Intermediates", start_row = int_est[1], end_row = int_est[2]) %>% 
+table_boot_632_sub %>%
+  select(statistic, brier_class_logistic, brier_class_knn) %>%
+  kbl(digits = 3, escape = TRUE, col.names = c(" ", "Logistic", "1 NN")) %>%
+  add_header_above(c(" " = 1, "Brier Score" = 2)) %>%
+  pack_rows("Estimates", start_row = ind_est[1], end_row = ind_est[2]) %>%
+  pack_rows("Intermediates", start_row = int_est[1], end_row = int_est[2]) %>%
   pack_rows("Final Estimates", start_row = fin_est[1], end_row = fin_est[2])
 ```
 
@@ -632,16 +681,16 @@ Going back to our forestry data, we previously used hexagonal blocks to split th
 ```{r}
 #| label: fig-forested-blockcv
 #| echo: false
-#| fig-cap: An example of one split produced by block cross-validation on the forestation data. The analysis (magenta) and assessment (purple) sets are shown with locations in the buffer in black. The empty spaces represent the data reserved for the test set (see @fig-forested-split). 
+#| fig-cap: An example of one split produced by block cross-validation on the forestation data. The analysis (magenta) and assessment (purple) sets are shown with locations in the buffer in black. The empty spaces represent the data reserved for the test set (see @fig-forested-split).
 
 leaflet() %>%
   addProviderTiles(providers$CartoDB.PositronNoLabels) %>%
   addCircles(
     data = forested_cv_split_info,
-    lng = ~ longitude,
-    lat = ~ latitude,
-    color = ~ group_col,
-    fillColor = ~ group_col,
+    lng = ~longitude,
+    lat = ~latitude,
+    color = ~group_col,
+    fillColor = ~group_col,
     fill = TRUE,
     opacity = .01,
     fillOpacity = 3 / 4,
@@ -730,12 +779,5 @@ No. These are techniques to modify your training set (or analysis set) to rebala
 As discussed in @sec-deep-learning, stereotypical deep learning models are trained on _very_ large sets of data. There is very little reason to use multiple resamples in these instances, and deep learning takes up a lot of space in the media and social media. 
 
 Generally, every data set that is not massive could benefit from multiple resamples. 
-
-```{r}
-#| label: teardown-cluster
-#| include: false
-
-stopCluster(cl)
-```
 
 ## Chapter References {.unnumbered}
