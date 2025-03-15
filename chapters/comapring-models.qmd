@@ -140,6 +140,37 @@ bootstrapped_metrics %>%
 ```
 The bootstrap was previously used to generate confidence intervals in Figures [-@fig-delivery-increases], [-@fig-barley-linear-bakeoff], and [-@fig-delivery-items].
 
+## How Bad Could It Be?
+
+As we'll see in @sec-cls-metrics and @sec-reg-metrics, there are times when we lack intuition on the values of a metric that indicates that the process of training a model is going wrong. For example, we've used the MAE in @sec-model-development-whole-game to measure how well we can predict delivery times. It is not obvious what a bad value of this statistic would be, and since it is in the units of the outcome data, the range of values will change from application to application. 
+
+One solution to this issue is to use permutations of the data. We can create a permutation of a data set by randomly shuffling the values of one or more columns. This should break any relationships between the permuted column and the others. However, with random numbers, we might get a "bad shuffle" of the data that doesn't wholly obviate the relationship. For this reason, we usually use multiple permutations.
+
+To quantify what it means for a model to perform poorly, we can permute the outcome data and then calculate our metric(s) of interest. After doing this multiple times, the average of these replicates estimates the metric value when there is no relationship between the predictions and the outcome. We've seen this before in @sec-bootstrap, where we computed the no-information rate (NIR) to correct the bootstrap bias. 
+
+```{r}
+#| label: perm-lin-reg
+#| include: false
+
+lin_reg_pred <- 
+  lin_reg_res %>%
+  collect_predictions()
+
+set.seed(579)
+lin_reg_perm <- 
+  lin_reg_res %>%
+  collect_predictions() %>%
+  permutations(time_to_delivery, times = 100) %>%
+  mutate(
+    dat = map(splits, analysis),
+    mae = map_dbl(dat, ~ mae(.x, time_to_delivery, .pred)$.estimate)
+  )
+lin_reg_perm <- mean(lin_reg_perm$mae)
+lin_reg_orig <- select_best(lin_reg_res, metric = "mae")$mean
+```
+
+For example, let's take the validation set results from our linear regression model on the delivery times. The observed MAE for the model was `r signif(show_best(lin_reg_res, metric = "mae")$mean, 3)` minutes. Using 100 permutations of the data, the worst-case result should be about `r signif(lin_reg_perm, 3)` minutes. Knowing this value helps put the differences in models in a new perspective.
+
 ## Resampling Data
 
 When models are resampled, the process offers a small but rich data set that can be used as a substrate for statistical analysis. We’ve seen this in the context of racing in @sec-racing already; the resampled performance statistics were analyzed to determine which (if any) should be discarded from consideration. 
@@ -463,10 +494,4 @@ p_brier + p_rope
 
 ## Chapter References {.unnumbered}
 
-```{r}
-#| label: teardown-cluster
-#| include: false
-
-stopCluster(cl)
-```
 
