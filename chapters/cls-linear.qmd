@@ -1,0 +1,197 @@
+---
+knitr:
+  opts_chunk:
+    cache.path: "../_cache/cls-linear/"
+---
+
+# Linear and Additive Classifiers {#sec-cls-linear}
+
+```{r}
+#| label: cls-linear-setup
+#| include: false
+source("../R/_common.R")
+
+# ------------------------------------------------------------------------------
+
+library(patchwork)
+library(tidymodels)
+library(hstats)
+library(bonsai)
+
+# ------------------------------------------------------------------------------
+# Set options
+
+tidymodels_prefer()
+theme_set(theme_transparent())
+set_options()
+
+# ------------------------------------------------------------------------------
+# Load data
+
+load("../RData/forested_data.RData")
+```
+
+
+## Exploring Forestation Data
+
+previous discussions of data
+
+goals
+
+predictors, outcome, data splitting etc. 
+
+Non-spatial models being used; talk about data collection scheme to reduce autocorrelation
+
+Before embarking on model development, let’s take some time to understand the training data. A few questions that we might investigate: 
+
+1. Are the distributions for each predictor unorthodox in any way? 
+2. Are there correlations between predictors? Are they large? 
+3. For each predictor, does the relationship with the outcome appear linear, nonlinear, or nonexistent? 
+4. Can we detect any interactions? 
+5. Are there any missing data, and if so, do the mechanisms appear to be informative or random?
+
+For Question 5, there are no missing data in the training or testing sets. 
+
+Question 2 was addressed in @sec-unsupervised-selection. In particular, there are some clusters of highly correlated predictors (see @fig-corr-plot). We’ll address this issue shortly when discussing logistic regression. 
+
+```{r}
+#| label: long-forest
+#| include: false
+
+long_forest <- 
+  forested_train %>% 
+  pivot_longer(cols = c(-class), names_to = "predictor", values_to = "value")
+
+num_pred <- ncol(forested_train) - 1
+```
+
+For Question 1, looking at the data’s histograms can be very helpful. @fig-forest-histograms shows each predictor’s training data. Three temperature predictors (annual maximum, annual mean, and January minimum) show moderate left skew, and two others appear to have bimodal distributions (annual minimum and dew temperature). A handful of training set locations have outliers with very low temperatures (in several dimensions). We may want to convert the skewed predictors to more symmetric representations so that those few outliers do not inappropriately influence the model fit. 
+
+```{r}
+#| label: fig-forest-hist
+#| out-width: 80%
+#| fig-cap: "Histograms of the predictors in the forestation training set."
+#| fig-height: 6
+#| fig-width: 9
+#| message: false
+#| warning: false
+
+long_forest %>% 
+  ggplot(aes(value)) + 
+  geom_histogram(bins = 20, col = "white") + 
+  facet_wrap(~ predictor, scales = "free_x", ncol = 5) +
+  labs(x = "Predictor Value")
+```
+
+Precipitation, elevation, and roughness are somewhat right-skewed. A few others have relatively flat distributions, and two (eastness and northness) are _bathtub-shaped_ with peaks at the two extremes and decreased frequency in the middle of the distributions. 
+
+For Question 3, one way to assess the relationship with a binary outcome is to temporarily group the predictors by percentiles and see how the event rate changes over the predictors’ distributions. @fig-forest-trends shows these profiles for each predictor, the blue areas denoting 90% confidence intervals on the forestation rates. Most predictors show nonlinear trends with the forestation rate^[We’ll reconsider this plot again when we discuss logistic regression.]. Only year, eastness, and northness show flat trends, implying no univariate relationship to the rate. If we use a linear model, we should consider splines or some other mechanism to capture nonlinear trends. 
+
+```{r}
+#| label: fig-forest-trends
+#| out-width: 80%
+#| fig-cap: "Assessments of the relationships between individual predictors and the event rate."
+#| fig-height: 6
+#| fig-width: 9
+#| message: false
+#| warning: false
+
+num_unique <- 
+  long_forest %>% 
+  summarize(
+    num_vals = min(21, vctrs::vec_unique_count(value)), 
+    .by = c(predictor)
+  )
+
+percentiles <- 
+  long_forest %>% 
+  full_join(num_unique, by = "predictor") %>% 
+  group_nest(predictor, num_vals) %>% 
+  mutate(
+    pctl = map2(data, num_vals, 
+                ~ tibble(group = ntile(.x$value, n = .y), class = .x$class))
+  ) %>% 
+  select(-data) %>% 
+  unnest(c(pctl)) %>% 
+  mutate(pctl = (group - 1) / num_vals * 100) %>% 
+  summarize(
+    events = sum(class == "Yes"), 
+    total = length(class),
+    .by = c(predictor, pctl)
+  ) %>% 
+  mutate(
+    prop_obj = map2(events, total, ~ tidy(binom.test(.x, .y, conf.level = 0.9)))
+  ) %>% 
+  select(-events, -total) %>% 
+  unnest(c(prop_obj))
+
+percentiles %>% 
+#   mutate(
+#     estimate = binomial()$linkfun(estimate),
+#     conf.low = binomial()$linkfun(conf.low),
+#     conf.high = binomial()$linkfun(conf.high),
+#   ) %>% 
+  ggplot(aes(pctl, estimate)) + 
+  geom_line() + 
+  geom_ribbon(aes(ymin = conf.low, ymax = conf.high), alpha = 1 / 5, fill = "blue") + 
+  facet_wrap(~ predictor, ncol = 5) + 
+  labs(x = "Percentile", y = "Rate of Forestation") 
+```
+
+
+Are there interactions? To answer Question 4, we can use the H-statistic from @sec-interactions-detection. We’ll need to fit a model that can automatically estimate interactions between predictors to get started. We’ll use a boosted classification tree (see @sec-cls-boosting) for more details. This tree-based ensemble was trained on the entire training set, and the partial dependence profiles were computed using random selections of 1,000 training set points. The results are a set of statistics that capture the likelihood of all possible `r choose(num_pred, 2)` two-way interactions. @fig-forest-int shows the top 20 interaction pairs. TODO MORE HERE. 
+
+```{r}
+#| label: forest-int-calc
+#| include: false
+#| cache: true
+set.seed(905)
+bst_fit <-
+  boost_tree(mode = "classification", trees = 1000, stop_iter = 5) |>
+  set_engine("lightgbm") |>
+  fit(class ~ ., data = forested_train)
+ 
+set.seed(494)
+bst_hstats <-
+  hstats(bst_fit,
+         X = forested_train %>% dplyr::select(-class),
+         pairwise_m = 50,
+         approx = TRUE,
+         n_max = 500,
+         verbose = FALSE)
+bst_two_way_int_obj <- h2_pairwise(bst_hstats, zero = TRUE)
+
+int_vars <-
+  strsplit(rownames(bst_two_way_int_obj), ":") %>%
+  map(sort) %>%
+  map(~gsub("_0", " ", .x)) %>%
+  map(~gsub("_", " ", .x)) %>%
+  map_chr( ~ paste(.x[1], "x", .x[2]))
+
+# all choose(15, 2)
+bst_two_way_int <-
+  tibble(terms = int_vars, effect = bst_two_way_int_obj$M[, 1]) %>%
+  mutate(
+    terms = factor(terms),
+    terms = reorder(terms, effect)
+  ) %>% 
+  slice_max(effect, n = 20)
+
+```
+
+```{r}
+#| label: fig-forest-int
+#| out-width: 80%
+#| fig-cap: "H-statistics for the top 20 potential interactions."
+#| fig-height: 4
+#| fig-width: 7
+#| message: false
+#| warning: false
+bst_two_way_int %>% 
+  ggplot(aes(effect, terms)) + 
+  geom_bar(stat = "identity") +
+  labs(y = NULL, x = "Proportion of Joint Effect Variability")
+```
+
+
+
