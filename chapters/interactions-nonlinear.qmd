@@ -25,7 +25,7 @@ library(aorsf)
 library(patchwork)
 library(probably)
 library(foreach)
-library(doParallel)
+library(future)
 library(aspline)
 
 # ------------------------------------------------------------------------------
@@ -33,8 +33,7 @@ library(aspline)
 
 tidymodels_prefer()
 theme_set(theme_transparent())
-cl <- makePSOCKcluster(parallel::detectCores(logical = TRUE))
-registerDoParallel(cl)
+plan("multisession")
 
 set_options()
 
@@ -778,7 +777,7 @@ Other alternatives can be found in @hooker2004discovering, @herbinger2022repid, 
 
 The two PDP approaches we have described apply to any model capable of estimating interactions. There are also model-specific procedures for describing which joint effects are driving the model (if any). One method useful for tree-based models is understanding if two predictors are used in consecutive splits in the data. For example, @fig-reg-tree showed a shallow regression tree for the delivery time data. The terminal nodes had splits with orderings $\text{hour}\rightarrow\text{hour}$ and $\text{hour}\rightarrow\text{day} \rightarrow\text{distance}$ (twice). This implies that these three predictors have a higher potential to be involved in interactions with one another. 
 
-@kapelner2013bartmachine describe an algorithm that counts how many times pairs of variables are used in consecutive splits in a tree. They demonstrate this process with Bayesian Adaptive Regression Trees (BART, Section TODO) which creates an ensemble of fairly shallow trees. @fig-bart-interaction shows the top ten pairwise interactions produced using this technique. Note that the BART implementation split categorical predictors via single categories. For the delivery data, this means that the tree would split on a specific day of the week (.i.e., Friday or not) instead of splitting all of the categories at once. This makes a comparison between the other two methods difficult. However, it can be seen that the hour $\times$ day interaction has shown to be very important in all three methods. 
+@kapelner2013bartmachine describe an algorithm that counts how many times pairs of variables are used in consecutive splits in a tree. They demonstrate this process with Bayesian Adaptive Regression Trees (BART, @sec-bart-cls) which creates an ensemble of fairly shallow trees. @fig-bart-interaction shows the top ten pairwise interactions produced using this technique. Note that the BART implementation split categorical predictors via single categories. For the delivery data, this means that the tree would split on a specific day of the week (.i.e., Friday or not) instead of splitting all of the categories at once. This makes a comparison between the other two methods difficult. However, it can be seen that the hour $\times$ day interaction has shown to be very important in all three methods. 
 
 ```{r}
 #| label: fig-bart-interaction
@@ -796,7 +795,7 @@ bart_interaction_res %>%
   labs(y = NULL, x = "Average Count of Splits with Both Variables")
 ```
 
-Caution should be exercised with this method. First, some tree ensembles randomly sample a subset of predictors for each split (commonly known as $m_{try}$). For example, if $m_{try} = 4$, a random set of four predictors are the only ones considered for that split point. This deliberately coerces non-informative splits; we are not using the best possible predictors in a split. This can dilute the effectiveness of counting predictors in successive splits. Second, as discussed in @sec-classification-trees, many tree-based splitting procedures disadvantage predictors with fewer unique values. For example, in the delivery data, the distance and hour predictors are more likely to be chosen for splitting than the item predictors _even if they are equally informative_.  There are splitting procedures that correct for this bias, but users should be aware of the potential impartiality. 
+Caution should be exercised with this method. First, some tree ensembles randomly sample a subset of predictors for each split (commonly known as $m_{try}$). For example, if $m_{try} = 4$, a random set of four predictors are the only ones considered for that split point. This deliberately coerces non-informative splits; we are not using the best possible predictors in a split. This can dilute the effectiveness of counting predictors in successive splits. Second, as discussed in @sec-cls-trees, many tree-based splitting procedures disadvantage predictors with fewer unique values. For example, in the delivery data, the distance and hour predictors are more likely to be chosen for splitting than the item predictors _even if they are equally informative_.  There are splitting procedures that correct for this bias, but users should be aware of the potential impartiality. 
 
 The H-statistic and its alternatives can be an incredibly valuable tool for learning about the data early on as well as suggesting new features that should be included in the model. They are, however, computationally expensive. 
 
@@ -1718,7 +1717,7 @@ Given the simplicity of this spline function, the fixed polynomial degree, and i
 
 Splines can be configured in different ways. Two details to specify are how many regions should be separately modeled and how they are apportioned. The number of regions is related to how many features are used in the basis expansion. As the number of regions increases, so does the ability of the spline to adapt to whatever trend might be in the data. However, the risk of overfitting the model to individual data points increases as the flexibility increases.
 
-For this reason, we often tune the amount of complexity that the spline will accommodate. Generally, since the number of regions is related to the number of features, we'll refer to the complexity of the basis function via the number of degrees of freedom afforded by the spline. We don't necessarily know how many degrees of freedom to use. There are two ways to determine this. First, we can treat the complexity of the spline as a tuning parameter and optimize it with the tuning methods mentioned in Chapters [-@sec-grid] and [-@sec-iterative]. Another option is to over-specify the number of degrees of freedom and let specialized training methods solve the potential issue of over-fitting. From @wood2006generalized: 
+For this reason, we often tune the amount of complexity that the spline will accommodate. Generally, since the number of regions is related to the number of features, we'll refer to the complexity of the basis function via the number of degrees of freedom afforded by the spline. We don't necessarily know how many degrees of freedom to use. There are two ways to determine this. First, we can treat the complexity of the spline as a tuning parameter and optimize it with the tuning methods mentioned in Chapters [-@sec-grid-search] and [-@sec-iterative-search]. Another option is to over-specify the number of degrees of freedom and let specialized training methods solve the potential issue of over-fitting. From @wood2006generalized: 
 
 > An alternative to controlling smoothness by altering the basis dimension, is to keep the basis dimension fixed, at a size a little larger than it is believed it could reasonably be necessary, but to control the model’s smoothness by adding a "wiggliness" penalty to the least squares fitting objective. 
 
@@ -2151,9 +2150,3 @@ Again, we want to emphasize that arbitrary or subjective discretization is almos
 
 ## Chapter References {.unnumbered}
 
-```{r}
-#| label: teardown-cluster
-#| include: false
-
-stopCluster(cl)
-```
