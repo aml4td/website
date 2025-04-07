@@ -65,7 +65,7 @@ ctrl_grid <-
     save_workflow = TRUE,
     extract = get_iters
   )
-reg_metrics <- metric_set(mae, rmse, rsq)
+reg_metrics <- metric_set(mae)
 
 delivery_folds <- vfold_cv(delivery_train, v = 10)
 
@@ -206,15 +206,12 @@ In this equation $\mu_{\cdot\cdot}$ is the overall average model performance acr
 for_fig <-
   bind_rows(
     rf_metrics %>%
-      dplyr::filter(.metric == "mae") %>%
       dplyr::select(id, .estimate) %>%
       mutate(Model = "Random Forest"),
     cb_metrics %>%
-      dplyr::filter(.metric == "mae") %>%
       dplyr::select(id, .estimate) %>%
       mutate(Model = "Cubist"),
     nnet_metrics %>%
-      dplyr::filter(.metric == "mae") %>%
       dplyr::select(id, .estimate) %>%
       mutate(Model = "Neural Network")
   ) %>%
@@ -276,7 +273,7 @@ grand_mean_segment <-
 
 error_segment <-
   tibble(
-    Model = 0.9,
+    Model = 0.84,
     y_begin = model_means %>%
       dplyr::filter(Model == "Random Forest") %>%
       dplyr::select(MAE) %>%
@@ -327,7 +324,7 @@ ggplot(for_fig, aes(x = Model, y = MAE)) +
     shape = 1,
     size = 5
   ) +
-  geom_hline(yintercept = grand_mean, linetype = 2, color = "black") +
+  geom_hline(yintercept = grand_mean, linetype = 3, color = "black") +
   geom_point(
     data = model_means,
     aes(x = Model, y = MAE),
@@ -550,29 +547,42 @@ Now, let's compare how these methods perform when evaluating each pair of models
 #| tbl-cap: "Pairwise comparisons among the three models for predicting delivery times.  The table includes the estimated difference in MAE, standard error, degrees of freedom, the raw unadjusted p-value, and the corrseponding Tukey and FDR adjusted p-values."
 
 #Pairwise comparison adjustments
-one_way_model_with_blocks_em <- emmeans(
-  one_way_model_with_blocks,
-  "Model",
-  data = for_fig
-)
-unadjusted_pairs <- data.frame(pairs(
-  one_way_model_with_blocks_em,
-  adjust = "none"
-))
-tukey_pairs <- data.frame(pairs(one_way_model_with_blocks_em, adjust = "tukey"))
-fdr_pairs <- data.frame(pairs(one_way_model_with_blocks_em, adjust = "fdr"))
+one_way_model_with_blocks_em <- 
+  emmeans(one_way_model_with_blocks, specs = "Model", data = for_fig)
 
-pairwise_comparison_table <-
+
+unadjusted_pairs <- 
+  one_way_model_with_blocks_em %>% 
+  pairs(adjust = "none") %>% 
+  tidy()
+
+tukey_pairs <-
+  one_way_model_with_blocks_em %>% 
+  pairs(adjust = "tukey") %>% 
+  tidy()
+
+fdr_pairs <- 
+  one_way_model_with_blocks_em %>% 
+  pairs(adjust = "fdr") %>% 
+  tidy()
+
+large_exp_diff <- 
+  unadjusted_pairs %>% 
+  slice_max(estimate, n = 1) %>% 
+  mutate(max_diff = round(60 * estimate), 0)
+  
+unadjusted_pairs %>%
+  select(
+    Comparison = contrast,
+    Estimate = estimate,
+    SE = std.error,
+    df,
+    Unadjusted = p.value
+  ) %>% 
   bind_cols(
-    unadjusted_pairs %>%
-      dplyr::select(contrast, estimate, SE, df, p.value) %>%
-      rename(Unadjusted = p.value),
-    tukey_pairs %>% dplyr::select(p.value) %>% rename(Tukey = p.value),
-    fdr_pairs %>% dplyr::select(p.value) %>% rename(`FDR` = p.value)
+    tukey_pairs %>% select(Tukey = adj.p.value),
+    fdr_pairs %>% select(FDR = adj.p.value)
   ) %>%
-  rename(Comparison = contrast, Estimate = estimate, DF = df)
-
-pairwise_comparison_table %>%
   gt() %>%
   cols_align(
     align = "center"
@@ -591,7 +601,7 @@ pairwise_comparison_table %>%
   tab_options(table.width = pct(100))
 ```
 
-Although each pairwise difference is statistically significant, the largest difference (`r round(60*unadjusted_pairs$estimate[which(unadjusted_pairs$estimate == max(unadjusted_pairs$estimate))],0)` seconds) is between the random forest and Cubist models. However, this difference is likely not practically meaningful, suggesting that either model would be a suitable choice.
+Although each pairwise difference is statistically significant, the largest difference (`r  large_exp_diff$max_diff`s) is between the random forest and Cubist models. However, this difference is likely not practically meaningful, suggesting that either model would be a suitable choice.
 
 #### Comparing Performance using Equivalence Tests {#sec-equivalence-tests}
 
@@ -644,7 +654,7 @@ Schuirmann showed that the two one-sided hypotheses can be practically evaluated
 
 Selecting an appropriate margin of indifference is crucial and should be determined prior to conducting the statistical test.  What value should we choose?  The answer to this question is problem specific and depends on what we believe makes a practical difference in performance.
 
-From the previous section we saw that the largest expected difference between any pair of models was `r round(60*unadjusted_pairs$estimate[which(unadjusted_pairs$estimate == max(unadjusted_pairs$estimate))],0)` seconds.  For the sake of this illustration, let's suppose that the margin of practical indifference between models is at least 5 seconds.  This means that two models will be considered practically equivalent if the MAE is for delivery times are within $\pm$ `r round(5/60, 2)`.  
+From the previous section we saw that the largest expected difference between any pair of models was `r large_exp_diff$exp_diff`s.  For the sake of this illustration, let's suppose that the margin of practical indifference between models is at least 5 seconds.  This means that two models will be considered practically equivalent if the MAE is for delivery times are within $\pm$ `r round(5/60, 2)`.  
 
 To perform the equivalence tests, we use the same ANOVA model for when testing for differences in @eq-one-way-model-with-blocks and estimate the 90% confidence intervals about each pairwise difference.  Because we are making multiple pairwise comparisons, the intervals need to be adjusted to minimize the chance of making a false positive finding.  This adjustment can be done using either the Tukey or FDR procedures.
 
@@ -659,20 +669,27 @@ To perform the equivalence tests, we use the same ANOVA model for when testing f
 #| out-width: "70%"
 #| fig-cap: Pairwise comparisons of models using equivalence testing.  The Tukey adjusted 90% confidence interval of each pairwise difference is illustrated with vertical bands.  For these comparisons, the margin of practical equivalence was set to $\pm$ 5 seconds (MAE = $\pm$ 0.08).
 
-one_way_model_with_blocks_em <- emmeans(one_way_model_with_blocks, "Model", data=for_fig)
-pairwise_comparisons <- pairs(one_way_model_with_blocks_em, adjust='tukey')
-conf_int <- 
-  tibble(confint(pairwise_comparisons, adjust = "tukey", level=0.90)) %>%
-  mutate(contrast = factor(contrast, levels=c("Random Forest - Neural Network",
-                                              "Random Forest - Cubist",
-                                              "Neural Network - Cubist")))
-
-ggplot(conf_int, aes(x=contrast, y=estimate)) +
-  geom_point(size=2, color="black") +
-  geom_segment(aes(x=contrast, y=lower.CL, xend=contrast, yend=upper.CL)) +
-  geom_hline(yintercept=c(-0.08,0.08), linetype=2, color="black") +
-  xlab("Comparison") +
-  ylab("MAE Difference")
+one_way_model_with_blocks %>% 
+  emmeans(specs = "Model", data = for_fig) %>% 
+  pairs(adjust = 'tukey') %>% 
+  confint(level = 0.90) %>%
+  mutate(
+    contrast = factor(
+      contrast,
+      levels = c(
+        "Random Forest - Neural Network",
+        "Random Forest - Cubist",
+        "Neural Network - Cubist"
+      )
+    )
+  ) %>% 
+  ggplot(aes(x = contrast, y = estimate)) +
+  geom_point(size = 2) +
+  geom_errorbar(
+    aes(ymin = lower.CL, ymax = upper.CL), width = 1 / 8
+  ) +
+  geom_hline(yintercept = c(-0.08, 0.08), linetype = 2) +
+  labs(x = NULL, y = "MAE Difference")
 ```
 
 ### Comparisons Using Bayesian Models {#sec-compare-resample-bayes}
