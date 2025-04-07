@@ -288,7 +288,7 @@ r_comp <- function(stub) {
 # formatting data
 
 pval <- function(x, format = "html", max_zeros = 4) {
-  browser()
+
   min_log <- floor(-log10(x))
   if (min_log < max_zeros) {
     res <- format(x, digits = 3, scientific = FALSE)
