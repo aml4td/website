@@ -18,7 +18,7 @@ library(readr)
 library(tidymodels)
 library(patchwork)
 library(kableExtra)
-library(doParallel)
+library(future)
 library(leaflet)
 library(ragg)
 library(bestNormalize)
@@ -28,15 +28,13 @@ library(gt)
 library(emmeans)
 library(tidyposterior)
 
-
 # Also requires: 
 # for model fitting
 # viridisLite
 
 # ------------------------------------------------------------------------------
 # Set options
-cl <- makePSOCKcluster(parallel::detectCores(logical = TRUE))
-registerDoParallel(cl)
+plan("multisession")
 tidymodels_prefer()
 theme_set(theme_transparent())
 set_options()
@@ -162,7 +160,6 @@ nnet_res <-
 nnet_metrics <- collect_metrics(nnet_res, summarize = FALSE)
 ```
 
-
 In chapters @sec-overfitting, @sec-resampling, and @sec-grid, we established several key fundamentals of building predictive models. To create an effective model, we must employ strategies to reduce overfitting, use resampling techniques to accurately measure predictive performance, and systematically search a tuning parameter space to identify values that optimize model accuracy. By following these approaches, we can have confidence that our model generalizes well to new, unseen data and provides a realistic estimate of its predictive performance.
 
 With this foundation in place, the next step is to select the best model for a given data set.  When presented with new data, we typically evaluate multiple machine learning models, each with different sets of tuning parameters. Our goal is to select the model and parameter combination that yields the best predictive performance. But how do we determine which model and corresponding parameters are truly the best?
@@ -177,9 +174,9 @@ In the first part of this chapter, we will focus on methods for evaluating model
 
 Once a final model is selected, we often want to assess its predictive performance on an independent holdout or validation set. In this setting, we no longer benefit from the distributional insight offered by repeated resampling. Therefore, in the final part of the chapter, we will present methods for evaluating model performance when only a single evaluation data set is available.
 
-## Resampled Data Sets
+## Resampled Data Sets {#sec-compare-resamples}
 
-### Statistical Foundations
+### Statistical Foundations {#sec-stats}
 
 Regardless of whether we take a frequentist or Bayesian approach to comparing model performance, both methods aim to identify key factors that influence the outcome. The chosen approach is then applied to the data to quantify the impact of these factors. Specifically, we seek to determine whether their effect on the outcome is statistically significant—that is, unlikely to be due to random chance.  
 
@@ -187,7 +184,7 @@ In this chapter, we focus on tools for comparing predictive performance across m
 
 To illustrate these statistical techniques, we will use the food delivery time dataset introduced in Chapter @sec-introduction. The objective is to predict the number of minutes between when an order is placed and when it is delivered. Key predictors in this dataset include the distance from the restaurant to the delivery location, the date and time of the order, and the specific items in the order.  Chapter @sec-whole-game covered model development for a linear regression model, a neural network, and a Cubist model. In this chapter, we will focus on comparing the performance of a random forest, neural network, and Cubist model.
 
-### Frequentist Hypothesis Testing Methods
+### Frequentist Hypothesis Testing Methods {#sec-nhtm}
 
 Let's begin by building towards a statistical model that will enable us to formally compare the predictive performance among models.  For this illustration, we will evaluate the performance of three models using 10-fold cross-validation.
 
@@ -514,13 +511,13 @@ ggplot(for_fig, aes(x = Model, y = MAE, group = Fold)) +
 
 We have now established there is strong evidence of differences in average predictive performance among models.  But this result does not tell us which models are different.  To understand which models are different, we need to perform additional tests to compare each pair of models.  These tests are referred to as _post-hoc_ tests because they are performed after the initial hypothesis test among all means.
 
-#### Post-hoc Pairwise Comparisons and Protecting against False Positive Findings
+#### Post-Hoc Pairwise Comparisons and Protecting Against False Positive Findings {#sec-post-hoc}
 
 After detecting a significant effect in a one-way analysis of variance (ANOVA), the next step is to determine which specific groups differ from each other. This is achieved using post-hoc pairwise comparisons, which assess all possible pairwise differences while controlling for false positive findings.
 
 When conducting multiple comparisons, the risk of making at least one Type I error (false positive) increases. If we compare many pairs of groups separately, the probability of incorrectly rejecting at least one null hypothesis accumulates, leading to spurious findings.  If this issue is not addressed, then we will eventually conclude that models are different when they actually are not.  To mitigate this, statistical procedures adjust for multiple comparisons to ensure that the overall false positive rate remains controlled.  Two methods for this purpose are Tukey's Honestly Significant Difference (HSD) [@tukey1949comparing] and the False Discovery Rate (FDR) procedures [@benjamini1995controlling].
 
-##### Tukey’s Honestly Significant Difference (HSD)
+##### Tukey’s Honestly Significant Difference (HSD) {#sec-post-hoc-tukey}
 
 Tukey’s HSD test is specifically designed for one-way ANOVA post-hoc comparisons and ensures that the familywise error rate (FWER) remains at a pre-determined significance level ($\alpha$ = 0.05). The test considers all possible pairwise differences while maintaining a constant error rate across comparisons. The test statistic is calculated as:
 
@@ -534,7 +531,7 @@ The critical value for $q$ is obtained from the studentized range distribution, 
 
 When we desire to compare the performance of each pair of models, then Tukey's HSD procedure will provide the appropriate adjustments to the $p$-values to protect against false positive findings.
 
-##### False Discovery Rate (FDR)
+##### False Discovery Rate (FDR) {#sec-post-hoc-fdr}
 
 In settings where many hypotheses are tested simultaneously, controlling the false discovery rate (FDR)—the expected proportion of false positives among all rejected hypotheses—can be more appropriate than controlling the familywise error rate. The FDR procedure ranks the $p$-values from all pairwise comparisons from smallest to largest ($p_1$, $p_2$, ..., $p_m$) and compares them to an adjusted threshold:
 
@@ -614,7 +611,7 @@ $$ {#eq-equivalence-alternative}
 
 Rejecting the null hypothesis in under this framework will allow us to conclude that the models are equivalent within the predefined margin of indifference.
 
-##### The Two One-Sided Test (TOST) Procedure
+##### The Two One-Sided Test (TOST) Procedure {#sec-post-hoc-tost}
 
 A commonly used approach for equivalence testing is the Two One-Sided Test (TOST) procedure [@schuirmann1987comparison]. This method involves conducting two separate one-sided hypothesis tests as defined in @eq-equivalence-null and @eq-equivalence-alternative.  Specifically, one test assesses the lower bound comparison while the other test assesses the upper bound comparison as follows:
 
@@ -671,8 +668,7 @@ ggplot(conf_int, aes(x=contrast, y=estimate)) +
   ylab("MAE Difference")
 ```
 
-
-### Comparisons Using Bayesian Models
+### Comparisons Using Bayesian Models {#sec-compare-resample-bayes}
 
 Thus far we have focused on the frequentist approach which utilizes the hypothesis testing framework, a statistical model, and distributional assumptions to estimate the probability of rejecting the null hypothesis in favor of the alternative hypothesis.  A Bayesian approach can also be used to compare models.  We first saw this modeling approach in @chapter-categorical-predictors where this technique was used to fit a linear mixed effect model.  As we will see, Bayesian modeling has some distinct advantages over a frequentist approach. This framework can be more intuitive and incorporates prior knowledge about the process being measured.
 
@@ -852,8 +848,7 @@ ggplot(pairwise_diffs, aes(x = difference, fill = color_group_diff)) +
   theme(legend.position = "none")
 ```
 
-
-#### Region of Practical Equivalence (ROPE)
+#### Region of Practical Equivalence (ROPE) {#sec-rope}
 
 In addition to utilizing the posterior distribution to compute probabilities of difference, we can also utilize this distribution to compute probabilities of similarity or equivalence.  The region of practical equivalence (ROPE) defines a region of the parameter space that we would consider practically insignificant [@kruschke2014doing].  When using the equivalence testing from @sec-comparing-models-equivalence-tests, we considered models to be equivalent if their predictions were within 5 seconds.  Using this region, the posterior distribution of the parameter of interest is used to generate a probability that the parameter is within this region.  If a large proportion of the posterior distribution falls within the ROPE, then we can conclude that the difference is minimal.
 
@@ -871,7 +866,6 @@ For instance, the probability of practical equivalence between the Cubist and ne
 #| fig-align: "center"
 #| out-width: "70%"
 #| fig-cap: Posterior distributions of pairwise differences in MAE for each pair of models.  The vertical dashed lines represent the region of practical equivalence.  The probability mass within this region represents the probability that the models are practically equivalent within +/- 5 seconds (+/- 0.08 MAE).
-
 
 #Histogram of posterior distributions between models
 #Color bars of histogram differently on either side of +/- 0.08
@@ -903,9 +897,9 @@ difference_summary %>%
   fmt_number(columns = c("Probability of Practical Equivalence"), decimals = 3)
 ```
 
-## Single Holdout Data Sets
+## Single Holdout Data Sets {#sec-compare-holdout}
 
-### Bootstrap Techniques
+### Bootstrap Techniques {#sec-boot-ci}
 
 After selecting the optimal tuning parameters, the training and testing data are combined to fit the final model. To evaluate this model’s predictive performance, we reserve a portion of the original data—often referred to as a validat set. If the validation set is representative of the training and testing data, we expect the model’s performance metric on the validatin set to be consistent with the results observed during cross-validation.
 
@@ -1049,7 +1043,6 @@ ggplot(rf_boot_mae, aes(x = Size, y = .estimate)) +
   ylab("MAE")
 ```
 
-
 ## Conclusion
 
 Selecting the best predictive model involves assessing performance metrics and accounting for practical considerations. Thus far, this chapter outlined both frequentist and Bayesian approaches to comparing model performance, emphasizing the importance of appropriate statistical techniques when evaluating differences. The frequentist approach provides a formal hypothesis testing framework, while the Bayesian approach offer a more intuitive probability-based interpretation of model differences.  When there is just one data set for evaluation, like a validation set, then the bootstrap technique can be used to create an interval about the performance metric.
@@ -1057,13 +1050,5 @@ Selecting the best predictive model involves assessing performance metrics and a
 Ultimately, while statistical significance can indicate meaningful differences between models, practical significance should also guide decision-making. Equivalence testing and Bayesian ROPE analysis help determine whether models perform similarly within a defined threshold of practical relevance. In our food delivery time example, these methods suggested that while the Cubist model demonstrated superior predictive performance overall, differences between models may not always be large enough to drive a clear choice.
 
 In practice, model selection is rarely based on performance alone. Factors such as interpretability, computational cost, and deployment feasibility must also be considered. By combining quantitative performance assessment with practical domain knowledge, we can make informed decisions that balance accuracy with real-world constraints.
-
-```{r}
-#| label: teardown-cluster
-#| include: false
-
-stopCluster(cl)
-```
-
 
 ## Chapter References {.unnumbered}
