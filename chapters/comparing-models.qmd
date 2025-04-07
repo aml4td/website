@@ -50,7 +50,6 @@ source("../R/setup_deliveries.R")
 ```{r}
 #| label: model-options
 #| include: false
-
 ctrl_rs <-
   control_resamples(
     save_pred = TRUE,
@@ -60,8 +59,7 @@ ctrl_rs <-
 
 get_iters <- function(x) {
   fit <- extract_fit_engine(x)
-  tibble::tibble(iteration = seq(along = fit$loss), 
-                 loss = fit$loss)
+  tibble::tibble(iteration = seq(along = fit$loss), loss = fit$loss)
 }
 
 ctrl_grid <-
@@ -73,34 +71,35 @@ ctrl_grid <-
   )
 reg_metrics <- metric_set(mae, rmse, rsq)
 
-delivery_folds <- vfold_cv(delivery_train, v=10)
+delivery_folds <- vfold_cv(delivery_train, v = 10)
+
 ```
 
 ```{r}
 #| label: rf-fit
 #| include: false
 #| cache: true
-
-rf_spec <- 
-  rand_forest(trees = 1000,
-              mtry = 10) %>% 
-  set_engine("ranger") %>% 
+#| 
+rf_spec <-
+  rand_forest(trees = 1000, mtry = 10) %>%
+  set_engine("ranger") %>%
   set_mode("regression")
 
-rf_wflow <- 
-  workflow() %>% 
+rf_wflow <-
+  workflow() %>%
   add_model(rf_spec) %>%
   add_formula(time_to_delivery ~ .)
 
 set.seed(3838)
 rf_res <-
-  tune_grid(rf_wflow,
-            resamples = delivery_folds,
-            control = ctrl_grid,
-            #grid = rf_grid,
-            metrics = reg_metrics)
+  tune_grid(
+    rf_wflow,
+    resamples = delivery_folds,
+    control = ctrl_grid,
+    metrics = reg_metrics
+  )
 
-rf_metrics <- collect_metrics(rf_res, summarize=FALSE)
+rf_metrics <- collect_metrics(rf_res, summarize = FALSE)
 ```
 
 ```{r}
@@ -108,19 +107,21 @@ rf_metrics <- collect_metrics(rf_res, summarize=FALSE)
 #| include: false
 #| cache: true
 
-cb_wflow <- 
-  workflow() %>% 
-  add_model(cubist_rules(committees = 5)) %>% 
+cb_wflow <-
+  workflow() %>%
+  add_model(cubist_rules(committees = 5)) %>%
   add_formula(time_to_delivery ~ .)
 
 set.seed(3838)
 cb_res <-
-  fit_resamples(cb_wflow, 
-                resamples = delivery_folds, 
-                control = ctrl_grid, 
-                metrics = reg_metrics)
+  fit_resamples(
+    cb_wflow,
+    resamples = delivery_folds,
+    control = ctrl_grid,
+    metrics = reg_metrics
+  )
 
-cb_metrics <- collect_metrics(cb_res, summarize=FALSE)
+cb_metrics <- collect_metrics(cb_res, summarize = FALSE)
 ```
 
 ```{r}
@@ -128,13 +129,13 @@ cb_metrics <- collect_metrics(cb_res, summarize=FALSE)
 #| include: false
 #| cache: true
 
-norm_rec <- 
-  recipe(time_to_delivery ~ ., data = delivery_train) %>% 
-  step_dummy(day) %>% 
-  step_zv(all_predictors()) %>% 
+norm_rec <-
+  recipe(time_to_delivery ~ ., data = delivery_train) %>%
+  step_dummy(day) %>%
+  step_zv(all_predictors()) %>%
   step_normalize(all_predictors())
 
-nnet_spec <- 
+nnet_spec <-
   mlp(
     hidden_units = 19,
     penalty = 0.01,
@@ -144,19 +145,21 @@ nnet_spec <-
   set_mode("regression") %>%
   set_engine("brulee", stop_iter = 10, rate_schedule = "cyclic")
 
-nnet_wflow <- 
-  workflow() %>% 
-  add_model(nnet_spec) %>% 
+nnet_wflow <-
+  workflow() %>%
+  add_model(nnet_spec) %>%
   add_recipe(norm_rec)
 
 set.seed(3838)
 nnet_res <-
-  fit_resamples(nnet_wflow, 
-                resamples = delivery_folds, 
-                control = ctrl_grid, 
-                metrics = reg_metrics)
+  fit_resamples(
+    nnet_wflow,
+    resamples = delivery_folds,
+    control = ctrl_grid,
+    metrics = reg_metrics
+  )
 
-nnet_metrics <- collect_metrics(nnet_res, summarize=FALSE)
+nnet_metrics <- collect_metrics(nnet_res, summarize = FALSE)
 ```
 
 
@@ -206,24 +209,30 @@ In this equation $\mu_{..}$ is the overall average model performance across all 
 #| fig-cap: An illustration of how variation is partitioned based on the effect of the model (blue) and unexplainable causes (orange) when distinct cross-validation partitions are used to train each model. 
 
 for_fig <-
-  bind_rows(rf_metrics %>% 
-              dplyr::filter(.metric == "mae") %>% 
-              dplyr::select(id, .estimate) %>% 
-              mutate(Model = "Random Forest"),
-            cb_metrics %>% 
-              dplyr::filter(.metric == "mae") %>% 
-              dplyr::select(id, .estimate) %>% 
-              mutate(Model = "Cubist"),
-            nnet_metrics %>% 
-              dplyr::filter(.metric == "mae") %>% 
-              dplyr::select(id, .estimate) %>% 
-              mutate(Model = "Neural Network")) %>%
-  rename(MAE = .estimate,
-         Fold = id) %>%
-  mutate(Model = factor(Model, levels=c("Random Forest", "Neural Network", "Cubist")),
-         Fold = factor(Fold))
+  bind_rows(
+    rf_metrics %>%
+      dplyr::filter(.metric == "mae") %>%
+      dplyr::select(id, .estimate) %>%
+      mutate(Model = "Random Forest"),
+    cb_metrics %>%
+      dplyr::filter(.metric == "mae") %>%
+      dplyr::select(id, .estimate) %>%
+      mutate(Model = "Cubist"),
+    nnet_metrics %>%
+      dplyr::filter(.metric == "mae") %>%
+      dplyr::select(id, .estimate) %>%
+      mutate(Model = "Neural Network")
+  ) %>%
+  rename(MAE = .estimate, Fold = id) %>%
+  mutate(
+    Model = factor(
+      Model,
+      levels = c("Random Forest", "Neural Network", "Cubist")
+    ),
+    Fold = factor(Fold)
+  )
 
-grand_mean <- 
+grand_mean <-
   mean(for_fig$MAE)
 
 model_means <-
@@ -241,87 +250,134 @@ fold_means <-
   ungroup()
 
 max_fold_mean_segment <-
-  tibble(Model = 0.9,
-         y_begin = model_means %>% 
-           dplyr::filter(Model == "Random Forest") %>% 
-           dplyr::select(MAE) %>% pull(),
-         y_end = fold_means %>% 
-           dplyr::filter(MAE == max(MAE)) %>% 
-           pull(),
-         MAE = grand_mean,
-         Fold = "Fold01")
+  tibble(
+    Model = 0.9,
+    y_begin = model_means %>%
+      dplyr::filter(Model == "Random Forest") %>%
+      dplyr::select(MAE) %>%
+      pull(),
+    y_end = fold_means %>%
+      dplyr::filter(MAE == max(MAE)) %>%
+      pull(),
+    MAE = grand_mean,
+    Fold = "Fold01"
+  )
 
 example_point <-
   for_fig %>%
   dplyr::filter(Model == "Random Forest" & MAE == max(MAE))
 
 grand_mean_segment <-
-  tibble(Model = 0.9,
-         y_begin = grand_mean,
-         y_end = model_means %>% 
-           dplyr::filter(Model == "Random Forest") %>% 
-           dplyr::select(MAE) %>% pull(),
-         MAE = grand_mean) %>%
+  tibble(
+    Model = 0.9,
+    y_begin = grand_mean,
+    y_end = model_means %>%
+      dplyr::filter(Model == "Random Forest") %>%
+      dplyr::select(MAE) %>%
+      pull(),
+    MAE = grand_mean
+  ) %>%
   mutate(Fold = "Fold01")
 
 error_segment <-
-  tibble(Model = 0.9,
-         y_begin = model_means %>% 
-           dplyr::filter(Model == "Random Forest") %>% 
-           dplyr::select(MAE) %>% pull(),
-         y_end = example_point$MAE,
-         MAE = grand_mean)
+  tibble(
+    Model = 0.9,
+    y_begin = model_means %>%
+      dplyr::filter(Model == "Random Forest") %>%
+      dplyr::select(MAE) %>%
+      pull(),
+    y_end = example_point$MAE,
+    MAE = grand_mean
+  )
 
 error_segment2 <-
-  tibble(Model = 0.9,
-         y_begin = max_fold_mean_segment$y_end,
-         y_end = example_point$MAE,
-         MAE = grand_mean,
-         Fold = "Fold10")
-  
+  tibble(
+    Model = 0.9,
+    y_begin = max_fold_mean_segment$y_end,
+    y_end = example_point$MAE,
+    MAE = grand_mean,
+    Fold = "Fold10"
+  )
+
 grand_mean_text <-
-  tibble(Model = 0.7,
-         y = mean(c(grand_mean_segment$y_begin, grand_mean_segment$y_end)),
-         Fold = "Fold01")
+  tibble(
+    Model = 0.7,
+    y = mean(c(grand_mean_segment$y_begin, grand_mean_segment$y_end)),
+    Fold = "Fold01"
+  )
 
 error_text <-
-  tibble(Model = 0.7,
-         y = mean(c(error_segment$y_begin, error_segment$y_end)))
-         
+  tibble(Model = 0.7, y = mean(c(error_segment$y_begin, error_segment$y_end)))
+
 fold_text <-
-  tibble(Model = 0.7,
-         y = mean(c(max_fold_mean_segment$y_begin, max_fold_mean_segment$y_end)),
-         Fold = "Fold01")
+  tibble(
+    Model = 0.7,
+    y = mean(c(max_fold_mean_segment$y_begin, max_fold_mean_segment$y_end)),
+    Fold = "Fold01"
+  )
 
 error_text2 <-
-  tibble(Model = 0.7,
-         y = mean(c(error_segment2$y_begin, error_segment2$y_end)),
-         Fold = "Fold01")
-  
-ggplot(for_fig, aes(x=Model, y=MAE)) +
-  geom_point(color="black", shape=1) +
-  geom_point(data=example_point, aes(x=Model, y=MAE), color="darkorange", shape=1, size=5) +
-  geom_hline(yintercept=grand_mean, linetype=2, color="black") +
-  geom_point(data=model_means, aes(x=Model, y=MAE), shape=95, size=10, color="royalblue") +
-  geom_errorbar(data=grand_mean_segment, aes(ymin=y_begin, ymax=y_end), color="royalblue", width=0.05) +
-  geom_errorbar(data=error_segment, aes(ymin=y_begin, ymax=y_end), color="darkorange", width=0.05) +
-  geom_text(data=grand_mean_text, aes(x=Model, y=y), label="Model", color="royalblue") +
-  geom_text(data=error_text, aes(x=Model, y=y), label="Error", color="darkorange")
+  tibble(
+    Model = 0.7,
+    y = mean(c(error_segment2$y_begin, error_segment2$y_end)),
+    Fold = "Fold01"
+  )
+
+ggplot(for_fig, aes(x = Model, y = MAE)) +
+  geom_point(color = "black", shape = 1) +
+  geom_point(
+    data = example_point,
+    aes(x = Model, y = MAE),
+    color = "darkorange",
+    shape = 1,
+    size = 5
+  ) +
+  geom_hline(yintercept = grand_mean, linetype = 2, color = "black") +
+  geom_point(
+    data = model_means,
+    aes(x = Model, y = MAE),
+    shape = 95,
+    size = 10,
+    color = "royalblue"
+  ) +
+  geom_errorbar(
+    data = grand_mean_segment,
+    aes(ymin = y_begin, ymax = y_end),
+    color = "royalblue",
+    width = 0.05
+  ) +
+  geom_errorbar(
+    data = error_segment,
+    aes(ymin = y_begin, ymax = y_end),
+    color = "darkorange",
+    width = 0.05
+  ) +
+  geom_text(
+    data = grand_mean_text,
+    aes(x = Model, y = y),
+    label = "Model",
+    color = "royalblue"
+  ) +
+  geom_text(
+    data = error_text,
+    aes(x = Model, y = y),
+    label = "Error",
+    color = "darkorange"
+  )
 ```
 
 ```{r}
 #| label: anova-results
 #| include: false
 #| cache: true
-
-one_way_model <- glm(MAE ~ Model, data=for_fig)
+one_way_model <- glm(MAE ~ Model, data = for_fig)
 one_way_anova <- data.frame(anova(one_way_model))
 one_way_anova_f <- one_way_anova$F[2]
 one_way_anova_ndf <- one_way_anova$Df[2]
 one_way_anova_ddf <- one_way_anova$Resid..Df[2]
 one_way_anova_pvalue <- one_way_anova$Pr..F.[2]
 
-one_way_model_with_blocks <- glm(MAE ~ Model + Fold, data=for_fig)
+one_way_model_with_blocks <- glm(MAE ~ Model + Fold, data = for_fig)
 one_way_anova_with_blocks <- data.frame(anova(one_way_model_with_blocks))
 one_way_anova_with_blocks_f <- one_way_anova_with_blocks$F[2]
 one_way_anova_with_blocks_ndf <- one_way_anova_with_blocks$Df[2]
@@ -388,20 +444,72 @@ max_fold_mean <-
   dplyr::filter(MAE == max(MAE)) %>%
   mutate(Model = "Random Forest")
 
-ggplot(for_fig, aes(x=Model, y=MAE, group=Fold)) +
-  geom_point(color="black", shape=1) +
-  geom_point(data=example_point, aes(x=Model, y=MAE), color="darkorange", shape=1, size=5) +
-  geom_line(alpha=0.1) +
-  geom_line(data=fold10, aes(x=Model, y=MAE, group=Fold), color="purple") +
-  geom_hline(yintercept=grand_mean, linetype=2, color="black") +
-  geom_point(data=model_means, aes(x=Model, y=MAE), shape=95, size=10, color="royalblue") +
-  geom_errorbar(data=grand_mean_segment, aes(ymin=y_begin, ymax=y_end), color="royalblue", width=0.05) +
-  geom_point(data=max_fold_mean, aes(x=Model, y=MAE), shape=95, size=10, color="purple") +
-  geom_errorbar(data=max_fold_mean_segment, aes(ymin=y_begin, ymax=y_end), color="purple", width=0.05) +
-  geom_errorbar(data=error_segment2, aes(ymin=y_begin, ymax=y_end), color="darkorange", width=0.05) +
-  geom_text(data=grand_mean_text, aes(x=Model, y=y), label="Model", color="royalblue") +
-  geom_text(data=fold_text, aes(x=Model, y=y), label="Fold", color="purple") +
-  geom_text(data=error_text2, aes(x=Model, y=y), label="Error", color="darkorange")
+ggplot(for_fig, aes(x = Model, y = MAE, group = Fold)) +
+  geom_point(color = "black", shape = 1) +
+  geom_point(
+    data = example_point,
+    aes(x = Model, y = MAE),
+    color = "darkorange",
+    shape = 1,
+    size = 5
+  ) +
+  geom_line(alpha = 0.1) +
+  geom_line(
+    data = fold10,
+    aes(x = Model, y = MAE, group = Fold),
+    color = "purple"
+  ) +
+  geom_hline(yintercept = grand_mean, linetype = 2, color = "black") +
+  geom_point(
+    data = model_means,
+    aes(x = Model, y = MAE),
+    shape = 95,
+    size = 10,
+    color = "royalblue"
+  ) +
+  geom_errorbar(
+    data = grand_mean_segment,
+    aes(ymin = y_begin, ymax = y_end),
+    color = "royalblue",
+    width = 0.05
+  ) +
+  geom_point(
+    data = max_fold_mean,
+    aes(x = Model, y = MAE),
+    shape = 95,
+    size = 10,
+    color = "purple"
+  ) +
+  geom_errorbar(
+    data = max_fold_mean_segment,
+    aes(ymin = y_begin, ymax = y_end),
+    color = "purple",
+    width = 0.05
+  ) +
+  geom_errorbar(
+    data = error_segment2,
+    aes(ymin = y_begin, ymax = y_end),
+    color = "darkorange",
+    width = 0.05
+  ) +
+  geom_text(
+    data = grand_mean_text,
+    aes(x = Model, y = y),
+    label = "Model",
+    color = "royalblue"
+  ) +
+  geom_text(
+    data = fold_text,
+    aes(x = Model, y = y),
+    label = "Fold",
+    color = "purple"
+  ) +
+  geom_text(
+    data = error_text2,
+    aes(x = Model, y = y),
+    label = "Error",
+    color = "darkorange"
+  )
 ```
 
 We have now established there is strong evidence of differences in average predictive performance among models.  But this result does not tell us which models are different.  To understand which models are different, we need to perform additional tests to compare each pair of models.  These tests are referred to as _post-hoc_ tests because they are performed after the initial hypothesis test among all means.
@@ -547,7 +655,6 @@ To perform the equivalence tests, we use the same ANOVA model for when testing f
 #| out-width: "70%"
 #| fig-cap: Pairwise comparisons of models using equivalence testing.  The Tukey adjusted 90% confidence interval of each pairwise difference is illustrated with vertical bands.  For these comparisons, the margin of practical equivalence was set to +/- 5 seconds (MAE = +/- 0.08).
 
-
 one_way_model_with_blocks_em <- emmeans(one_way_model_with_blocks, "Model", data=for_fig)
 pairwise_comparisons <- pairs(one_way_model_with_blocks_em, adjust='tukey')
 conf_int <- 
@@ -616,43 +723,66 @@ A credible interval can be derived for any parameter or function of parameters f
 
 MAE_values <-
   for_fig %>%
-  pivot_wider(id_cols="Fold", names_from="Model", values_from="MAE") %>%
+  pivot_wider(id_cols = "Fold", names_from = "Model", values_from = "MAE") %>%
   rename(id = Fold)
 
 bayes_model <-
-  perf_mod(MAE_values, seed=310, iter=5000, chains=5, refresh=0)
+  perf_mod(MAE_values, seed = 310, iter = 5000, chains = 5, refresh = 0)
 
 #Get posterior samples
-posterior_samples <- 
+posterior_samples <-
   tidy(bayes_model) %>%
-  mutate(model = factor(model, levels=c("Random Forest", "Neural Network", "Cubist")))
+  mutate(
+    model = factor(
+      model,
+      levels = c("Random Forest", "Neural Network", "Cubist")
+    )
+  )
 
 #Credible intervals for posterior distribution of model performance
 credible_intervals <-
   posterior_samples %>%
   group_by(model) %>%
-  summarize(Lower = quantile(posterior, probs=0.025),
-            Upper = quantile(posterior, probs=0.975)) %>%
+  summarize(
+    Lower = quantile(posterior, probs = 0.025),
+    Upper = quantile(posterior, probs = 0.975)
+  ) %>%
   ungroup()
 
 #Get pairwise contrasts between models
-pairwise_diffs <- 
-  contrast_models(bayes_model, 
-                  list_1 = c("Neural Network", "Random Forest", "Random Forest"),
-                  list_2 = c("Cubist", "Cubist", "Neural Network"),
-                  seed=310) %>%
-  mutate(color_group_equiv = ifelse(difference >= 0.08 | difference <= -0.08, "Not Equivalent", 
-                                    "Equivalent")) %>%
+pairwise_diffs <-
+  contrast_models(
+    bayes_model,
+    list_1 = c("Neural Network", "Random Forest", "Random Forest"),
+    list_2 = c("Cubist", "Cubist", "Neural Network"),
+    seed = 310
+  ) %>%
+  mutate(
+    color_group_equiv = ifelse(
+      difference >= 0.08 | difference <= -0.08,
+      "Not Equivalent",
+      "Equivalent"
+    )
+  ) %>%
   mutate(color_group_equiv = factor(color_group_equiv))
 
 contrast_credible_intervals <-
   pairwise_diffs %>%
-  mutate(contrast = factor(contrast, levels=c("Neural Network vs. Cubist", 
-                                              "Random Forest vs. Cubist",
-                                              "Random Forest vs. Neural Network"))) %>%
+  mutate(
+    contrast = factor(
+      contrast,
+      levels = c(
+        "Neural Network vs. Cubist",
+        "Random Forest vs. Cubist",
+        "Random Forest vs. Neural Network"
+      )
+    )
+  ) %>%
   group_by(contrast) %>%
-  summarize(Lower = quantile(difference, probs=0.025),
-            Upper = quantile(difference, probs=0.975)) %>%
+  summarize(
+    Lower = quantile(difference, probs = 0.025),
+    Upper = quantile(difference, probs = 0.975)
+  ) %>%
   ungroup()
 
 pairwise_diffs_nn_rf <-
@@ -662,7 +792,7 @@ pairwise_diffs_nn_rf <-
 #Define the region of practical equivalence
 #and get the probability of practical equivalence
 difference_summary <-
-  summary(pairwise_diffs,  size = 0.08)
+  summary(pairwise_diffs, size = 0.08)
 ```
 
 ```{r}
@@ -676,9 +806,19 @@ difference_summary <-
 
 ggplot(posterior_samples, aes(x = posterior)) +
   geom_histogram(bins = 50, color = "white", fill = "blue", alpha = 0.4) +
-  facet_wrap(~ model, ncol = 1) +
-  geom_vline(data=credible_intervals, aes(xintercept=Lower), color = "black", linetype = 2) +
-  geom_vline(data=credible_intervals, aes(xintercept=Upper), color = "black", linetype = 2) +
+  facet_wrap(~model, ncol = 1) +
+  geom_vline(
+    data = credible_intervals,
+    aes(xintercept = Lower),
+    color = "black",
+    linetype = 2
+  ) +
+  geom_vline(
+    data = credible_intervals,
+    aes(xintercept = Upper),
+    color = "black",
+    linetype = 2
+  ) +
   xlab("Posterior MAE")
 ```
 
@@ -693,11 +833,21 @@ We may also be interested in assessing the probability of a meaningful differenc
 #| out-width: "70%"
 #| fig-cap: Posterior distributions of pairwise differences in MAE for each pair of models.  The vertical dashed lines represent the 95% credible intervals for each contrast.
 
-ggplot(pairwise_diffs, aes(x = difference, fill=color_group_diff)) +
+ggplot(pairwise_diffs, aes(x = difference, fill = color_group_diff)) +
   geom_histogram(bins = 50, color = "white", fill = "blue", alpha = 0.4) +
-  facet_wrap(~ contrast, ncol = 1) +
-  geom_vline(data=contrast_credible_intervals, aes(xintercept=Lower), color = "black", linetype = 2) +
-  geom_vline(data=contrast_credible_intervals, aes(xintercept=Upper), color = "black", linetype = 2) +
+  facet_wrap(~contrast, ncol = 1) +
+  geom_vline(
+    data = contrast_credible_intervals,
+    aes(xintercept = Lower),
+    color = "black",
+    linetype = 2
+  ) +
+  geom_vline(
+    data = contrast_credible_intervals,
+    aes(xintercept = Upper),
+    color = "black",
+    linetype = 2
+  ) +
   xlab("MAE Difference") +
   theme(legend.position = "none")
 ```
@@ -725,11 +875,13 @@ For instance, the probability of practical equivalence between the Cubist and ne
 
 #Histogram of posterior distributions between models
 #Color bars of histogram differently on either side of +/- 0.08
-ggplot(pairwise_diffs, aes(x = difference, fill=color_group_equiv)) +
+ggplot(pairwise_diffs, aes(x = difference, fill = color_group_equiv)) +
   geom_histogram(bins = 100, alpha = 0.75, color = "white") +
-  facet_wrap(~ contrast, ncol = 1) +
-  scale_fill_manual(values = c("Equivalent" = "blue", "Not Equivalent" = "red")) +
-  geom_vline(xintercept = c(-0.08, 0.08), color="black", linetype=2) +
+  facet_wrap(~contrast, ncol = 1) +
+  scale_fill_manual(
+    values = c("Equivalent" = "blue", "Not Equivalent" = "red")
+  ) +
+  geom_vline(xintercept = c(-0.08, 0.08), color = "black", linetype = 2) +
   xlab("MAE Difference") +
   theme(legend.position = "none")
 ```
@@ -738,17 +890,17 @@ ggplot(pairwise_diffs, aes(x = difference, fill=color_group_equiv)) +
 #| label: tbl-bayesian-ROPE
 #| tbl-cap: "Probability of practical equivalence between each pair of models' performance."
 
-
 difference_summary %>%
   dplyr::select(contrast, pract_equiv) %>%
-  rename(Comparison = contrast,
-         `Probability of Practical Equivalence` = pract_equiv) %>%
+  rename(
+    Comparison = contrast,
+    `Probability of Practical Equivalence` = pract_equiv
+  ) %>%
   gt() %>%
   cols_align(
     align = "center"
   ) %>%
-  fmt_number(columns = c("Probability of Practical Equivalence"),
-             decimals = 3)
+  fmt_number(columns = c("Probability of Practical Equivalence"), decimals = 3)
 ```
 
 ## Single Holdout Data Sets
@@ -778,7 +930,6 @@ if (knitr::is_html_output()) {
 }  else {
   knitr::include_graphics("../premade/bootstrap_single_holdout_data_set_2.pdf")
 }
-
 ```
 
 This process yields a distribution of performance metrics, from which bootstrap confidence intervals can be derived. These intervals offer an estimate of the uncertainty around the validation set performance and give us a sound way to express the expected range of performance across other validation sets of similar size.
@@ -797,38 +948,49 @@ The bootstrap approach was applied to the three models for the food delivery tim
 #| fig-cap: 90% bootstrap confidence intervals of the validation set MAE for each model.  The circle represent the MAE estimate of the validation set for each model.
 
 # Get validation set performance and corresponding bootstrap CI
-rf_validation_res <- 
-  rf_spec %>% 
+rf_validation_res <-
+  rf_spec %>%
   last_fit(time_to_delivery ~ ., split = delivery_split, metrics = reg_metrics)
 
 rf_validation_boot <- int_pctl(rf_validation_res, alpha = 0.90)
 
-cb_spec <- 
+cb_spec <-
   cubist_rules(committees = 5)
 
-cb_validation_res <- 
-  cb_spec %>% 
+cb_validation_res <-
+  cb_spec %>%
   last_fit(time_to_delivery ~ ., split = delivery_split, metrics = reg_metrics)
 
 cb_validation_boot <- int_pctl(cb_validation_res, alpha = 0.90)
 
-nnet_validation_res <- 
-  nnet_wflow %>% 
+nnet_validation_res <-
+  nnet_wflow %>%
   last_fit(time_to_delivery ~ ., split = delivery_split, metrics = reg_metrics)
 
 nnet_validation_boot <- int_pctl(nnet_validation_res, alpha = 0.90)
 
 validation_boot_mae <-
-  bind_rows(rf_validation_boot %>% mutate(Model = "Random Forest"),
-            cb_validation_boot %>% mutate(Model = "Cubist"),
-            nnet_validation_boot %>% mutate(Model = "Neural Network")) %>%
+  bind_rows(
+    rf_validation_boot %>% mutate(Model = "Random Forest"),
+    cb_validation_boot %>% mutate(Model = "Cubist"),
+    nnet_validation_boot %>% mutate(Model = "Neural Network")
+  ) %>%
   dplyr::filter(.metric == "mae") %>%
-  mutate(Model = factor(Model, levels=c("Random Forest", "Neural Network", "Cubist")))
+  mutate(
+    Model = factor(
+      Model,
+      levels = c("Random Forest", "Neural Network", "Cubist")
+    )
+  )
 
-
-ggplot(validation_boot_mae, aes(x=Model, y=.estimate)) +
-  geom_point(color="black", shape=1) +
-  geom_errorbar(data=validation_boot_mae, aes(ymin=.lower, ymax=.upper), color="black", width=0.05) +
+ggplot(validation_boot_mae, aes(x = Model, y = .estimate)) +
+  geom_point(color = "black", shape = 1) +
+  geom_errorbar(
+    data = validation_boot_mae,
+    aes(ymin = .lower, ymax = .upper),
+    color = "black",
+    width = 0.05
+  ) +
   ylab("MAE")
 ```
 
@@ -846,37 +1008,44 @@ As the validation set size increases, the variation we expect to see in the summ
 n_validation <- nrow(rf_validation_res$.predictions[[1]])
 set.seed(405)
 rf_validation_res_10 <- rf_validation_res
-n_10 <- sample(c(1:n_validation), size=10)
+n_10 <- sample(c(1:n_validation), size = 10)
 rf_validation_res_10$.predictions[[1]] <-
-  rf_validation_res$.predictions[[1]][n_10,]
+  rf_validation_res$.predictions[[1]][n_10, ]
 rf_validation_boot_10 <- int_pctl(rf_validation_res_10, alpha = 0.90)
 rm(rf_validation_res_10)
 
 rf_validation_res_100 <- rf_validation_res
-n_100 <- sample(c(1:n_validation), size=100)
+n_100 <- sample(c(1:n_validation), size = 100)
 rf_validation_res_100$.predictions[[1]] <-
-  rf_validation_res$.predictions[[1]][n_100,]
+  rf_validation_res$.predictions[[1]][n_100, ]
 rf_validation_boot_100 <- int_pctl(rf_validation_res_100, alpha = 0.90)
 rm(rf_validation_res_100)
 
 rf_validation_res_1000 <- rf_validation_res
-n_1000 <- sample(c(1:n_validation), size=1000)
+n_1000 <- sample(c(1:n_validation), size = 1000)
 rf_validation_res_1000$.predictions[[1]] <-
-  rf_validation_res$.predictions[[1]][n_1000,]
+  rf_validation_res$.predictions[[1]][n_1000, ]
 rf_validation_boot_1000 <- int_pctl(rf_validation_res_1000, alpha = 0.90)
 rm(rf_validation_res_1000)
 
 rf_boot_mae <-
-  bind_rows(rf_validation_boot_10 %>% mutate(Size = "10"),
-            rf_validation_boot_100 %>% mutate(Size = "100"),
-            rf_validation_boot_1000 %>% mutate(Size = "1000"),
-            rf_validation_boot %>% mutate(Size = "Original")) %>%
+  bind_rows(
+    rf_validation_boot_10 %>% mutate(Size = "10"),
+    rf_validation_boot_100 %>% mutate(Size = "100"),
+    rf_validation_boot_1000 %>% mutate(Size = "1000"),
+    rf_validation_boot %>% mutate(Size = "Original")
+  ) %>%
   dplyr::filter(.metric == "mae") %>%
-  mutate(Size = factor(Size, levels=c("10", "100", "1000", "Original")))
+  mutate(Size = factor(Size, levels = c("10", "100", "1000", "Original")))
 
-ggplot(rf_boot_mae, aes(x=Size, y=.estimate)) +
-  geom_point(color="black", shape=1) +
-  geom_errorbar(data=rf_boot_mae, aes(ymin=.lower, ymax=.upper), color="black", width=0.05) +
+ggplot(rf_boot_mae, aes(x = Size, y = .estimate)) +
+  geom_point(color = "black", shape = 1) +
+  geom_errorbar(
+    data = rf_boot_mae,
+    aes(ymin = .lower, ymax = .upper),
+    color = "black",
+    width = 0.05
+  ) +
   ylab("MAE")
 ```
 
