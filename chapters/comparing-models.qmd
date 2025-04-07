@@ -28,16 +28,14 @@ library(gt)
 library(emmeans)
 library(tidyposterior)
 
-# Also requires: 
-# for model fitting
-# viridisLite
-
 # ------------------------------------------------------------------------------
 # Set options
 plan("multisession")
 tidymodels_prefer()
 theme_set(theme_transparent())
 set_options()
+
+pval <- function(x) format(x, scientific = FALSE, digits = 3)
 
 # ------------------------------------------------------------------------------
 # Load previous data sets
@@ -160,17 +158,17 @@ nnet_res <-
 nnet_metrics <- collect_metrics(nnet_res, summarize = FALSE)
 ```
 
-In chapters @sec-overfitting, @sec-resampling, and @sec-grid-search, we established several key fundamentals of building predictive models. To create an effective model, we must employ strategies to reduce overfitting, use resampling techniques to accurately measure predictive performance, and systematically search a tuning parameter space to identify values that optimize model accuracy. By following these approaches, we can have confidence that our model generalizes well to new, unseen data and provides a realistic estimate of its predictive performance.
+In Chapters [-@sec-overfitting], [-@sec-resampling], and [-@sec-grid-search], we established several key fundamentals of building predictive models. To create an effective model, we must employ strategies to reduce overfitting, use resampling techniques to accurately measure predictive performance, and systematically search a tuning parameter space to identify values that optimize model accuracy. By following these approaches, we can have confidence that our model generalizes well to new, unseen data and provides a realistic estimate of its predictive performance.
 
 With this foundation in place, the next step is to select the best model for a given data set.  When presented with new data, we typically evaluate multiple machine learning models, each with different sets of tuning parameters. Our goal is to select the model and parameter combination that yields the best predictive performance. But how do we determine which model and corresponding parameters are truly the best?
 
-Making this decision requires considering several factors. As briefly discussed in Chapter @sec-whole-game, practical characteristics such as model complexity, interpretability, and deployability play an important role. These aspects are typically assessed qualitatively based on practical considerations.  Predictive performance, however, is an objective measure that can be evaluated quantitatively. However, comparing predictive performance across models raises an important question:  how can we be sure that one model's predictive performance is truly superior to another's?  Or, conversely, how can we conclude that multiple models have no significance difference in predictive performance?
+Making this decision requires considering several factors. As briefly discussed in @sec-whole-game, practical characteristics such as model complexity, interpretability, and deployability play an important role. These aspects are typically assessed qualitatively based on practical considerations.  Predictive performance, however, is an objective measure that can be evaluated quantitatively. However, comparing predictive performance across models raises an important question:  how can we be sure that one model's predictive performance is truly superior to another's?  Or, conversely, how can we conclude that multiple models have no significance difference in predictive performance?
 
 To address these questions, we will examine both graphical and statistical techniques for comparing the predictive performance of different models. During the model tuning and training process, these comparisons may involve assessing various configurations of tuning parameters within a single model or comparing fundamentally different modeling approaches.
 
 Cross-validation serves as the backbone of the tuning and training process. It systematically partitions the data into multiple subsets, enabling repeated estimation of model performance. The variability in predictions from the holdout sets provides critical information for selecting optimal tuning parameters or identifying the best-performing model.
 
-In the first part of this chapter, we will focus on methods for evaluating models when multiple performance metrics are available. This includes techniques grounded in both frequentist and Bayesian frameworks.
+In the first part of this chapter, we will focus on methods for evaluating models when multiple performance metrics are available. This includes techniques grounded in both Frequentist and Bayesian frameworks.
 
 Once a final model is selected, we often want to assess its predictive performance on an independent holdout or validation set. In this setting, we no longer benefit from the distributional insight offered by repeated resampling. Therefore, in the final part of the chapter, we will present methods for evaluating model performance when only a single evaluation data set is available.
 
@@ -178,11 +176,11 @@ Once a final model is selected, we often want to assess its predictive performan
 
 ### Statistical Foundations {#sec-stats}
 
-Regardless of whether we take a frequentist or Bayesian approach to comparing model performance, both methods aim to identify key factors that influence the outcome. The chosen approach is then applied to the data to quantify the impact of these factors. Specifically, we seek to determine whether their effect on the outcome is statistically significant—that is, unlikely to be due to random chance.  
+Regardless of whether we take a Frequentist or Bayesian approach to comparing model performance, both methods aim to identify key factors that influence the outcome. The chosen approach is then applied to the data to quantify the impact of these factors. Specifically, we seek to determine whether their effect on the outcome is statistically significant—that is, unlikely to be due to random chance.  
 
 In this chapter, we focus on tools for comparing predictive performance across models. These tools can be used to evaluate different tuning parameter settings within a single model or to compare performance across different model types. The insights gained from this analysis help inform decisions about which model(s) to use for predicting new samples.
 
-To illustrate these statistical techniques, we will use the food delivery time dataset introduced in Chapter @sec-introduction. The objective is to predict the number of minutes between when an order is placed and when it is delivered. Key predictors in this dataset include the distance from the restaurant to the delivery location, the date and time of the order, and the specific items in the order.  Chapter @sec-whole-game covered model development for a linear regression model, a neural network, and a Cubist model. In this chapter, we will focus on comparing the performance of a random forest, neural network, and Cubist model.
+To illustrate these statistical techniques, we will use the food delivery time dataset introduced in @sec-introduction. The objective is to predict the number of minutes between when an order is placed and when it is delivered. Key predictors in this dataset include the distance from the restaurant to the delivery location, the date and time of the order, and the specific items in the order.  @sec-whole-game covered model development for a linear regression model, a neural network, and a Cubist model. In this chapter, we will focus on comparing the performance of a random forest, neural network, and Cubist model.
 
 ### Frequentist Hypothesis Testing Methods {#sec-nhtm}
 
@@ -191,10 +189,10 @@ Let's begin by building towards a statistical model that will enable us to forma
 To begin this illustration, let's suppose that each of these models were built separately using **different** 10-fold partitions of the training data.  In this scenario, the predictive performance on the first holdout fold would be unique, or independent, for each model.  If this was the case, then we could represent the desired performance metric with the following linear statistical model:
 
 $$
-y_{ij} = \mu_{..} + \tau_j + \epsilon_{ij}
+y_{ij} = \mu_{\cdot\cdot} + \tau_j + \epsilon_{ij}
 $$ {#eq-one-way-model}
 
-In this equation $\mu_{..}$ is the overall average model performance across all hold out sets and models.  The term $\tau_j$ represents the incremental impact on performance due to the $j^{th}$ model ($j$ = 1, 2, ..., $M$ = total number of models).  And $\epsilon_{ij}$ represents the part of the performance that is not explainable by the $i^{th}$ hold out set and $j^{th}$ model.  This is known as the residual or random error and is assumed to follow a Gaussian distribution with a mean of zero and an unknown variance.  The model along with the statistical assumption about the distribution of the residuals provides the statistical foundation for formally comparing models.  For a specific data set, $\mu_{..}$ is estimated by the overall mean of the data, and $\tau_j$ is estimated by the difference between overall mean and the mean of the $j^{th}$ model.  @fig-variance-partition-one-way illustrates these separate components for the hold out set with the largest MAE value for the random forest model.
+In this equation $\mu_{\cdot\cdot}$ is the overall average model performance across all hold out sets and models.  The term $\tau_j$ represents the incremental impact on performance due to the $j^{th}$ model ($j$ = 1, 2, ..., $M$ = total number of models).  And $\epsilon_{ij}$ represents the part of the performance that is not explainable by the $i^{th}$ hold out set and $j^{th}$ model.  This is known as the residual or random error and is assumed to follow a Gaussian distribution with a mean of zero and an unknown variance.  The model along with the statistical assumption about the distribution of the residuals provides the statistical foundation for formally comparing models.  For a specific data set, $\mu_{\cdot\cdot}$ is estimated by the overall mean of the data, and $\tau_j$ is estimated by the difference between overall mean and the mean of the $j^{th}$ model.  @fig-variance-partition-one-way illustrates these separate components for the hold out set with the largest MAE value for the random forest model.
 
 ```{r}
 #| label: fig-variance-partition-one-way
@@ -389,7 +387,7 @@ This model enables us to distinctly partition the total variability in the data 
 
 The variability explained by the model is often referred to as the **signal**, while the unexplained variability is known as **noise**.  
 
-Our key question is whether the observed differences in model performance (@fig-variance-partition-one-way) reflect genuine differences among models or if they could simply be due to random variation. The frequentist approach addresses this question using hypothesis testing. In this framework:  
+Our key question is whether the observed differences in model performance (@fig-variance-partition-one-way) reflect genuine differences among models or if they could simply be due to random variation. The Frequentist approach addresses this question using hypothesis testing. In this framework:  
 
 - The null hypothesis ($H_0$) represents the assumption that all models have the same average performance. Formally, this can be written as $H_0: \mu_1 = \mu_2 = \mu_3$.
 
@@ -398,27 +396,27 @@ Our key question is whether the observed differences in model performance (@fig-
 Tying this notation back to @eq-one-way-model, we express the model means as:  
 
 $$
-\mu_j = \mu_{..} + \tau_j, \quad \text{where } j = 1, 2, 3.
+\mu_j = \mu_{\cdot\cdot} + \tau_j
 $$  
 
-To determine whether we have sufficient evidence to reject the null hypothesis, we compare:  
+where $j$ = 1, 2, 3. To determine whether we have sufficient evidence to reject the null hypothesis, we compare:  
 
 - Between-group variability (signal): Differences in mean performance across models.  
 - Within-group variability (noise): Residual variation not explained by the models.  
 
-This comparison is conducted using an $F$-test [@kutner2004applied], which assesses whether the signal is large enough relative to the noise to conclude that differences among models are statistically significant.  
+This comparison is conducted using an _F_-test [@kutner2004applied], which assesses whether the signal is large enough relative to the noise to conclude that differences among models are statistically significant.  
 
-In this case, the $F$-statistic is `r paste0("(", round(one_way_anova_f,2), ", ", paste0(one_way_anova_ndf), ", ", paste0(one_way_anova_ddf), ")")`^[This is common notation for reporting the $F$-statistic, where the first number represents the ratio of the mean square of the model to the mean square of the error.  The second and third numbers represent the degrees of freedom of the numerator and denominator, respectively.], with a corresponding $p$-value of `r paste0(round(one_way_anova_pvalue,4))`. Since the $p$-value is very small, we have strong evidence to reject the null hypothesis, indicating that there are significant differences in MAE among the models.  
+In this case, the _F_-statistic is `r paste0("(", pval(one_way_anova_f), ", ", paste0(one_way_anova_ndf), ", ", paste0(one_way_anova_ddf), ")")`^[This is common notation for reporting the _F_-statistic, where the first number represents the ratio of the mean square of the model to the mean square of the error.  The second and third numbers represent the degrees of freedom of the numerator and denominator, respectively.], with a corresponding $p$-value of `r pval(one_way_anova_pvalue)`. Since the $p$-value is very small, we have strong evidence to reject the null hypothesis, indicating that there are significant differences in MAE among the models.  
 
 In practice when tuning and training models, we use the same cross-validation sets for evaluating model performance.  This is a more efficient approach since we only need to set up the cross-validation scheme once.  Moreover, the structure that is generated by using the same hold out sets will enable us to have a better ability to detect differences in predictive performance between models.
 
 In this setting, each hold out set forms what is known as a block, which is a group of units that are similar to each other.  This grouping is an important piece of information which will aid in assessing if models have statistically different performance.  The predictive performance when tuning multiple models using the same cross-validation hold out sets can now be represented as:
 
 $$
-y_{ij} = \mu_{..} + \gamma_i + \tau_j + \epsilon_{ij}
+y_{ij} = \mu_{\cdot\cdot} + \gamma_i + \tau_j + \epsilon_{ij}
 $$ {#eq-one-way-model-with-blocks}
 
-Notice that @eq-one-way-model-with-blocks is nearly the same as @eq-one-way-model, with the additional term $\gamma_i$.  This term represents the incremental impact on performance due to the $i^{th}$ hold out set ($i$ = 1, 2,..., $v$ = total number of validation folds). @fig-variance-partition-one-way-with-blocks illustrates these separate components for the hold out set with the largest MAE value for the random forest model.  In this figure, the points are connected based on the fold.  Notice that the amount of variability explained by the model is identical to @fig-variance-partition-one-way.  However, the unexplainable variability from @fig-variance-partition-one-way-with-blocks is now partially explained by the variation due to the fold, thus reducing the unexplainable variability.  To understand if there are differences in performance among models, we again compare the variability explained by the different models with the unexplainable variability.  The signal relative to the noise is now much stronger, enabling us to more easily see differences in model performance.  The $F$-statistic from this model is `r paste0("(", round(one_way_anova_with_blocks_f,2), ", ", paste0(one_way_anova_with_blocks_ndf), ", ", paste0(one_way_anova_with_blocks_ddf), ")")` and has a corresponding p-value of `r formatC(one_way_anova_with_blocks_pvalue, format="e", digits=2)`.  By utilizing the same cross-validation scheme across models, we are able to greatly improve the significance.
+Notice that @eq-one-way-model-with-blocks is nearly the same as @eq-one-way-model, with the additional term $\gamma_i$.  This term represents the incremental impact on performance due to the $i^{th}$ hold out set ($i$ = 1, 2,..., $v$ = total number of validation folds). @fig-variance-partition-one-way-with-blocks illustrates these separate components for the hold out set with the largest MAE value for the random forest model.  In this figure, the points are connected based on the fold.  Notice that the amount of variability explained by the model is identical to @fig-variance-partition-one-way.  However, the unexplainable variability from @fig-variance-partition-one-way-with-blocks is now partially explained by the variation due to the fold, thus reducing the unexplainable variability.  To understand if there are differences in performance among models, we again compare the variability explained by the different models with the unexplainable variability.  The signal relative to the noise is now much stronger, enabling us to more easily see differences in model performance.  The _F_-statistic from this model is `r paste0("(", pval(one_way_anova_with_blocks_f), ", ", paste0(one_way_anova_with_blocks_ndf), ", ", paste0(one_way_anova_with_blocks_ddf), ")")` and has a corresponding p-value of `r pval(one_way_anova_with_blocks_pvalue)`.  By utilizing the same cross-validation scheme across models, we are able to greatly improve the significance.
 
 ```{r}
 #| label: fig-variance-partition-one-way-with-blocks
@@ -510,13 +508,13 @@ We have now established there is strong evidence of differences in average predi
 
 #### Post-Hoc Pairwise Comparisons and Protecting Against False Positive Findings {#sec-post-hoc}
 
-After detecting a significant effect in a one-way analysis of variance (ANOVA), the next step is to determine which specific groups differ from each other. This is achieved using post-hoc pairwise comparisons, which assess all possible pairwise differences while controlling for false positive findings.
+After detecting a significant effect in a one-way analysis of variance (ANOVA), the next step is to determine which specific groups differ from each other. This is achieved using _post hoc_ pairwise comparisons, which assess all possible pairwise differences while controlling for false positive findings.
 
 When conducting multiple comparisons, the risk of making at least one Type I error (false positive) increases. If we compare many pairs of groups separately, the probability of incorrectly rejecting at least one null hypothesis accumulates, leading to spurious findings.  If this issue is not addressed, then we will eventually conclude that models are different when they actually are not.  To mitigate this, statistical procedures adjust for multiple comparisons to ensure that the overall false positive rate remains controlled.  Two methods for this purpose are Tukey's Honestly Significant Difference (HSD) [@tukey1949comparing] and the False Discovery Rate (FDR) procedures [@benjamini1995controlling].
 
 ##### Tukey’s Honestly Significant Difference (HSD) {#sec-post-hoc-tukey}
 
-Tukey’s HSD test is specifically designed for one-way ANOVA post-hoc comparisons and ensures that the familywise error rate (FWER) remains at a pre-determined significance level ($\alpha$ = 0.05). The test considers all possible pairwise differences while maintaining a constant error rate across comparisons. The test statistic is calculated as:
+Tukey’s HSD test is specifically designed for one-way ANOVA _post hoc_ comparisons and ensures that the familywise error rate (FWER) remains at a pre-determined significance level ($\alpha$ = 0.05). The test considers all possible pairwise differences while maintaining a constant error rate across comparisons. The test statistic is calculated as:
 
 $$
  q = \frac{\bar{x}_i - \bar{x}_j}{\sqrt{MS_{within} / n}}
@@ -534,10 +532,13 @@ In settings where many hypotheses are tested simultaneously, controlling the fal
 
 1. Rank the $p$-values in ascending order, assigning each a rank $i$.
 2. Compute the critical value for each comparison:
-   $$
-   p_{crit} = \frac{i}{m} \alpha
-   $$
-   where $m$ is the total number of comparisons and $\alpha$ is the desired FDR level.
+
+$$
+p_{crit} = \frac{i}{m} \alpha
+$$
+
+where $m$ is the total number of comparisons and $\alpha$ is the desired FDR level.
+
 3. Find the largest $i$ where $p_i \leq p_{crit}$, and reject all hypotheses with p-values at or below this threshold.
 
 Unlike Tukey’s method, FDR control is more appropriate when performing many comparisons.  This procedure offers a balance between sensitivity (detecting true differences) and specificity (limiting false positives).
@@ -579,9 +580,9 @@ pairwise_comparison_table %>%
   fmt_scientific(
     columns = c("Unadjusted", "Tukey", "FDR"),
     exp_style = "e1",
-    decimals = 2
+    n_sigfig = 2
   ) %>%
-  fmt_number(columns = c("Estimate", "SE"), decimals = 3) %>%
+  fmt_number(columns = c("Estimate", "SE"), n_sigfig = 3) %>%
   tab_spanner(
     label = "p-value Adjustment",
     columns = c(Unadjusted, Tukey, FDR)
@@ -592,7 +593,7 @@ pairwise_comparison_table %>%
 
 Although each pairwise difference is statistically significant, the largest difference (`r round(60*unadjusted_pairs$estimate[which(unadjusted_pairs$estimate == max(unadjusted_pairs$estimate))],0)` seconds) is between the random forest and Cubist models. However, this difference is likely not practically meaningful, suggesting that either model would be a suitable choice.
 
-#### Comparing Performance using Equivalence Tests {#sec-comparing-models-equivalence-tests}
+#### Comparing Performance using Equivalence Tests {#sec-equivalence-tests}
 
 In the previous section, we explored how to determine whether one model significantly outperforms another in predictive performance. However, there are cases where we may instead want to assess whether the models perform similarly in a practically meaningful way. To do this, we use an equivalence test, which differs from the previous hypothesis test that aimed to detect differences between models.
 
@@ -601,6 +602,7 @@ Equivalence testing is based on the concept that two models can be considered pr
 $$
 H_O:  \mu_1 = \mu_2
 $$
+
 while the alternative hypothesis is:
 
 $$
@@ -617,8 +619,6 @@ H_A:  |\mu_1 - \mu_2| \lt \theta
 $$ {#eq-equivalence-alternative}
 
 Rejecting the null hypothesis in under this framework will allow us to conclude that the models are equivalent within the predefined margin of indifference.
-
-##### The Two One-Sided Test (TOST) Procedure {#sec-post-hoc-tost}
 
 A commonly used approach for equivalence testing is the Two One-Sided Test (TOST) procedure [@schuirmann1987comparison]. This method involves conducting two separate one-sided hypothesis tests as defined in @eq-equivalence-null and @eq-equivalence-alternative.  Specifically, one test assesses the lower bound comparison while the other test assesses the upper bound comparison as follows:
 
@@ -640,7 +640,7 @@ H_A:  \mu_1 - \mu_2 > \theta
 $$
 Each test is conducted at a desired significance level $\alpha$, and if both null hypotheses are rejected, we conclude that the model performance is equivalent based on the predefined margin of indifference.
 
-Schuirmann showed that the two one-sided hypotheses can be practically evaluated by constructing a $100(1-2\alpha)\%$ confidence interval for $\mu_1 - \mu_2$.  If this interval is contained within the boundaries of ($-\theta$, $\theta$), then we can reject the null hypothesis and conclude that the two models have equivalent predictive performance.
+Schuirmann showed that the two one-sided hypotheses can be practically evaluated by constructing a $100(1-2\alpha)\%$ confidence interval for $\mu_1 - \mu_2$.  If this interval is contained within the boundaries of $(-\theta, \theta)$, then we can reject the null hypothesis and conclude that the two models have equivalent predictive performance.
 
 Selecting an appropriate margin of indifference is crucial and should be determined prior to conducting the statistical test.  What value should we choose?  The answer to this question is problem specific and depends on what we believe makes a practical difference in performance.
 
@@ -677,7 +677,7 @@ ggplot(conf_int, aes(x=contrast, y=estimate)) +
 
 ### Comparisons Using Bayesian Models {#sec-compare-resample-bayes}
 
-Thus far we have focused on the frequentist approach which utilizes the hypothesis testing framework, a statistical model, and distributional assumptions to estimate the probability of rejecting the null hypothesis in favor of the alternative hypothesis.  A Bayesian approach can also be used to compare models.  We first saw this modeling approach in @chapter-categorical-predictors where this technique was used to fit a linear mixed effect model.  As we will see, Bayesian modeling has some distinct advantages over a frequentist approach. This framework can be more intuitive and incorporates prior knowledge about the process being measured.
+Thus far we have focused on the Frequentist approach which utilizes the hypothesis testing framework, a statistical model, and distributional assumptions to estimate the probability of rejecting the null hypothesis in favor of the alternative hypothesis.  A Bayesian approach can also be used to compare models.  We first saw this modeling approach in @sec-categorical-predictors where this technique was used to fit a linear mixed effect model.  As we will see, Bayesian modeling has some distinct advantages over a Frequentist approach. This framework can be more intuitive and incorporates prior knowledge about the process being measured.
 
 A Bayesian model applies Bayes' theorem to combine observed data with prior knowledge about parameter distributions. The key inputs to this process are:
 
@@ -688,7 +688,7 @@ Using Bayes' theorem, these inputs are used to produce posterior distributions, 
 
 If prior knowledge about the parameters is strong, we can specify precise prior distributions. However, when little or no prior information is available, we typically use vague or uninformative priors, which exert minimal influence on the results.  An excellent introduction to Bayesian modeling is @Rethinking.
 
-To compare the predictive performance of different models using a Bayesian approach, we start with a model that represents the data, which is similar to the frequentist approach. The model from the previous section  (@eq-one-way-model-with-blocks) accounts for variation due to differences in predictive model performance, cross-validation folds, and random error.
+To compare the predictive performance of different models using a Bayesian approach, we start with a model that represents the data, which is similar to the Frequentist approach. The model from the previous section  (@eq-one-way-model-with-blocks) accounts for variation due to differences in predictive model performance, cross-validation folds, and random error.
 
 We assume each sample follows a normal distribution:  
 
@@ -713,7 +713,7 @@ The prior distribution for the model mean is gaussian with a mean of 1.5 and sta
 
 Although the model has multiple parameters, our primary focus is $\mu_j$. By analyzing the posterior distributions of $\mu$, we can assess and compare the predictive impact of different models, guiding our decision-making process.
 
-For our example modeling food delivery times, the posterior distributions of $\mu_j$ are illustrated in @fig-bayesian-model-posterior.  The results are similar to the frequentist approach where the Cubist model posterior distribution exhibits lower MAE values, while the random forest exhibits the largest MAE values.  The posterior distribution is the foundation from which decisions can be made.  From this distribution we can derive a *credible interval* which is a probabilistic statement about where the parameter lies given that the observed data and prior information are valid.
+For our example modeling food delivery times, the posterior distributions of $\mu_j$ are illustrated in @fig-bayesian-model-posterior.  The results are similar to the Frequentist approach where the Cubist model posterior distribution exhibits lower MAE values, while the random forest exhibits the largest MAE values.  The posterior distribution is the foundation from which decisions can be made.  From this distribution we can derive a *credible interval* which is a probabilistic statement about where the parameter lies given that the observed data and prior information are valid.
 
 At face value, it seems like a confidence interval and credible interval are conveying the same information.  While these intervals may be numerically similar, their interpretations are different.  Confidence intervals are build on distributional assumptions such that a proportion of intervals will contain the true parameter in repeated sampling of the same population.  In contrast, a Bayesian credible interval allows us to make a direct probability statement about the parameter itself, which is more intuitive.
 
@@ -858,11 +858,11 @@ ggplot(pairwise_diffs, aes(x = difference, fill = color_group_diff)) +
 
 In addition to utilizing the posterior distribution to compute probabilities of difference, we can also utilize this distribution to compute probabilities of similarity or equivalence.  The region of practical equivalence (ROPE) defines a region of the parameter space that we would consider practically insignificant [@kruschke2014doing].  When using the equivalence testing from @sec-comparing-models-equivalence-tests, we considered models to be equivalent if their predictions were within 5 seconds.  Using this region, the posterior distribution of the parameter of interest is used to generate a probability that the parameter is within this region.  If a large proportion of the posterior distribution falls within the ROPE, then we can conclude that the difference is minimal.
 
-The primary difference between the frequentist and Bayesian equivalence testing lies in interpretation and flexibility. Frequentist equivalence testing is based on pre-specified significance levels and long-run error rates. Bayesian ROPE, on the other hand, provides a probability-based assessment of practical equivalence. This is particularly useful in predictive modeling, where small differences in performance may not be operationally relevant.
+The primary difference between the Frequentist and Bayesian equivalence testing lies in interpretation and flexibility. Frequentist equivalence testing is based on pre-specified significance levels and long-run error rates. Bayesian ROPE, on the other hand, provides a probability-based assessment of practical equivalence. This is particularly useful in predictive modeling, where small differences in performance may not be operationally relevant.
 
 @fig-bayesian-ROPE illustrates the ROPE for the delivery time data, defined as $\pm$5 seconds or $\pm$ 0.08 MAE. The probability mass within this region, shown in blue, represents the likelihood that the models have equivalent performance based on this criterion. @tab-bayesian-ROPE summarizes the probabilities for each model comparison.
 
-For instance, the probability of practical equivalence between the Cubist and neural network models is `r round(difference_summary$pract_equiv[which(difference_summary$contrast=="Cubist vs Neural Network")],3)`, suggesting a moderate likelihood that these models produce similar results within the defined threshold. In contrast, the probability of practical equivalence between the Cubist and random forest models is a meager `r round(difference_summary$pract_equiv[which(difference_summary$contrast=="Cubist vs Random Forest")],3)`, indicating that the Cubist model is likely to have superior predictive performance relative to the random forest, based on the $\pm$5 second criterion.
+For instance, the probability of practical equivalence between the Cubist and neural network models is `r pval(difference_summary$pract_equiv[which(difference_summary$contrast=="Cubist vs Neural Network")])`, suggesting a moderate likelihood that these models produce similar results within the defined threshold. In contrast, the probability of practical equivalence between the Cubist and random forest models is a meager `r pval(difference_summary$pract_equiv[which(difference_summary$contrast=="Cubist vs Random Forest")])`, indicating that the Cubist model is likely to have superior predictive performance relative to the random forest, based on the $\pm$5 second criterion.
 
 ```{r}
 #| label: fig-bayesian-ROPE
@@ -900,7 +900,7 @@ difference_summary %>%
   cols_align(
     align = "center"
   ) %>%
-  fmt_number(columns = c("Probability of Practical Equivalence"), decimals = 3)
+  fmt_number(columns = c("Probability of Practical Equivalence"), n_sigfig = 3)
 ```
 
 ## Single Holdout Data Sets {#sec-compare-holdout}
@@ -922,14 +922,10 @@ To adapt this idea to a single validation set, we treat the validation set as ou
 ```{r}
 #| label: fig-bootstrap-single-holdout-graphic
 #| echo: false
-#| out-width: '70%'
+#| out-width: 50%
 #| fig-cap: "A schematic of five bootstraps resamples created from an initial pool of 25 data points."
 
-if (knitr::is_html_output()) {
-  knitr::include_graphics("../premade/bootstrap_single_holdout_data_set_2.jpg")
-}  else {
-  knitr::include_graphics("../premade/bootstrap_single_holdout_data_set_2.pdf")
-}
+ knitr::include_graphics("../premade/boostrap_stat.svg")
 ```
 
 This process yields a distribution of performance metrics, from which bootstrap confidence intervals can be derived. These intervals offer an estimate of the uncertainty around the validation set performance and give us a sound way to express the expected range of performance across other validation sets of similar size.
@@ -1051,7 +1047,7 @@ ggplot(rf_boot_mae, aes(x = Size, y = .estimate)) +
 
 ## Conclusion
 
-Selecting the best predictive model involves assessing performance metrics and accounting for practical considerations. Thus far, this chapter outlined both frequentist and Bayesian approaches to comparing model performance, emphasizing the importance of appropriate statistical techniques when evaluating differences. The frequentist approach provides a formal hypothesis testing framework, while the Bayesian approach offer a more intuitive probability-based interpretation of model differences.  When there is just one data set for evaluation, like a validation set, then the bootstrap technique can be used to create an interval about the performance metric.
+Selecting the best predictive model involves assessing performance metrics and accounting for practical considerations. Thus far, this chapter outlined both Frequentist and Bayesian approaches to comparing model performance, emphasizing the importance of appropriate statistical techniques when evaluating differences. The Frequentist approach provides a formal hypothesis testing framework, while the Bayesian approach offer a more intuitive probability-based interpretation of model differences.  When there is just one data set for evaluation, like a validation set, then the bootstrap technique can be used to create an interval about the performance metric.
 
 Ultimately, while statistical significance can indicate meaningful differences between models, practical significance should also guide decision-making. Equivalence testing and Bayesian ROPE analysis help determine whether models perform similarly within a defined threshold of practical relevance. In our food delivery time example, these methods suggested that while the Cubist model demonstrated superior predictive performance overall, differences between models may not always be large enough to drive a clear choice.
 
