@@ -90,7 +90,7 @@ rf_wflow <-
 
 set.seed(3838)
 rf_res <-
-  tune_grid(
+  fit_resamples(
     rf_wflow,
     resamples = delivery_folds,
     control = ctrl_grid,
@@ -160,7 +160,7 @@ nnet_res <-
 nnet_metrics <- collect_metrics(nnet_res, summarize = FALSE)
 ```
 
-In chapters @sec-overfitting, @sec-resampling, and @sec-grid, we established several key fundamentals of building predictive models. To create an effective model, we must employ strategies to reduce overfitting, use resampling techniques to accurately measure predictive performance, and systematically search a tuning parameter space to identify values that optimize model accuracy. By following these approaches, we can have confidence that our model generalizes well to new, unseen data and provides a realistic estimate of its predictive performance.
+In chapters @sec-overfitting, @sec-resampling, and @sec-grid-search, we established several key fundamentals of building predictive models. To create an effective model, we must employ strategies to reduce overfitting, use resampling techniques to accurately measure predictive performance, and systematically search a tuning parameter space to identify values that optimize model accuracy. By following these approaches, we can have confidence that our model generalizes well to new, unseen data and provides a realistic estimate of its predictive performance.
 
 With this foundation in place, the next step is to select the best model for a given data set.  When presented with new data, we typically evaluate multiple machine learning models, each with different sets of tuning parameters. Our goal is to select the model and parameter combination that yields the best predictive performance. But how do we determine which model and corresponding parameters are truly the best?
 
@@ -391,21 +391,18 @@ The variability explained by the model is often referred to as the **signal**, w
 
 Our key question is whether the observed differences in model performance (@fig-variance-partition-one-way) reflect genuine differences among models or if they could simply be due to random variation. The frequentist approach addresses this question using hypothesis testing. In this framework:  
 
-- The null hypothesis ($H_0$) represents the assumption that all models have the same average performance. Formally, this can be written as:  
-  $$
-  H_0: \mu_1 = \mu_2 = \mu_3
-  $$  
-- The alternative hypothesis ($H_A$) asserts that at least two models have significantly different average predictive performance:  
-  $$
-  H_A: \mu_i \neq \mu_j
-  $$  
+- The null hypothesis ($H_0$) represents the assumption that all models have the same average performance. Formally, this can be written as $H_0: \mu_1 = \mu_2 = \mu_3$.
+
+- The alternative hypothesis ($H_A$) asserts that at least two models have significantly different average predictive performance: $H_A: \mu_i \neq \mu_j$
 
 Tying this notation back to @eq-one-way-model, we express the model means as:  
+
 $$
 \mu_j = \mu_{..} + \tau_j, \quad \text{where } j = 1, 2, 3.
 $$  
 
 To determine whether we have sufficient evidence to reject the null hypothesis, we compare:  
+
 - Between-group variability (signal): Differences in mean performance across models.  
 - Within-group variability (noise): Residual variation not explained by the models.  
 
@@ -552,33 +549,43 @@ Now, let's compare how these methods perform when evaluating each pair of models
 #| tbl-cap: "Pairwise comparisons among the three models for predicting delivery times.  The table includes the estimated difference in MAE, standard error, degrees of freedom, the raw unadjusted p-value, and the corrseponding Tukey and FDR adjusted p-values."
 
 #Pairwise comparison adjustments
-one_way_model_with_blocks_em <- emmeans(one_way_model_with_blocks, "Model", data=for_fig)
-unadjusted_pairs <- data.frame(pairs(one_way_model_with_blocks_em, adjust="none"))
-tukey_pairs <- data.frame(pairs(one_way_model_with_blocks_em, adjust="tukey"))
-fdr_pairs <- data.frame(pairs(one_way_model_with_blocks_em, adjust="fdr"))
+one_way_model_with_blocks_em <- emmeans(
+  one_way_model_with_blocks,
+  "Model",
+  data = for_fig
+)
+unadjusted_pairs <- data.frame(pairs(
+  one_way_model_with_blocks_em,
+  adjust = "none"
+))
+tukey_pairs <- data.frame(pairs(one_way_model_with_blocks_em, adjust = "tukey"))
+fdr_pairs <- data.frame(pairs(one_way_model_with_blocks_em, adjust = "fdr"))
 
 pairwise_comparison_table <-
   bind_cols(
-    unadjusted_pairs %>% dplyr::select(contrast, estimate, SE, df, p.value) %>% rename(Unadjusted = p.value),
+    unadjusted_pairs %>%
+      dplyr::select(contrast, estimate, SE, df, p.value) %>%
+      rename(Unadjusted = p.value),
     tukey_pairs %>% dplyr::select(p.value) %>% rename(Tukey = p.value),
     fdr_pairs %>% dplyr::select(p.value) %>% rename(`FDR` = p.value)
   ) %>%
-  rename(Comparison = contrast,
-         Estimate = estimate,
-         DF = df)
+  rename(Comparison = contrast, Estimate = estimate, DF = df)
 
 pairwise_comparison_table %>%
   gt() %>%
   cols_align(
     align = "center"
   ) %>%
-  fmt_scientific(columns = c("Unadjusted", "Tukey", "FDR"), 
-                 exp_style = "e1",
-                 decimals = 2) %>%
-  fmt_number(columns = c("Estimate", "SE"),
-             decimals = 3) %>%
-  tab_spanner(label = "p-value Adjustment", 
-              columns = c(Unadjusted, Tukey, FDR)) %>%
+  fmt_scientific(
+    columns = c("Unadjusted", "Tukey", "FDR"),
+    exp_style = "e1",
+    decimals = 2
+  ) %>%
+  fmt_number(columns = c("Estimate", "SE"), decimals = 3) %>%
+  tab_spanner(
+    label = "p-value Adjustment",
+    columns = c(Unadjusted, Tukey, FDR)
+  ) %>%
   cols_width(Comparison ~ px(200)) %>%
   tab_options(table.width = pct(100))
 ```
@@ -637,7 +644,7 @@ Schuirmann showed that the two one-sided hypotheses can be practically evaluated
 
 Selecting an appropriate margin of indifference is crucial and should be determined prior to conducting the statistical test.  What value should we choose?  The answer to this question is problem specific and depends on what we believe makes a practical difference in performance.
 
-From the previous section we saw that the largest expected difference between any pair of models was `r round(60*unadjusted_pairs$estimate[which(unadjusted_pairs$estimate == max(unadjusted_pairs$estimate))],0)` seconds.  For the sake of this illustration, let's suppose that the margin of practical indifference between models is at least 5 seconds.  This means that two models will be considered practically equivalent if the MAE is for delivery times are within +/- `r round(5/60, 2)`.  
+From the previous section we saw that the largest expected difference between any pair of models was `r round(60*unadjusted_pairs$estimate[which(unadjusted_pairs$estimate == max(unadjusted_pairs$estimate))],0)` seconds.  For the sake of this illustration, let's suppose that the margin of practical indifference between models is at least 5 seconds.  This means that two models will be considered practically equivalent if the MAE is for delivery times are within $\pm$ `r round(5/60, 2)`.  
 
 To perform the equivalence tests, we use the same ANOVA model for when testing for differences in @eq-one-way-model-with-blocks and estimate the 90% confidence intervals about each pairwise difference.  Because we are making multiple pairwise comparisons, the intervals need to be adjusted to minimize the chance of making a false positive finding.  This adjustment can be done using either the Tukey or FDR procedures.
 
@@ -650,7 +657,7 @@ To perform the equivalence tests, we use the same ANOVA model for when testing f
 #| fig-height: 3.5
 #| fig-align: "center"
 #| out-width: "70%"
-#| fig-cap: Pairwise comparisons of models using equivalence testing.  The Tukey adjusted 90% confidence interval of each pairwise difference is illustrated with vertical bands.  For these comparisons, the margin of practical equivalence was set to +/- 5 seconds (MAE = +/- 0.08).
+#| fig-cap: Pairwise comparisons of models using equivalence testing.  The Tukey adjusted 90% confidence interval of each pairwise difference is illustrated with vertical bands.  For these comparisons, the margin of practical equivalence was set to $\pm$ 5 seconds (MAE = $\pm$ 0.08).
 
 one_way_model_with_blocks_em <- emmeans(one_way_model_with_blocks, "Model", data=for_fig)
 pairwise_comparisons <- pairs(one_way_model_with_blocks_em, adjust='tukey')
@@ -716,7 +723,6 @@ A credible interval can be derived for any parameter or function of parameters f
 #| label: bayesian-calcs
 #| include: false
 #| cache: true
-
 MAE_values <-
   for_fig %>%
   pivot_wider(id_cols = "Fold", names_from = "Model", values_from = "MAE") %>%
@@ -854,9 +860,9 @@ In addition to utilizing the posterior distribution to compute probabilities of 
 
 The primary difference between the frequentist and Bayesian equivalence testing lies in interpretation and flexibility. Frequentist equivalence testing is based on pre-specified significance levels and long-run error rates. Bayesian ROPE, on the other hand, provides a probability-based assessment of practical equivalence. This is particularly useful in predictive modeling, where small differences in performance may not be operationally relevant.
 
-@fig-bayesian-ROPE illustrates the ROPE for the delivery time data, defined as +/-5 seconds or +/- 0.08 MAE. The probability mass within this region, shown in blue, represents the likelihood that the models have equivalent performance based on this criterion. @tab-bayesian-ROPE summarizes the probabilities for each model comparison.
+@fig-bayesian-ROPE illustrates the ROPE for the delivery time data, defined as $\pm$5 seconds or $\pm$ 0.08 MAE. The probability mass within this region, shown in blue, represents the likelihood that the models have equivalent performance based on this criterion. @tab-bayesian-ROPE summarizes the probabilities for each model comparison.
 
-For instance, the probability of practical equivalence between the Cubist and neural network models is `r round(difference_summary$pract_equiv[which(difference_summary$contrast=="Cubist vs Neural Network")],3)`, suggesting a moderate likelihood that these models produce similar results within the defined threshold. In contrast, the probability of practical equivalence between the Cubist and random forest models is a meager `r round(difference_summary$pract_equiv[which(difference_summary$contrast=="Cubist vs Random Forest")],3)`, indicating that the Cubist model is likely to have superior predictive performance relative to the random forest, based on the +/-5 second criterion.
+For instance, the probability of practical equivalence between the Cubist and neural network models is `r round(difference_summary$pract_equiv[which(difference_summary$contrast=="Cubist vs Neural Network")],3)`, suggesting a moderate likelihood that these models produce similar results within the defined threshold. In contrast, the probability of practical equivalence between the Cubist and random forest models is a meager `r round(difference_summary$pract_equiv[which(difference_summary$contrast=="Cubist vs Random Forest")],3)`, indicating that the Cubist model is likely to have superior predictive performance relative to the random forest, based on the $\pm$5 second criterion.
 
 ```{r}
 #| label: fig-bayesian-ROPE
@@ -865,7 +871,7 @@ For instance, the probability of practical equivalence between the Cubist and ne
 #| fig-height: 3.5
 #| fig-align: "center"
 #| out-width: "70%"
-#| fig-cap: Posterior distributions of pairwise differences in MAE for each pair of models.  The vertical dashed lines represent the region of practical equivalence.  The probability mass within this region represents the probability that the models are practically equivalent within +/- 5 seconds (+/- 0.08 MAE).
+#| fig-cap: Posterior distributions of pairwise differences in MAE for each pair of models.  The vertical dashed lines represent the region of practical equivalence.  The probability mass within this region represents the probability that the models are practically equivalent within $\pm$ 5 seconds ($\pm$ 0.08 MAE).
 
 #Histogram of posterior distributions between models
 #Color bars of histogram differently on either side of +/- 0.08
