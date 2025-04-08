@@ -3,12 +3,20 @@ library(tidymodels)
 library(spatialsample)
 library(tidysdm)
 library(forested)
+library(zipcodeR)
+library(furrr)
 
 # ------------------------------------------------------------------------------
 
 tidymodels_prefer()
 theme_set(theme_bw())
-options(pillar.advice = FALSE, pillar.min_title_chars = Inf)
+options(
+  pillar.advice = FALSE,
+  pillar.min_title_chars = Inf,
+  future.rng.onMisuse = "ignore"
+)
+
+plan("multisession")
 
 # ------------------------------------------------------------------------------
 
@@ -36,12 +44,40 @@ for_analysis <-
   )
 
 # ------------------------------------------------------------------------------
+# Get ZIP codes
+
+zip_codes <- 
+  future_map(
+    1:nrow(for_analysis),
+    ~ search_radius(
+      lat = for_analysis$latitude[.x], 
+      lng = for_analysis$longitude[.x], 
+      radius = 200
+    ) %>% 
+      mutate(.row = .x)
+  )
+
+has_zip <- map_lgl(zip_codes, ~ nrow(.x) > 0)
+any(!has_zip)
+
+zip_estimates <- 
+  map_dfr(
+    zip_codes,
+    ~ slice_min(.x, distance, n = 1, with_ties = FALSE, by = c(.row))
+  ) %>% 
+  arrange(.row) %>% 
+  select(zip = zipcode)
+
+for_analysis <- 
+  bind_cols(for_analysis, zip_estimates) %>% 
+  mutate(zip = factor(zip))
+
+# ------------------------------------------------------------------------------
 # Convert the lon/lat to sf geometry format
 
 forested_sf <-
   for_analysis %>%
   st_as_sf(coords = c("longitude", "latitude"), crs = st_crs("EPSG:4326"))
-
 
 # ------------------------------------------------------------------------------
 # Conduct the initial split using block sampling and buffering
@@ -135,14 +171,14 @@ save(
   forested_train,
   forested_test,
   forested_rs,
-  file = "RData/forested_data.RData"
+  file = "forested_data.RData"
 )
 save(
   forested_split_info,
   forested_cv_split_info,
-  file = "RData/forested_split_info.RData"
+  file = "forested_split_info.RData"
 )
-save(forested_sf, file = "RData/forested_sf.RData")
+save(forested_sf, file = "forested_sf.RData")
 
 # ------------------------------------------------------------------------------
 # Session versions
