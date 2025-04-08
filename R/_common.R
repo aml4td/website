@@ -288,6 +288,9 @@ r_comp <- function(stub) {
 # formatting data
 
 pval <- function(x, format = "html", max_zeros = 4) {
+  if (is.na(x)) {
+    return("")
+  }
 
   min_log <- floor(-log10(x))
   if (min_log < max_zeros) {
