@@ -48,7 +48,6 @@ pkg_chr <- function(x) {
 
 # ------------------------------------------------------------------------------
 
-
 holdout_plots <- function(x, resid_rng, alpha = 3/4) {
   require(patchwork)
 
@@ -284,3 +283,28 @@ r_comp <- function(stub) {
     .open = "[", .close = "]"
   )
 }
+
+# ------------------------------------------------------------------------------
+# formatting data
+
+pval <- function(x, format = "html", max_zeros = 4) {
+  if (is.na(x)) {
+    return("")
+  }
+
+  min_log <- floor(-log10(x))
+  if (min_log < max_zeros) {
+    res <- format(x, digits = 3, scientific = FALSE)
+  } else {
+    if (format == "plain") {
+      res <- paste0("<10^-", min_log)
+    } else if (format == "html") {
+      res <- paste0("< 10<sup>-", min_log, "</sup>")
+    } else {
+      res <- paste0("$<10^{-", min_log, "}$")
+    }
+  }
+  res
+}
+
+
