@@ -14,12 +14,12 @@ source("../R/_common.R")
 # ------------------------------------------------------------------------------
 
 library(ragg)
-library(doParallel)
+library(future.mirai)
 library(patchwork)
 library(tidymodels)
 library(bestNormalize)
 library(probably)
-library(rules) 
+library(rules)
 library(gt)
 
 # Also requires packages: Cubist, splines2, brulee
@@ -29,8 +29,7 @@ library(gt)
 
 tidymodels_prefer()
 theme_set(theme_transparent())
-cl <- makePSOCKcluster(parallel::detectCores(logical = TRUE))
-registerDoParallel(cl)
+plan(mirai_multisession)
 set_options()
 
 # ------------------------------------------------------------------------------
@@ -431,16 +430,22 @@ get_rule_info <- function(number, x) {
   )
 }
 
-all_rules <- foreach(i = 1:100, .combine = bind_rows) %dopar% get_rule_info(i, x = cb_fit)
+all_rules <- get_rule_info(100, x = cb_fit)
 num_rules <- nrow(all_rules)
 mean_rule_vars <- round(mean(all_rules$rule_mem), 1)
 mean_reg_vars <- round(mean(all_rules$reg_mem), 1)
 
-val_1_rules <- 
-  foreach(i = 1:nrow(all_rules), .combine = c) %dopar% 
-  rlang::eval_tidy(all_rules$rule_expr[[i]], data = delivery_val %>% slice(1))
-val_1_rules <- sum(val_1_rules)
+row_1 <- delivery_val %>% slice(1)
+
+all_rules <- 
+  all_rules %>% 
+  mutate(is_active = map_lgl(rule_expr, ~ rlang::eval_tidy(.x, data = row_1)))
+
+val_1_rules <- sum(all_rules$is_active) 
 val_1_pct <- round(100 * val_1_rules / num_rules)
+
+cb_active <- unique(unlist(map(all_rules$rule_expr, all.vars)))
+cb_unused <- ncol(delivery_train) - 1 - length(cb_active)
 
 ### 
 
@@ -858,8 +863,9 @@ At face value, model building appears straightforward:  pick a modeling techniqu
 #| include: false
 
 save(lin_reg_res, file = "../RData/deliveries_lm.RData", compress = TRUE)
+save(cb_fit, cb_active, cb_unused, all_rules, 
+     file = "../RData/deliveries_cubist.RData", compress = TRUE)
 
-stopCluster(cl)
 ```
 
 ## Chapter References {.unnumbered}

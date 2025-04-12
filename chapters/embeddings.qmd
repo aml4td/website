@@ -21,14 +21,13 @@ library(patchwork)
 library(scales)
 library(modeldatatoo) # remove this later with setup file
 library(viridis)
-library(doParallel)
+library(future.mirai)
 
 # ------------------------------------------------------------------------------
 # set options
 tidymodels_prefer()
 theme_set(theme_transparent())
-cl <- makePSOCKcluster(parallel::detectCores(logical = FALSE))
-registerDoParallel(cl)
+plan(mirai_multisession)
 set_options()
 ```
 
@@ -39,7 +38,7 @@ source("../R/setup_ames.R")
 source("../R/setup_chemometrics.R")
 ```
 
-When there are a multitude of predictors, it might be advantegous to condense them into a smaller number of artificial features. To be useful, this smaller set should represent what is essential in the original data. This process is often called _feature extraction_, _dimension reduction_, or _manifold learning_. We’ll use a more general term currently en vogue: **embeddings**. While this chapter focuses on feature extraction, embeddings  can be used for other purposes, such as converting non-numeric data (e.g., text) into a more usable numeric format. 
+When there are a multitude of predictors, it might be advantageous to condense them into a smaller number of artificial features. To be useful, this smaller set should represent what is essential in the original data. This process is often called _feature extraction_, _dimension reduction_, or _manifold learning_. We’ll use a more general term currently en vogue: **embeddings**. While this chapter focuses on feature extraction, embeddings  can be used for other purposes, such as converting non-numeric data (e.g., text) into a more usable numeric format. 
 
 This chapter will examine several primary classes of embedding methods that can achieve multiple purposes. First, we’ll consider linear methods that take a numeric input matrix $\boldsymbol{X}$ that is $n \times p$ and create a different, probably smaller set of features $\boldsymbol{X}^*$ ($n \times m$) using the transformation $\boldsymbol{X}^* = \boldsymbol{X}\boldsymbol{Q}$. We hope that we can find appropriate embeddings so that $m << p$.
 
@@ -51,7 +50,7 @@ Before beginning, we’ll introduce another data set that will be used here and 
 
 ## Example: Predicting Barley Amounts  {#sec-barley}
 
-@larsen2019deep and @pierna2020applicability describe a data set where laboratory measurements are used to predict what percentage of a liquid was lucerne, soy oil, or barley oil^[Retreived from [`https://chemom2019.sciencesconf.org/resource/page/id/13.html`](https://chemom2019.sciencesconf.org/resource/page/id/13.html)]. An instrument is used to measure how much of particular wavelengths of light are absorbed by the mixture to help determine chemical composition. We will focus on using the lab measurements to predict the percentage of barley oil in the mixture. The distribution of these values is shown in @fig-barley-data(a). 
+@larsen2019deep and @pierna2020applicability describe a data set where laboratory measurements are used to predict what percentage of a liquid was lucerne, soy oil, or barley oil^[Retrieved from [`https://chemom2019.sciencesconf.org/resource/page/id/13.html`](https://chemom2019.sciencesconf.org/resource/page/id/13.html)]. An instrument is used to measure how much of particular wavelengths of light are absorbed by the mixture to help determine chemical composition. We will focus on using the lab measurements to predict the percentage of barley oil in the mixture. The distribution of these values is shown in @fig-barley-data(a). 
 
 ```{r}
 #| label: base-rec
@@ -66,7 +65,7 @@ barley_base <-
 ```
 
 ```{r}
-#| label: fig-barley-data 
+#| label: fig-barley-data
 #| echo: false
 #| warning: false
 #| out-width: 60%
@@ -76,36 +75,36 @@ barley_base <-
 
 key <- tibble(
   barley_bin = levels(chimiometrie_2019$barley_bin),
-  midpoint = barley_breaks[-length(barley_breaks)] + diff(barley_breaks)/2
+  midpoint = barley_breaks[-length(barley_breaks)] + diff(barley_breaks) / 2
 )
 
-barley_p <- 
-  chimiometrie_2019 %>% 
+barley_p <-
+  chimiometrie_2019 %>%
   summarize(
     count = n(),
     median = median(barley),
     .by = barley_bin
-    ) %>% 
-  full_join(key, by = "barley_bin") %>% 
+  ) %>%
+  full_join(key, by = "barley_bin") %>%
   ggplot(aes(midpoint / 100, count, fill = median)) +
   geom_bar(stat = "identity", show.legend = FALSE) +
   scale_fill_viridis(option = "viridis") +
-  labs(x = "Barley", title = "(a)") + 
+  labs(x = "Barley", title = "(a)") +
   scale_x_continuous(labels = scales::label_percent())
 
-set.seed(41) 
-spect_p <- 
-    chimiometrie_2019 %>% 
-    filter(barley_bin %in% c("[0,2]", "(18,20]", "(38,40]", "(52,54]")) %>% 
-    slice_sample(n = 1, by = "barley_bin") %>% 
-    add_rowindex() %>% 
-    pivot_longer(c(starts_with("wv"))) %>% 
-    mutate(index = as.numeric(gsub("wvlgth_", "", name))) %>% 
-    full_join(wave, by = "index") %>%
-    ggplot(aes(wavelength, value, col = barley, group = .row)) + 
-    geom_line(show.legend = FALSE, linewidth = 1, alpha = 1) +
-    scale_color_viridis(option = "viridis") +
-    labs(y = "Measurement", x = "Wavelength (nm)", title = "(b)") 
+set.seed(41)
+spect_p <-
+  chimiometrie_2019 %>%
+  filter(barley_bin %in% c("[0,2]", "(18,20]", "(38,40]", "(52,54]")) %>%
+  slice_sample(n = 1, by = "barley_bin") %>%
+  add_rowindex() %>%
+  pivot_longer(c(starts_with("wv"))) %>%
+  mutate(index = as.numeric(gsub("wvlgth_", "", name))) %>%
+  full_join(wave, by = "index") %>%
+  ggplot(aes(wavelength, value, col = barley, group = .row)) +
+  geom_line(show.legend = FALSE, linewidth = 1, alpha = 1) +
+  scale_color_viridis(option = "viridis") +
+  labs(y = "Measurement", x = "Wavelength (nm)", title = "(b)")
 
 barley_p / spect_p
 ```
@@ -172,19 +171,19 @@ barley_rec <-
 barley_preproc <- bake(barley_rec, barley_train)
 
 barley_linear_trans_base <-
-  recipe(barley ~ ., data=barley_preproc) 
+  recipe(barley ~ ., data = barley_preproc)
 
 barley_pca <-
   barley_rec %>%
-  step_pca(all_numeric_predictors(), num_comp = 20, id="PCA")
+  step_pca(all_numeric_predictors(), num_comp = 20, id = "PCA")
 
-barley_pca_estimates <- prep(barley_pca, training=barley_preproc)
+barley_pca_estimates <- prep(barley_pca, training = barley_preproc)
 barley_pca_data <- bake(barley_pca_estimates, barley_preproc)
-barley_cumulative_variance <- 
-  tidy(barley_pca_estimates, id="PCA", type="variance") %>% # OR number=3.  Do the same for ICA
-  dplyr::filter(terms=="cumulative percent variance") %>%
+barley_cumulative_variance <-
+  tidy(barley_pca_estimates, id = "PCA", type = "variance") %>% # OR number=3.  Do the same for ICA
+  dplyr::filter(terms == "cumulative percent variance") %>%
   dplyr::filter(component <= 10) %>%
-  mutate(previous_cum_var = dplyr::lag(value, n=1)) %>%
+  mutate(previous_cum_var = dplyr::lag(value, n = 1)) %>%
   mutate(previous_cum_var = ifelse(component == 1, 0, previous_cum_var)) %>%
   mutate(pct_total_var = value - previous_cum_var)
 ```
@@ -205,17 +204,17 @@ barley_norm_train <- bake(barley_norm_rec, barley_val)
 
 barley_pca <-
   barley_norm_rec %>%
-  step_pca(all_numeric_predictors(), num_comp = 4, id = "pca") %>% 
+  step_pca(all_numeric_predictors(), num_comp = 4, id = "pca") %>%
   prep()
 
 barley_pca_val <- bake(barley_pca, barley_val)
 
 barley_cumulative_variance <-
-  tidy(barley_pca, id = "pca", type = "variance") %>% 
+  tidy(barley_pca, id = "pca", type = "variance") %>%
   dplyr::filter(terms == "cumulative percent variance" & component <= 10) %>%
   mutate(
-    previous_cum_var = dplyr::lag(value, n = 1), 
-    previous_cum_var = ifelse(component == 1, 0, previous_cum_var), 
+    previous_cum_var = dplyr::lag(value, n = 1),
+    previous_cum_var = ifelse(component == 1, 0, previous_cum_var),
     pct_total_var = value - previous_cum_var
   )
 ```
@@ -226,7 +225,7 @@ barley_cumulative_variance <-
 #| cache: true
 #| warning: false
 
-# For reproducibility, initialize with our own random numbers. 
+# For reproducibility, initialize with our own random numbers.
 
 set.seed(228)
 initial_loadings <- matrix(rnorm(4^2), ncol = 4)
@@ -259,7 +258,12 @@ barley_ica_val <- bake(barley_ica, barley_val)
 
 barley_pls <-
   barley_norm_rec %>%
-  step_pls(all_numeric_predictors(), outcome = "barley", num_comp = 4, id = "pls") %>% 
+  step_pls(
+    all_numeric_predictors(),
+    outcome = "barley",
+    num_comp = 4,
+    id = "pls"
+  ) %>%
   prep()
 
 barley_pls_val <- bake(barley_pls, barley_val)
@@ -270,16 +274,21 @@ barley_pls_val <- bake(barley_pls, barley_val)
 #| echo: false
 #| warning: false
 pivot_me <- function(x, method) {
-  x %>% 
-    add_rowindex() %>% 
-    pivot_longer(cols = c(-barley, -.row), names_to = "label", values_to = "value") %>% 
+  x %>%
+    add_rowindex() %>%
+    pivot_longer(
+      cols = c(-barley, -.row),
+      names_to = "label",
+      values_to = "value"
+    ) %>%
     mutate(
       component_num = gsub("[a-zA-Z]", "", label),
       component_num = as.numeric(component_num),
-      Method = method)
+      Method = method
+    )
 }
 
-all_scores_val <- 
+all_scores_val <-
   bind_rows(
     pivot_me(barley_pca_val, "PCA"),
     pivot_me(barley_ica_val, "ICA"),
@@ -289,14 +298,14 @@ all_scores_val <-
     value = ifelse(label == "PLS1", -value, value)
   )
 
-all_loadings <- 
+all_loadings <-
   bind_rows(
-    tidy(barley_pca, id = "pca"), 
+    tidy(barley_pca, id = "pca"),
     tidy(barley_ica, id = "ica"),
-    tidy(barley_pls, id = "pls") %>% 
+    tidy(barley_pls, id = "pls") %>%
       # standardize signs
       mutate(value = ifelse(component == "PLS2", -value, value))
-  ) %>% 
+  ) %>%
   mutate(
     index = gsub("wvlgth_", "", terms),
     index = as.integer(index),
@@ -304,17 +313,21 @@ all_loadings <-
     component_number = as.numeric(component_number),
     # make signs more consistent across methods
     value = ifelse(id == "pca" & component_number == 2, -value, value),
-  ) %>% 
-  dplyr::select(-terms) %>% 
-  dplyr::filter(component_number <= 4) %>% 
+  ) %>%
+  dplyr::select(-terms) %>%
+  dplyr::filter(component_number <= 4) %>%
   mutate(
     component_number = format(component_number),
     id = factor(id, levels = c("pca", "ica", "pls"))
-  ) %>% 
+  ) %>%
   full_join(wave, by = "index")
 
-if ( !file.exists("../RData/barley_linear_embeddings.RData") ) {
-  save(all_scores_val, all_loadings, file = "../RData/barley_linear_embeddings.RData")
+if (!file.exists("../RData/barley_linear_embeddings.RData")) {
+  save(
+    all_scores_val,
+    all_loadings,
+    file = "../RData/barley_linear_embeddings.RData"
+  )
 }
 ```
 
@@ -380,18 +393,26 @@ angles <- c(angles, angles + 180)
 angles_txt <- paste0(round(angles, 0), "$^{\\circ}$")
 angles_txt <- knitr::combine_words(angles_txt)
 
-q_11 <- 
-  barley_pca_coefs %>% filter(terms == "wvlgth_001" & component == "PC1") %>%
-  pluck("value") %>% round(2)
-q_12 <- 
-  barley_pca_coefs %>% filter(terms == "wvlgth_050" & component == "PC1") %>%
-  pluck("value") %>% round(2)
-q_21 <- 
-  barley_pca_coefs %>% filter(terms == "wvlgth_001" & component == "PC2") %>%
-  pluck("value") %>% round(2)
-q_22 <- 
-  barley_pca_coefs %>% filter(terms == "wvlgth_050" & component == "PC2") %>%
-  pluck("value") %>% round(2)
+q_11 <-
+  barley_pca_coefs %>%
+  filter(terms == "wvlgth_001" & component == "PC1") %>%
+  pluck("value") %>%
+  round(2)
+q_12 <-
+  barley_pca_coefs %>%
+  filter(terms == "wvlgth_050" & component == "PC1") %>%
+  pluck("value") %>%
+  round(2)
+q_21 <-
+  barley_pca_coefs %>%
+  filter(terms == "wvlgth_001" & component == "PC2") %>%
+  pluck("value") %>%
+  round(2)
+q_22 <-
+  barley_pca_coefs %>%
+  filter(terms == "wvlgth_050" & component == "PC2") %>%
+  pluck("value") %>%
+  round(2)
 ```
 
 To demonstrate, we chose two predictors in the barley data. They correspond to wavelengths^[These wavelengths correspond to the 1<sup>st</sup> and 50<sup>th</sup> predictors.] 1,300 and 1,398 shown in @fig-barley-data(b).  In the data, these two predictors were preprocessed using the ORQ procedure (@sec-skewness). The standardized versions of the predictors have a correlation of `r barley_val_cor` and are shown in @fig-pca-rotation(a). 
@@ -415,8 +436,6 @@ Because of this illustrative example’s low-dimensional aspect, this solution i
 #| fig-width: 4
 #| out-width: 100%
 #| dev: png
-#| dev-args:
-#|   bg: transparent
 barley_norm_train %>%
   ggplot(aes(wvlgth_001, wvlgth_050, col = barley)) +
   geom_point(cex = 2, alpha = 1 / 3, show.legend = FALSE) +
@@ -424,7 +443,8 @@ barley_norm_train %>%
   theme_transparent() +
   labs(x = "Wavelength 1300", y = "Wavelength 1398", title = "(a)") +
   coord_obs_pred()
-``` 
+```
+
 ```{r}
 #| label: pca-rotation-gif
 #| echo: false
@@ -496,7 +516,8 @@ source("https://raw.githubusercontent.com/aml4td/website/main/R/shiny-setup.R")
 source("https://raw.githubusercontent.com/aml4td/website/main/R/shiny-linear-scores.R")
 
 app
-```
+`
+``
 :::
 
 A visualization of the four new features for different linear embedding methods. The data shown are the validation set results.
@@ -523,10 +544,13 @@ library(viridis)
 library(dplyr)
 
 source("https://raw.githubusercontent.com/aml4td/website/main/R/shiny-setup.R")
-source("https://raw.githubusercontent.com/aml4td/website/main/R/shiny-linear-loadings.R")
+source(
+  "https://raw.githubusercontent.com/aml4td/website/main/R/shiny-linear-loadings.R"
+)
 
 app
-```
+``
+`
 :::
 
 The loadings for the first four components of each linear embedding method as a function of wavelength.
@@ -686,10 +710,22 @@ pls_wavelength <-
 
 comp1_wavelength_comparison <-
   bind_rows(pca_wavelength, ica_wavelength, pls_wavelength) %>%
-  rename(`1300` = wvlgth_001,
-         `1900` = wvlgth_250,
-         `2398` = wvlgth_550) %>%
-  pivot_longer(cols=c(`1300`, `1900`, `2398`), values_to="Measurement", names_to="Wavelength") %>%
+  rename(`
+1300
+` = wvlgth_001,
+         `
+1900
+` = wvlgth_250,
+         `
+2398
+` = wvlgth_550) %>%
+  pivot_longer(cols=c(`
+1300
+`, `
+1900
+`, `
+2398
+`), values_to="Measurement", names_to="Wavelength") %>%
   mutate(Wavelength = factor(Wavelength, levels=c("1300", "1900", "2398")),
          Method = factor(Method, levels=c("PCA", "ICA", "PLS")))
 ```
@@ -970,7 +1006,7 @@ one_d_df <- bind_rows(mds_1D_df, isomap_1D_df)
 #| fig-height: 8
 #| fig-cap: "(a) A collection of samples associated with three outcome classes. (b) A diagram of the two nearest neighbors for each data point. (c) A one-dimensional projection using two different methods: non-metric MDS and Isomap."
 
-base_p <- 
+base_p <-
   pen_subset %>%
   ggplot(aes(x = length, y = depth)) +
   coord_fixed(ratio = ar) +
@@ -989,43 +1025,49 @@ orig_p <-
 
 knn_p <- base_p
 
-for(i in 1:n) {
-  tmp <- pen_subset[nearest[[i]], 1:2] %>% rename_with(~paste0(., "_end"))
+for (i in 1:n) {
+  tmp <- pen_subset[nearest[[i]], 1:2] %>% rename_with(~ paste0(., "_end"))
   dat <- pen_subset %>% slice(rep(i, 2)) %>% bind_cols(tmp)
 
   knn_p <-
     knn_p +
-    geom_segment(data = dat, aes(xend = length_end, yend = depth_end),
-                 col = "grey")
+    geom_segment(
+      data = dat,
+      aes(xend = length_end, yend = depth_end),
+      col = "grey"
+    )
 }
 knn_p <-
   knn_p +
-    geom_point(
-      # pch = 16,
-      cex = 8,
-      aes(col = class, shape = class),
-      show.legend = FALSE
-    ) +
+  geom_point(
+    # pch = 16,
+    cex = 8,
+    aes(col = class, shape = class),
+    show.legend = FALSE
+  ) +
   geom_text(aes(label = sample), col = "white", show.legend = FALSE) +
-  labs(title = "(b) 2-Nearest Neighbors", x = "Predictor A", y = "Predictor B") 
+  labs(title = "(b) 2-Nearest Neighbors", x = "Predictor A", y = "Predictor B")
 
-### 
+###
 
-  one_d_p <-
-    one_d_df %>%
-    ggplot(aes(x = MDS_1, y = method)) +
-      geom_point(
-        # pch = 16,
-        cex = 8,
-        aes(col = class, shape = class),
-        show.legend = FALSE
-      ) +
-    geom_text(aes(label = sample), col = "white", show.legend = FALSE) +
-    labs(title = "(c) 1 Dimensional MDS (two ways)", y = NULL, 
-         x = "Embedded Value") +
-    scale_color_brewer(palette = "Dark2")
-  
-### 
+one_d_p <-
+  one_d_df %>%
+  ggplot(aes(x = MDS_1, y = method)) +
+  geom_point(
+    # pch = 16,
+    cex = 8,
+    aes(col = class, shape = class),
+    show.legend = FALSE
+  ) +
+  geom_text(aes(label = sample), col = "white", show.legend = FALSE) +
+  labs(
+    title = "(c) 1 Dimensional MDS (two ways)",
+    y = NULL,
+    x = "Embedded Value"
+  ) +
+  scale_color_brewer(palette = "Dark2")
+
+###
 
 layout <- "
 AAAAAAAA
@@ -1078,15 +1120,15 @@ neighbor_grid <- c(5, 20, 50)
 isomap_grid <- NULL
 for (i in neighbor_grid) {
   set.seed(1)
-  tmp_rec <- 
-    barley_base %>% 
-    step_isomap(all_numeric_predictors(), neighbors = i, num_terms = 2) %>% 
+  tmp_rec <-
+    barley_base %>%
+    step_isomap(all_numeric_predictors(), neighbors = i, num_terms = 2) %>%
     prep()
 
-  tmp_iso <- 
-    bake(tmp_rec, new_data = barley_val) %>% 
+  tmp_iso <-
+    bake(tmp_rec, new_data = barley_val) %>%
     mutate(Neighbors = i)
-  
+
   isomap_grid <- bind_rows(isomap_grid, tmp_iso)
 }
 ```
@@ -1102,8 +1144,8 @@ for (i in neighbor_grid) {
 
 isomap_grid %>%
   ggplot(aes(Isomap1, Isomap2, col = barley)) +
-  geom_point(alpha = 1 / 3, cex = 2)  +
-  facet_wrap(~ Neighbors, nrow = 1, labeller = "label_both") +
+  geom_point(alpha = 1 / 3, cex = 2) +
+  facet_wrap(~Neighbors, nrow = 1, labeller = "label_both") +
   scale_color_viridis(option = "viridis") +
   labs(x = "Isomap Embedding #1", y = "Isomap Embedding #2") +
   guides(col = guide_colourbar(barheight = 0.5))
@@ -1127,12 +1169,12 @@ where $\sigma$ is a scaling parameter that can be tuned. If two points are not n
 #| results: asis
 
 sigma <- 1 / 2
-wt_mat <- exp(-pen_dist/sigma)
+wt_mat <- exp(-pen_dist / sigma)
 
 adj_mat <- pen_dist * 0
 
 for (i in 1:n) {
-  nn <-  nearest[[i]]
+  nn <- nearest[[i]]
   for (j in seq_along(nn)) {
     adj_mat[i, nn[j]] <- 1
     adj_mat[nn[j], i] <- 1
@@ -1204,7 +1246,7 @@ $$
 
 Unlike the previous weighting system, the resulting $n \times n$ matrix may not be symmetric, so the final weights are computed using $p_{ij} = p_{j|i} + p_{i|j} - p_{j|i}p_{i|j}$. 
 
-UMAP performs a similar weight calculation for the embedded values $\boldsymbol{x}^*$. We'll denote the probability that embedded points $\boldsymbol{x}_i^*$ and $\boldsymbol{x}_j^*$ are connected as $p_{ij}^*$. We'd like the algorthim to estimate these values such that $p_{ij} \approx p_{ij}^*$. 
+UMAP performs a similar weight calculation for the embedded values $\boldsymbol{x}^*$. We'll denote the probability that embedded points $\boldsymbol{x}_i^*$ and $\boldsymbol{x}_j^*$ are connected as $p_{ij}^*$. We'd like the algorithm to estimate these values such that $p_{ij} \approx p_{ij}^*$. 
 
 Numerical optimization methods^[Specifically gradient descent with a user-defined learning rate.] used to estimate the $n \times m$ values $x^*_{ij}$. The process is initialized using a very sparse Laplacian eigenmap, the first few PCA components, or random uniform numbers. The objective function is based on cross-entropy and attempts to make the graphs in the input and embedded dimensions as similar as possible by minimizing:   
 
@@ -1243,7 +1285,8 @@ source("https://raw.githubusercontent.com/aml4td/website/main/R/shiny-setup.R")
 source("https://raw.githubusercontent.com/aml4td/website/main/R/shiny-umap.R")
 
 app
-```
+``
+`
 :::
 
 A visualization of UMAP results for the barley data using different values for several tuning parameters. The points are the validation set values. 
@@ -1356,12 +1399,12 @@ cent_shrunk_path <-
 #| out-width: 80%
 #| fig-width: 6.25
 #| fig-height: 4
-#| fig-cap: An example of shrunken, class-specific centroids. Panel (a) shows data where there are three classes. Panel (b) demonstrates how, with increasing regularization, the centorids converge towards the global centroid (the black open circle). 
+#| fig-cap: An example of shrunken, class-specific centroids. Panel (a) shows data where there are three classes. Panel (b) demonstrates how, with increasing regularization, the centorids converge towards the global centroid (the black open circle).
 #| fig-alt: Nearest centroids
 
-three_class_points <- 
-  three_class_dat %>% 
-  ggplot(aes(x_1, x_2)) + 
+three_class_points <-
+  three_class_dat %>%
+  ggplot(aes(x_1, x_2)) +
   geom_point(
     aes(col = class, pch = class),
     cex = 1,
@@ -1369,13 +1412,13 @@ three_class_points <-
     show.legend = FALSE
   ) +
   labs(x = expression(x[1]), y = expression(x[2])) +
-  scale_color_brewer(palette = "Dark2") + 
+  scale_color_brewer(palette = "Dark2") +
   scale_shape_manual(values = c(21, 22, 24)) +
   ggtitle("(a)")
 
-three_class_path <- 
-  three_class_dat %>% 
-  ggplot(aes(x_1, x_2)) + 
+three_class_path <-
+  three_class_dat %>%
+  ggplot(aes(x_1, x_2)) +
   geom_point(aes(col = class, pch = class), alpha = 0.27, pch = 1, cex = 1) +
   geom_point(data = cent_class, aes(col = class, pch = class), cex = 3) +
   geom_path(
@@ -1389,9 +1432,15 @@ three_class_path <-
       type = "open"
     )
   ) +
-  geom_point(data = cent_overall, col = "black", cex = 8, pch = 21, show.legend = FALSE)  +
+  geom_point(
+    data = cent_overall,
+    col = "black",
+    cex = 8,
+    pch = 21,
+    show.legend = FALSE
+  ) +
   labs(x = expression(x[1]), y = expression(x[2])) +
-  scale_color_brewer(palette = "Dark2") + 
+  scale_color_brewer(palette = "Dark2") +
   scale_shape_manual(values = c(16, 15, 17)) +
   ggtitle("(b)")
 

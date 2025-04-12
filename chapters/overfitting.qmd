@@ -23,13 +23,12 @@ library(patchwork)
 library(rlang)
 library(kernlab)
 library(splines2)
-library(doParallel)
+library(future)
 
 # ------------------------------------------------------------------------------
 # Set options
 
-cl <- makePSOCKcluster(parallel::detectCores(logical = TRUE))
-registerDoParallel(cl)
+plan("multisession")
 tidymodels_prefer()
 theme_set(theme_transparent())
 set_options()
@@ -77,8 +76,7 @@ When the cost is low, the results are often boundaries with low complexity. @fig
 f <- expr(-1 - 4 * A - 2 * B - 0.2 * A^2 + 1 * B^2)
 
 x_seq <- seq(-4, 4, length.out = 100)
-grid <-
-  crossing(A = seq(-3, 3, length.out = 100), B = x_seq) %>%
+grid <- crossing(A = seq(-3, 3, length.out = 100), B = x_seq) %>%
   mutate(
     lp = rlang::eval_tidy(f, data = .)
   )
@@ -94,13 +92,12 @@ sim_cols <- c("#D55E00", "#56B4E9")
 # probabilities; the latter are not reproducible with ksvm()
 svm_grid_vals <- function(cost = 1) {
   set.seed(323)
-  res <-
-    ksvm(
-      as.matrix(sim_tr[, 1:2]),
-      y = sim_tr$class,
-      C = cost,
-      kpar = list(sigma = 10^-1)
-    ) %>%
+  res <- ksvm(
+    as.matrix(sim_tr[, 1:2]),
+    y = sim_tr$class,
+    C = cost,
+    kpar = list(sigma = 10^-1)
+  ) %>%
     predict(as.matrix(grid[, 1:2]), type = "decision")
   colnames(res) <- "value"
   as_tibble(res) %>% bind_cols(grid)
@@ -110,8 +107,7 @@ high_cost <- svm_grid_vals(2^20)
 mid_cost <- svm_grid_vals(1)
 low_cost <- svm_grid_vals(1 / 100)
 
-base_plot <-
-  sim_tr %>%
+base_plot <- sim_tr %>%
   ggplot(aes(A, B)) +
   geom_point(
     aes(col = class, pch = class),
@@ -133,19 +129,16 @@ base_plot <-
   labs(x = "Predictor A", y = "Predictor B") +
   scale_color_manual(values = sim_cols)
 
-pointers <-
-  tibble(
-    A = c(-2.0, 2.00, 2.00),
-    B = c(2.4, 1.5, -3.5),
-    C = c(-1.3, 1.25, 1.25),
-    D = c(2.4, 1.5, -3.5)
-  )
+pointers <- tibble(
+  A = c(-2.0, 2.00, 2.00),
+  B = c(2.4, 1.5, -3.5),
+  C = c(-1.3, 1.25, 1.25),
+  D = c(2.4, 1.5, -3.5)
+)
 
-pointers_blowback <-
-  tibble(A = c(2.20), B = c(-3.5), C = c(1.25), D = c(-3.5))
+pointers_blowback <- tibble(A = c(2.20), B = c(-3.5), C = c(1.25), D = c(-3.5))
 
-high_plot <-
-  base_plot +
+high_plot <- base_plot +
   geom_contour(
     data = high_cost,
     aes(z = value),
@@ -168,8 +161,7 @@ high_plot <-
   ggtitle("(d) High complexity") +
   labs(x = "Predictor A", y = NULL)
 
-mid_plot <-
-  base_plot +
+mid_plot <- base_plot +
   geom_contour(
     data = mid_cost,
     aes(z = value),
@@ -181,8 +173,7 @@ mid_plot <-
   ggtitle("(c) Medium complexity") +
   labs(x = "Predictor A", y = NULL)
 
-low_plot <-
-  base_plot +
+low_plot <- base_plot +
   geom_contour(
     data = low_cost,
     aes(z = value),
@@ -287,8 +278,7 @@ This tuning parameter, we'll call it $n_{min}$, is used to moderate the tree-gro
 #| message: false
 #| warning: false
 
-lgb_spec <-
-  boost_tree(trees = 100, learn_rate = 0.1, min_n = tune()) %>%
+lgb_spec <- boost_tree(trees = 100, learn_rate = 0.1, min_n = tune()) %>%
   set_mode("classification") %>%
   set_engine("lightgbm")
 
@@ -297,8 +287,7 @@ min_vals <- tibble(min_n = 3:80)
 brier <- metric_set(brier_class)
 
 set.seed(888)
-lgb_cv_res <-
-  lgb_spec %>%
+lgb_cv_res <- lgb_spec %>%
   tune_grid(
     class ~ .,
     resamples = sim_rs,
@@ -324,8 +313,7 @@ get_resub <- function(x) {
 ctrl <- control_grid(extract = get_resub)
 
 set.seed(888)
-lgb_test_res <-
-  lgb_spec %>%
+lgb_test_res <- lgb_spec %>%
   tune_grid(
     class ~ .,
     resamples = test_rs,
@@ -336,48 +324,43 @@ lgb_test_res <-
 
 # ------------------------------------------------------------------------------
 
-brier_cv <-
-  collect_metrics(lgb_cv_res) %>%
+brier_cv <- collect_metrics(lgb_cv_res) %>%
   select(min_n, brier = mean) %>%
   mutate(Method = "Resampling")
 
-brier_test <-
-  collect_metrics(lgb_test_res) %>%
+brier_test <- collect_metrics(lgb_test_res) %>%
   select(min_n, brier = mean) %>%
   mutate(Method = "Test Set")
 
-brier_resub <-
-  collect_extracts(lgb_test_res) %>%
+brier_resub <- collect_extracts(lgb_test_res) %>%
   mutate(
     train_pred = map(.extracts, ~ augment(.x, new_data = sim_tr)),
     brier = map_dbl(train_pred, ~ brier_class(.x, class, .pred_one)$.estimate)
   ) %>%
   select(min_n, brier) %>%
-  mutate(Method = "Resubstituion")
+  mutate(Method = "Resubstitution")
 
-brier_all <-
-  bind_rows(brier_resub, brier_cv, brier_test) %>%
+brier_all <- bind_rows(brier_resub, brier_cv, brier_test) %>%
   mutate(
     Method = factor(
       Method,
-      levels = c("Resubstituion", "Test Set", "Resampling")
+      levels = c("Resubstitution", "Test Set", "Resampling")
     )
   )
 
 method_cols <- c(
-  Resubstituion = "#f6c85f",
+  Resubstitution = "#f6c85f",
   "Test Set" = "#6f4e7c",
   Resampling = "#0b84a5"
 )
 
-min_n_df <-
-  brier_all %>%
+min_n_df <- brier_all %>%
   slice_min(brier, n = 1, by = Method)
 ```
 
-We took the training data and fit models using values $n_{min}$ = 3, 4, ..., 80. To understand performance, the Brier score [@brier1950verification;@steyerberg2009] is used (described in @sec-brier). It is an error metric for classification models (similar to RMSE) and measures how close the predicted probabilities are to their binary (i.e., 0/1) values. A Brier score of zero is a perfect model, and ineffectual models tend to have values $\ge$ 0.25. 
+We took the training data and fit models using values $n_{min}$ = 3, 4, ..., 80. To understand performance, the Brier score [@brier1950verification;@steyerberg2009] is used. It is an error metric for classification models (similar to RMSE) and measures how close the predicted probabilities are to their binary (i.e., 0/1) values. A Brier score of zero is a perfect model, and ineffectual models tend to have values $\ge$ 0.25. 
 
-@fig-complexity-error shows the results. The yellow curve illustrates the Brier score when the training set is re-predicted. There is a sharp increase in error as the tuning parameter values increase. This line suggests that we use very small values. The smallest Brier score is associated with $n_{min}$ = `r min_n_df$min_n[min_n_df$Method == "Resubstituion"]` (producing an effectively zero Brier score).
+@fig-complexity-error shows the results. The yellow curve illustrates the Brier score when the training set is re-predicted. There is a sharp increase in error as the tuning parameter values increase. This line suggests that we use very small values. The smallest Brier score is associated with $n_{min}$ = `r min_n_df$min_n[min_n_df$Method == "Resubstitution"]` (producing an effectively zero Brier score).
 
 ```{r}
 #| label: fig-complexity-error
@@ -447,7 +430,7 @@ One tuning parameter used in tree-based ensembles and neural networks is the _le
 
 Suppose that the performance goal is to minimize some notion of error (e.g., RMSE, the Brier score, etc.). @fig-learn-rate-grid shows an example of how the learning rate can affect the model error^[This was taken from a real example.]. At low rates, the error is high. Increasing the rate results in a drop in error that reaches a trough of optimal performance. However, increasing the learning rate at some point causes a different type of underfitting^[A very high learning rate for tree-based ensembles can result in models that produce near-constant predicted values (as opposed to many unique predicted values that are inaccurate).], increasing the error. 
 
-The solid points illustrate a very simple five-point grid of errors whose y-axis value is the resampled error. While this grid does not pick the absolute best value, it does result in a model with good performance (relatively speaking) very quickly. If a larger grid were used, we would have placed a grid point much closer the optimal value.
+The solid points illustrate a very simple five-point grid of errors whose y-axis value is the resampled error. While this grid does not pick the absolute best value, it does result in a model with good performance (relatively speaking) very quickly. If a larger grid were used, we would have placed a grid point much closer to the optimal value.
 
 ```{r}
 #| label: fig-learn-rate-grid
@@ -458,8 +441,7 @@ The solid points illustrate a very simple five-point grid of errors whose y-axis
 #| fig-cap: An example of grid search containing five candidates for a learning rate parameter.
 
 set.seed(1)
-grid_points <-
-  grid_points %>%
+grid_points <- grid_points %>%
   mutate(
     smoothed = stats::filter(mean, rep(1 / 3, 3)),
     smoothed = if_else(is.na(smoothed), mean, smoothed),
@@ -482,7 +464,7 @@ Grid search pre-defines the grid points and all of them are tested before the re
 
 The other type of search method is _iterative_. These tools start with one or more initial candidate points and conduct analyses that predict which tuning parameter value(s) should be evaluated next. The most widely used iterative tuning method is **Bayesian optimization** [@MockusBO;@gramacy2020surrogates;@garnett2023]. After each candidate is evaluated, a Bayesian model is used to suggest the next value and this process repeats until a pre-defined number of iterations is reached. Any search method could be used, such as simulated annealing, genetic algorithms, and others. 
 
-@fig-learn-rate-seq has an animation to demonstrate. First, three initial points were sampled (shown as open circles). A Bayesian model is fit to these data points and is used to predict the _probability distribution_ of the metric (e.g. RMSE, Brier score, .etc). A tool called an acquisition function is utilized to choose which learning rate value to evaluate on the next search iteration based on the mean and variance of the predicted distribution. In @fig-learn-rate-seq, this process repeats for a total of `r max(bayes_points$.iter)` iterations. 
+@fig-learn-rate-seq has an animation to demonstrate. First, three initial points were sampled (shown as open circles). A Bayesian model is fit to these data points and is used to predict the _probability distribution_ of the metric (e.g. RMSE, Brier score, etc.). A tool called an acquisition function is utilized to choose which learning rate value to evaluate on the next search iteration based on the mean and variance of the predicted distribution. In @fig-learn-rate-seq, this process repeats for a total of `r max(bayes_points$.iter)` iterations. 
 
 ```{r}
 #| label: fig-learn-rate-seq
@@ -500,9 +482,3 @@ All of our optimization methods assume that a reasonable range of tuning paramet
 
 ## Chapter References {.unnumbered}
 
-```{r}
-#| label: teardown-cluster
-#| include: false
-
-stopCluster(cl)
-```
