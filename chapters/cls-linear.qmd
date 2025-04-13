@@ -1,0 +1,203 @@
+---
+knitr:
+  opts_chunk:
+    cache.path: "../_cache/cls-linear/"
+---
+
+# Generalized Linear and Additive Classifiers {#sec-cls-linear}
+
+```{r}
+#| label: cls-linear-setup
+#| include: false
+source("../R/_common.R")
+
+# ------------------------------------------------------------------------------
+
+library(tidymodels)
+library(future)
+library(gt)
+
+# ------------------------------------------------------------------------------
+# set options
+
+tidymodels_prefer()
+theme_set(theme_transparent())
+set_options()
+plan("multisession")
+
+# ------------------------------------------------------------------------------
+# load data 
+
+load("../RData/forested_data.RData")
+load("../RData/logistic_bayes.RData")
+```
+
+## Exploring Forestation Data  {#sec-forestation-eda}
+
+### Feature engineering 
+
+## Logistic Regression {#sec-logistic-reg}
+
+### Maximum Likelihood Estimation  {#sec-logistic-mle}
+
+### Regularized {#sec-logistic-penalized}
+
+### Bayesian Estimation {#sec-logistic-bayes}
+
+Now that we've seen how to find parameter estimates for logistic regression via maximum likelihood (penalized or unpenalized), let's discuss how Bayesian estimation works. This explanation will be very reductive; the mechanisms for serious Bayesian analysis are highly optimized and complex. Our example will demonstrate the main points but is insufficient for solving real problems. 
+
+Recall that the Bayesian posterior distribution is the endpoint. It combines our prior belief with the observed data to make a complete probabilistic description of the data and the parameters. For small-scale illustration, we'll use a single predictor model: 
+
+$$
+log\left(\frac{\pi_i}{1 - \pi_i}\right) = \beta_0 + \beta_1 {x}_i
+$$ 
+
+where $i=1, \ldots, 100$. We'll simulate the 100 training set data points using $\beta_0 = 1.0$ and $\beta_1 = -1.5$. Let's assume that the data are independent Bernoulli random variables. The predictor data were uniformly distributed between $\pm 1$. Using these specifications, our data set has an event rate of `r round(mean(tr_data$class== "A")*100, 1)`%. 
+
+Instead of maximizing the likelihood, the goal is to optimize the posterior distribution:
+
+$$
+Pr[\boldsymbol{\beta}| x] = \frac{Pr[\boldsymbol{\beta}]  \ell(x| \boldsymbol{\beta})}{Pr[x]}
+$$
+
+As mentioned in @sec-bayes, we are trying to estimate a distribution and not just the values of our two unknown parameters. To do so, we need two prior distributions. If we know a lot about the data, we might be able to inject some opinion into the analysis. For example, if we were extremely sure that the slope parameter $\beta_1$ should be non-negative, our prior could be a right-skewed distribution with no negative values. # spike-slab
+
+In many cases, though, we might err on the side of choosing very broad, diffuse distributions. The regression parameters generally take up values on the entire real line, so our priors will both be independently Gaussian $N(0, 10)$. 
+
+At this point, we can calculate the likelihood and the prior probabilities for proposed parameter values. Note that Bayes Rule above also includes $Pr[x]$. This is a normalizing constant and is not a function of the unknown parameters. It is not generally ignorable, but, in this case, the methodology used here does not require its calculation; we'll multiply the prior and likelihood to compute an unnormalized posterior probability. 
+
+One small problem is numerical. As we multiply a collection of small numbers, the product can become so small that it is indistinguishable from absolute zero. The solution is often to compute logarithms of the probabilities and add them (maximizing the sum of the log posterior is the same as maximizing it in the natural units). This may seem trivial, but it also helps us understand the effect of the prior. The prior has two probability values in the example, and $Pr[\boldsymbol{\beta}]$ is their product. The likelihood for this example is the product of 100 probability density values. When taking the log of the posterior, we're summing 102 log probabilities, two of which are from the prior. Although these two values come from different probability scales, they contribute to less than 2% of the total sum. Suppose that our training set consisted of eight data points. Now, the prior accounts for 20% of the posterior. This shows how, all other things being equal, the effect of the prior can be limited (unless it is extraordinarily opinionated and/or narrow). 
+
+The Metropolis-Hastings (MH) algorithm is used to demonstrate the process of estimating parameters. Again, currently, technology for estimating the posterior is more complex and effective, but this method illustrates MCMC optimization. The process will seem similar; simulated annealing is an application of MH. 
+
+We start with initial samples from the two prior distributions, denoted as $\boldsymbol{\beta}_0$. Using these and our data, we calculate the unnormalized posterior probability. As with simulated annealing, we can make a small more within a "local neighborhood.". We'll take a simple approach and simulate proposed values, $\boldsymbol{\beta}_1$, that are within $\pm 2.0$ of our current initial values. After computing the second posterior value: 
+
+* If the new posterior is larger than the first, accept $\boldsymbol{\beta}_1$ as our new best estimate. 
+* Otherwise, we can accept $\boldsymbol{\beta}_1$ if a random uniform number is larger than the ratio of the first posterior value to the second. 
+
+If $\boldsymbol{\beta}_1$ is close (in posterior probability) to $\boldsymbol{\beta}_0$, we have a higher probability of accepting it (as with simulated annealing). 
+
+Table TODO shows the first ten iterations of MH
+
+```{r}
+#| label: tbl-mcmc
+#| tbl-cap: "The first ten iterations of the Metropolis-Hastings algorithm for Bayesian logistic regression."
+#| echo: false
+
+dec_lvls <- c("initial", "improvement", "acceptable", "rejected")
+
+param <- param %>% 
+  mutate(
+    Decision =
+      case_when(
+        better ~ "improvement",
+        !better & accept ~ "acceptable",
+        TRUE ~ "rejected"
+      ),
+    Decision = ifelse(row_number() == 1, "initial", Decision),
+    Decision = factor(Decision, levels = dec_lvls)
+  )
+
+param %>% 
+  slice(1:11) %>% 
+  mutate(random = ifelse(is.na(accept_prob), NA, random)) %>% 
+  select(Iteration = iteration, Parent = parent, Intercept = beta_0, 
+         Slope = beta_1, `(Log) Posterior` = log_post, `Pr[Accept]` = accept_prob,
+         Random = random, Decision) %>% 
+  gt() %>% 
+  fmt_number(columns = c(Intercept, Slope, `(Log) Posterior`), n_sigfig = 3) %>% 
+  fmt_number(columns = c(`(Log) Posterior`), n_sigfig = 4) %>% 
+  fmt_number(columns = c(`Pr[Accept]`, Random), decimals = 3) %>% 
+  sub_missing(columns = c(`Pr[Accept]`, Parent, Random), missing_text = "---")
+```
+
+This process proceeds a large number of times. We can monitor the proposed parameter values and assess if they appear to converge to a stable parameter space. @fig-mcmc-warmup shows the progress of MH for the first `r warmup` iterations. The process starts far away from the true parameters (represented by the dotted lines), and the next 25 iterations happen to sample slope values in a narrow, negative range. There are some improved values until the slope meanders to larger values, where new proposals are consistently accepted. 
+
+
+```{r}
+#| label: fig-mcmc-warmup
+#| echo: false
+#| out-width: 60%
+#| fig-width: 5
+#| fig-height: 5.1
+#| fig-align: center
+#| fig-cap: The warmup period for MH optimization. 
+true_means <- c(1.0, -1.5)
+
+warmup_data %>%
+	ggplot(aes(beta_0, beta_1, col = Decision, pch = Decision)) +
+	geom_point() +
+	geom_vline(xintercept = true_means[1], lty = 3) +
+	geom_hline(yintercept = true_means[2], lty = 3) +
+	labs(x = expression(beta[0]), y = expression(beta[1])) +
+	scale_color_manual(
+		values = c(rgb(0, 0, 0, 3 / 4), rgb(0, 0, 1, 3 / 4), rgb(0, 0, 0, 1 / 4))
+	) +
+	scale_shape_manual(values = c(16, 17, 4))
+```
+
+
+
+Around 55 iterations, the MH process has settled near the true values. For iterations six throught `r warmup`, the proposals remain in that area with `r round(100 * mean(warmup_data$Decision[55:warmup] == "rejected"), 1)`% being outright rejected, `r round(100 * mean(warmup_data$Decision[55:warmup] == "acceptable"), 1)`% are provisionally accepted, and `r round(100 * mean(warmup_data$Decision[55:warmup] == "improvement"), 1)`% are improvements. 
+
+```{r}
+#| label: post-summary
+#| echo: false
+
+post_point <- 
+  posterior %>% 
+  dplyr::select(-iteration) %>% 
+  colMeans() %>% 
+  signif(digits = 3)
+post_lower <- 
+  posterior %>% 
+  dplyr::select(-iteration) %>% 
+  map_dbl(~ quantile(.x, prob = 0.05)) %>% 
+  signif(digits = 3)
+post_upper <- 
+  posterior %>% 
+  dplyr::select(-iteration) %>% 
+  map_dbl(~ quantile(.x, prob = 0.95)) %>% 
+  signif(digits = 3)
+
+mle_coef <- 
+  glm(class ~ x, data = tr_data, family = binomial) %>% 
+  tidy()
+```
+
+At this point, it is reasonable to believe the MH has converged to the location of the optimal values. Since we may not be able to analytically determine the true distribution of the posterior, we spend a good deal of time running new iterations. The non-rejected proposals form a sample of the posterior, and we continue to sample until there are enough data points to make precise numerical summaries. After a total of `r format(nrow(param) - warmup - 1, big.mark = ",")` additional iterations, there were `r format(sum(param$Decision[(warmup+1):nrow(param)] != "rejected"), big.mark = ",")` usable samples. @fig-logistic-posterioer shows the univariate distributions of our parameters. The slope's posterior mean was `r post_point[2]`, with 90% of the samples within (`r post_lower[2]`, `r post_upper[2]`). This interval is credible and can come from a more rational probability statement about this parameter (compared to a confidence interval). 
+
+```{r}
+#| label: fig-logistic-posterioer
+#| echo: false
+#| out-width: 60%
+#| fig-width: 6
+#| fig-height: 3.1
+#| fig-align: center
+#| fig-cap: Samples of the posterior distribution (post-warm) for the two logistic regression parameters. 
+
+true_means <- c(1.0, -1.5)
+
+posterior %>%
+  pivot_longer(cols = c(intercept, slope), names_to = "parameter", values_to = "value") %>%
+  ggplot(aes(value)) +
+  geom_histogram(bins = 20, col = "white") +
+  facet_wrap(~ parameter, scales = "free_x") +
+  labs(x = "Parameter Values")
+```
+
+
+bias due to the prior; regularization. Basic maximum likelihood estimated the slope to be `r signif(mle_coef$estimate[mle_coef$term == "x"], 3)`. 
+
+post intervals
+
+
+## Multinomial Regression {#sec-multinomial-reg}
+
+## Generalized Additive Models {#sec-cls-gam}
+
+## Linear Discriminants {#sec-lda}
+
+## Naive Bayes {#sec-naive-bayes}
+
+## Chapter References {.unnumbered}
