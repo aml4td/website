@@ -16,6 +16,7 @@ source("../R/_common.R")
 library(tidymodels)
 library(future)
 library(gt)
+library(patchwork)
 
 # ------------------------------------------------------------------------------
 # set options
@@ -44,9 +45,9 @@ load("../RData/logistic_bayes.RData")
 
 ### Bayesian Estimation {#sec-logistic-bayes}
 
-Now that we've seen how to find parameter estimates for logistic regression via maximum likelihood (penalized or unpenalized), let's discuss how Bayesian estimation works. This explanation will be very reductive; the mechanisms for serious Bayesian analysis are highly optimized and complex. Our example will demonstrate the main points but is insufficient for solving real problems. 
+Now that we've seen how to find parameter estimates for logistic regression via maximum likelihood (penalized or unpenalized), let's discuss how Bayesian estimation works for logistic regression. This explanation will be very reductive; the mechanisms for serious Bayesian analysis are highly optimized and complex. Our example will demonstrate the main points but is insufficient for solving real problems. 
 
-Recall that the Bayesian posterior distribution is the endpoint. It combines our prior belief with the observed data to make a complete probabilistic description of the data and the parameters. For small-scale illustration, we'll use a single predictor model: 
+Recall that the Bayesian posterior distribution is the endpointof a Bayesian analysis. It combines our prior belief with the observed data to make a complete probabilistic description of the parameters, given the data. For small-scale illustration, we'll use a single predictor model: 
 
 $$
 log\left(\frac{\pi_i}{1 - \pi_i}\right) = \beta_0 + \beta_1 {x}_i
@@ -60,9 +61,9 @@ $$
 Pr[\boldsymbol{\beta}| x] = \frac{Pr[\boldsymbol{\beta}]  \ell(x| \boldsymbol{\beta})}{Pr[x]}
 $$
 
-As mentioned in @sec-bayes, we are trying to estimate a distribution and not just the values of our two unknown parameters. To do so, we need two prior distributions. If we know a lot about the data, we might be able to inject some opinion into the analysis. For example, if we were extremely sure that the slope parameter $\beta_1$ should be non-negative, our prior could be a right-skewed distribution with no negative values. # spike-slab
+As mentioned in @sec-bayes, we are trying to estimate a distribution and not just the values of our two unknown parameters. To do so, we need two prior distributions. If we know a lot about the data, we might be able to inject some opinion into the analysis. For example, if we were extremely sure that the slope parameter $\beta_1$ should be non-negative, our prior could be a right-skewed distribution with no negative values. 
 
-In many cases, though, we might err on the side of choosing very broad, diffuse distributions. The regression parameters generally take up values on the entire real line, so our priors will both be independently Gaussian $N(0, 10)$. 
+In many cases, though, we might err on the side of choosing very broad, diffuse distributions. The regression parameters generally take up values on the entire real line, so we'll choose our two priors to be independently Gaussian $N(0, 10)$. Considering that most values of these distributions will be within $\pm 3$ standard deviations, these are fairly flat and offer very limited opinions about what the parameters are likely to be. While @gelman2008weakly makes a recommendation for a weakly informative default prior, we'll discuss more complex methods later in this section. 
 
 At this point, we can calculate the likelihood and the prior probabilities for proposed parameter values. Note that Bayes Rule above also includes $Pr[x]$. This is a normalizing constant and is not a function of the unknown parameters. It is not generally ignorable, but, in this case, the methodology used here does not require its calculation; we'll multiply the prior and likelihood to compute an unnormalized posterior probability. 
 
@@ -70,14 +71,14 @@ One small problem is numerical. As we multiply a collection of small numbers, th
 
 The Metropolis-Hastings (MH) algorithm is used to demonstrate the process of estimating parameters. Again, currently, technology for estimating the posterior is more complex and effective, but this method illustrates MCMC optimization. The process will seem similar; simulated annealing is an application of MH. 
 
-We start with initial samples from the two prior distributions, denoted as $\boldsymbol{\beta}_0$. Using these and our data, we calculate the unnormalized posterior probability. As with simulated annealing, we can make a small more within a "local neighborhood.". We'll take a simple approach and simulate proposed values, $\boldsymbol{\beta}_1$, that are within $\pm 2.0$ of our current initial values. After computing the second posterior value: 
+We start with initial samples from the two prior distributions, denoted as $\boldsymbol{\beta}^{(0)}$. Using these and our data, we calculate the unnormalized posterior probability. As with simulated annealing, we can make a small more within a "local neighborhood.". We'll take a simple approach and simulate proposed values, $\boldsymbol{\beta}^{(1)}$, that are within $\pm 2.0$ of our current initial values. After computing the second posterior value: 
 
-* If the new posterior is larger than the first, accept $\boldsymbol{\beta}_1$ as our new best estimate. 
-* Otherwise, we can accept $\boldsymbol{\beta}_1$ if a random uniform number is larger than the ratio of the first posterior value to the second. 
+* If the new posterior is larger than the first, accept $\boldsymbol{\beta}^{(1)}$ as our new best estimate. 
+* Otherwise, we can accept $\boldsymbol{\beta}^{(1)}$ if a random uniform number is larger than the ratio of the first posterior value to the second. 
 
-If $\boldsymbol{\beta}_1$ is close (in posterior probability) to $\boldsymbol{\beta}_0$, we have a higher probability of accepting it (as with simulated annealing). 
+If $\boldsymbol{\beta}^{(1)}$ is close (in posterior probability) to $\boldsymbol{\beta}^{(0)}$, we have a higher probability of accepting it (as with simulated annealing). 
 
-Table TODO shows the first ten iterations of MH
+@tbl-mcmc shows some of the initial iterations of the MH algorithm. After the initial parameter value, another is generated to be in a nearby space. The log-posterior for this new value is smaller than the first, so we do not automatically accept it. The probability of acceptance is essentially zero though, since the difference in the log-posterior values is `r round(param$log_post[2] - param$log_post[1])`, the exponentiated value is very close to zero. The random uniform value for this decision (`r signif(param$random[2], 3)`) formally rejects it. The next proposal is again based on the initial value and is rejected. On the third try, the new parameter value has a larger log-posterior probability and is automatically accepted as the current best.  
 
 ```{r}
 #| label: tbl-mcmc
@@ -165,12 +166,12 @@ mle_coef <-
   tidy()
 ```
 
-At this point, it is reasonable to believe the MH has converged to the location of the optimal values. Since we may not be able to analytically determine the true distribution of the posterior, we spend a good deal of time running new iterations. The non-rejected proposals form a sample of the posterior, and we continue to sample until there are enough data points to make precise numerical summaries. After a total of `r format(nrow(param) - warmup - 1, big.mark = ",")` additional iterations, there were `r format(sum(param$Decision[(warmup+1):nrow(param)] != "rejected"), big.mark = ",")` usable samples. @fig-logistic-posterioer shows the univariate distributions of our parameters. The slope's posterior mean was `r post_point[2]`, with 90% of the samples within (`r post_lower[2]`, `r post_upper[2]`). This interval is credible and can come from a more rational probability statement about this parameter (compared to a confidence interval). 
+At this point, it is reasonable to believe the MH has converged to the location of the optimal values. Since we may not be able to analytically determine the true distribution of the posterior, we spend a good deal of time running new iterations. The non-rejected proposals form a sample of the posterior, and we continue to sample until there are enough data points to make precise numerical summaries. After a total of `r format(nrow(param) - warmup - 1, big.mark = ",")` additional iterations, there were `r format(sum(param$Decision[(warmup+1):nrow(param)] != "rejected"), big.mark = ",")` usable samples. @fig-logistic-posterior shows the univariate distributions of our parameters. The slope's posterior mean was `r post_point[2]`, with 90% of the samples within (`r post_lower[2]`, `r post_upper[2]`). This interval is credible and can come from a more rational probability statement about this parameter (compared to a confidence interval). 
 
 ```{r}
-#| label: fig-logistic-posterioer
+#| label: fig-logistic-posterior
 #| echo: false
-#| out-width: 60%
+#| out-width: 70%
 #| fig-width: 6
 #| fig-height: 3.1
 #| fig-align: center
@@ -186,11 +187,74 @@ posterior %>%
   labs(x = "Parameter Values")
 ```
 
+The previous section showed how penalizing the likelihood can mitigate issues with our model related to multicollinearity or irrelevant predictions. Penalization produces biased estimates for those models since they are shrunken towards zero. From a Frequentist perspective, using priors in Bayesian estimation also produces biased estimates since the posterior is shrunken to the prior (to some degree). 
 
-bias due to the prior; regularization. Basic maximum likelihood estimated the slope to be `r signif(mle_coef$estimate[mle_coef$term == "x"], 3)`. 
+We mentioned that there are more specialized priors that can be used. For example, we can choose priors to encourage sparsity in our regression parameters (as we did with the lasso model). It turns out that the regularization of the lasso model is equivalent to using a Laplace distribution (a.k.a the double exponential distribution) as a prior [@tibshirani1996regression]. @fig-sparse-posteriors (left) show an example of the Laplace distribution. Compared to a similar Gaussian distribution, the Laplacian has larger probabilities near zero and in the distribution's tails.  Bayesian models using this prior are discussed by @park2008bayesian.
 
-post intervals
+```{r}
+#| label: fig-sparse-posteriors
+#| echo: false
+#| out-width: 70%
+#| fig-width: 6
+#| fig-height: 3.1
+#| fig-align: center
+#| fig-cap: Examples of priors that can be used to encourage sparsity in the parameter values. The spike distribution has been scaled to be smaller for illustration. 
+x_seq <- seq(-25, 25, by = 0.005)
 
+dbl_expo <- function(x, mu = 0, scale = 1) {
+  1 / (2 * scale) * exp(-abs(x - mu) / scale)
+}
+
+gau_lap <- 
+  bind_rows(
+    tibble(Parameter = x_seq, density = dbl_expo(x_seq, scale = 10), Distribution = "Laplacian"),
+    tibble(Parameter = x_seq, density = dnorm(x_seq, sd = 10), Distribution = "Gaussian")
+  )
+
+p_gau_lap <-
+  ggplot(gau_lap, aes(x = Parameter, y = density, col = Distribution)) +
+  geom_line(linewidth = 3 / 4, alpha = 3 / 4) +
+  theme(legend.position = "top") + 
+  scale_color_manual(values = c("#A8BE74FF", "#BF7417FF"))
+
+slab <- dnorm(x_seq, mean = 0, sd = 10)
+
+# Normalize for printing
+spike <- dnorm(x_seq, mean = 0, sd = 0.1)
+spike <- spike / max(spike)
+spike <- spike * max(slab) * 3
+zero_spike <- spike > .Machine$double.eps
+
+spike_slab <- bind_rows(
+  tibble(Parameter = x_seq, density = slab, Distribution = "Slab"),
+  tibble(
+    Parameter = x_seq[zero_spike],
+    density = spike[zero_spike],
+    Distribution = "Spike"
+  )
+)
+
+p_spike_slab <- 
+  ggplot(spike_slab, aes(x = Parameter, y = density, col = Distribution)) +
+  labs(y = NULL) +
+  geom_line(linewidth = 3 / 4) +
+  theme(legend.position = "top") + 
+  scale_color_manual(values = c("#D64358FF", "#4F5791FF"))
+
+p_gau_lap + p_spike_slab
+```
+
+Another idea is to use a composite distribution. The "spike and slab" prior contains three distributions [@mitchell1988bayesian;@malsiner2011comparing]. The first is a slab: a very wide distribution such as our earlier N(0, 10). This is designed to represent our (weak) belief for parameters that should have a non-sparse/non-zero value. The spike element is an incredibly tight distribution centered around zero (such as an N(0, 0.1)) and typifies parameters that should have little or no effect on the model. These two choices are shown in @fig-sparse-posteriors (right). Finally, the mixture distribution has values on [0, 1] that indicate how to blend the spike and slab elements. For example, with the values given above, the spike-slab prior could be: 
+
+$$
+Pr[\beta|\alpha] = (1 - \alpha) N(0, 10) + \alpha N(0, 0.1)
+$$
+
+What should we use for the mixture prior $Pr[\alpha]$? With a Beta distribution, we could have the prior take values of the entire range. This would include a uniform distribution if we lack an opinion on the sparsity rate or enable more informative beliefs. Alternatively, we could choose a Bernoulli distribution that produces values in $\alpha \in \{0, 1\}$ with some probability. We would choose a value for $Pr[\alpha = 1]$ or put yet another prior on that parameter. 
+
+While these approaches do regularize the parameters to be closer to zero, remember that Bayesian models _do not_ produce a single parameter value but a distribution of values. Whereas the lasso and glmnet can estimate the parameters to be absolute zero, eliminating the feature from the prediction equation entirely. For Bayesian models, it will not occur. The priors shown in @fig-sparse-posteriors indicate that, theoretically, there is an infinitesimally small probability that the posterior will have many values at absolute zero. In the case of the spike-slab model, the posterior for these parameters is likely to be bimodal with one mode at zero. In summary, the Bayesian approach _does_ move values very close to zero as needed but will not exclude any features from the prediction equation. 
+
+The _posterior predictive distribution_ is used when predicting new data. If we are predicting a value of $x_0$, the posterior predictive distribution takes into account our existing posterior but also accounts for the variability that we sampled the new value, i.e., $Pr[X = x_0]$ where $X$ is the random variable for our predictor. The draws from this distribution are used to estimate the class probability. We often produce a single value for a new prediction, which could be the mean (or mode) of the posterior draws. We can also produce credible intervals for our probability. This alone may be a good reason to use Bayesian estimation for these models.  
 
 ## Multinomial Regression {#sec-multinomial-reg}
 
