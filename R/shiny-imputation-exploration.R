@@ -1,3 +1,5 @@
+# Requires the sources in shiny-setup.R
+
 ui <- fluidPage(
 	theme = grid_theme,
 	fluidRow(
@@ -49,13 +51,9 @@ ui <- fluidPage(
 	) # top fluid row
 )
 
-load(
-	url(
-		"https://raw.githubusercontent.com/aml4td/website/main/RData/simulation_data.RData"
-	)
-)
-
 server <- function(input, output, session) {
+  load(rd_url("simulation_data.RData"))
+  
 	update_app <- reactive({
 		input$update
 		isolate({
@@ -213,4 +211,5 @@ getData <- function(
 		linear_partition = linear_partition
 	)
 }
+
 app <- shinyApp(ui = ui, server = server)

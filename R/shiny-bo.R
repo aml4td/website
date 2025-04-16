@@ -1,3 +1,5 @@
+# Requires the sources in shiny-setup.R
+
 ui <- page_fillable(
 	theme = grid_theme,
 	sliderInput(

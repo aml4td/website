@@ -1,5 +1,7 @@
+# Requires the sources in shiny-setup.R
+
 ui <- page_fillable(
-	theme = bs_theme(bg = "#fcfefe", fg = "#595959"),
+	theme = grid_theme,
 	padding = "1rem",
 	layout_columns(
 		fill = FALSE,

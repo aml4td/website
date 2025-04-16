@@ -1,3 +1,5 @@
+# Requires the sources in shiny-setup.R
+
 data(fossil)
 
 ui <- page_fillable(
@@ -130,3 +132,5 @@ server <- function(input, output, session) {
 		print(p)
 	})
 }
+
+app <- shinyApp(ui, server)

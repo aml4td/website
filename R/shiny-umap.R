@@ -1,3 +1,5 @@
+# Requires the sources in shiny-setup.R
+
 ui <- fluidPage(
 	theme = grid_theme,
 	fluidRow(
