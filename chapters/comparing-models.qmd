@@ -39,6 +39,10 @@ set_options()
 # Load previous data sets
 
 source("../R/setup_deliveries.R")
+load("../RData/deliveries_lm.RData")
+load("../RData/deliveries_nnet.RData")
+load("../RData/deliveries_cubist.RData")
+
 ```
 
 ```{r}
@@ -145,7 +149,7 @@ nnet_wflow <-
   add_recipe(norm_rec)
 
 set.seed(3838)
-nnet_res <-
+nnet_rs_res <-
   fit_resamples(
     nnet_wflow,
     resamples = delivery_folds,
@@ -153,7 +157,7 @@ nnet_res <-
     metrics = reg_metrics
   )
 
-nnet_metrics <- collect_metrics(nnet_res, summarize = FALSE)
+nnet_metrics <- collect_metrics(nnet_rs_res, summarize = FALSE)
 ```
 
 In Chapters [-@sec-overfitting], [-@sec-resampling], and [-@sec-grid-search], we established several key fundamentals of building predictive models. To create an effective model, we must employ strategies to reduce overfitting, use resampling techniques to accurately measure predictive performance, and systematically search a tuning parameter space to identify values that optimize model accuracy. By following these approaches, we can have confidence that our model generalizes well to new, unseen data and provides a realistic estimate of its predictive performance.
@@ -918,144 +922,167 @@ difference_summary %>%
 
 ## Single Holdout Data Sets {#sec-compare-holdout}
 
-### Bootstrap Techniques {#sec-boot-ci}
+For test and/or validation sets, we have a single data set of predictions and true values. Since this produces a single estimate for each performance metric, we can't do any realistic statistical analysis using the abovementioned methods. Given the effort invested in model development, relying on just one value to assess predictive ability on unseen data may feel inadequate, especially since, by chance, a single holdout set result might not be a reliable estimate.
 
-After selecting the optimal tuning parameters, the training and testing data are combined to fit the final model. To evaluate this model’s predictive performance, we reserve a portion of the original data—often referred to as a validat set. If the validation set is representative of the training and testing data, we expect the model’s performance metric on the validatin set to be consistent with the results observed during cross-validation.
+Can we quantify our uncertainty around the validation set performance?  Yes, we can use bootstrap resampling [@sec-bootstrap] to gain greater confidence in our single performance estimate [@Efron1979boot]. Recall the interpretation of a 90% confidence interval given in @sec-bayes:
 
-However, unlike cross-validation, which yields a distribution of performance metrics across multiple resampled data sets, evaluation on a holdout set provides only a single performance estimate. Given the effort invested in model development, relying on just one value to assess predictive ability on unseen data may feel inadequate, especially since, by chance, the validation set result might deviate from the cross-validation results.
+> "We believe that if we were to repeat this experiment a large number of times, the true parameter value would fall between $L$ and $U$ 90% of the time." 
 
-Can we quantify our uncertainty around the validation set performance?  Yes, we can use a statistical technique called the bootstrap to gain greater confidence in the performance estimate from a single data set [@Efron1979boot].
-
-You were first introduced to the bootstrap in @sec-bootstrap, where it was applied to estimate model performance during tuning. In essence, the bootstrap involves resampling with replacement from the available data to estimate the sampling variability of a statistic. This variability can then be used to construct confidence intervals of the performance metrics of interest, offering a range of plausible values for model performance on similar validation sets.
-
-@fig-bootstrap-scheme illustrates the bootstrap process during the model building tuning phase. Recall that resampling with replacement from the training data generates multiple bootstrap samples of the same size as the original. Because sampling is done with replacement, some observations may appear multiple times within a sample, while others may be omitted. The omitted samples are used as holdout sets to evaluate model performance.
-
-To adapt this idea to a single validation set, we treat the validation set as our data source and repeatedly draw bootstrap samples from the validation set itself. Each bootstrap sample is the same size as the validation set and is created via random sampling with replacement (as illustrated in @fig-bootstrap-single-holdout-graphic). The final trained model is used to predict outcomes for each bootstrap sample, and the selected performance metric is computed for each.
+The bootstrap is designed to emulate this Frequentist philosophy. Bootstrap resampling creates a large number of alternative realizations of our holdout set by sampling with replacement^[Note that in previous diagrams of resampling schemes, the training set was being resampled. In this case, our assessment set results are resampled, and their bootstrap samples are new _analysis sets_. We are resampling the predictions in instead of the training data.]. Each of these yields a single replicate of our metric of interest, as outlined in @fig-boot-ci-scheme. This variability in these realizations is used to construct confidence intervals for a metric, offering a range of plausible values for model performance on similar holdout sets.
 
 ```{r}
-#| label: fig-bootstrap-single-holdout-graphic
+#| label: fig-boot-ci-scheme
 #| echo: false
 #| out-width: 50%
-#| fig-cap: "A schematic of how bootstrap sample statistics are created from a validation set."
+#| fig-cap: ""
 
- knitr::include_graphics("../premade/boostrap_stat.svg")
+knitr::include_graphics("../premade/boostrap_stat.svg")
 ```
 
-This process yields a distribution of performance metrics, from which bootstrap confidence intervals can be derived. These intervals offer an estimate of the uncertainty around the validation set performance and give us a sound way to express the expected range of performance across other validation sets of similar size.
-
-The bootstrap approach was applied to the three models for the food delivery time data.  @fig-bootstrap-validation-delivery illustrates the 90% bootstrap confidence intervals for each of the models.  Notice that these intervals are narrow.  This is because the number of validation set samples is large (n = `r nrow(delivery_test)`).
+There are numerous ways to compute confidence intervals from these resampled statistics, but the simplest and most popular approach computes quantiles of the resamples [@davison1997bootstrap;@EfronHastie2016a]. For example, to compute a 90% confidence interval, using the _percentile method_, the 5<sup>th</sup> and 95<sup>th</sup> percentiles are determined. Several other methods exist for computing confidence intervals, but for simplicity, we'll concentrate on the percentile method. 
 
 ```{r}
-#| label: fig-bootstrap-validation-delivery
+#| label: boot-ci-calc
+#| include: false
+#| cache: true
+
+options(future.globals.maxSize = 3.0 * 1e9)  ## 3.0 GB
+
+mae_mtr <- metric_set(mae)
+
+lin_reg_int <-
+  lin_reg_res %>% 
+  int_pctl(metrics = mae_mtr, alpha = 0.1, times = 1000) %>% 
+  mutate(model = "Linear\nRegression") %>% 
+  dplyr::select(model, .lower, .estimate, .upper)
+
+cb_int <- 
+  cb_res %>% 
+  int_pctl(metrics = mae_mtr, alpha = 0.1, times = 1000) %>% 
+  mutate(model = "Cubist") %>% 
+  dplyr::select(model, .lower, .estimate, .upper)
+
+nnet_int <- 
+  nnet_res %>% 
+  int_pctl(metrics = mae_mtr, alpha = 0.1, times = 1000) %>% 
+  mutate(model = "Neural\nNetwork") %>% 
+  dplyr::select(model, hidden_units, .lower, .estimate, .upper)
+```
+
+The bootstrap approach was applied to the three models for the food delivery time data.  For each computation, 5,000 bootstrap samples were used. @fig-boot-ci-deliveries shows the results. In Panel (a), 90% intervals were calculated for each model configuration generated during model tuning, mimicking @fig-delivery-nnet-tune. Apart from the candidates with the fewest hidden units, none of the MAE values show any statistical difference. Given that the differences in MAE are in seconds, no practical difference could be claimed. Panel (b) shows comparisons _between_ three models where the neural network model corresponds to the numerically best model. 
+
+In this case, we get a sense of the variation in MAE for each model, which helps characterize the performance uncertainty. _However_, we should not gauge whether the models differ from these intervals. As shown above, the variance of a difference should consider the _covariance_ (or correlation) between the two statistics being contrasted. If we don't, our statistical power can be substantially reduced (perhaps without realizing it). 
+
+```{r}
+#| label: fig-boot-ci-deliveries
 #| echo: false
 #| warning: false
-#| cache: true
-#| fig-width: 6
-#| fig-height: 3.5
+#| fig-width: 6.5
+#| fig-height: 6.5
 #| fig-align: "center"
-#| out-width: "70%"
-#| fig-cap: 90% bootstrap confidence intervals of the validation set MAE for each model.  The circle represent the MAE estimate of the validation set for each model.
+#| out-width: 70%
+#| fig-cap:  90% bootstrap percentile confidence intervals on the validation set MAE for the food delivery data. Both within- and between-model comparisons are shown. 
 
-# Get validation set performance and corresponding bootstrap CI
-rf_validation_res <-
-  rf_spec %>%
-  last_fit(time_to_delivery ~ ., split = delivery_split, metrics = reg_metrics)
-
-rf_validation_boot <- int_pctl(rf_validation_res, alpha = 0.90)
-
-cb_spec <-
-  cubist_rules(committees = 5)
-
-cb_validation_res <-
-  cb_spec %>%
-  last_fit(time_to_delivery ~ ., split = delivery_split, metrics = reg_metrics)
-
-cb_validation_boot <- int_pctl(cb_validation_res, alpha = 0.90)
-
-nnet_validation_res <-
-  nnet_wflow %>%
-  last_fit(time_to_delivery ~ ., split = delivery_split, metrics = reg_metrics)
-
-nnet_validation_boot <- int_pctl(nnet_validation_res, alpha = 0.90)
-
-validation_boot_mae <-
+between_p <- 
   bind_rows(
-    rf_validation_boot %>% mutate(Model = "Random Forest"),
-    cb_validation_boot %>% mutate(Model = "Cubist"),
-    nnet_validation_boot %>% mutate(Model = "Neural Network")
-  ) %>%
-  dplyr::filter(.metric == "mae") %>%
+    lin_reg_int, cb_int,
+    nnet_int %>% inner_join(best_nnet, by = "hidden_units") %>% select(-hidden_units)
+  ) %>% 
   mutate(
-    Model = factor(
-      Model,
-      levels = c("Random Forest", "Neural Network", "Cubist")
-    )
-  )
+    model = factor(model, levels = c("Linear\nRegression", "Cubist", "Neural\nNetwork"))
+  ) %>% 
+  ggplot(aes(model)) + 
+  geom_point(aes(y = .estimate)) + 
+  geom_errorbar(aes(ymin = .lower, ymax = .upper), width = 1 / 20) +
+  labs(x = NULL, y = "MAE", title = "(b) Between-Model Comparisons")
 
-ggplot(validation_boot_mae, aes(x = Model, y = .estimate)) +
-  geom_point(color = "black", shape = 1) +
-  geom_errorbar(
-    data = validation_boot_mae,
-    aes(ymin = .lower, ymax = .upper),
-    color = "black",
-    width = 0.05
-  ) +
-  ylab("MAE")
+
+within_p <- 
+  nnet_int %>% 
+  filter(.estimate < 2) %>% 
+  ggplot(aes(hidden_units)) + 
+  geom_smooth(aes(y = .estimate), se = FALSE, span = 1 / 4, col = rgb(0, 0, 1, 1 / 3)) + 
+  geom_point(aes(y = .estimate), cex = 3 / 4) + 
+  geom_errorbar(aes(ymin = .lower, ymax = .upper), width = 1, alpha = 1 / 4) +
+  labs(x = "# Hidden Units", y = "MAE", title = "(a) Within-Model Comparisons for Neural Network")
+
+within_p / between_p
 ```
 
-As the validation set size increases, the variation we expect to see in the summary statistic will decrease.  This concept is illustrated in @fig-bootstrap-single-holdout-varying-size.  In this figure, we have randomly selected subsets of varying size of the validation set and then applied the bootstrapping approach to these smaller sets.  Notice that as the sample size decreases, the width of the confidence interval increases.  Therefore, the smaller the validation set, the higher the variability will be in the estimate of model performance and the the important it is to understand the range of potential predictive performance.
+```{r}
+#| label: boot-paired-mae
+#| include: false
+#| cache: true
+
+paired_predictions <- 
+  nnet_res %>% 
+  collect_predictions(parameters = best_nnet) %>% 
+  select(nnet = .pred, .row) %>% 
+  full_join(
+    cb_res %>% 
+      collect_predictions() %>% 
+      select(cubist = .pred, .row, time_to_delivery) ,
+    by = ".row"
+  )
+
+mae_diff <- function(split) {
+  dat <- analysis(split)
+  cubist_mae <- mae(dat, time_to_delivery, cubist)$.estimate
+  nnet_mae <- mae(dat, time_to_delivery, nnet)$.estimate
+  tibble::tibble(estimate = nnet_mae - cubist_mae, term = "nnet-cubist")
+}
+
+set.seed(655)
+paired_int <- 
+  paired_predictions %>% 
+  bootstraps(time = 5000) %>% 
+  mutate(stats = map(splits, mae_diff)) %>% 
+  int_pctl(stats, alpha = 0.1)
+```
+
+To formally compare two models, we could compute the difference in their metrics using the bootstrap. Let's do this by computing a confidence interval for the MAE of the neural network minus the Cubist MAE by merging their predictions together (by a row of the validation set), bootstrapping these data, and then computing the two MAE values in their difference. In this case, the estimated difference was `r signif(paired_int$.estimate, 3)`s with 90% interval (`r signif(paired_int$.lower, 3)`, `r signif(paired_int$.upper, 3))`. This indicates that the Cubist model has a statistically lower MAE than the neural network. 
+
+Why does this seem incongruent with the intervals in @ fig-boot-ci-deliveries? There is an extremely strong correlation between the predictions from these two models: `r signif(cor(paired_predictions$nnet, paired_predictions$cubist), 3)`. This drastically reduces the standard error of the difference. The individual confidence intervals for the models do not factor in this strong covariance term. While those intervals are correct individually, they cannot judge the difference between models. 
+
+As the validation set size increases, the variation we expect to see in the summary statistic will decrease.  This concept is illustrated in @fig-boot-int-width.  In this figure, we have randomly selected subsets of varying size of the validation set and then applied the bootstrapping approach to these smaller sets.  Notice that as the sample size decreases, the width of the confidence interval increases.  Therefore, the smaller the validation set, the higher the variability will be in the estimate of model performance and the the important it is to understand the range of potential predictive performance.
 
 ```{r}
-#| label: fig-bootstrap-single-holdout-varying-size
+#| label: fig-boot-int-width
 #| echo: false
 #| fig-width: 6
 #| fig-height: 3.5
 #| fig-align: "center"
 #| out-width: "70%"
+#| cache: true
 #| fig-cap: 90% bootstrap confidence intervals of MAE for validation sets of varying size for the random forest model.  The smaller the size of the validation set, the wider the interval.
 
-n_validation <- nrow(rf_validation_res$.predictions[[1]])
-set.seed(405)
-rf_validation_res_10 <- rf_validation_res
-n_10 <- sample(c(1:n_validation), size = 10)
-rf_validation_res_10$.predictions[[1]] <-
-  rf_validation_res$.predictions[[1]][n_10, ]
-rf_validation_boot_10 <- int_pctl(rf_validation_res_10, alpha = 0.90)
-rm(rf_validation_res_10)
+cb_pred <- collect_predictions(cb_res, summarize = FALSE)
+n_validation <- nrow(cb_pred)
+val_size <- 10^seq(2, 3.7, length.out = 30)
+val_size <- floor(c(val_size, n_validation))
 
-rf_validation_res_100 <- rf_validation_res
-n_100 <- sample(c(1:n_validation), size = 100)
-rf_validation_res_100$.predictions[[1]] <-
-  rf_validation_res$.predictions[[1]][n_100, ]
-rf_validation_boot_100 <- int_pctl(rf_validation_res_100, alpha = 0.90)
-rm(rf_validation_res_100)
+val_size_res <- NULL
+for (i in val_size) {
+  set.seed(i)
+  tmp <- 
+    cb_pred %>% 
+    slice_sample(n = i) %>% 
+    bootstraps(times = 5000) %>% 
+    mutate(
+      dat = map(splits, analysis),
+      stats = map(dat, ~ mae_mtr(.x, time_to_delivery, .pred)),
+      stats = map(stats, ~ dplyr::select(.x, estimate = .estimate) %>% mutate(term = i))
+    ) %>% 
+    int_pctl(stats, alpha = 0.10)
+  val_size_res <- bind_rows(val_size_res, tmp)
+}
 
-rf_validation_res_1000 <- rf_validation_res
-n_1000 <- sample(c(1:n_validation), size = 1000)
-rf_validation_res_1000$.predictions[[1]] <-
-  rf_validation_res$.predictions[[1]][n_1000, ]
-rf_validation_boot_1000 <- int_pctl(rf_validation_res_1000, alpha = 0.90)
-rm(rf_validation_res_1000)
-
-rf_boot_mae <-
-  bind_rows(
-    rf_validation_boot_10 %>% mutate(Size = "10"),
-    rf_validation_boot_100 %>% mutate(Size = "100"),
-    rf_validation_boot_1000 %>% mutate(Size = "1000"),
-    rf_validation_boot %>% mutate(Size = "Original")
-  ) %>%
-  dplyr::filter(.metric == "mae") %>%
-  mutate(Size = factor(Size, levels = c("10", "100", "1000", "Original")))
-
-ggplot(rf_boot_mae, aes(x = Size, y = .estimate)) +
-  geom_point(color = "black", shape = 1) +
-  geom_errorbar(
-    data = rf_boot_mae,
-    aes(ymin = .lower, ymax = .upper),
-    color = "black",
-    width = 0.05
-  ) +
-  ylab("MAE")
+val_size_res %>% 
+  mutate(width = .upper - .lower) %>% 
+  ggplot(aes(x = term, y = width)) +
+  geom_point() +
+  labs(x = "Validation Set Size", y = "Confidence Interval Width") +
+  scale_x_log10()
 ```
 
 ## Conclusion
