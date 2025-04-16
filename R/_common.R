@@ -307,4 +307,12 @@ pval <- function(x, format = "html", max_zeros = 4) {
   res
 }
 
+# ------------------------------------------------------------------------------
+# From recipes::names0 and used in shinylive chunks
 
+names_zero_padded <- function(num, prefix = "x", call = rlang::caller_env()) {
+  rlang:::check_number_whole(num, min = 1, call = call)
+  ind <- format(seq_len(num))
+  ind <- gsub(" ", "0", ind)
+  paste0(prefix, ind)
+}
