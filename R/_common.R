@@ -308,7 +308,7 @@ pval <- function(x, format = "html", max_zeros = 4) {
 }
 
 # ------------------------------------------------------------------------------
-# From recipes::names0 and used in shinylive chunks
+# From recipes::names0 and used in shinylive chunks; see https://github.com/aml4td/website/pull/80
 
 names_zero_padded <- function(num, prefix = "x", call = rlang::caller_env()) {
   rlang:::check_number_whole(num, min = 1, call = call)
