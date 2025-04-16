@@ -25,8 +25,6 @@ ui <- page_fillable(
 )
 
 server <- function(input, output, session) {
-	# ------------------------------------------------------------------------------
-
 	spline_example <- tibble(x = fossil$age, y = fossil$strontium.ratio)
 	rng <- extendrange(fossil$age, f = .025)
 	grid <- seq(rng[1], rng[2], length.out = 1000)
@@ -123,4 +121,4 @@ server <- function(input, output, session) {
 	})
 }
 
-app <- shinyApp(ui, server)
+app <- shinyApp(ui = ui, server = server)
