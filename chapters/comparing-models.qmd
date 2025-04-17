@@ -27,6 +27,7 @@ library(rules)
 library(gt)
 library(emmeans)
 library(tidyposterior)
+library(splines2)
 
 # ------------------------------------------------------------------------------
 # Set options
@@ -39,10 +40,6 @@ set_options()
 # Load previous data sets
 
 source("../R/setup_deliveries.R")
-load("../RData/deliveries_lm.RData")
-load("../RData/deliveries_nnet.RData")
-load("../RData/deliveries_cubist.RData")
-
 ```
 
 ```{r}
@@ -922,13 +919,24 @@ difference_summary %>%
 
 ## Single Holdout Data Sets {#sec-compare-holdout}
 
-For test and/or validation sets, we have a single data set of predictions and true values. Since this produces a single estimate for each performance metric, we can't do any realistic statistical analysis using the abovementioned methods. Given the effort invested in model development, relying on just one value to assess predictive ability on unseen data may feel inadequate, especially since, by chance, a single holdout set result might not be a reliable estimate.
+```{r}
+#| label: load-whole-game-res
+#| include: false
+
+load("../RData/deliveries_lm.RData")
+load("../RData/deliveries_nnet.RData")
+load("../RData/deliveries_cubist.RData")
+```
+
+For test and/or validation data, we have a single set of predictions and true values. Since this produces a single estimate for each performance metric, we can't do any realistic statistical analysis using the abovementioned methods. Given the effort invested in model development, relying on just one value to assess predictive ability on unseen data may feel inadequate, especially since, by chance, a single holdout set result might not be a reliable estimate.
 
 Can we quantify our uncertainty around the validation set performance?  Yes, we can use bootstrap resampling [@sec-bootstrap] to gain greater confidence in our single performance estimate [@Efron1979boot]. Recall the interpretation of a 90% confidence interval given in @sec-bayes:
 
 > "We believe that if we were to repeat this experiment a large number of times, the true parameter value would fall between $L$ and $U$ 90% of the time." 
 
-The bootstrap is designed to emulate this Frequentist philosophy. Bootstrap resampling creates a large number of alternative realizations of our holdout set by sampling with replacement^[Note that in previous diagrams of resampling schemes, the training set was being resampled. In this case, our assessment set results are resampled, and their bootstrap samples are new _analysis sets_. We are resampling the predictions in instead of the training data.]. Each of these yields a single replicate of our metric of interest, as outlined in @fig-boot-ci-scheme. This variability in these realizations is used to construct confidence intervals for a metric, offering a range of plausible values for model performance on similar holdout sets.
+The bootstrap is designed to emulate this Frequentist philosophy. Bootstrap resampling creates a large number of alternative realizations of our holdout set by sampling with replacement. Each of these yields a single replicate of our metric of interest, as outlined in @fig-boot-ci-scheme. Note that in previous diagrams of resampling schemes, the training set was being resampled. In this case, our holdout data predictions are resampled, and their bootstrap samples are new _analysis sets_. We are resampling the heldout predictions in instead of the training data. 
+
+This variability from multiple realizations is used to construct confidence intervals for a metric, offering a range of plausible values for model performance on similar holdout sets.
 
 ```{r}
 #| label: fig-boot-ci-scheme
@@ -939,7 +947,8 @@ The bootstrap is designed to emulate this Frequentist philosophy. Bootstrap resa
 knitr::include_graphics("../premade/boostrap_stat.svg")
 ```
 
-There are numerous ways to compute confidence intervals from these resampled statistics, but the simplest and most popular approach computes quantiles of the resamples [@davison1997bootstrap;@EfronHastie2016a]. For example, to compute a 90% confidence interval, using the _percentile method_, the 5<sup>th</sup> and 95<sup>th</sup> percentiles are determined. Several other methods exist for computing confidence intervals, but for simplicity, we'll concentrate on the percentile method. 
+There are numerous ways to compute confidence intervals from these resampled statistics, but the simplest and most popular approach computes quantiles of the resamples [@davison1997bootstrap;@EfronHastie2016a]. For example, to compute a 90% confidence interval, using the _percentile method_, the 5<sup>th</sup> and 95<sup>th</sup> percentiles are determined. Several other methods exist for computing confidence intervals, but for simplicity, we'll concentrate on the percentile method^[What is the difference between a quantile and a percentile? They represent the same values, but percentiles are specified in percentages. For example, the 0.05 quantile is the same as the 5<sup>th</sup> percentile.]. 
+
 
 ```{r}
 #| label: boot-ci-calc
@@ -952,26 +961,27 @@ mae_mtr <- metric_set(mae)
 
 lin_reg_int <-
   lin_reg_res %>% 
-  int_pctl(metrics = mae_mtr, alpha = 0.1, times = 1000) %>% 
+  int_pctl(metrics = mae_mtr, alpha = 0.1, times = 1000, allow_par = TRUE) %>% 
   mutate(model = "Linear\nRegression") %>% 
   dplyr::select(model, .lower, .estimate, .upper)
 
 cb_int <- 
   cb_res %>% 
-  int_pctl(metrics = mae_mtr, alpha = 0.1, times = 1000) %>% 
+  int_pctl(metrics = mae_mtr, alpha = 0.1, times = 1000, allow_par = TRUE) %>% 
   mutate(model = "Cubist") %>% 
   dplyr::select(model, .lower, .estimate, .upper)
 
 nnet_int <- 
   nnet_res %>% 
-  int_pctl(metrics = mae_mtr, alpha = 0.1, times = 1000) %>% 
+  int_pctl(metrics = mae_mtr, alpha = 0.1, times = 1000, allow_par = TRUE) %>% 
   mutate(model = "Neural\nNetwork") %>% 
   dplyr::select(model, hidden_units, .lower, .estimate, .upper)
+
 ```
 
-The bootstrap approach was applied to the three models for the food delivery time data.  For each computation, 5,000 bootstrap samples were used. @fig-boot-ci-deliveries shows the results. In Panel (a), 90% intervals were calculated for each model configuration generated during model tuning, mimicking @fig-delivery-nnet-tune. Apart from the candidates with the fewest hidden units, none of the MAE values show any statistical difference. Given that the differences in MAE are in seconds, no practical difference could be claimed. Panel (b) shows comparisons _between_ three models where the neural network model corresponds to the numerically best model. 
+The bootstrap approach was applied to the three models for the food delivery time data.  For each computation, 5,000 bootstrap samples were used. @fig-boot-ci-deliveries shows the results. In Panel (a), 90% intervals were calculated for each model configuration generated during model tuning, mimicking @fig-delivery-nnet-tune. The variation is fairly constant across different candidates and the uncertainty is about $\pm$ 2 seconds. Panel (b) shows comparisons _between_ three models where the neural network model corresponds to the numerically best model. The level of uncertainty appears to be the same across models.  
 
-In this case, we get a sense of the variation in MAE for each model, which helps characterize the performance uncertainty. _However_, we should not gauge whether the models differ from these intervals. As shown above, the variance of a difference should consider the _covariance_ (or correlation) between the two statistics being contrasted. If we don't, our statistical power can be substantially reduced (perhaps without realizing it). 
+In this case, we get a sense of the variation in MAE for each model/candidate, which helps characterize the performance uncertainty. _However_, we should not gauge whether the models differ from these intervals. As shown above, the variance of a difference should consider the _covariance_ (or correlation) between the two statistics being contrasted. If we don't, our statistical power can be substantially reduced (perhaps without realizing it). 
 
 ```{r}
 #| label: fig-boot-ci-deliveries
@@ -1032,29 +1042,27 @@ mae_diff <- function(split) {
   tibble::tibble(estimate = nnet_mae - cubist_mae, term = "nnet-cubist")
 }
 
-set.seed(655)
-paired_int <- 
+set.seed(65)
+paired_diff <- 
   paired_predictions %>% 
   bootstraps(time = 5000) %>% 
-  mutate(stats = map(splits, mae_diff)) %>% 
+  mutate(stats = map(splits, mae_diff))
+
+paired_int <- 
+  paired_diff %>% 
   int_pctl(stats, alpha = 0.1)
 ```
 
-To formally compare two models, we could compute the difference in their metrics using the bootstrap. Let's do this by computing a confidence interval for the MAE of the neural network minus the Cubist MAE by merging their predictions together (by a row of the validation set), bootstrapping these data, and then computing the two MAE values in their difference. In this case, the estimated difference was `r signif(paired_int$.estimate, 3)`s with 90% interval (`r signif(paired_int$.lower, 3)`, `r signif(paired_int$.upper, 3))`. This indicates that the Cubist model has a statistically lower MAE than the neural network. 
+To formally compare two models, we could compute the difference in their metrics using the bootstrap. Let's do this by computing a confidence interval for the MAE of the neural network minus the Cubist MAE by merging their predictions together (by a row of the validation set), bootstrapping these data, and then computing the two MAE values and their difference. In this case, the estimated difference was `r signif(paired_int$.estimate, 2)` with 90% interval (`r signif(paired_int$.lower, 2)`, `r signif(paired_int$.upper, 2)`). This indicates that the MAE difference between the models is not different from zero, although this is true with the thinnest margins.  
 
-Why does this seem incongruent with the intervals in @ fig-boot-ci-deliveries? There is an extremely strong correlation between the predictions from these two models: `r signif(cor(paired_predictions$nnet, paired_predictions$cubist), 3)`. This drastically reduces the standard error of the difference. The individual confidence intervals for the models do not factor in this strong covariance term. While those intervals are correct individually, they cannot judge the difference between models. 
+How do we reconcile this with @fig-boot-ci-deliveries where the two intervals in question greatly overlap? There is an extremely strong correlation between the predictions from these two models: `r signif(cor(paired_predictions$nnet, paired_predictions$cubist), 3)`. This drastically reduces the standard error of the difference. The individual confidence intervals for the models do not factor in this strong covariance term. While those intervals are correct individually, we shouldn't use then to judge the difference between models. 
 
-As the validation set size increases, the variation we expect to see in the summary statistic will decrease.  This concept is illustrated in @fig-boot-int-width.  In this figure, we have randomly selected subsets of varying size of the validation set and then applied the bootstrapping approach to these smaller sets.  Notice that as the sample size decreases, the width of the confidence interval increases.  Therefore, the smaller the validation set, the higher the variability will be in the estimate of model performance and the the important it is to understand the range of potential predictive performance.
+As the validation set size increases, the variation we expect to see in the summary statistic will decrease.  This concept is illustrated in @fig-boot-int-width.  In this figure, we have randomly selected subsets of varying sizes of the validation set and then applied the bootstrapping approach to these smaller sets.  Notice that as the sample size decreases, the width of the confidence interval increases.  Therefore, the smaller the validation set, the higher the variability will be in the estimate of model performance. At some point, the variablity will become large enough that a scheme with multiple resamples should be used. 
 
 ```{r}
-#| label: fig-boot-int-width
-#| echo: false
-#| fig-width: 6
-#| fig-height: 3.5
-#| fig-align: "center"
-#| out-width: "70%"
+#| label: boot-int-width
+#| inlcude: false
 #| cache: true
-#| fig-cap: 90% bootstrap confidence intervals of MAE for validation sets of varying size for the random forest model.  The smaller the size of the validation set, the wider the interval.
 
 cb_pred <- collect_predictions(cb_res, summarize = FALSE)
 n_validation <- nrow(cb_pred)
@@ -1076,14 +1084,35 @@ for (i in val_size) {
     int_pctl(stats, alpha = 0.10)
   val_size_res <- bind_rows(val_size_res, tmp)
 }
+```
+
+```{r}
+#| label: fig-boot-int-width
+#| echo: false
+#| fig-width: 6
+#| fig-height: 3.5
+#| fig-align: "center"
+#| out-width: "70%"
+#| fig-cap: 90% bootstrap confidence intervals of MAE for validation sets of varying size for the random forest model.  The smaller the size of the validation set, the wider the interval.
 
 val_size_res %>% 
   mutate(width = .upper - .lower) %>% 
   ggplot(aes(x = term, y = width)) +
+  geom_smooth(method = lm, formula = y ~ naturalSpline(x, df = 5)) +
   geom_point() +
   labs(x = "Validation Set Size", y = "Confidence Interval Width") +
   scale_x_log10()
 ```
+
+::: {.note-box}
+Why resample in the thousands?
+
+When the bootstrap was previously discussed for measuring performance in @sec-bootstrap, at most 100 resamples were considered. For confidence intervals, we've been using 5,000. Why is that? 
+
+Previously, the bootstrap was used to estimate the mean of the resampled metrics produced by the assessment sets. Depending on the training set size, 25 to 100 resamples should estimate an average with acceptable precision. 
+
+In our application, the confidence intervals are estimated using the extreme quantiles of the bootstrap distribution. The distribution should include a very large number of data points to produce precise estimates of the 0.05 and 0.95 quantiles. Unlike the previous application of the bootstrap, our thousands of resamples do not require thousands of model fits.
+:::
 
 ## Conclusion
 
