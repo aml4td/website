@@ -37,6 +37,7 @@ set_options()
 # Load other data
 
 load("../RData/bayes_opt_calcs.RData")
+load("../RData/deliveries_lm.RData")
 ```
 
 This chapter describes the most crucial concept in predictive modeling: overfitting. When a model fails, it is almost always due to overfitting of some sort. The problem is that you may only realize that there is an issue once you finish the development phase of modeling and are exposed to completely new data.
@@ -479,6 +480,38 @@ knitr::include_graphics("../premade/anime_learn_rate.gif")
 The animation shows that the search evaluated very disparate values, including the lower and upper limits that were defined. However, after a few iterations, the search focuses on points near the optimal value. Again, this method discussed in more detail in @sec-iterative-search.
 
 All of our optimization methods assume that a reasonable range of tuning parameters is known. The range is naturally bounded in some cases, such as the number of PCA components. Otherwise, you (and/or the ML community) will develop a sense of appropriate ranges of these parameters. We will suggest basic ranges here. For example, for the learning rate, we know it has to be greater than zero but the fuzzy upper bound of about 0.1 is a convention learned by trial and error. 
+
+# Sidebar: How Bad Can the Model Be?  {#sec-permutations}
+
+```{r}
+#| label: permutate
+#| include: false
+
+mae_perm <- 
+  lin_reg_res %>% 
+  collect_predictions() %>% 
+  permutations(permute = time_to_delivery, times = 50) %>% 
+  mutate(
+    mae_perm = map_dbl(splits, ~ mae(analysis(.x), time_to_delivery, .pred)$.estimate)
+  ) %>% 
+  pluck("mae_perm") %>% 
+  mean() %>% 
+  signif(digits = 3)
+```
+
+When a model is overfit, the results can be unduly optimistic. Let's take a minute to consider the opposite: ff we compute some performance measure, what's the worst value we can achieve? 
+
+For some metrics, the possible range of values is well-defined. For example, for the coefficient of determination (a.k.a. R<sup>2</sup>), a value of zero means that the model explains none of the variation in the outcome. In classification, when computing the area under the ROC curve [@sec-roc], a value of 0.5 indicates that the model has no ability to discriminate between the classes. In these instances, the range of metric values is not dependent on the outcome data distribution. 
+
+As a counter-example, the mean absolute deviation (MAE) used in @sec-whole-game to measure the effectiveness of our time-to-delivery models does depend on the outcome data. We know a value of zero is best, but what is the worst it can be? 
+
+The worst performance occurs when no relationship exists between the observed and predicted outcomes. To translate this to a worst-case metric value, we can use a permutation strategy where we _break_ the relationship by randomly shuffling the outcome data and then compute the metric.  
+
+Since it is possible to get "a bad shuffle" that doesn't completely break the relationship, we can do this multiple times and then take the average of these values. 
+
+For example, the linear regression model had a validation set MAE of less than two minutes (`r signif(show_best(lin_reg_res, metric = "mae")$mean, 3)`), and the difference in MAE between models was measured _in seconds_. For perspective, the worst possible model would have a MAE of `r mae_perm` fractional minutes (using 50 permutations). Given how large this value is, any of our three modeling approaches for that data do well. 
+
+Permutated performance values will show up several times in subsequent chapters. 
 
 ## Chapter References {.unnumbered}
 
