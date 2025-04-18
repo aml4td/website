@@ -3,7 +3,7 @@ library(tidymodels)
 library(spatialsample)
 library(tidysdm)
 library(forested)
-library(zipcodeR)
+# library(zipcodeR)
 library(furrr)
 
 # ------------------------------------------------------------------------------
@@ -31,46 +31,46 @@ for_analysis <-
   rename(class = forested) %>%
   select(-tree_no_tree, -land_type, -canopy_cover) |>
   rename(
-    `dew temperature` = dew_temp,
-    `annual precipitation` = precip_annual,
-    `annual minimum temperature` = temp_annual_min,
-    `annual maximum temperature` = temp_annual_max,
-    `january minimum temperature` = temp_january_min,
-    `annual mean temperature` = temp_annual_mean,
-    `minimum vapor` = vapor_min,
-    `maximum vapor` = vapor_max,
+    dew_temperature = dew_temp,
+    annual_precipitation = precip_annual,
+    annual_minimum_temperature = temp_annual_min,
+    annual_maximum_temperature = temp_annual_max,
+    january_minimum_temperature = temp_january_min,
+    annual_mean_temperature = temp_annual_mean,
+    minimum_vapor = vapor_min,
+    maximum_vapor = vapor_max,
     longitude = lon,
     latitude = lat
   )
 
 # ------------------------------------------------------------------------------
 # Get ZIP codes
+# 
+# zip_codes <- 
+#   future_map(
+#     1:nrow(for_analysis),
+#     ~ search_radius(
+#       lat = for_analysis$latitude[.x], 
+#       lng = for_analysis$longitude[.x], 
+#       radius = 200
+#     ) %>% 
+#       mutate(.row = .x)
+#   )
+# 
+# has_zip <- map_lgl(zip_codes, ~ nrow(.x) > 0)
+# any(!has_zip)
+# 
+# zip_estimates <- 
+#   map_dfr(
+#     zip_codes,
+#     ~ slice_min(.x, distance, n = 1, with_ties = FALSE, by = c(.row))
+#   ) %>% 
+#   arrange(.row) %>% 
+#   select(zip = zipcode)
 
-zip_codes <- 
-  future_map(
-    1:nrow(for_analysis),
-    ~ search_radius(
-      lat = for_analysis$latitude[.x], 
-      lng = for_analysis$longitude[.x], 
-      radius = 200
-    ) %>% 
-      mutate(.row = .x)
-  )
-
-has_zip <- map_lgl(zip_codes, ~ nrow(.x) > 0)
-any(!has_zip)
-
-zip_estimates <- 
-  map_dfr(
-    zip_codes,
-    ~ slice_min(.x, distance, n = 1, with_ties = FALSE, by = c(.row))
-  ) %>% 
-  arrange(.row) %>% 
-  select(zip = zipcode)
-
-for_analysis <- 
-  bind_cols(for_analysis, zip_estimates) %>% 
-  mutate(zip = factor(zip))
+# for_analysis <- 
+#   bind_cols(for_analysis, zip_estimates) %>% 
+#   mutate(zip = factor(zip))
 
 # ------------------------------------------------------------------------------
 # Convert the lon/lat to sf geometry format
