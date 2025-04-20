@@ -33,18 +33,29 @@ theme_transparent <- function(...) {
 log_2_breaks <- scales::trans_breaks("log2", function(x) 2^x)
 log_2_labs   <- scales::trans_format("log2", scales::math_format(2^.x))
 
-drk_text <- ggplot2::element_text(color = "#adb5bd")
-drk_rect <- ggplot2::element_rect(fill = "transparent", color = "#adb5bd")
+dk_text <- ggplot2::element_text(color = "#adb5bd")
+dk_rect <- ggplot2::element_rect(fill = "transparent", color = "#adb5bd")
 
-drk_thm <- 
+dk_thm <- 
   ggplot2::theme_dark() +
   ggplot2::theme(
-    text = drk_text,
-    legend.background = drk_rect,
-    legend.box.background = drk_rect,
-    panel.background = drk_rect,
+    text = dk_text,
+    legend.background = dk_rect,
+    legend.box.background = dk_rect,
+    panel.background = dk_rect,
     plot.background = ggplot2::element_rect(fill = "transparent", color = NA),
-    strip.background = drk_rect
+    strip.background = dk_rect
+  )
+
+dk_gif_thm <- 
+  ggplot2::theme_dark() +
+  ggplot2::theme(
+    text = dk_text,
+    legend.background = dk_rect,
+    legend.box.background = dk_rect,
+    panel.background = dk_rect,
+    plot.background = ggplot2::element_rect(fill = "#222", color = NA),
+    strip.background = dk_rect
   )
 
 # ------------------------------------------------------------------------------

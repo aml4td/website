@@ -2,11 +2,17 @@ library(tidymodels)
 library(bestNormalize)
 library(gganimate)
 library(viridis)
+library(magick)
 
 # ------------------------------------------------------------------------------
 
 source("R/setup_chemometrics.R")
 source("R/_common.R")
+
+# ------------------------------------------------------------------------------
+
+light_bg <- "#fcfefe"
+dark_bg <- "#222"
 
 # ------------------------------------------------------------------------------
 
@@ -22,7 +28,6 @@ barley_val_normed <-
   bake(barley_val)
 
 barley_val_cor <- round(cor(barley_val_normed)[1,2], 2)
-
 
 barley_pca_coefs <- 
   barley_pre_pca_rec %>% 
@@ -134,19 +139,20 @@ ranges <-
   )
 
 # ------------------------------------------------------------------------------
-# make the animation
+# make the animation - light mode
+
+theme_set(theme_transparent())
 
 pca_animation <-
   ggplot(rotations, aes(x = wvlgth_001, y = wvlgth_050)) +
   geom_text(data = ranges, aes(x = note_x, y = note_y, label = note)) +
-  geom_point(aes(col = barley), alpha = 1 / 3) +
+  geom_point(aes(col = barley), alpha = 1 / 3, show.legend = FALSE) +
   transition_states(state2) +
   labs(x = "Dimension 1", y = "Dimension 2", title = "(b)") +
   enter_fade() +
   exit_shrink() +
   ease_aes('sine-in-out') +
-  scale_color_viridis(option = "viridis") +
-  theme_transparent()
+  scale_color_viridis(option = "viridis")
 
 anim <-
   gganimate::animate(
@@ -154,12 +160,44 @@ anim <-
     detail = 5,
     width = 750,
     height = 750,
-    res = 200
+    res = 200,
+    renderer = magick_renderer()
   )
 
 anim
 
 anim_save("premade/anime_barley_pca.gif")
+
+# ------------------------------------------------------------------------------
+# make the animation - dark mode
+
+theme_set(dk_gif_thm)
+
+pca_animation_dark <-
+  ggplot(rotations, aes(x = wvlgth_001, y = wvlgth_050)) +
+  geom_text(data = ranges, aes(x = note_x, y = note_y, label = note), col = "#adb5bd") +
+  geom_point(aes(col = barley), alpha = 1 / 3, show.legend = FALSE) +
+  transition_states(state2) +
+  labs(x = "Dimension 1", y = "Dimension 2", title = "(b)") +
+  enter_fade() +
+  exit_shrink() +
+  ease_aes('sine-in-out') +
+  scale_color_viridis(option = "viridis")
+
+anim <-
+  gganimate::animate(
+    pca_animation_dark,
+    detail = 5,
+    width = 750,
+    height = 750,
+    res = 200,
+    renderer = magick_renderer(),
+    bg = "#222"
+  )
+
+anim
+
+anim_save("premade/anime_barley_pca_dark.gif")
 
 # ------------------------------------------------------------------------------
 
