@@ -13,14 +13,13 @@ source("../R/_common.R")
 
 # ------------------------------------------------------------------------------
 
-library(kableExtra)
 library(tidymodels)
 library(finetune)
 library(patchwork)
 library(future)
 library(bestNormalize)
-library(kableExtra)
 library(GA)
+library(gt)
 
 # ------------------------------------------------------------------------------
 # Set Options
@@ -323,18 +322,33 @@ To illustrate, a very small initial space-filling design with three candidates w
 
 ```{r}
 #| label: tbl-svm-initial
+#| renderings: [light, dark]
 #| echo: false
-sa_history %>% 
-  filter(.iter == 0) %>% 
+
+sa_tbl <- 
+  sa_history %>% 
+  dplyr::filter(.iter == 0) %>% 
   arrange(mean) %>% 
-  select(RMSE, log_cost, log_scale) %>% 
-  kable(
-    digits = 1,
-    col.names  = c("RMSE (%)", "Cost (log-2)", "Scale (log-10)")
+  dplyr::select(RMSE, log_cost, log_scale) %>% 
+  gt() %>% 
+  fmt_number(
+    columns = c(RMSE, log_cost, log_scale),
+    decimals = 1
   ) %>% 
-  kable_styling(bootstrap_options = "responsive", full_width = FALSE)
+  cols_label(
+    RMSE = "RMSE (%)", 
+    log_cost = "Cost (log-2)", 
+    log_scale = "Scale (log-10)"
+  ) %>%
+  tab_options(
+    table.width = pct(75)  
+  )
 
 load(url("https://raw.githubusercontent.com/aml4td/website/main/RData/two_param_iter_initial.RData"))
+
+sa_tbl |> lt_tbl_thm()
+
+sa_tbl |> dk_tbl_thm()
 ```
 
 The initial set of candidates used for iterative search with the toy example from @fig-svm-grid. One candidate does poorly while the other two have relatively similar results. 
@@ -1119,8 +1133,11 @@ An initial grid was created without constraints, and candidates who violated the
 
 ```{r}
 #| label: tbl-nnet-initial
+#| renderings: [light, dark]
 #| echo: false
-mlp_sfd_bo_ci %>% 
+
+initial_tbl <- 
+  mlp_sfd_bo_ci %>% 
   filter(.iter == 0) %>% 
   mutate(
     `window size` = 2 * window_side + 1,
@@ -1129,20 +1146,36 @@ mlp_sfd_bo_ci %>%
     `learn rate (log-10)` = log10(learn_rate),
     activation = gsub("_", " ", activation),
     rate_schedule = gsub("(decay_time)|(decay_expo)", "decay", rate_schedule)
-    ) %>% 
+  ) %>% 
   arrange(.estimate) %>% 
   select(`RMSE (%)` = .estimate, `window size`, differentiation_order, degree,
          hidden_units, `penalty (log-10)`, activation, `learn rate (log-10)`,
          rate_schedule, stop_iter, mixture) %>% 
-  kable(
-    digits = 2,
-    col.names  = c(
-     "RMSE (%)", "Window", "Diff. Order", "Degree", "Units", "Penalty (log-10)", 
-     "Activation", "Learn Rate (log-10)", "Rate Schedule", "Stop Iter.", 
-     "L1 Mixture"
-    )
-  ) %>% 
-  kable_styling(bootstrap_options = "responsive", full_width = FALSE)
+  gt() %>%
+  fmt_number(
+    columns = everything(),
+    decimals = 2
+  ) %>%
+  cols_label(
+    `RMSE (%)` = "RMSE (%)",
+    `window size` = "Window",
+    differentiation_order = "Diff. Order",
+    degree = "Degree",
+    hidden_units = "Units",
+    `penalty (log-10)` = "Penalty (log-10)",
+    activation = "Activation",
+    `learn rate (log-10)` = "Learn Rate (log-10)",
+    rate_schedule = "Rate Schedule",
+    stop_iter = "Stop Iter.",
+    mixture = "L1 Mixture"
+  ) %>%
+  tab_options(
+    table.width = pct(100)
+  )
+
+initial_tbl |> lt_tbl_thm()
+
+initial_tbl |> dk_tbl_thm()
 ```
 
 The initial set of candidates used for iterative search methods.
@@ -1194,7 +1227,9 @@ A Bayesian optimization was also used with a squared exponential kernel for the 
 
 ```{r}
 #| label: tbl-nnet-sg-best
+#| renderings: [light, dark]
 #| echo: false
+
 iter_rows <- 
   c("Differentiation Order", "Polynomial Degree", "Window Size",
     "Hidden Units", "Activation", "Penalty (log10)", "L1 Proportion", 
@@ -1202,33 +1237,32 @@ iter_rows <-
     "Conf. Int."
     )
 
-bind_rows(init_best_ci, mlp_sfd_sa_best_ci, mlp_sfd_bo_best_ci) %>% 
+best_tbl <-
+  bind_rows(init_best_ci, mlp_sfd_sa_best_ci, mlp_sfd_bo_best_ci) %>%
   mutate(
     `Penalty (log10)` = log10(penalty),
     `Learning Rate (log10)` = log10(learn_rate),
-    `Conf. Int.` = map2_chr(.lower, .upper, 
+    `Conf. Int.` = map2_chr(.lower, .upper,
                        ~ cli::format_inline("({round(.x, 2)}%, {round(.y, 2)}%)")),
     RMSE = map_chr(.estimate, ~ cli::format_inline("{round(.x, 2)}%")),
     `Window Size` = 1 + 2 * window_side,
     across(where(is.numeric), ~ format(.x, digits = 3))
-  ) %>% 
-  select(-.metric, -.estimator, -.config, -penalty, -learn_rate, 
-         -.lower, -.upper, -.estimate, -window_side, -.iter) %>% 
+  ) %>%
+  dplyr::select(-.metric, -.estimator, -.config, -penalty, -learn_rate,
+                -.lower, -.upper, -.estimate, -window_side, -.iter) %>%
   rename(`Hidden Units` = hidden_units, Activation = activation,
-         `Stopping Rule` = stop_iter, `L1 Proportion` = mixture, 
+         `Stopping Rule` = stop_iter, `L1 Proportion` = mixture,
          `Rate Schedule` = rate_schedule, `Polynomial Degree` = degree,
-         `Differentiation Order` = differentiation_order) %>% 
-  pivot_longer(cols = c(-method), names_to = "Parameter", values_to = "Value") %>% 
-  pivot_wider(id_cols = c(Parameter), names_from = "method", values_from = "Value") %>% 
-  mutate(
-    Parameter = factor(Parameter, levels = iter_rows)
-  ) %>% 
-  arrange(Parameter) %>% 
-  kable(
-    col.names  = c(" ", "Initial Grid", "Simulated Annealing", "Bayesian Optimzation")
-  ) %>% 
-  kable_styling(bootstrap_options = "responsive", full_width = FALSE)
+         `Differentiation Order` = differentiation_order) %>%
+  pivot_longer(cols = c(-method), names_to = "Parameter", values_to = "Value") %>%
+  pivot_wider(id_cols = c(Parameter), names_from = "method", values_from = "Value") %>%
+  mutate(Parameter = factor(Parameter, levels = iter_rows)) %>%
+  arrange(Parameter) %>%
+  gt()
 
+best_tbl |> lt_tbl_thm()
+
+best_tbl |> dk_tbl_thm()
 ```
 
 The best results from the initial space-filling design and the two iterative searches for a neural network using Savitzky-Golay preprocessing. 
