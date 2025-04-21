@@ -5,6 +5,7 @@ library(tidymodels)
 # ------------------------------------------------------------------------------
 
 light_bg <- "#fcfefe" # from aml4td.scss
+dark_bg <- "#222"
 
 # ------------------------------------------------------------------------------
 
@@ -46,3 +47,20 @@ svg("premade/delivery-tree.svg", width = 12, height = 6)
          newpage = FALSE)
 dev.off()
 
+
+svg("premade/delivery-tree-dark.svg", width = 12, height = 6)
+grid.newpage()
+grid.rect(gp = gpar(col = dark_bg, fill = dark_bg))
+
+cart_tree %>% 
+  as.party() %>% 
+  plot(ip_args = list(id = FALSE, fill = dark_bg),
+       ep_args = list(fill = dark_bg),
+       tp_args = list(id = FALSE, bg = dark_bg, fill = dark_bg),
+       newpage = FALSE)
+dev.off()
+
+# convert white to #F2EFE5
+dark_svg <- readLines("premade/delivery-tree-dark.svg")
+dark_svg <- gsub("rgb(0%, 0%, 0%)", "rgb(95%, 94%, 90%)", dark_svg, fixed = TRUE)
+cat(dark_svg, file = "premade/delivery-tree-dark.svg")

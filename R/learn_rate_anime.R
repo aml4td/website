@@ -87,7 +87,7 @@ animate(
   duration = 15
 )
 
-anim_save("premade/anim_learn_rate.gif")
+anim_save("premade/anime_learn_rate.gif")
 
 
 # ------------------------------------------------------------------------------
@@ -131,6 +131,6 @@ animate(
   duration = 15
 )
 
-anim_save("premade/anim_learn_rate_dark.gif")
+anim_save("premade/anime_learn_rate_dark.gif")
 
 
