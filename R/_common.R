@@ -45,7 +45,9 @@ dk_thm <-
     legend.box.background = dk_rect,
     panel.background = dk_rect,
     plot.background = ggplot2::element_rect(fill = "transparent", color = NA),
-    strip.background = dk_rect
+    strip.background = dk_rect,
+    axis.text.x = ggplot2::element_text(colour = "#CCDEEC"),
+    axis.text.y = ggplot2::element_text(colour = "#CCDEEC")
   )
 
 dk_gif_thm <- 
@@ -56,7 +58,9 @@ dk_gif_thm <-
     legend.box.background = dk_rect,
     panel.background = dk_rect,
     plot.background = ggplot2::element_rect(fill = "#222", color = NA),
-    strip.background = dk_rect
+    strip.background = dk_rect,
+    axis.text.x = ggplot2::element_text(colour = "#CCDEEC"),
+    axis.text.y = ggplot2::element_text(colour = "#CCDEEC")
   )
 
 # ------------------------------------------------------------------------------
