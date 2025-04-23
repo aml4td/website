@@ -305,23 +305,39 @@ Traditional indicator encoding methods should be avoided if new predictor catego
 
 Some predictors have high cardinality; they can take many possible values relative to the number of data points. For example, in the entirety of the hotel rate data, there are `r length(unique(hotel_rate_train$agent))` unique agents (see @fig-agents). Should we create so many indicator variables for this predictor? In the data, `r hotel_rate_train %>% count(agent) %>% filter(n <= 5) %>% nrow()`  agents had fewer than six bookings. This means there will be many sparse columns with almost all zero entries. Additionally, `r sum(!(unique(hotel_rate_train$agent) %in% unique(hotel_rate_test$agent)))` of the agents have no data in the training set; they only occur in the test set. Their indicator columns would contain all zeros. 
 
+::: {#fig-agents}
+
+::: {.figure-content}
+
 ```{r}
-#| label: fig-agents
-#| fig-cap: "The frequency distribution of agents in the training set. "
+#| renderings: [light, dark]
 #| fig-width: 7
 #| fig-height: 3
 #| out-width: 70%
-hotel_rate_train %>% 
+hotel_rate_p <-
+  hotel_rate_train %>% 
   count(agent, name = "bookings") %>% 
   mutate(
     agent = factor(agent),
     agent = reorder(agent, bookings)
   ) %>% 
   ggplot(aes(bookings)) + 
-  geom_histogram(bins = 40, col = "white") + 
   scale_x_log10() + 
   labs(x = "Number of Bookings per Agent")
+
+hotel_rate_p + 
+  geom_histogram(bins = 40, col = "white") +
+  theme_transparent()
+
+hotel_rate_p + 
+  geom_histogram(bins = 40, col = dark_bg) +
+  dk_thm
 ```
+:::
+
+The frequency distribution of agents in the training set.
+
+:::
 
 This section will consider several methods for effectively representing high cardinality predictors. The first two techniques are unsupervised (i.e., they do not use the outcome), while the others are supervised. @Cerda2022 surveys different methods for dealing with these types of predictors. 
 
@@ -597,14 +613,6 @@ blups <-
     blup = blup,
     centered = blup - pop_beta
     )
-
-blup_plot <- 
-  blups %>% 
-  ggplot(aes(x = centered)) +
-  geom_histogram(col = "white", bins = 20) + 
-  geom_rug(alpha = 1 / 2) + 
-  labs(x = ~ paste(hat(beta)[0][j])) +
-  ggtitle("(a) Random Intercept Estimates") 
 ```
 
 This may seem somewhat problematic though; we are using the training data to estimate **the effect of a predictor**, putting the resulting effects back into the data, and using our primary model to (re)estimate the effect of the predictor. Since the same data are used, is this a circular argument? Also, there should be a worry about data quality. As previously mentioned, the number of bookings per agent can vary greatly. For example: 
@@ -680,6 +688,15 @@ agent_means <-
   scale_size(range = c(1, 8)) +
   labs(x = "No Pooling", y = "Partial Pooling") +
   ggtitle("(b) Mean ADR Estimates")
+
+
+blup_plot <- 
+  blups %>% 
+  ggplot(aes(x = centered)) +
+  geom_histogram(col = "white", bins = 20) + 
+  geom_rug(alpha = 1 / 2) + 
+  labs(x = ~ paste(hat(beta)[0][j])) +
+  ggtitle("(a) Random Intercept Estimates")  # START HERE
 
 (blup_plot + theme(plot.margin = unit(c(0,20,0,0), "pt"))) + 
   (agent_means + theme(plot.margin = unit(c(0,0,0,20), "pt")))
@@ -860,11 +877,13 @@ agent_plot_data <-
 
 For the agent data, @fig-collapse shows this process. The `r length(unique(groupings$agent))` agent are categorized into `r length(unique(groupings$group))` groups. The top panel shows the ordered mean ADR values for each agent. The vertical lines indicate how the different agents are grouped at each step of the splitting process. The bottom panel shows a scaled estimate of the RMSE that uses the group-level mean ADR to predict the individual outcome results. 
 
+::: {#fig-collapse}
+
+::: {.figure-content}
+
 ```{r}
-#| label: fig-collapse
-#| out-width: 60%
 #| renderings: [light, dark]
-#| fig-cap: "The progression of using a tree-based method to collapse predictor categories into smaller sets."
+#| out-width: 60%
 #| message: false
 #| warning: false
 
@@ -872,6 +891,11 @@ knitr::include_graphics("../premade/anime_tree_collapse.gif")
 
 knitr::include_graphics("../premade/anime_tree_collapse_dark.gif")
 ```
+:::
+
+The progression of using a tree-based method to collapse predictor categories into smaller sets.
+
+:::
 
 For these data, there is no rational grouping or clustering of the agents (regarding their ADR) for the tree-based model to discover. The process produces increasingly granular groups, and the stopping point is somewhat arbitrary. For these reasons, it is probably not the best approach for this predictor in this particular data set. 
 
@@ -887,18 +911,22 @@ Another choice is to use domain-specific knowledge to imply relationships betwee
 
 There are also contrast methods, similar to the one discussed in @sec-indicators, that can automatically create potential patterns using polynomial expansions (more on these in @sec-polynomials). For our quality example, there are five possible levels. Mathematically, we can create up to the number of unique levels (minus one) polynomial function.  In this example, linear, quadratic, cubic, and quartic ($x^4$) polynomial functions can be used. @fig-ordered shows these patterns using orthogonal polynomial values^[These features have characteristics that their values sum to zero and there is zero correlation between features.]. 
 
+::: {#fig-ordered}
+
+::: {.figure-content}
+
 ```{r}
-#| label: fig-ordered
+#| renderings: [light, dark]
 #| echo: false
 #| out-width: 70%
 #| fig-width: 7
 #| fig-height: 4.5
-#| fig-cap: Polynomial contrasts for an ordered categorical predictor with five possible levels. 
 
 qual_vals <- c('excellent', 'fair', 'good', 'typical', 'poor')
 quality <- data.frame(quality = ordered(qual_vals, levels = qual_vals))
 
-model.matrix(~ quality, quality) %>% 
+ordered_p <- 
+  model.matrix(~ quality, quality) %>% 
   as.data.frame() %>% 
   select(-1) %>% 
   setNames(paste("Feature", 1:4)) %>% 
@@ -906,12 +934,27 @@ model.matrix(~ quality, quality) %>%
   mutate(ordering = as.numeric(quality)) %>% 
   pivot_longer(cols = c(starts_with("Feature")), names_to = "variable", values_to = "value") %>% 
   ggplot(aes(x = quality, y = value)) + 
+  facet_wrap(~ variable) +
+
+  labs(y = NULL)
+
+ordered_p + 
   geom_point(aes(col = quality), cex = 2.5, show.legend = FALSE) + 
   geom_line(aes(x = ordering), alpha = 1 / 3) + 
-  facet_wrap(~ variable) +
   scale_color_brewer(palette = "Set2") +
-  labs(y = NULL)
+  theme_transparent()
+
+ordered_p + 
+   geom_line(aes(x = ordering), alpha = 1 / 3, col = "#CCDEEC") + 
+   geom_point(aes(col = quality), cex = 2.5, show.legend = FALSE) + 
+  scale_color_brewer(palette = "Set2") +
+  dk_thm
 ```
+:::
+
+Polynomial contrasts for an ordered categorical predictor with five possible levels.
+
+:::
 
 In many applications, higher-degree polynomials (> 2) are unlikely to be effective predictors. For example, the cubic pattern in @fig-ordered ("Feature 3") implies that houses in Ames with '`excellent`' quality heating systems would have lower sale prices than those with '`fair`' or '`poor`' systems.  Utilizing higher order polynomials usually requires some specific knowledge about the problem at hand.
 
