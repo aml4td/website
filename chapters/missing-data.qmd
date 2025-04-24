@@ -263,17 +263,70 @@ The figure highlights several characteristics. The most noteworthy: missing data
 An "upset plot" is a method for visualizing high-dimensional Venn diagrams [@lex2014upset]. We can use this to explore potential patterns of missingness across predictors. For example, @fig-ames-patterns shows that the majority of the properties in Ames are missing values for ally, fence, or pool.
 
 ```{r}
-#| label: fig-ames-patterns
+#| label: miss-svg
+#| include: false
+#| cache: true
+
+# Ok, usetp plots cannot change much of their colors via api. 
+# We'll make the svgs, then postprocess them
+
+svg("../premade/ames-patterns-light.svg", width = 12, height = 6)
+light_miss <- 
+  ames_predictors %>% 
+  select(all_of(ames_has_missing_cols)) %>% 
+  naniar::gg_miss_upset(nsets = 8)
+print(light_miss)
+dev.off()
+
+svg("../premade/ames-patterns-dark.svg", width = 12, height = 6)
+dark_miss <- 
+  ames_predictors %>% 
+  select(all_of(ames_has_missing_cols)) %>% 
+  naniar::gg_miss_upset(
+    nsets = 8,
+    matrix.color = "red",
+    main.bar.color = "red",
+    sets.bar.color = "red",
+  )
+print(dark_miss)
+dev.off()
+
+# convert white to #F2EFE5
+dark_svg <- readLines("../premade/ames-patterns-dark.svg")
+# convert white to #222
+dark_svg <- gsub("rgb(100%, 100%, 100%)", h2rgb("#222"), dark_svg, fixed = TRUE)
+# convert black to "#adb5bd"
+dark_svg <- gsub("rgb(0%, 0%, 0%)", h2rgb("#adb5bd"), dark_svg, fixed = TRUE)
+# convert red to "#CCDEEC"
+dark_svg <- gsub("rgb(100%, 0%, 0%)", h2rgb("#CCDEEC"), dark_svg, fixed = TRUE)
+# Convert some boxes to dark box color
+dark_svg <- gsub("rgb(20%, 20%, 20%)", h2rgb("#adb5bd"), dark_svg, fixed = TRUE)
+cat(dark_svg, file = "../premade/ames-patterns-dark.svg", sep = "\n")
+
+```
+
+::: {#fig-ames-patterns}
+
+::: {.figure-content}
+
+```{r}
+#| renderings: [light, dark]
 #| echo: false
+#| message: false
+#| warning: false
 #| out-width: 100%
 #| fig-width: 8
 #| fig-height: 6
-#| fig-cap: An upset plot showing a few patterns of missingness in the Ames data. 
 
-ames_predictors %>% 
-  select(all_of(ames_has_missing_cols)) %>% 
-  naniar::gg_miss_upset(nsets = 8)
+knitr::include_graphics("../premade/ames-patterns-light.svg")
+
+knitr::include_graphics("../premade/ames-patterns-dark.svg")
 ```
+:::
+
+An upset plot showing a few patterns of missingness in the Ames data.
+
+:::
 
 The problem with missing data is that many models are not naturally equipped to deal with this lack of information. As a simple example, consider the multiple linear regression model. Deriving the regression coefficients depends on operations on the predictor values (e.g., computing the covariance matrix). These calculations cannot be performed if the predictors contain any missing values; this is also true for the majority of models. Consequently, it is crucial to address the presence of missing data to build any of these predictive methods^[Exceptions are listed below.]. In addition to addressing missing data, the pattern and nature of missingness can sometimes serve as a significant predictor of the response. In this chapter, we will explore the root causes of missing data, examine approaches for resolving the problem, and understand when it should be addressed in the modeling process.
 
@@ -289,13 +342,11 @@ As a counter-example, suppose that patients with more severe respiratory illness
 
 Another example data set will be introduced in @sec-hotel-rates, where we try to predict the cost of a hotel room (known as the "average daily rate" or ADR). The data set includes data on the method of booking the room, such as the name of the travel agent, the travel company, and the customer's country of origin. The agent variable in the hotel rate data was missing for `r round(hotels_pct_missing_agent,1)`% of the data. We don't always know if the agent is missing because no agent was used or because the value was not recorded. Treating the missingness of the agent as a binary outcome, we can use a simple recursive partitioning model (@sec-cart-cls) to understand potential relationships with other predictors. This might suggest the mechanism(s) influencing the occurrence of missing data. @fig-hotels-agent-missing illustrates the predictors that partition the missing agent data into increasing homogeneous groups. For example, non-missing company values are highly associated with missing values. This might mean that the company making the reservation used automated systems instead of a specific person in the company being associated with the reservation. Lead time also appears to be related to missingness, with shorter lead times occurring more frequently with missing agent values. We don't know whether lead time influences missingness or vice-versus. However, this analysis would provide a direction to begin an investigation. 
 
+
 ```{r}
-#| label: fig-hotels-agent-missing
-#| echo: false
-#| out-width: 90%
-#| fig-width: 10.5
-#| fig-height: 7.5
-#| fig-cap: A classification tree to predict the missing category of agent in the hotel rate dataset. "TA" stands for travel agent and "TO" means tour operators.
+#| label: missing-tree-svg
+#| include: false
+#| cache: true
 
 hotels_for_rpart <-
   hotels_predictors %>%
@@ -316,10 +367,62 @@ hotels_for_rpart <-
 rpart_mod <- rpart(agent ~ ., data = hotels_for_rpart, 
                    control = rpart.control(maxdepth = 3))
 rpart_party <- as.party(rpart_mod)
+
+svg("../premade/missing-tree-light.svg", width = 12, height = 6)
+grid.newpage()
+grid.rect(gp = gpar(col = light_bg, fill = light_bg))
+
 rpart_party %>% 
-  plot(ep_args = list(justmin = 20, abbreviate = TRUE), 
-       tp_args = list(text = "vertical", rot = 45, gp = gpar(cex = .9)))
+  plot(ip_args = list(id = FALSE, fill = light_bg),
+       ep_args = list(justmin = 20, abbreviate = TRUE, fill = light_bg), 
+       tp_args = list(text = "vertical", rot = 45, gp = gpar(cex = .9), 
+                      id = FALSE),
+       newpage = FALSE
+  )
+
+dev.off()
+
+svg("../premade/missing-tree-dark.svg", width = 12, height = 6)
+grid.newpage()
+grid.rect(gp = gpar(col = dark_bg, fill = dark_bg))
+
+rpart_party %>% 
+  plot(ip_args = list(id = FALSE, fill = dark_bg),
+       ep_args = list(justmin = 20, abbreviate = TRUE, fill = dark_bg), 
+       tp_args = list(text = "vertical", rot = 45, gp = gpar(cex = .9), 
+                      bg = dark_bg, 
+                      id = FALSE),
+       newpage = FALSE
+  )
+
+dev.off()
+
+# convert white to #F2EFE5
+dark_svg <- readLines("../premade/missing-tree-dark.svg")
+dark_svg <- gsub("rgb(0%, 0%, 0%)", "rgb(95%, 94%, 90%)", dark_svg, fixed = TRUE)
+cat(dark_svg, file = "../premade/missing-tree-dark.svg")
 ```
+
+::: {#fig-hotels-agent-missing}
+
+::: {.figure-content}
+
+```{r}
+#| renderings: [light, dark]
+#| echo: false
+#| out-width: 90%
+#| fig-width: 10.5
+#| fig-height: 7.5
+
+knitr::include_graphics("../premade/missing-tree-light.svg")
+
+knitr::include_graphics("../premade/missing-tree-dark.svg")
+```
+:::
+
+A classification tree to predict the missing category of agent in the hotel rate dataset. "TA" stands for travel agent and "TO" means tour operators.
+
+:::
 
 With some simple exploration, as demonstrated with the Ames and hotel rate data sets, we can understand the causes or potential reasons for missing data. However, determining the cause of missing data may be more challenging for many other data sets. We need a framework to understand and manage missing data in such cases.
 
@@ -373,13 +476,16 @@ For example, naive Bayes [@webb2010naive] builds models by analyzing each predic
 
 Naive Bayes would use the predictor data to compute _conditional densities_ of the predictor for each outcome class. The middle plot shows what these densities should resemble if the dataset were complete. There is a small overlap between the predictor densities; decent model performance is achievable. 
 
+::: {#fig-missing-naive-bayes}
+
+::: {.figure-content}
+
 ```{r}
-#| label: fig-missing-naive-bayes
+#| renderings: [light, dark]
 #| echo: false
 #| out-width: 70%
 #| fig-width: 6
 #| fig-height: 5
-#| fig-cap: An example of how missingness can cause bias in the training data and impair a model fit.
 
 set.seed(8230)
 nb_n <- 5000
@@ -390,7 +496,7 @@ nb_data <-
     miss_lp = -5 + 2.6 * value,
     miss_prob = binomial()$linkinv(miss_lp),
     is_missing = runif(5000*2) <= miss_prob
-    )
+  )
 
 val_range <- extendrange(nb_data$value, f = .025)
 
@@ -407,16 +513,25 @@ nb_predictors <-
 p_nb <- 
   nb_predictors %>% 
   ggplot(aes(value, fill = outcome)) + 
-  stat_density(trim = TRUE, alpha = .3) + 
+  stat_density(trim = TRUE, alpha = .3) +
   lims(x = val_range) + 
   facet_wrap(~ Data, nc = 1) +
   theme(legend.position = "bottom") +
   labs(x = "Predictor Values")
 
+p_nb_light <- 
+  p_nb + 
+  theme_transparent()
+
+p_nb_dark <- 
+  p_nb + 
+  scale_fill_brewer(palette = "Set2") +
+  dk_thm
+
+
 p_miss <- 
   nb_data %>% 
   ggplot(aes(value, miss_prob)) + 
-  geom_line() + 
   lims(x = val_range, y = 0:1) +
   labs(x = "Predictor Values", y = "Pr[missingness]") +
   theme(
@@ -425,9 +540,27 @@ p_miss <-
     axis.ticks.x = element_blank()
   )
 
-p_miss / p_nb + 
+p_miss_light <- 
+  p_miss +
+  geom_line() + 
+  theme_transparent()
+
+p_miss_dark <- 
+  p_miss +
+  geom_line(col = "#CCDEEC") + 
+  dk_thm 
+
+p_miss_light / p_nb_light + 
+  plot_layout(heights = c(1, 3))
+
+p_miss_dark / p_nb_dark + 
   plot_layout(heights = c(1, 3))
 ```
+:::
+
+An example of how missingness can cause bias in the training data and impair a model fit.
+
+:::
 
 The bottom set of densities reflects the observed data. The density for class level `B` is more affected and would appear to have a tighter distribution. This induces more overlap in the densities, making the classification problem more difficult. 
 
@@ -437,13 +570,16 @@ This demonstrates that a model being agnostic to missing values does not mean th
 
 The simplest method for managing missing data is to eliminate the predictors *or* samples that contain them. However, the deletion of data requires careful consideration of several factors within the dataset. When deleting data, the order in which we assess the proportion of missing values (in columns or rows) is important to consider. In some scenarios, there are many more predictors than samples; samples are often difficult or expensive to collect. In this case, it would be wise to first identify predictors that should be removed due to excessive missing values, then proceed to identify and possibly remove samples that have excessive missing values. If, on the other hand, the data contain many more samples than predictors, then the removal procedure could be reversed. In any case, however, we need to remember that the samples are our currency for tuning models and assessing model performance. Therefore, we will often place a higher priority on preserving samples over predictors. 
 
+::: {#fig-ames-missing-distribution}
+
+::: {.figure-content}
+
 ```{r}
-#| label: fig-ames-missing-distribution
+#| renderings: [light, dark]
 #| echo: false
 #| out-width: 60%
 #| fig-width: 5.5
 #| fig-height: 3.5
-#| fig-cap: The distribution of percent missing values across predictors for the Ames housing data set.
 
 ames_missing_summary <-
   ames_missing %>%
@@ -453,8 +589,18 @@ ames_missing_summary <-
 ames_num_pred_gt_20 <- length(which(ames_missing_summary$`Percent Missing` > 20))
 
 ggplot(ames_missing_summary, aes(x=`Percent Missing`)) +
-  geom_histogram(binwidth = 5)
+  geom_histogram(binwidth = 5, col = light_bg) +
+  theme_transparent()
+
+ggplot(ames_missing_summary, aes(x=`Percent Missing`)) +
+  geom_histogram(binwidth = 5, col = dark_bg) +
+  dk_thm
 ```
+:::
+
+The distribution of percent missing values across predictors for the Ames housing data set.
+
+:::
 
 Let's return to the Ames data set. In this example, there are many more samples ($n$=`r nrow(ames_original)`) than predictors ($p$=`r format(ncol(ames_original), big.mark = ",")`). While this is true, @fig-ames-missing clearly illustrates that a few of the predictors were missing for the vast majority of the samples. The proportion of missing values across the predictors is shown in @fig-ames-missing-distribution. This figure reveals that `r ames_num_pred_gt_20` predictors have more than 20% missing sample values. Because the percentage of missing values is large, these predictors would be candidates for removal. In the hotel rate data, the agent and company predictors had missing values of `r round(hotels_pct_missing_agent,1)`% and `r round(hotels_pct_missing_company,1)`%, respectively. In our experience, we have tended to remove predictors that have more than 20%-30% missing values. This percentage is simply a point of guidance and not a hard rule to be applied to every data set. After removing these predictors, the Ames data set now has `r round(ames_pct_missing_subset,1)`% missing values and the hotel rate data set had `r round(hotels_pct_missing_subset,2)`% missing values.
 
@@ -662,44 +808,81 @@ By considering each of these characteristics, imputation can effectively allevia
 
 To illustrate how these methods work, we will use two simple, simulated two-predictor classification data sets. @fig-imputation-simulation-data displays the simulated data. For these data sets, the optimal class separation is defined by the black lines. We will initially focus on the nonlinear data set. From these data set, 10% of the samples will be randomly selected. Of these samples, half will have the value of first predictor deleted, while the other half will have the second predictor deleted. 
 
+::: {#fig-imputation-simulation-data}
+
+::: {.figure-content}
+
 ```{r}
-#| label: fig-imputation-simulation-data
+#| renderings: [light, dark]
 #| echo: false
 #| warning: false
 #| out-width: 85%
 #| fig-width: 8
 #| fig-height: 4
-#| fig-cap: Two complete two-class simulated datasets with 200 data points, one with a linear relationship between the predictors and the other nonlinear. The optimal partitions of the classes are represented by the black lines.
 
 p_nonlin <- 
   ggplot(simulation_nonlinear, aes(x = `Predictor 1`, y = `Predictor 2`)) +
   geom_point(aes(pch = Observed, color = Observed), size = 2, alpha = 2 / 4) +
+  scale_color_manual(values = c("#56B4E9", "#D55E00")) +
+  scale_shape_manual(values = c(16, 17)) +
+  ggtitle("Nonlinear Relationship")
+
+p_nonlin_light <- 
+  p_nonlin +
   geom_function(
     fun = function(x) (x ^ 2) / 2 + 4,
     col = "black",
     linewidth = 2,
     alpha = 1 / 5
   ) +
-  scale_color_manual(values = c("#56B4E9", "#D55E00")) +
-  scale_shape_manual(values = c(16, 17)) +
-  ggtitle("Nonlinear Relationship")
+  theme_transparent()
+
+p_nonlin_dark <- 
+  p_nonlin +
+  geom_function(
+    fun = function(x) (x ^ 2) / 2 + 4,
+    col = "#CCDEEC",
+    linewidth = 2,
+    alpha = 1 / 5
+  ) +
+  dk_thm
 
 p_lin <- 
   ggplot(simulation_linear, aes(x = `Predictor 1`, y = `Predictor 2`)) +
   geom_point(aes(pch = Observed, color = Observed), size = 2, alpha = 2 / 4) +
+  scale_color_manual(values = c("#56B4E9", "#D55E00")) +
+  scale_shape_manual(values = c(16, 17))  +
+  ggtitle("Linear Relationship")
+
+p_lin_light <-
+  p_lin +
   geom_function(
     fun = function(x) x + 4,
     col = "black",
     linewidth = 2,
     alpha = 1 / 5
   ) +
-  scale_color_manual(values = c("#56B4E9", "#D55E00")) +
-  scale_shape_manual(values = c(16, 17))  +
-  ggtitle("Linear Relationship")
+  theme_transparent()
 
-p_lin + p_nonlin + plot_layout(guides = 'collect')
+p_lin_dark <-
+  p_lin +
+  geom_function(
+    fun = function(x) x + 4,
+    col = "#CCDEEC",
+    linewidth = 2,
+    alpha = 1 / 5
+  ) +
+  dk_thm
 
+p_lin_light + p_nonlin_light + plot_layout(guides = 'collect')
+
+p_lin_dark + p_nonlin_dark + plot_layout(guides = 'collect')
 ```
+:::
+
+Two complete two-class simulated datasets with 200 data points, one with a linear relationship between the predictors and the other nonlinear. The optimal partitions of the classes are represented by the black lines.
+
+:::
 
 `r r_comp("missing-data.html#imputation")`
 
@@ -767,21 +950,38 @@ When the predictor that requires imputation is categorical, then logistic or mul
 
 @fig-imputation-distance-comparison provides another visual comparison of the imputation techniques. In this figure, each point represents the Euclidean distance from the imputed sample to its known location. The mean, median, and linear methods have similar distributions of distances. 
 
+::: {#fig-imputation-distance-comparison}
+
+::: {.figure-content}
+
 ```{r}
-#| label: fig-imputation-distance-comparison
+#| renderings: [light, dark]
 #| echo: false
 #| warning: false
 #| out-width: 60%
 #| fig-width: 6
 #| fig-height: 4.25
-#| fig-cap: A comparison of the distribution of distances between the actual and imputed samples across imputation techniques for the nonlinear data shown in @fig-imputation-simulation-data. The mean, median, and linear techniques perform similarly, while K-NN and bagging generate imputed values that are modestly closer to the actual values.
+set.seed(32)
 
 ggplot(imputation_distance_comparison, aes(x = Method, y = Distance)) +
   geom_boxplot(outlier.size = 0) +
   geom_jitter(height = 0, width = 0.05, color = "blue", alpha = 3 / 4) + 
   scale_y_log10() +
-  labs(x = NULL)
+  labs(x = NULL) +
+  theme_transparent()
+
+ggplot(imputation_distance_comparison, aes(x = Method, y = Distance)) +
+  geom_boxplot(outlier.size = 0, col = "#adb5bd", fill = "#CCDEEC") +
+  geom_jitter(height = 0, width = 0.05, color = "#377EB8", alpha = 3 / 4) + 
+  scale_y_log10() +
+  labs(x = NULL) +
+  dk_thm
 ```
+:::
+
+A comparison of the distribution of distances between the actual and imputed samples across imputation techniques for the nonlinear data shown in @fig-imputation-simulation-data. The mean, median, and linear techniques perform similarly, while K-NN and bagging generate imputed values that are modestly closer to the actual values.
+
+:::
 
 ### Nearest Neighbors  {#sec-imputation-knn}
 

@@ -47,7 +47,9 @@ dk_thm <-
     plot.background = ggplot2::element_rect(fill = "transparent", color = NA),
     strip.background = dk_rect,
     axis.text.x = ggplot2::element_text(colour = "#CCDEEC"),
-    axis.text.y = ggplot2::element_text(colour = "#CCDEEC")
+    axis.text.y = ggplot2::element_text(colour = "#CCDEEC"),
+    legend.position = "top", 
+    legend.direction = "horizontal"
   )
 
 dk_gif_thm <- 
@@ -55,12 +57,14 @@ dk_gif_thm <-
   ggplot2::theme(
     text = dk_text,
     legend.background = dk_rect,
-    legend.box.background = dk_rect,
+    legend.box.background = ggplot2::element_rect(fill = dark_bg, color = NA),
     panel.background = dk_rect,
-    plot.background = ggplot2::element_rect(fill = "#222", color = NA),
+    plot.background = ggplot2::element_rect(fill = dark_bg, color = NA),
     strip.background = dk_rect,
     axis.text.x = ggplot2::element_text(colour = "#CCDEEC"),
-    axis.text.y = ggplot2::element_text(colour = "#CCDEEC")
+    axis.text.y = ggplot2::element_text(colour = "#CCDEEC"),
+    legend.position = "top", 
+    legend.direction = "horizontal"
   )
 
 # ------------------------------------------------------------------------------
@@ -188,6 +192,12 @@ dk_tbl_thm <- function(gt_object, ...) {
       ),
       locations = gt::cells_body()
     )
+}
+
+h2rgb <- function(x) {
+  pct <- paste0(round(col2rgb(x)[,1] / 255 * 100, 1), "%") 
+  pct <- paste0(pct, collapse = ", ")
+  paste0("rgb(", pct, ")")
 }
 
 # ------------------------------------------------------------------------------
