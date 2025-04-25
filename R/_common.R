@@ -11,7 +11,7 @@ teardown <- TRUE
 # ------------------------------------------------------------------------------
 
 light_bg <- "#fcfefe" # from aml4td.scss
-dark_bg <- "#222" 
+dark_bg <- "#222222" 
 
 # ------------------------------------------------------------------------------
 # ggplot stuff
@@ -41,30 +41,30 @@ dk_thm <-
   ggplot2::theme_dark() +
   ggplot2::theme(
     text = dk_text,
-    legend.background = dk_rect,
-    legend.box.background = dk_rect,
-    panel.background = dk_rect,
+    panel.background = ggplot2::element_rect(fill = "transparent", color = "#adb5bd"),
     plot.background = ggplot2::element_rect(fill = "transparent", color = NA),
     strip.background = dk_rect,
     axis.text.x = ggplot2::element_text(colour = "#CCDEEC"),
     axis.text.y = ggplot2::element_text(colour = "#CCDEEC"),
     legend.position = "top", 
-    legend.direction = "horizontal"
+    legend.direction = "horizontal",
+    legend.background = ggplot2::element_rect(fill = "transparent", color = dark_bg),
+    legend.box.background = ggplot2::element_rect(fill = "transparent", color = dark_bg)
   )
 
 dk_gif_thm <- 
   ggplot2::theme_dark() +
   ggplot2::theme(
     text = dk_text,
-    legend.background = dk_rect,
-    legend.box.background = ggplot2::element_rect(fill = dark_bg, color = NA),
     panel.background = dk_rect,
     plot.background = ggplot2::element_rect(fill = dark_bg, color = NA),
     strip.background = dk_rect,
     axis.text.x = ggplot2::element_text(colour = "#CCDEEC"),
     axis.text.y = ggplot2::element_text(colour = "#CCDEEC"),
     legend.position = "top", 
-    legend.direction = "horizontal"
+    legend.direction = "horizontal",
+    legend.background = ggplot2::element_rect(fill = "transparent", color = dark_bg),
+    legend.box.background = ggplot2::element_rect(fill = "transparent", color = dark_bg)
   )
 
 # ------------------------------------------------------------------------------
