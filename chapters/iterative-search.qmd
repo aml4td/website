@@ -108,13 +108,16 @@ svm_param <-
 reg_mtr <- metric_set(rmse)
 ```
 
+::: {#fig-svm-grid}
+
+::: {.figure-content}
+
 ```{r}
-#| label: fig-svm-grid
+#| renderings: [light, dark]
 #| echo: false
 #| fig-width: 5
 #| fig-height: 5
 #| out-width: 50%
-#| fig-cap: "A visualization of model performance when only the SVM cost and scaling factor parameters are optimized. It shows the combination with the smallest RMSE and a ridge of candidate values with nearly equivalent performance."
 #| fig-altalt: "Heatmap showing optimization results for SVM parameters. A dark red diagonal ridge indicates optimal performance zones where cost and scaling factors are inversely related. The brightest point marks the lowest RMSE value at high scaling factor and low cost."
 
 load("../RData/two_param_iter_large.RData")
@@ -127,7 +130,8 @@ log2_labs <- trans_format("log2", math_format(2^.x, function(x) format(x, digits
 num_cuts <- 50
 rd_or <- colorRampPalette(rev(RColorBrewer::brewer.pal(9, "OrRd")))(num_cuts)
 
-regular_mtr %>%
+svm_grid_p <-
+  regular_mtr %>%
   mutate(RMSE = cut(mean, breaks = seq(5, 31, length = num_cuts))) %>% 
   ggplot(aes(scale_factor, cost)) +
   geom_tile(aes(fill = RMSE)) +
@@ -150,9 +154,22 @@ regular_mtr %>%
   scale_fill_manual(values = rd_or) +  
   labs(x = "Scaling Factor", y = "Cost") +
   coord_fixed(ratio = 1/2) +
-  theme_bw() +
+  theme_bw()
+
+svm_grid_p + 
+  theme_transparent() +
+  theme(legend.position = "none")
+
+svm_grid_p + 
+  dk_thm +
   theme(legend.position = "none")
 ```
+
+:::
+
+A visualization of model performance when only the SVM cost and scaling factor parameters are optimized. It shows the combination with the smallest RMSE and a ridge of candidate values with nearly equivalent performance.
+
+:::
 
 In the next section, we explore gradient descent optimization and explain why it may not be suitable for model tuning. Following that, we delve into two traditional global search methods—simulated annealing and genetic algorithms—and their application in parameter space exploration. We then shift our focus to Bayesian optimization, concluding with an in-depth analysis of the barley prediction problem.
 
@@ -320,7 +337,6 @@ To illustrate, a very small initial space-filling design with three candidates w
 ::: {#tbl-svm-initial}
 
 ```{r}
-#| label: tbl-svm-initial
 #| renderings: [light, dark]
 #| echo: false
 
@@ -631,16 +647,20 @@ and so on.
 
 From these answers, we would experiment with different values of $\alpha$ and $\beta$ until we find a combination that encapsulates what we believe. If we think that larger probabilities of forestation are more likely, we might choose a Beta prior that has values of $\alpha$ that are larger than $\beta$, which places more mass on larger values (as seen below). This is an example of an _informative prior_, albeit a weak one. As our prior distribution is more peaked it reflects that, before seeing any data, we have strong beliefs. If we honestly have no idea, we could choose a uniform distribution between zero and one using $\alpha = \beta = 1$.  
 
+::: {#fig-beta-dist}
+
+::: {.figure-content}
+
 ```{r}
-#| label: fig-beta-dist
+#| renderings: [light, dark]
 #| echo: false
 #| out-width: 70%
 #| fig-width: 6
 #| fig-height: 3
-#| fig-cap: Examples of the Beta distribution for different values of $\alpha$ and $\beta$.
 #| fig-altalt: "Three panel plot showing Beta distributions with varying parameters. Left panel (beta=1): curves showing increasing probability density as alpha increases from 1 to 5, with steeper growth near probability=1. Center panel (beta=3): several curves peaking at different points with means near 0.5. Right panel (beta=5): curves skewed left, with peaks shifting leftward as alpha increases. X-axis shows probability of forestation from 0 to 1, Y-axis shows probability density."
 
-crossing(
+beta_p <-
+  crossing(
   value = seq(0, 1, length.out = 100),
   alpha = c(1, 3, 5),
   beta = c(1, 3, 5)
@@ -653,7 +673,16 @@ crossing(
   facet_wrap(~beta, labeller = label_both) +
   labs(x = "Probability of Forestation") +
   scale_colour_viridis_d(option = "viridis")
+
+beta_p + theme_transparent()
+
+beta_p + dk_thm
 ```
+:::
+
+Examples of the Beta distribution for different values of $\alpha$ and $\beta$.
+
+:::
 
 We'll use values of $\alpha = 5$ and $\beta = 3$. If the training set has $n_{tr}$ points and $n_+$ of them are known to be forested, the ordinary sample proportion estimate is $\hat{p} = n_+ / n_{tr}$. In a Bayesian analysis, the final estimate is a function of both the prior distribution and our observed data. For a Beta prior, the Bayesian estimate is 
 
@@ -716,7 +745,7 @@ $$ {#eq-surrogate}
 where $j$ is the iteration number, $f(\cdot)$ is a _surrogate model_, and $\epsilon$ is an error term. For the barley data, we’ve used RMSE as our primary metric. Using a Bayesian model for $f(\cdot)$ enables us to predict what we expected the RMSE to be for different candidate points. 
 
 ```{r}
-#| label: fig-two-candidates-dist
+#| label: two-candidates-dist
 #| include: false
 
 set.seed(28383)
@@ -733,23 +762,43 @@ two_cand_probs <-
 
 Since a Bayesian model produces a posterior (predictive) distribution, we can obtain the distribution of the performance metric for a potential new candidate. We often summarize this predictive distribution with the mean and standard deviation. @fig-two-candidates shows two hypothetical candidates and their respective predictive distributions. The first candidate has a slightly better predicted RMSE (on average). The area under the distribution curve to the right of the vertical line reflects the probability of being worse than the current solution which, for this candidate, is `r two_cand_probs$prob[two_cand_probs$group == "# 1"]`%.
 
+::: {#fig-two-candidates}
+
+::: {.figure-content}
+
 ```{r}
-#| label: fig-two-candidates
+#| renderings: [light, dark]
 #| echo: false
 #| out-width: 55%
 #| fig-width: 6
 #| fig-height: 4
-#| fig-cap: An example of a choice between two candidates where performance is gauged by RMSE. One candidate has slightly better predicted mean performance and another where the mean RMSE is predicted to be much lower but with high uncertainty. 
-#| fig-altalt: Line graph comparing two candidates' performance distributions across RMSE values (ranging from 3 to 9). Candidate 1 shows a wider, flatter curve centered around RMSE of 5.75, while Candidate 2 displays a narrow, tall peak at an RMSE of 5.5. A vertical dashed line marks the 'Current best' position at an RMSE of 6.0.
 
-two_cand_data %>% 
+two_cand_p <-
+  two_cand_data %>% 
   ggplot(aes(RMSE, col = `Candidate:`)) + 
   geom_line(stat = "density", adjust = 1.5, trim = TRUE, linewidth = 1) +
-  geom_vline(mapping = aes(xintercept = 6), lty = 2) +
   theme(legend.position = "top") +
   annotate("text", x = 6.5, y = 1.25, label = "Current\nbest") + 
+  geom_vline(mapping = aes(xintercept = 6), lty = 2) +
   labs(y = "Posterior Density")
+
+two_cand_p +
+  annotate("text", x = 6.5, y = 1.25, label = "Current\nbest") + 
+  geom_vline(mapping = aes(xintercept = 6), lty = 2) +
+  theme_transparent()
+
+two_cand_p +
+  annotate("text", x = 6.5, y = 1.25, label = "Current\nbest", col = "#CCDEEC") + 
+  geom_vline(mapping = aes(xintercept = 6), lty = 2, col = "#CCDEEC") +
+  dk_thm
+
 ```
+
+:::
+
+An example of a choice between two candidates where performance is gauged by RMSE. One candidate has slightly better predicted mean performance and another where the mean RMSE is predicted to be much lower but with high uncertainty.
+
+:::
 
 The second candidate has a mean RMSE that is predicted to have about a 2-fold improvement over the first but comes with considerably large uncertainty. On average, this is a better choice but there is more area to the right of the vertical line. The probability of the second candidate having worse results than the current best is `r two_cand_probs$prob[two_cand_probs$group == "# 2"]`%. 
 
@@ -1001,15 +1050,17 @@ Differencing has a single tuning parameter: the difference order. A zero-order d
 
 The bottom panel shows the data when a first-order difference is used. The pattern is completely different since the data now represent the rate of change in the outcome rather than the absolute measurement. Again, larger window sizes oversmooth the data, and the highest degree of polynomial provides minimal smoothing. 
 
+::: {#fig-savitzky-golay}
+
+::: {.figure-content}
+
 ```{r}
-#| label: fig-savitzky-golay
+#| renderings: [light, dark]
 #| echo: false
 #| fig-width: 8.5
 #| fig-height: 6
 #| out-width: 100%
 #| warning: false
-#| fig-cap: "Demonstrations of the Savitzky-Golay preprocessing method for a small region for one specific sample previously shown in @fig-barley-data."
-#| fig-altalt: "Six panel figure showing Savitzky-Golay smoothing analysis of spectral data. Top row displays original values with fitted curves for polynomial degrees 1, 2, and 5 (windows: 3, 7, 11). Bottom row shows corresponding first differences. Each panel plots wavelength against signal intensity, demonstrating increasing smoothing complexity across polynomial degrees."
 
 load("../RData/savitzky_golay_demo.RData")
 
@@ -1017,26 +1068,54 @@ smoothed_p <-
   smoothed_plot_data %>%
   mutate(.location = .location + (`window size`/2) - 1/2) %>%
   ggplot(aes(.location, .measure)) +
-  geom_point(data = raw_plot_data, cex = 1/2) +
   geom_path(aes(col = window), alpha = 3 / 4) +
   facet_wrap(~ `polynomial degree`, labeller = label_both) +
   lims(y = c(0.595, 0.606), x = c(505, 544)) +
   labs(y = "Original Value", x = NULL) +
   theme(legend.position = "top")
 
-diff_p <- diff_plot_data %>%
+smoothed_p_lt <-
+  smoothed_p +
+  geom_point(data = raw_plot_data, cex = 1/2) +
+  theme_transparent()
+
+smoothed_p_dk <-
+  smoothed_p +
+  geom_point(data = raw_plot_data, cex = 1/2, col = "#CCDEEC") +
+  dk_thm
+  
+diff_p <- 
+  diff_plot_data %>%
   mutate(.location = .location + (`window size`/2)) %>%
   ggplot(aes(.location, .measure)) +
-  geom_hline(yintercept = 0, lty = 2, alpha = 1 / 2) +
-  geom_point(data = raw_diff_plot_data, cex = 1/2) +
   geom_path(aes(col = window), alpha = 3 / 4) +
   facet_wrap(~ `polynomial degree`, labeller = label_both) +
   lims(y = c(-0.0012, 0.0014), x = c(505, 544)) +
   labs(y = "1st Difference", x = "Wavelength (nm)") +
   theme(legend.position = "none")
 
-smoothed_p / diff_p
+diff_p_lt <- 
+  diff_p +
+  geom_hline(yintercept = 0, lty = 2, alpha = 1 / 2) +
+  geom_point(data = raw_diff_plot_data, cex = 1/2) +
+  theme_transparent()
+
+diff_p_dk <- 
+  diff_p +
+  geom_hline(yintercept = 0, lty = 2, alpha = 1 / 2) +
+  geom_point(data = raw_diff_plot_data, cex = 1/2, col = "#CCDEEC") +
+  dk_thm
+
+smoothed_p_lt / diff_p_lt
+
+smoothed_p_dk / diff_p_dk
 ```
+
+:::
+
+Demonstrations of the Savitzky-Golay preprocessing method for a small region for one specific sample previously shown in @fig-barley-data.
+
+:::
 
 We’ll want to optimize these preprocessing parameters simultaneously with the parameters for the supervised model. With this example, the supervised model of choice is a neural network with a single layer of hidden units. We’ll tune over the following parameters, described at length in @sec-cls-nnet:
 
@@ -1127,7 +1206,6 @@ An initial grid was created without constraints, and candidates who violated the
 ::: {#tbl-nnet-initial}
 
 ```{r}
-#| label: tbl-nnet-initial
 #| renderings: [light, dark]
 #| echo: false
 
@@ -1179,17 +1257,20 @@ The initial set of candidates used for iterative search methods.
 
 Can we improve on these results using iterative optimization? To begin, a simulated annealing search was initialized using the best results in @tbl-nnet-initial and ran for `r iters` iterations with no early stopping. If a new globally best result was not found within eight iterations, the search restarted from the previously best candidate. `r cli::format_inline("The search was restarted {length(restarts$.iter)} time{?s} at iterations {restarts$.iter}")` and improved candidates were found at iterations `r sa_best`. The overall best candidate had an RMSE value of `r round(mlp_sfd_sa_best_ci$.estimate, 2)`%, with a 90% confidence interval of (`r round(mlp_sfd_sa_best_ci$.lower, 2)`%, `r round(mlp_sfd_sa_best_ci$.upper, 2)`%).  The improvement appears to be a legitimate improvement over the initial best configuration. The top panel of @fig-nnet-sg-iterations shows the RMSE values over iterations and @tbl-nnet-sg-best lists the best candidate value.
 
+::: {#fig-nnet-sg-iterations}
+
+::: {.figure-content}
+
 ```{r}
-#| label: fig-nnet-sg-iterations
+#| renderings: [light, dark]
 #| echo: false
 #| fig-width: 6
 #| fig-height: 5
 #| out-width: 70%
-#| fig-cap: "Validation set RMSE results for the optimization. The validation set RMSE is shown on the y-axis with 90% confidence intervals. Orange points indicate iterations where a new optimal value was found and vertical lines indicate where the algorithm restarted from the previous best candidate."
-#| fig-altalt: "Comparison of two optimization methods - SA (top) and BO (bottom) - showing RMSE values over 50 iterations. Both plots display RMSE (3-15 scale) vs. iteration number with error bars. Orange points mark new optimal values. Both methods show gradual error reduction, with Bayesian Optimization achieving lower and more stable RMSE values."
 #| warning: false
 
-mlp_sfd_sa_ci %>% 
+mlp_sfd_p <- 
+  mlp_sfd_sa_ci %>% 
   mutate(Method = "Simulated Annealing") %>% 
   bind_rows(
     mlp_sfd_bo_ci %>% mutate(Method = "Bayesian Optimization")
@@ -1203,11 +1284,25 @@ mlp_sfd_sa_ci %>%
     width = 1/2, 
     show.legend = FALSE
   ) +
-  geom_vline(data = restarts, aes(xintercept = .iter), col = "darkred", lty = 3) +
   facet_wrap(~ Method, ncol = 1) +
-  labs(x = "Iteration", y = "RMSE") +
-  scale_color_manual(values = c("black", "#FF7F00"))
+  labs(x = "Iteration", y = "RMSE") 
+
+mlp_sfd_p+
+  scale_color_manual(values = c("black", "#FF7F00")) +
+  geom_vline(data = restarts, aes(xintercept = .iter), col = "darkred", lty = 3) + 
+  theme_transparent()
+
+mlp_sfd_p+
+  scale_color_manual(values = c("#CCDEEC", "#FF7F00")) +
+  geom_vline(data = restarts, aes(xintercept = .iter), col = "red", lty = 3) + 
+  dk_thm
 ```
+
+:::
+
+Validation set RMSE results for the optimization. The validation set RMSE is shown on the y-axis with 90% confidence intervals. Orange points indicate iterations where a new optimal value was found and vertical lines indicate where the algorithm restarted from the previous best candidate.
+
+:::
 
 A Bayesian optimization was also used with a squared exponential kernel for the covariance function and used expected improvement to select candidates at each of the `r iters` iterations. This search found new best results at `r cli::format_inline("{length(bo_best_iter)} iteration{?s}: {bo_best_iter}")`. Like the SA search, the best RMSE was substantially different than the one found in the initial grid: `r round(mlp_sfd_bo_best_ci$.estimate, 2)`% with 90% confidence interval, (`r round(mlp_sfd_bo_best_ci$.lower, 2)`%, `r round(mlp_sfd_bo_best_ci$.upper, 2)`%). The iterations and final values also be seen in @fig-nnet-sg-iterations and @tbl-nnet-sg-best, respectively. 
 
@@ -1221,7 +1316,6 @@ A Bayesian optimization was also used with a squared exponential kernel for the 
 ::: {#tbl-nnet-sg-best}
 
 ```{r}
-#| label: tbl-nnet-sg-best
 #| renderings: [light, dark]
 #| echo: false
 
