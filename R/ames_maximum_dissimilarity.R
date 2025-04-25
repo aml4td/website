@@ -17,9 +17,7 @@ ia_roads <- st_read(dsn = "R/iowa_highway.shp") # also requires iowa_highway.SHX
 # ------------------------------------------------------------------------------
 
 source("R/_common.R")
-
-light_bg <- "#fcfefe"
-dark_bg <- "#222"
+source("R/_themes.R")
 
 # ------------------------------------------------------------------------------
 
@@ -158,7 +156,7 @@ all_ames_dark <-
   geom_sf(data = ia_roads, aes(geometry = geometry), alpha = .1, col = "white") +
   geom_point(
     data = ames, aes(x = Longitude, y = Latitude),
-    size = 1 / 8, alpha = 1, col = "#F2EFE5"
+    size = 1 / 8, alpha = 1, col = dark_tan
   ) + 
   theme(
     panel.background = element_rect(fill = dark_bg, colour = NA),

@@ -8,11 +8,7 @@ library(magick)
 
 source("R/setup_chemometrics.R")
 source("R/_common.R")
-
-# ------------------------------------------------------------------------------
-
-light_bg <- "#fcfefe"
-dark_bg <- "#222"
+source("R/_themes.R")
 
 # ------------------------------------------------------------------------------
 
@@ -175,7 +171,7 @@ theme_set(dk_gif_thm)
 
 pca_animation_dark <-
   ggplot(rotations, aes(x = wvlgth_001, y = wvlgth_050)) +
-  geom_text(data = ranges, aes(x = note_x, y = note_y, label = note), col = "#adb5bd") +
+  geom_text(data = ranges, aes(x = note_x, y = note_y, label = note), col = dark_line) +
   geom_point(aes(col = barley), alpha = 1 / 3, show.legend = FALSE) +
   transition_states(state2) +
   labs(x = "Dimension 1", y = "Dimension 2", title = "(b)") +

@@ -10,9 +10,7 @@ options(pillar.advice = FALSE, pillar.min_title_chars = Inf)
 # ------------------------------------------------------------------------------
 
 source("R/_common.R")
-
-light_bg <- "#fcfefe"
-dark_bg <- "#222"
+source("R/_themes.R")
 
 # ------------------------------------------------------------------------------
 
@@ -98,16 +96,16 @@ theme_set(dk_gif_thm)
 set.seed(283)
 p <- grid_points %>% 
   ggplot(aes(learn_rate)) + 
-  geom_line(aes(y = smoothed), linewidth = 1, alpha = 1 / 4, col = "#F2EFE5") + 
+  geom_line(aes(y = smoothed), linewidth = 1, alpha = 1 / 4, col = dark_tan) + 
   geom_point(
     data = grid_points %>% slice(c(1, 50, 100)), 
     aes(y = sampled),
-    cex = 3, pch = 1, col = "#F2EFE5"
+    cex = 3, pch = 1, col = dark_tan
   ) +
   geom_point(
     data = bayes_iter,
     aes(y = sampled),
-    cex = 3, col = "#F2EFE5"
+    cex = 3, col = dark_tan
   ) +
   scale_x_log10() +
   transition_states(.iter, state_length = 10, transition_length = 4) +

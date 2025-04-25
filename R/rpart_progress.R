@@ -13,11 +13,7 @@ options(pillar.advice = FALSE, pillar.min_title_chars = Inf)
 
 source("R/setup_hotel_rates.R")
 source("R/_common.R")
-
-# ------------------------------------------------------------------------------
-
-light_bg <- "#fcfefe"
-dark_bg <- "#222"
+source("R/_themes.R")
 
 # ------------------------------------------------------------------------------
 
@@ -88,13 +84,13 @@ saveGIF(
 			p_data <- get_node(tmp_mod) %>%
 				ggplot(aes(agent_index, mean, col = label)) +
 				geom_point(cex = 1, alpha = 1 / 3, show.legend = FALSE) +
-				geom_vline(xintercept = cut_vals, lty = 2, col = "#F2EFE5") +
+				geom_vline(xintercept = cut_vals, lty = 2, col = dark_tan) +
 				labs(y = "Mean ADR", x = "Agent (index)")
 
 			p_progress <- split_data %>%
 				slice(1:i) %>%
 				ggplot(aes(groups, xerror)) +
-				geom_point(col = "#F2EFE5") +
+				geom_point(col = dark_tan) +
 				scale_x_continuous(
 					breaks = pretty_breaks(),
 					limits = range(split_data$groups)
@@ -103,7 +99,7 @@ saveGIF(
 				labs(x = "Number of Groups", y = "Error")
 
 			if (i > 1) {
-				p_progress <- p_progress + geom_line(col = "#F2EFE5")
+				p_progress <- p_progress + geom_line(col = dark_tan)
 			}
 
 			print(p_data / p_progress + plot_layout(heights = c(2, 1)))
@@ -142,13 +138,13 @@ saveGIF(
       p_data <- get_node(tmp_mod) %>%
         ggplot(aes(agent_index, mean, col = label)) +
         geom_point(cex = 1, alpha = 1 / 3, show.legend = FALSE) +
-        geom_vline(xintercept = cut_vals, lty = 2, col = "#F2EFE5") +
+        geom_vline(xintercept = cut_vals, lty = 2, col = dark_tan) +
         labs(y = "Mean ADR", x = "Agent (index)")
       
       p_progress <- split_data %>%
         slice(1:i) %>%
         ggplot(aes(groups, xerror)) +
-        geom_point(col = "#F2EFE5") +
+        geom_point(col = dark_tan) +
         scale_x_continuous(
           breaks = pretty_breaks(),
           limits = range(split_data$groups)
@@ -157,7 +153,7 @@ saveGIF(
         labs(x = "Number of Groups", y = "Error")
       
       if (i > 1) {
-        p_progress <- p_progress + geom_line(col = "#F2EFE5")
+        p_progress <- p_progress + geom_line(col = dark_tan)
       }
       
       print(p_data / p_progress + plot_layout(heights = c(2, 1)))
