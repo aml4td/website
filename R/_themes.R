@@ -1,3 +1,6 @@
+require(ggplot2)
+require(gt)
+
 # ------------------------------------------------------------------------------
 # Themes for plots, tables, and shiny apps
 
@@ -26,21 +29,18 @@ theme_transparent <- function(...) {
   ret
 }
 
-log_2_breaks <- scales::trans_breaks("log2", function(x) 2^x)
-log_2_labs   <- scales::trans_format("log2", scales::math_format(2^.x))
-
-dk_text <- ggplot2::element_text(color = "#adb5bd")
-dk_rect <- ggplot2::element_rect(fill = "transparent", color = "#adb5bd")
+dk_text <- ggplot2::element_text(color = dark_line)
+dk_rect <- ggplot2::element_rect(fill = "transparent", color = dark_line)
 
 dk_thm <- 
   ggplot2::theme_dark() +
   ggplot2::theme(
     text = dk_text,
-    panel.background = ggplot2::element_rect(fill = "transparent", color = "#adb5bd"),
+    panel.background = ggplot2::element_rect(fill = "transparent", color = dark_line),
     plot.background = ggplot2::element_rect(fill = "transparent", color = NA),
     strip.background = dk_rect,
-    axis.text.x = ggplot2::element_text(colour = "#CCDEEC"),
-    axis.text.y = ggplot2::element_text(colour = "#CCDEEC"),
+    axis.text.x = ggplot2::element_text(colour = dark_data),
+    axis.text.y = ggplot2::element_text(colour = dark_data),
     legend.position = "top", 
     legend.direction = "horizontal",
     legend.background = ggplot2::element_rect(fill = "transparent", color = dark_bg),
@@ -54,8 +54,8 @@ dk_gif_thm <-
     panel.background = dk_rect,
     plot.background = ggplot2::element_rect(fill = dark_bg, color = NA),
     strip.background = dk_rect,
-    axis.text.x = ggplot2::element_text(colour = "#CCDEEC"),
-    axis.text.y = ggplot2::element_text(colour = "#CCDEEC"),
+    axis.text.x = ggplot2::element_text(colour = dark_data),
+    axis.text.y = ggplot2::element_text(colour = dark_data),
     legend.position = "top", 
     legend.direction = "horizontal",
     legend.background = ggplot2::element_rect(fill = "transparent", color = dark_bg),
@@ -67,13 +67,13 @@ dk_gif_thm <-
 lt_tbl_thm <- function(gt_object, ...) {
   gt_object %>%
     gt::tab_options(
-      table.background.color = "#fcfefe",
+      table.background.color = light_bg,
       table.font.color.light = "grey",
-      table.border.left.color = "#fcfefe",
-      table.border.right.color = "#fcfefe",
+      table.border.left.color = light_bg,
+      table.border.right.color = light_bg,
       table_body.border.bottom.color = "grey",
       table_body.border.top.color = "grey",
-      column_labels.background.color = "#fcfefe",
+      column_labels.background.color = light_bg,
       data_row.padding = gt::px(7),
       ...
     ) %>%
@@ -126,35 +126,35 @@ lt_tbl_thm <- function(gt_object, ...) {
 dk_tbl_thm <- function(gt_object, ...) {
   gt_object %>%
     gt::tab_options(
-      table_body.border.bottom.color = "#F2EFE5",
-      table_body.border.top.color = "#F2EFE5",
-      table.border.bottom.color = "#F2EFE5",
-      table.border.top.color = "#F2EFE5",
-      table.background.color = "#222",
-      table.font.color.light = "#F2EFE5",
-      table.border.left.color = "#222",
-      table.border.right.color = "#222",
-      column_labels.background.color = "#222",
+      table_body.border.bottom.color = dark_tan,
+      table_body.border.top.color = dark_tan,
+      table.border.bottom.color = dark_tan,
+      table.border.top.color = dark_tan,
+      table.background.color = dark_bg,
+      table.font.color.light = dark_tan,
+      table.border.left.color = dark_bg,
+      table.border.right.color = dark_bg,
+      column_labels.background.color = dark_bg,
       data_row.padding = gt::px(7),
       ...
     ) %>%
     gt::tab_style(
       style = gt::cell_text(
-        color = "#adb5bd",
+        color = dark_line,
         font = gt::google_font("Libre Franklin"),
       ),
       locations = gt::cells_column_labels()
     ) %>%
     gt::tab_style(
       style = gt::cell_text(
-        color = "#adb5bd",
+        color = dark_line,
         font = gt::google_font("Libre Franklin"),
       ),
       locations = gt::cells_body()
     ) %>%
     gt::tab_style(
       style = gt::cell_text(
-        color = "#adb5bd",
+        color = dark_line,
         font = gt::google_font("Libre Franklin"),
       ),
       locations = gt::cells_column_spanners()
@@ -163,7 +163,7 @@ dk_tbl_thm <- function(gt_object, ...) {
       style = gt::cell_text(
         font = gt::google_font("Libre Franklin"),
         weight = 800,
-        color = "#adb5bd"
+        color = dark_line
       ),
       locations = gt::cells_title(groups = "title")
     ) |>
@@ -171,7 +171,7 @@ dk_tbl_thm <- function(gt_object, ...) {
       style = gt::cell_borders(
         sides = c("top", "bottom"),
         weight = gt::px(3),
-        col = "#F2EFE5"
+        col = dark_tan
       ),
       locations = list(
         gt::cells_column_labels(), 
@@ -181,7 +181,7 @@ dk_tbl_thm <- function(gt_object, ...) {
     gt::tab_style(
       style = gt::cell_borders(
         sides = c("top", "bottom"),
-        color = "#F2EFE5",
+        color = dark_tan,
         weight = gt::px(1),
         style = "solid"
       ),

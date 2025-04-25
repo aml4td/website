@@ -10,7 +10,7 @@ teardown <- TRUE
 
 # ------------------------------------------------------------------------------
 
-source("R/_themes.R")
+source("../R/_themes.R")
 
 # ------------------------------------------------------------------------------
 # formatting for package names
@@ -295,3 +295,9 @@ names_zero_padded <- function(num, prefix = "x", call = rlang::caller_env()) {
   ind <- gsub(" ", "0", ind)
   paste0(prefix, ind)
 }
+
+# ------------------------------------------------------------------------------
+
+log_2_breaks <- scales::trans_breaks("log2", function(x) 2^x)
+log_2_labs   <- scales::trans_format("log2", scales::math_format(2^.x))
+
