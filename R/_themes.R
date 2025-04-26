@@ -15,6 +15,8 @@ dark_tan <-  "#F2EFE5"
 # ggplot stuff
 
 transparent_rect <- ggplot2::element_rect(fill = "transparent", colour = NA)
+dk_text <- ggplot2::element_text(color = dark_line)
+dk_rect <- ggplot2::element_rect(fill = "transparent", color = dark_line)
 
 thm_transparent <- function(...) {
 
@@ -40,9 +42,6 @@ thm_lt <-
     legend.position = "top", 
     legend.direction = "horizontal"
   )
-
-dk_text <- ggplot2::element_text(color = dark_line)
-dk_rect <- ggplot2::element_rect(fill = "transparent", color = dark_line)
 
 thm_dk <- 
   ggplot2::theme_dark() +
