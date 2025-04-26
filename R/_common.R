@@ -9,10 +9,6 @@
 teardown <- TRUE
 
 # ------------------------------------------------------------------------------
-
-source("../R/_themes.R")
-
-# ------------------------------------------------------------------------------
 # formatting for package names
 
 pkg <- function(x) {
@@ -213,48 +209,6 @@ if (is_html) {
 }
 
 # ------------------------------------------------------------------------------
-
-lightsvglite <- function(file, width, height, ...) {
-  on.exit(ggplot2::reset_theme_settings())
-  
-  theme_transparent <- function(...) {
-    
-    ret <- ggplot2::theme_bw(...)
-    
-    transparent_rect <- ggplot2::element_rect(fill = "transparent", colour = NA)
-    ret$panel.background  <- transparent_rect
-    ret$plot.background   <- transparent_rect
-    ret$legend.background <- transparent_rect
-    ret$legend.key        <- transparent_rect
-    
-    ret$legend.position <- "top"
-    
-    ret
-  }
-  
-  ggplot2::theme_set(theme_transparent())
-  ggsave(
-    filename = file, #fs::path("figures", file),
-    width = width,
-    height = height,
-    dev = "svg",
-    bg = "transparent",
-    ...
-  )
-}
-
-darksvglite <- function(file, width, height, ...) {
-  on.exit(ggplot2::reset_theme_settings())
-  ggplot2::theme_set(ggdark::dark_theme_grey())
-  ggsave(
-    filename = file, #fs::path("figures", file),
-    width = width,
-    height = height,
-    dev = "svg",
-    bg = "transparent",
-    ...
-  )
-}
 
 r_comp <- function(stub) {
   glue::glue(
