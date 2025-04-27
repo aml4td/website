@@ -1,5 +1,5 @@
 require(gt)
-# source "_themes.R"
+source("https://raw.githubusercontent.com/aml4td/website/main/R/_themes.R")
 
 # ------------------------------------------------------------------------------
 
