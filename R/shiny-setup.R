@@ -1,5 +1,4 @@
-# source("https://raw.githubusercontent.com/aml4td/website/main/R/_themes.R")
-# source("https://raw.githubusercontent.com/aml4td/website/main/R/_themes_ggplot.R")
+source("https://raw.githubusercontent.com/aml4td/website/main/R/_themes_ggplot.R")
 
 # ------------------------------------------------------------------------------
 # From recipes::names0 and used in shinylive chunks; see https://github.com/aml4td/website/pull/80
@@ -10,7 +9,6 @@ names_zero_padded <- function(num, prefix = "x", call = rlang::caller_env()) {
 	ind <- gsub(" ", "0", ind)
 	paste0(prefix, ind)
 }
-
 
 # ------------------------------------------------------------------------------
 # for short url refs
@@ -25,7 +23,7 @@ rd_url <- function(nm) {
 
 get_theme <- function(
     input,
-    # these values found in _themes.R
+    # these values found in _themes.R (sourced by _themes_ggplot.R)
     light = thm_lt,
     dark = thm_dk,
     # these values found in _themes_ggplot.R
