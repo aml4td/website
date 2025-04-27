@@ -9,31 +9,6 @@
 teardown <- TRUE
 
 # ------------------------------------------------------------------------------
-
-light_bg <- "#fcfefe" # from aml4td.scss
-
-# ------------------------------------------------------------------------------
-# ggplot stuff
-
-theme_transparent <- function(...) {
-
-  ret <- ggplot2::theme_bw(...)
-
-  transparent_rect <- ggplot2::element_rect(fill = "transparent", colour = NA)
-  ret$panel.background  <- transparent_rect
-  ret$plot.background   <- transparent_rect
-  ret$legend.background <- transparent_rect
-  ret$legend.key        <- transparent_rect
-
-  ret$legend.position <- "top"
-
-  ret
-}
-
-log_2_breaks <- scales::trans_breaks("log2", function(x) 2^x)
-log_2_labs   <- scales::trans_format("log2", scales::math_format(2^.x))
-
-# ------------------------------------------------------------------------------
 # formatting for package names
 
 pkg <- function(x) {
@@ -235,48 +210,6 @@ if (is_html) {
 
 # ------------------------------------------------------------------------------
 
-lightsvglite <- function(file, width, height, ...) {
-  on.exit(ggplot2::reset_theme_settings())
-  
-  theme_transparent <- function(...) {
-    
-    ret <- ggplot2::theme_bw(...)
-    
-    transparent_rect <- ggplot2::element_rect(fill = "transparent", colour = NA)
-    ret$panel.background  <- transparent_rect
-    ret$plot.background   <- transparent_rect
-    ret$legend.background <- transparent_rect
-    ret$legend.key        <- transparent_rect
-    
-    ret$legend.position <- "top"
-    
-    ret
-  }
-  
-  ggplot2::theme_set(theme_transparent())
-  ggsave(
-    filename = file, #fs::path("figures", file),
-    width = width,
-    height = height,
-    dev = "svg",
-    bg = "transparent",
-    ...
-  )
-}
-
-darksvglite <- function(file, width, height, ...) {
-  on.exit(ggplot2::reset_theme_settings())
-  ggplot2::theme_set(ggdark::dark_theme_grey())
-  ggsave(
-    filename = file, #fs::path("figures", file),
-    width = width,
-    height = height,
-    dev = "svg",
-    bg = "transparent",
-    ...
-  )
-}
-
 r_comp <- function(stub) {
   glue::glue(
     '<a href="https://tidymodels.aml4td.org/chapters/[stub]">{{< fa brands r-project size=Large >}}</a>',
@@ -316,3 +249,9 @@ names_zero_padded <- function(num, prefix = "x", call = rlang::caller_env()) {
   ind <- gsub(" ", "0", ind)
   paste0(prefix, ind)
 }
+
+# ------------------------------------------------------------------------------
+
+log_2_breaks <- scales::trans_breaks("log2", function(x) 2^x)
+log_2_labs   <- scales::trans_format("log2", scales::math_format(2^.x))
+

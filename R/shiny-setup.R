@@ -1,23 +1,5 @@
-light_bg <- "#fcfefe" # from aml4td.scss
-grid_theme <- bs_theme(
-	bg = light_bg,
-	fg = "#595959"
-)
-
-col_rect <- ggplot2::element_rect(fill = light_bg, colour = light_bg)
-
-theme_light_bl <- function(...) {
-	ret <- ggplot2::theme_bw(...)
-
-	ret$panel.background <- col_rect
-	ret$plot.background <- col_rect
-	ret$legend.background <- col_rect
-	ret$legend.key <- col_rect
-
-	ret$legend.position <- "top"
-
-	ret
-}
+# source("https://raw.githubusercontent.com/aml4td/website/main/R/_themes.R")
+# source("https://raw.githubusercontent.com/aml4td/website/main/R/_themes_ggplot.R")
 
 # ------------------------------------------------------------------------------
 # From recipes::names0 and used in shinylive chunks; see https://github.com/aml4td/website/pull/80
@@ -37,3 +19,28 @@ rd_url <- function(nm) {
   rd_base <- "https://raw.githubusercontent.com/aml4td/website/main/RData"
   url(file.path(rd_base, nm))
 }
+
+# ------------------------------------------------------------------------------
+# switch between light and dark themes
+
+get_theme <- function(
+    input,
+    # these values found in _themes.R
+    light = thm_lt,
+    dark = thm_dk,
+    # these values found in _themes_ggplot.R
+    lt_bg = light_bg,
+    dk_bg = dark_bg
+) {
+  if (input$mode == "light") {
+    res <-
+      light +
+      theme(plot.background = element_rect(fill = lt_bg, color = lt_bg))
+  } else {
+    res <-
+      dark +
+      theme(plot.background = element_rect(fill = dk_bg, color = dk_bg))
+  }
+  res
+}
+
