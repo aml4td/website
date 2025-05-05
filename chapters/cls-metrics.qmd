@@ -102,7 +102,7 @@ recompute <- function(split) {
 }
 
 set.seed(364)
-orig_brier <-
+original_int <-
   nb_val_pred |>
   bootstraps(times = 2000) |>
   mutate(
@@ -278,7 +278,7 @@ In some cases, the pattern shown in @fig-discrim-vs-cal may be acceptable. For e
 
 ## Example Data: Poisonous Mushrooms {#sec-mushrooms}
 
-To demonstrate classification metrics, we'll primarily use a data set where mushroom characteristics are used to predict whether specific mushrooms are edible or poisonous [@wagner2021mushroom]. These data were obtained from the [UCI Machine Learning Archive](https://archive.ics.uci.edu/dataset/848/secondary+mushroom+dataset)) and we'll use these data in conjunction with a naive Bayes classification model^[This data set is very easy to predict. Other models, even simple decision trees, can produce nearly perfect results. We’ll use it here with a less powerful model for illustration purposes. The gravity of incorrectly predicting a poisonous mushroom to be edible makes discussing certain errors more compelling.]. This model uses a simplified version of Bayes' Rule (see @sec-naive-bayes). 
+To demonstrate classification metrics, we'll primarily use a data set where mushroom characteristics are used to predict whether specific mushrooms are edible or poisonous [@wagner2021mushroom]. These data were obtained from the [UCI Machine Learning Archive](https://archive.ics.uci.edu/dataset/848/secondary+mushroom+dataset) and we'll use them in conjunction with a naive Bayes classification model^[This data set is very easy to predict. Other models, even simple decision trees, can produce nearly perfect results. We’ll use it here with a less powerful model for illustration purposes. The gravity of incorrectly predicting a poisonous mushroom to be edible makes discussing certain errors more compelling.]. This model uses a simplified version of Bayes' Rule (see @sec-naive-bayes). 
 
 The initial data pool contained `r format(shroom_n, big.mark = ",")` data points. The main partition of the data was into training ($n_{tr}$ = `r format(nrow(shroom_train), big.mark = ",")`), validation ($n_{val}$ = `r format(nrow(shroom_val), big.mark = ",")`), and test ($n_{te}$ = `r format(nrow(shroom_test), big.mark = ",")`). Additionally, a _calibration_ set of $n_{cal}$ = `r format(nrow(shroom_cal), big.mark = ",")` mushrooms were allocated for the procedures described in @sec-calibration. 
 
@@ -813,7 +813,7 @@ $$ {#eq-brier-two}
 
 See @brier1950verification and, more recently, @bella2013effect. A perfect model would estimate probabilities to be either 1.0 or 0.0, depending on the class, and would minimize this statistic. What would an ineffective model produce? While there is only one way to be perfect, there are many ways in which a model could produce poor estimates. Let’s say the model is completely equivocal and every prediction for this binary outcome is 0.5. In this case, we are summing repeated values of 0.5<sup>2</sup>  so that the bad models would have scores $\ge$ 0.25. This serves as a good rule of thumb, but a better (but more complex) approach is via the permutation method previously described.
 
-Looking at our mushroom model, the Brier score was estimated as `r signif(nb_mtr$mean[nb_mtr$.metric == "brier_class"], 3)` with 90{{< pct >}} confidence limits of (`r signif(orig_brier$.lower, 3)`, `r signif(orig_brier$.upper, 3)`). The permutation estimate shows that a poor model would have an average score of `r signif(nb_mtr_perm$mean[nb_mtr$.metric == "brier_class"], 3)`. While not perfect, the model can achieve a fairly small average squared error. 
+Looking at our mushroom model, the Brier score was estimated as `r signif(nb_mtr$mean[nb_mtr$.metric == "brier_class"], 3)` with 90{{< pct >}} confidence limits of (`r signif(original_int$.lower, 3)`, `r signif(original_int$.upper, 3)`). The permutation estimate shows that a poor model would have an average score of `r signif(nb_mtr_perm$mean[nb_mtr$.metric == "brier_class"], 3)`. While not perfect, the model can achieve a fairly small average squared error. 
 
 In some cases, @eq-brier-two is written with the components for _both_ classes. In this case, the possible range of values and the rule of thumb value would be doubled. While @stanski1989survey recommends dividing the score by the number of classes to maintain a range of [0, 1], there does not appear to be an established convention for this aspect of the Brier score. The more general equation for any number of classes is: 
 
@@ -1190,28 +1190,28 @@ Another alternative is to fit a model to the data. Logistic regression is a rela
 
 ```{r}
 #| label: logistic-cal
-#| include: false
 #| cache: true
+#| include: false
 
-logistic_cal <- nb_cal_pred %>%
+lr_cal_mod <- nb_cal_pred %>%
   cal_estimate_logistic(truth = class, smooth = TRUE)
-pred_cal <- nb_val_pred %>% cal_apply(logistic_cal)
+lr_cal_val <- nb_val_pred %>% cal_apply(lr_cal_mod)
 
-num_logistic_vals <- nb_cal_pred %>% distinct(.pred_poisonous) %>% nrow()
+num_lr_vals <- nb_cal_pred %>% distinct(.pred_poisonous) %>% nrow()
 iso_cal <- nb_cal_pred %>% cal_estimate_isotonic(truth = class)
-pred_cal_iso <- nb_val_pred %>% cal_apply(iso_cal)
-num_isotonic_vals <- vctrs::vec_unique_count(pred_cal_iso$.pred_poisonous)
+iso_cal_val <- nb_val_pred %>% cal_apply(iso_cal)
+num_isotonic_vals <- vctrs::vec_unique_count(iso_cal_val$.pred_poisonous)
 
 iso_boot_cal <- nb_cal_pred %>%
   cal_estimate_isotonic_boot(truth = class, times = 1000)
-pred_cal_iso_boot <- nb_val_pred %>% cal_apply(iso_boot_cal)
+iso_boot_cal_val <- nb_val_pred %>% cal_apply(iso_boot_cal)
 num_isotonic_boot_vals <- vctrs::vec_unique_count(
-  pred_cal_iso_boot$.pred_poisonous
+  iso_boot_cal_val$.pred_poisonous
 )
 
 set.seed(364)
-lr_brier <-
-  pred_cal |>
+lr_cal_int <-
+  lr_cal_val |>
   bootstraps(times = 2000) |>
   mutate(
     dat = map(splits, analysis),
@@ -1224,8 +1224,8 @@ lr_brier <-
   int_pctl(brier, alpha = .10)
 
 set.seed(364)
-iso_brier <-
-  pred_cal_iso_boot |>
+iso_boot_cal_int <-
+  iso_boot_cal_val |>
   bootstraps(times = 2000) |>
   mutate(
     dat = map(splits, analysis),
@@ -1235,6 +1235,35 @@ iso_brier <-
       ~ dplyr::select(.x, term = .metric, estimate = .estimate)
     )
   ) |>
+  int_pctl(brier, alpha = .10)
+
+three_cal_val <- 
+  nb_val_pred |> 
+  dplyr::select(class, .row, original = .pred_poisonous) |> 
+  full_join(
+    iso_boot_cal_val |> dplyr::select(.row, isoreg = .pred_poisonous), by = ".row"
+  ) |> 
+  full_join(
+    lr_cal_val |> dplyr::select(.row, logistic = .pred_poisonous), by = ".row"
+  )
+
+three_brier <- function(split) {
+  predictions <- analysis(split)
+  brier_logistic <- predictions |> brier_class(class, logistic)
+  brier_isoreg <- predictions |> brier_class(class, isoreg)
+  brier_raw <- predictions |> brier_class(class, original)
+  tibble::tibble(
+    estimate = brier_raw$.estimate - 
+      c(brier_logistic$.estimate, brier_isoreg$.estimate),
+    term = c("Logistic Calibration", "Isotonic Calibration")
+  )
+}
+
+set.seed(766)
+diff_cal_int <-
+  three_cal_val |>
+  bootstraps(times = 2000) |>
+  mutate(brier = map(splits, three_brier)) |>
   int_pctl(brier, alpha = .10)
 ```
 
@@ -1244,7 +1273,7 @@ What can be done with poorly calibrated predictions? There are approaches for po
 
 This raises questions about which data should be used to fit the calibration model and which to evaluate its efficacy. We’ve previously mentioned that using simple repredictions of the training set is a very bad idea, and that is especially true here. If the model was resampled, the out-of-sample predictions can be used to fit the calibration model. In our example, a single validation set was used. 
 
-We were able to set aside `r format(nrow(pred_cal), big.mark = ",")` samples for the calibration set, and we will use these to fit the logistic model. @fig-re-cal-curves shows the results where panel (a) uses a sliding window to assess the smaller data set using a window size of 20{{< pct >}} that moves in 5{{< pct >}} increments. From these figures, the class probabilities have been improved. 
+We were able to set aside `r format(nrow(shroom_cal), big.mark = ",")` samples for the calibration set, and we will use these to fit the logistic model. @fig-re-cal-curves shows the results where panel (a) uses a sliding window to assess the smaller data set using a window size of 20{{< pct >}} that moves in 5{{< pct >}} increments. From these figures, the class probabilities have been improved. 
 
 ```{r}
 #| label: fig-re-cal-curves
@@ -1254,7 +1283,7 @@ We were able to set aside `r format(nrow(pred_cal), big.mark = ",")` samples for
 #| fig-height: 4
 #| fig-cap: The validation set calibration curves for naive Bayes model _after_ recalibration using a logistic regression fit to the calibration set. Different data were used to recalibrate the data and to assess how well the procedure worked. 
 cal_plot_3 <-
-  pred_cal %>%
+  lr_cal_val %>%
   cal_plot_windowed(
     class,
     .pred_poisonous,
@@ -1265,7 +1294,7 @@ cal_plot_3 <-
   ggtitle("(a) Moving 20% bins")
 
 cal_plot_4 <-
-  pred_cal %>%
+  lr_cal_val %>%
   cal_plot_logistic(class, .pred_poisonous, include_ribbon = FALSE) +
   ggtitle("(b) Logistic regression")
 
@@ -1275,14 +1304,14 @@ cal_plot_3 + cal_plot_4
 ```{r}
 #| label: re-cal
 #| echo: false
-re_class_stats <- pred_cal %>%
+re_class_stats <- lr_cal_val %>%
   cls_mtr(class, estimate = .pred_class, .pred_poisonous)
 
-re_class_iso_stats <- pred_cal_iso_boot %>%
+re_class_iso_stats <- iso_boot_cal_val %>%
   cls_mtr(class, estimate = .pred_class, .pred_poisonous)
 ```
 
-Using this approach to calibration, the new probability estimates have a Brier score of `r signif(re_class_stats$.estimate[re_class_stats$.metric == "brier_class"], 3)` with 90{{< pct >}} confidence limits (`r signif(lr_brier$.lower, 3)`, `r signif(lr_brier$.upper, 3)`). While this is smaller than the value (`r signif(nb_mtr$mean[nb_mtr$.metric == "brier_class"], 3)`) before calibration, it difficult to believe that the improvement is real since the confidence interval for the original unaltered predictions was (`r signif(orig_brier$.lower, 3)`, `r signif(orig_brier$.upper, 3)`). 
+Using this approach to calibration, the new probability estimates have a Brier score of `r signif(re_class_stats$.estimate[re_class_stats$.metric == "brier_class"], 3)` with 90{{< pct >}} confidence limits (`r signif(lr_cal_int$.lower, 3)`, `r signif(lr_cal_int$.upper, 3)`). While this is smaller than the value (`r signif(nb_mtr$mean[nb_mtr$.metric == "brier_class"], 3)`) before calibration, it difficult to believe that the improvement is real since the confidence interval for the original unaltered predictions was (`r signif(original_int$.lower, 3)`, `r signif(original_int$.upper, 3)`). 
 
 There are other approaches for improving calibrating. One is isotonic regression [@isotonic]. This tool fits a model that will generate monotonic, non-decreasing, predictions: $\hat{y}_i \le \hat{y}_{i+ 1}$ when $x_i \le x_{i+ 1}$. Multiple methods exist to create such models but the most straightforward approach is the pooled-adjacent violators algorithm (PAVA) of @pava. This method adjusts a sequence of data points that are not monotonically increasing to be so. For example, @tbl-isotonic shows an example where the rows are ordered by their model's predicted probabilities. One column shows a binary indicator for class `A`. The first three rows have the same outcome (`B`) but the fourth row is actually class `A`. The PAVA algorithm then takes the averages of the binary indicators that bracket the discordant value, and all of these probability estimates are given the average value (1/3). From the table, it is clear that there are three possible probability estimates after isotonic regression is used. 
 
@@ -1325,7 +1354,7 @@ An example of calculations for calibration via isotonic regression.
 :::
 :::::::
 
-The nice feature of this tool is that it is nonparametric and makes almost no distributional assumptions. However, one downside is that there are few unique recalibrated probability estimates. For this reason, isotonic regression is advised for large data sets. For example, for the naive Bayes data used for calibration, there were originally `r format(num_logistic_vals, big.mark = ",")` unique probability estimates while, after isotonic regression is applied, there are only `r num_isotonic_vals` possible values. @fig-recal-iso-curves(a) shows the calibration curve after isotonic regression is applied. 
+The nice feature of this tool is that it is nonparametric and makes almost no distributional assumptions. However, one downside is that there are few unique recalibrated probability estimates. For this reason, isotonic regression is advised for large data sets. For example, for the naive Bayes data used for calibration, there were originally `r format(num_lr_vals, big.mark = ",")` unique probability estimates while, after isotonic regression is applied, there are only `r num_isotonic_vals` possible values. @fig-recal-iso-curves(a) shows the calibration curve after isotonic regression is applied. 
 
 We can improve the isotonic regression results using _bagging_. As discussed later in @sec-cls-bagging, bagging creates an ensemble of models by taking $B$ bootstrap samples to build $B$ discinct models. The final model prediction is the average of the $B$ model predictions. For isotonic regression, this reduces the variability in the predicted (i.e., recalibrated) probabilities and also increases the number of unique probability values. Using 1,000 bootstrap samples, we have `r num_isotonic_boot_vals` unique probability estimates. 
 
@@ -1338,23 +1367,23 @@ We can improve the isotonic regression results using _bagging_. As discussed lat
 #| fig-cap: Validation set calibration curves for naive Bayes model _after_ recalibration using isotonic regression from a calibration set. Both panels show moving 20{{< pct >}} windows. 
 
 cal_plot_5 <- 
-  pred_cal_iso %>% 
+  iso_cal_val %>% 
   cal_plot_windowed(class, .pred_poisonous, window_size = 0.2, step_size = 0.025) + 
   ggtitle("(a) Single Isotonic Regression")
 
 cal_plot_6 <- 
-  pred_cal_iso_boot %>% 
+  iso_boot_cal_val %>% 
   cal_plot_windowed(class, .pred_poisonous, window_size = 0.2, step_size = 0.025) + 
   ggtitle("(b) Bootstrapped Results")
 
 cal_plot_5 + cal_plot_6
 ```
 
-@fig-recal-iso-curves(b) shows the ensemble results. The curve is slightly closer to the line, and there is far less "wiggle" around the values. The bootstrapping method reduces the Brier score from `r signif(nb_mtr$mean[nb_mtr$.metric == "brier_class"], 3)` to `r signif(re_class_stats$.estimate[re_class_stats$.metric == "brier_class"], 3)` but the with 90{{< pct >}} confidence limits (`r signif(iso_brier$.lower, 3)`, `r signif(iso_brier$.upper, 3)`) suggest that the improvement is within the experimental noise of the system. 
+@fig-recal-iso-curves(b) shows the ensemble results. The curve is slightly closer to the line, and there is far less "wiggle" around the values. The bootstrapping method reduces the Brier score from `r signif(nb_mtr$mean[nb_mtr$.metric == "brier_class"], 3)` to `r signif(re_class_stats$.estimate[re_class_stats$.metric == "brier_class"], 3)` but the with 90{{< pct >}} confidence limits (`r signif(iso_boot_cal_int$.lower, 3)`, `r signif(iso_boot_cal_int$.upper, 3)`) suggest that the improvement is within the experimental noise of the system. 
 
 There are many other tools in the calibration toolbox, such as beta calibration [@betacal]. There are also methods for calibrating classification models with three or more classes [@NIPS2001abdbeb4d; @johansson21a; @NEURIPS2021bbc92a64].
 
-It is important to recompute _all_ metrics using recalibrated predictions. Also note that since the class probabilities have been altered, any hard predictions should be recomputed since some values may have moved across the chosen probability threshold. Using the set of `r format(nrow(pred_cal), big.mark = ",")` data points that have been recalibrated, the reestimated sensitivity and specificity were `r round(re_class_stats$.estimate[re_class_stats$.metric == "sensitivity"] * 100, 1)`{{< pct >}} and `r round(re_class_stats$.estimate[re_class_stats$.metric == "specificity"] * 100, 1)`{{< pct >}}, respectively and the area under the ROC curve was `r signif(re_class_stats$.estimate[re_class_stats$.metric == "roc_auc"], 3)`.
+It is important to recompute _all_ metrics using recalibrated predictions. Also note that since the class probabilities have been altered, any hard predictions should be recomputed since some values may have moved across the chosen probability threshold. Using the set of `r format(nrow(lr_cal_val), big.mark = ",")` data points that have been recalibrated, the reestimated sensitivity and specificity were `r round(re_class_stats$.estimate[re_class_stats$.metric == "sensitivity"] * 100, 1)`{{< pct >}} and `r round(re_class_stats$.estimate[re_class_stats$.metric == "specificity"] * 100, 1)`{{< pct >}}, respectively and the area under the ROC curve was `r signif(re_class_stats$.estimate[re_class_stats$.metric == "roc_auc"], 3)`.
 
 ::: {.note-box}
 The user should not set expectations very high; recalibration methods often have limited ability to correct predictions. In our example, a large amount of data was set aside for calibration, and we were able to fix a minor issue with the original model’s predictions. In most cases, recalibration might _only_ be able to fix gross miscalibration trends. 
