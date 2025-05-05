@@ -24,6 +24,7 @@ library(patchwork)
 library(ggrepel)
 library(kableExtra)
 library(cli)
+library(gt)
 
 # ------------------------------------------------------------------------------
 # set options
@@ -1209,34 +1210,6 @@ num_isotonic_boot_vals <- vctrs::vec_unique_count(
   iso_boot_cal_val$.pred_poisonous
 )
 
-set.seed(364)
-lr_cal_int <-
-  lr_cal_val |>
-  bootstraps(times = 2000) |>
-  mutate(
-    dat = map(splits, analysis),
-    brier = map(dat, ~ brier_class(.x, truth = class, .pred_poisonous)),
-    brier = map(
-      brier,
-      ~ dplyr::select(.x, term = .metric, estimate = .estimate)
-    )
-  ) |>
-  int_pctl(brier, alpha = .10)
-
-set.seed(364)
-iso_boot_cal_int <-
-  iso_boot_cal_val |>
-  bootstraps(times = 2000) |>
-  mutate(
-    dat = map(splits, analysis),
-    brier = map(dat, ~ brier_class(.x, truth = class, .pred_poisonous)),
-    brier = map(
-      brier,
-      ~ dplyr::select(.x, term = .metric, estimate = .estimate)
-    )
-  ) |>
-  int_pctl(brier, alpha = .10)
-
 three_cal_val <- 
   nb_val_pred |> 
   dplyr::select(class, .row, original = .pred_poisonous) |> 
@@ -1247,24 +1220,70 @@ three_cal_val <-
     lr_cal_val |> dplyr::select(.row, logistic = .pred_poisonous), by = ".row"
   )
 
-three_brier <- function(split) {
+compute_brier_int <- function(split) {
   predictions <- analysis(split)
-  brier_logistic <- predictions |> brier_class(class, logistic)
-  brier_isoreg <- predictions |> brier_class(class, isoreg)
-  brier_raw <- predictions |> brier_class(class, original)
-  tibble::tibble(
-    estimate = brier_raw$.estimate - 
-      c(brier_logistic$.estimate, brier_isoreg$.estimate),
-    term = c("Logistic Calibration", "Isotonic Calibration")
-  )
+  brier_logistic <- predictions |> 
+    brier_class(class, logistic) |> 
+    dplyr::select(estimate = .estimate) |> 
+    mutate(term = "Logistic Calibration")
+  brier_isoreg <- predictions |> 
+    brier_class(class, isoreg) |> 
+    dplyr::select(estimate = .estimate) |> 
+    mutate(term = "Isotonic Boot. Calibration")
+  brier_raw <- predictions |> 
+    brier_class(class, original) |> 
+    dplyr::select(estimate = .estimate) |> 
+    mutate(term = "Uncalibrated")
+  
+  res <- bind_rows(brier_raw, brier_logistic, brier_isoreg)
+  diffs <- tibble(
+    estimate = c(brier_raw$estimate - brier_logistic$estimate, 
+                 brier_raw$estimate - brier_isoreg$estimate),
+  term = c("Logistic Diff", "Isotonic Boot. Diff"))
+  bind_rows(res, diffs)
 }
 
-set.seed(766)
+set.seed(364)
 diff_cal_int <-
   three_cal_val |>
   bootstraps(times = 2000) |>
-  mutate(brier = map(splits, three_brier)) |>
+  mutate(brier = map(splits, compute_brier_int)) |>
   int_pctl(brier, alpha = .10)
+
+
+single_tbl <- diff_cal_int |> 
+  filter(!grepl("Diff", term)) |> 
+  dplyr::select(-.alpha, -.method) |> 
+  mutate(
+    .lower = signif(.lower, digits = 4), 
+    .estimate = signif(.estimate, digits = 4), 
+    .upper = signif(.upper, digits = 4)
+  )
+
+diff_tbl <- diff_cal_int |> 
+  filter(grepl("Diff", term)) |> 
+  mutate(term = gsub("Diff", "Calibration", term)) |> 
+  mutate(
+    .lower = signif(.lower, digits = 3), 
+    .estimate = signif(.lower, digits = 3), 
+    .upper = signif(.upper, digits = 3)
+  ) |> 
+  dplyr::select(.lower_diff = .lower, .diff = .estimate, .upper_diff = .upper, term)
+
+int_f <- function(l, u) {
+  if (is.na(u)) {
+    return(NA_character_)
+  }
+  cli::format_inline("({l}, {u})")
+}
+
+int_tbl <- full_join(single_tbl, diff_tbl, by = "term") |> 
+  arrange(desc(term)) |> 
+  mutate(
+    .int = map2_chr(.lower, .upper, int_f),
+    .diff_int = map2_chr(.lower_diff, .upper_diff, int_f)
+  ) |> 
+  dplyr::select(term, .estimate, .diff, .diff_int)
 ```
 
 What can be done with poorly calibrated predictions? There are approaches for postprocessing the predicted probabilities to have higher fidelity to the observed data. The customary method is to use a logistic regression fit, as seen in @fig-cal-curves(b), to recalibrate the predictions. First a suitable logistic regression model is created in the same manner as the one used for diagnosis. Recall that the original estimates are used as predictors of the model. To recalibrate a set of predictions, the original values are pushed through the model, and the resulting logistic regression values are used to create new probability predictions.
@@ -1311,7 +1330,52 @@ re_class_iso_stats <- iso_boot_cal_val %>%
   cls_mtr(class, estimate = .pred_class, .pred_poisonous)
 ```
 
-Using this approach to calibration, the new probability estimates have a Brier score of `r signif(re_class_stats$.estimate[re_class_stats$.metric == "brier_class"], 3)` with 90{{< pct >}} confidence limits (`r signif(lr_cal_int$.lower, 3)`, `r signif(lr_cal_int$.upper, 3)`). While this is smaller than the value (`r signif(nb_mtr$mean[nb_mtr$.metric == "brier_class"], 3)`) before calibration, it difficult to believe that the improvement is real since the confidence interval for the original unaltered predictions was (`r signif(original_int$.lower, 3)`, `r signif(original_int$.upper, 3)`). 
+Using this approach to calibration, the new probability estimates have a Brier score of `r diff_cal_int$.estimate[diff_cal_int$term == "Logistic Calibration"]`. As shown in @tbl-calibration-results, this is slightly less than the uncalibrated score. However, since the uncalibrated and calibrated predictions are so highly correlated, the 90{{< pct >}} intervals do not overlap with zero; the difference is real but not large enough to be seen as important. 
+
+
+::::::: columns
+::: {.column width="20%"}
+:::
+
+:::: {.column width="60%"}
+::: {#tbl-calibration-results}
+
+```{r}
+#| label: calibration-results
+#| echo: false
+
+int_tbl |> 
+  gt() |> 
+  cols_label(
+    term = " ",
+    .estimate = "Brier Score",
+    .diff = "Difference",
+    .diff_int = "90% Interval"
+  ) |> 
+  sub_missing(
+    columns = everything(),
+    rows = everything(),
+    missing_text = "---"
+  ) |>
+  cols_width(
+    term ~ pct(20),
+    c(.estimate, .diff) ~ pct(10),
+    .diff_int ~ pct(20)
+  ) |> 
+  cols_align(
+    align = "center",
+    columns = c(-term)
+  )
+```
+
+Validation set Brier scores for the original model predictions and calibrated versions. The differences are the uncalibrated values minus the calibrated values. 
+
+:::
+::::
+
+::: {.column width="20%"}
+:::
+:::::::
 
 There are other approaches for improving calibrating. One is isotonic regression [@isotonic]. This tool fits a model that will generate monotonic, non-decreasing, predictions: $\hat{y}_i \le \hat{y}_{i+ 1}$ when $x_i \le x_{i+ 1}$. Multiple methods exist to create such models but the most straightforward approach is the pooled-adjacent violators algorithm (PAVA) of @pava. This method adjusts a sequence of data points that are not monotonically increasing to be so. For example, @tbl-isotonic shows an example where the rows are ordered by their model's predicted probabilities. One column shows a binary indicator for class `A`. The first three rows have the same outcome (`B`) but the fourth row is actually class `A`. The PAVA algorithm then takes the averages of the binary indicators that bracket the discordant value, and all of these probability estimates are given the average value (1/3). From the table, it is clear that there are three possible probability estimates after isotonic regression is used. 
 
@@ -1379,7 +1443,7 @@ cal_plot_6 <-
 cal_plot_5 + cal_plot_6
 ```
 
-@fig-recal-iso-curves(b) shows the ensemble results. The curve is slightly closer to the line, and there is far less "wiggle" around the values. The bootstrapping method reduces the Brier score from `r signif(nb_mtr$mean[nb_mtr$.metric == "brier_class"], 3)` to `r signif(re_class_stats$.estimate[re_class_stats$.metric == "brier_class"], 3)` but the with 90{{< pct >}} confidence limits (`r signif(iso_boot_cal_int$.lower, 3)`, `r signif(iso_boot_cal_int$.upper, 3)`) suggest that the improvement is within the experimental noise of the system. 
+@fig-recal-iso-curves(b) shows the ensemble results and @tbl-calibration-results contains the Brier scores. The curve is slightly closer to the line, and there is far less "wiggle" around the values. The bootstrapping method reduces the Brier score from `r signif(nb_mtr$mean[nb_mtr$.metric == "brier_class"], 3)` to `r diff_cal_int$.estimate[diff_cal_int$term == "Isotonic Boot. Calibration"]`. Like logistic calibration, the different is statistically significant but trival. 
 
 There are many other tools in the calibration toolbox, such as beta calibration [@betacal]. There are also methods for calibrating classification models with three or more classes [@NIPS2001abdbeb4d; @johansson21a; @NEURIPS2021bbc92a64].
 
