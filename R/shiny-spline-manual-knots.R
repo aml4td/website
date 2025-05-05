@@ -3,7 +3,7 @@
 data(fossil)
 
 ui <- page_fillable(
-	theme = grid_theme,
+#	theme = grid_theme,
 	padding = "1rem",
 	layout_columns(
 		fill = FALSE,
