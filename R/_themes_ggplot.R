@@ -24,6 +24,9 @@ thm_transparent <- function(...) {
 
 thm_lt <- 
   ggplot2::theme(
+    panel.border = ggplot2::element_rect(colour = "grey20", fill = "transparent"),
+    panel.grid = ggplot2::element_line(colour = "grey92"),
+    panel.grid.minor = ggplot2::element_line(linewidth = ggplot2::rel(0.5)),
     panel.background = transparent_rect,
     plot.background = transparent_rect,
     legend.background = transparent_rect,
