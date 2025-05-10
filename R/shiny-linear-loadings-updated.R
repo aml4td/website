@@ -1,3 +1,4 @@
+
 ui <- page_fillable(
   theme = bs_theme(bg = "#fcfefe", fg = "#595959"),
   padding = "1rem",
@@ -29,14 +30,13 @@ ui <- page_fillable(
 
 
 server <- function(input, output) {
-  load(url(
-    "https://raw.githubusercontent.com/aml4td/website/main/RData/barley_linear_embeddings.RData"
-  ))
-
+  load(url("https://raw.githubusercontent.com/aml4td/website/main/RData/barley_linear_embeddings.RData"))
+  
+  
   output$loadings <-
     renderPlot({
-      dat <-
-        all_loadings %>%
+      dat <- 
+        all_loadings %>% 
         dplyr::filter(id %in% input$method & component_number %in% input$comps)
       p <-
         ggplot(dat, aes(x = wavelength, y = value, col = component_number)) +
@@ -44,9 +44,9 @@ server <- function(input, output) {
         geom_line(alpha = 3 / 4, linewidth = 1) +
         labs(y = "Loading Value") +
         scale_color_brewer(palette = "Dark2") +
-        theme_light_bl()
-      if (length(input$method) > 1) {
-        p <- p + facet_wrap(~id, nrow = 1)
+        theme_light_bl() 
+      if ( length(input$method) > 1) {
+        p <- p + facet_wrap(~ id, nrow = 1)
       }
       print(p)
     })

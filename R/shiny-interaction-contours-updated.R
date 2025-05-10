@@ -1,3 +1,4 @@
+
 ui <- page_fillable(
   theme = bs_theme(bg = "#fcfefe", fg = "#595959"),
   padding = "1rem",
@@ -33,6 +34,7 @@ ui <- page_fillable(
 )
 
 server <- function(input, output) {
+
   # ------------------------------------------------------------------------------
 
   n_grid <- 100
@@ -41,10 +43,9 @@ server <- function(input, output) {
 
   output$contours <-
     renderPlot({
+
       grid$outcome <-
-        input$beta_1 *
-        grid$A +
-        input$beta_2 * grid$B +
+        input$beta_1 * grid$A + input$beta_2 * grid$B +
         input$beta_int * grid$A * grid$B
 
       p <-
@@ -55,15 +56,12 @@ server <- function(input, output) {
 
       if (length(unique(grid$outcome)) >= 15) {
         p <- p +
-          geom_contour_filled(
-            aes(z = scale(outcome)),
-            bins = 15,
-            show.legend = FALSE
-          ) +
+          geom_contour_filled(aes(z = scale(outcome)), bins = 15, show.legend = FALSE) +
           scale_fill_viridis_d(option = "G")
       }
 
       print(p)
+
     })
 }
 
