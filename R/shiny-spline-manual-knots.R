@@ -25,7 +25,7 @@ ui <- page_fillable(
 )
 
 server <- function(input, output, session) {
-  col_rect <- ggplot2::element_rect(fill = light_bg, colour = light_bg)
+  col_rect <- ggplot2::element_rect(fill = "#fcfefe", colour = "#fcfefe")
   
 	spline_example <- tibble(x = fossil$age, y = fossil$strontium.ratio)
 	rng <- extendrange(fossil$age, f = .025)

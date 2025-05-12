@@ -77,7 +77,7 @@ server <- function(input, output, session) {
 		res
 	}
 
-	col_rect <- ggplot2::element_rect(fill = light_bg, colour = light_bg)
+	col_rect <- ggplot2::element_rect(fill = "#fcfefe", colour = "#fcfefe")
 	
 	# ------------------------------------------------------------------------------
 
