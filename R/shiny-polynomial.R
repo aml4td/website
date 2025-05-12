@@ -30,6 +30,13 @@ server <- function(input, output, session) {
 		try(lm(y ~ poly(x, input$piecewise_deg), data = x), silent = TRUE)
 	}
 
+	names_zero_padded <- function(num, prefix = "x", call = rlang::caller_env()) {
+	  rlang:::check_number_whole(num, min = 1, call = call)
+	  ind <- format(seq_len(num))
+	  ind <- gsub(" ", "0", ind)
+	  paste0(prefix, ind)
+	}
+	
 	expansion_to_tibble <- function(x, original, prefix = "term ") {
 		cls <- class(x)[1]
 		nms <- names_zero_padded(ncol(x), prefix)
@@ -63,6 +70,19 @@ server <- function(input, output, session) {
 		res
 	}
 
+	col_rect <- ggplot2::element_rect(fill = light_bg, colour = light_bg)
+	theme_light_bl <- function() {
+		ggplot2::theme(
+			panel.background = col_rect,
+			panel.grid.major = col_rect,
+			panel.grid.minor = col_rect,
+			panel.border = col_rect,
+			legend.background = col_rect,
+			legend.key = col_rect,
+			plot.background = col_rect
+		)
+	}
+	
 	# ------------------------------------------------------------------------------
 
 	spline_example <- tibble(x = fossil$age, y = fossil$strontium.ratio)
