@@ -15,6 +15,11 @@ ui <- page_fillable(
 )
 
 server <- function(input, output) {
+  rd_url <- function(nm) {
+    rd_base <- "https://raw.githubusercontent.com/aml4td/website/main/RData"
+    url(file.path(rd_base, nm))
+  }
+  
 	num_cuts <- 50
 	rd_or <- colorRampPalette(rev(RColorBrewer::brewer.pal(9, "OrRd")))(num_cuts)
 

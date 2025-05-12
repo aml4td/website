@@ -16,6 +16,11 @@ ui <- page_fillable(
 )
 
 server <- function(input, output) {
+  rd_url <- function(nm) {
+    rd_base <- "https://raw.githubusercontent.com/aml4td/website/main/RData"
+    url(file.path(rd_base, nm))
+  }
+  
 	load(rd_url("two_param_iter_sa.RData"))
 	load(rd_url("two_param_iter_large.RData"))
 	
