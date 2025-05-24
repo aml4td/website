@@ -3,8 +3,8 @@ library(tidymodels)
 library(spatialsample)
 library(tidysdm)
 library(forested)
-library(zipcodeR)
-library(furrr)
+library(tidycensus)
+library(cli)
 
 # ------------------------------------------------------------------------------
 
@@ -16,8 +16,6 @@ options(
   future.rng.onMisuse = "ignore"
 )
 
-plan("multisession")
-
 # ------------------------------------------------------------------------------
 
 # These computations take a while so we do them in batch mode then load the
@@ -27,57 +25,51 @@ plan("multisession")
 # We remove some of the existing algorithmic data already there.
 
 for_analysis <-
-  forested %>%
-  rename(class = forested) %>%
+  forested |>
+  rename(class = forested) |>
   select(-tree_no_tree, -land_type, -canopy_cover) |>
-  rename(
-    `dew temperature` = dew_temp,
-    `annual precipitation` = precip_annual,
-    `annual minimum temperature` = temp_annual_min,
-    `annual maximum temperature` = temp_annual_max,
-    `january minimum temperature` = temp_january_min,
-    `annual mean temperature` = temp_annual_mean,
-    `minimum vapor` = vapor_min,
-    `maximum vapor` = vapor_max,
-    longitude = lon,
-    latitude = lat
-  )
+  rename(longitude = lon, latitude = lat)
+
+forested_names <- names(for_analysis)
 
 # ------------------------------------------------------------------------------
-# Get ZIP codes
-
-zip_codes <- 
-  future_map(
-    1:nrow(for_analysis),
-    ~ search_radius(
-      lat = for_analysis$latitude[.x], 
-      lng = for_analysis$longitude[.x], 
-      radius = 200
-    ) %>% 
-      mutate(.row = .x)
-  )
-
-has_zip <- map_lgl(zip_codes, ~ nrow(.x) > 0)
-any(!has_zip)
-
-zip_estimates <- 
-  map_dfr(
-    zip_codes,
-    ~ slice_min(.x, distance, n = 1, with_ties = FALSE, by = c(.row))
-  ) %>% 
-  arrange(.row) %>% 
-  select(zip = zipcode)
-
-for_analysis <- 
-  bind_cols(for_analysis, zip_estimates) %>% 
-  mutate(zip = factor(zip))
-
-# ------------------------------------------------------------------------------
-# Convert the lon/lat to sf geometry format
+# Convert the longitude/latitude to sf geometry format
 
 forested_sf <-
-  for_analysis %>%
+  for_analysis |>
   st_as_sf(coords = c("longitude", "latitude"), crs = st_crs("EPSG:4326"))
+
+# ------------------------------------------------------------------------------
+# Get county data
+
+WA_acs <- get_acs(
+  state = "WA",
+  geography = "tract",
+  variables = "B19013_001",
+  geometry = TRUE
+)
+WA_acs <- st_transform(WA_acs, 4326) |>
+  select(-variable, -estimate, -moe)
+
+forested_sf <- forested_sf |>
+  st_join(WA_acs) |>
+  mutate(
+    split_up = map(NAME, ~ strsplit(.x, ";")[[1]]),
+    county = map_chr(split_up, ~ .x[2]),
+    county = map_chr(county, ~ gsub(" County", "", .x)),
+    county = map_chr(county, ~ trimws(tolower(.x))),
+    county = map_chr(county, ~ gsub(" ", "_", .x)),
+    county = factor(county)
+  ) |>
+  select(-GEOID, -NAME, -split_up)
+
+cli::cli_alert(
+  "We'll have to remove {sum(is.na(forested_sf$county))} location{?s} from the \\
+  data due to missing county information."
+)
+
+forested_sf <- forested_sf |>
+  filter(!is.na(county))
 
 # ------------------------------------------------------------------------------
 # Conduct the initial split using block sampling and buffering
@@ -105,13 +97,31 @@ split_groups$group[forested_split$in_id] <- "training"
 split_groups$group[forested_split$out_id] <- "testing"
 
 forested_split_info <-
-  for_analysis %>%
-  add_rowindex() %>%
-  full_join(split_groups, by = ".row") %>%
+  for_analysis |>
+  add_rowindex() |>
+  full_join(split_groups, by = ".row") |>
   mutate(
     group_col = if_else(group == "training", "#E7298A", "#7570B3"),
     group_col = if_else(group == "buffer", "#000000", group_col)
   )
+
+if (rlang::is_installed("leaflet") & interactive()) {
+  library(leaflet)
+  leaflet() %>%
+    addProviderTiles(providers$CartoDB.PositronNoLabels) %>%
+    addCircles(
+      data = forested_split_info,
+      lng = ~longitude,
+      lat = ~latitude,
+      color = ~group_col,
+      fillColor = ~group_col,
+      fill = TRUE,
+      opacity = .01,
+      fillOpacity = 1 / 2,
+      radius = 1500,
+      popup = htmltools::htmlEscape(forested_split_info$group)
+    )
+}
 
 # ------------------------------------------------------------------------------
 # Resample the training set
@@ -130,12 +140,9 @@ forested_rs <- spatial_block_cv(
 # re-calculate geocodes and strip off geometry column
 
 re_geocode <- function(x) {
-  x %>%
-    dplyr::mutate(
-      longitude = sf::st_coordinates(.)[, 1],
-      latitude = sf::st_coordinates(.)[, 2]
-    ) %>%
-    st_drop_geometry()
+  x$longitude <- sf::st_coordinates(x)[, 1]
+  x$latitude <- sf::st_coordinates(x)[, 2]
+  st_drop_geometry(x)
 }
 
 no_geometry <- function(split) {
@@ -156,13 +163,30 @@ cv_split_groups$group[forested_rs$splits[[1]]$in_id] <- "analysis"
 cv_split_groups$group[forested_rs$splits[[1]]$out_id] <- "assessment"
 
 forested_cv_split_info <-
-  forested_train %>%
-  add_rowindex() %>%
-  full_join(cv_split_groups, by = ".row") %>%
+  forested_train |>
+  add_rowindex() |>
+  full_join(cv_split_groups, by = ".row") |>
   mutate(
     group_col = if_else(group == "analysis", "#E7298A", "#7570B3"),
     group_col = if_else(group == "buffer", "#000000", group_col)
   )
+
+if (rlang::is_installed("leaflet") & interactive()) {
+  leaflet() %>%
+    addProviderTiles(providers$CartoDB.PositronNoLabels) %>%
+    addCircles(
+      data = forested_cv_split_info,
+      lng = ~longitude,
+      lat = ~latitude,
+      color = ~group_col,
+      fillColor = ~group_col,
+      fill = TRUE,
+      opacity = .01,
+      fillOpacity = 3 / 4,
+      radius = 1500,
+      popup = htmltools::htmlEscape(forested_cv_split_info$group)
+    )
+}
 
 # ------------------------------------------------------------------------------
 # Save various things
