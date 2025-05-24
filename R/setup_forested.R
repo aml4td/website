@@ -15,6 +15,8 @@ options(
   pillar.min_title_chars = Inf,
   future.rng.onMisuse = "ignore"
 )
+# Read in api key; in .gitignore
+key <- readLines("census_api_key.txt")
 
 # ------------------------------------------------------------------------------
 
@@ -189,12 +191,42 @@ if (rlang::is_installed("leaflet") & interactive()) {
 }
 
 # ------------------------------------------------------------------------------
+# translations
+
+name_key <- 
+  tribble(
+    ~text, ~variable,
+    "dew temperature", "dew_temp",
+    "annual precipitation", "precip_annual",
+    "annual minimum temperature", "temp_annual_min",
+    "annual maximum temperature", "temp_annual_max",
+    "january minimum temperature", "temp_january_min",
+    "annual mean temperature", "temp_annual_mean",
+    "minimum vapor", "vapor_min",
+    "maximum vapor", "vapor_max"
+  )
+
+name_list <- 
+  list(
+    `dew temperature` = "dew_temp",
+    `annual precipitation` = "precip_annual",
+    `annual minimum temperature` = "temp_annual_min",
+    `annual maximum temperature` = "temp_annual_max",
+    `january minimum temperature` = "temp_january_min",
+    `annual mean temperature` = "temp_annual_mean",
+    `minimum vapor` = "vapor_min",
+    `maximum vapor` = "vapor_max"
+  )
+
+# ------------------------------------------------------------------------------
 # Save various things
 
 save(
   forested_train,
   forested_test,
   forested_rs,
+  name_key, 
+  name_list,
   file = "forested_data.RData"
 )
 save(
