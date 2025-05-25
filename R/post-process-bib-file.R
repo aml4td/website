@@ -19,7 +19,6 @@ scholar_url <- function(title, year) {
     title <- gsub(pattern, "\\1", title)
   }
   
-
   title <- gsub("[[:punct:]]", " ", title)
   title <- gsub("[[:space:]]+", " ", title)
   title <- gsub("[[:space:]]", "+", title)
