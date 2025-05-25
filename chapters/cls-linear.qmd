@@ -4,7 +4,7 @@ knitr:
     cache.path: "../_cache/cls-linear/"
 ---
 
-# Generalized Linear Classifiers {#sec-cls-linear}
+# Generalized Linear and Additive Classifiers {#sec-cls-linear}
 
 ```{r}
 #| label: cls-linear-setup
@@ -27,6 +27,7 @@ library(future.mirai)
 # set options
 
 tidymodels_prefer()
+theme_set(theme_bw())
 set_options()
 plan(mirai_multisession)
 
@@ -55,7 +56,7 @@ $$
 \boldsymbol{x}_i'\boldsymbol{\beta} = \beta_0 + \beta_1 x_{i1} + \ldots + \beta_p x_{ip}
 $$ {#eq-linear-predictor}
 
-This is often referred to as the "linear predictor." The range of this value is [-$\infty$, $\infty$], so we can't directly model the probability of the event using this equation as it would easily exceed the natural boundaries for $\pi_i$. One approach is to embed the linear predictor inside a nonlinear function. The logistic model takes the form:
+This is often referred to as the "linear predictor" and is commonly denoted as $\eta_i$ The range of this value is [-$\infty$, $\infty$], so we can't directly model the probability of the event using this equation as it would easily exceed the natural boundaries for $\pi_i$. One approach is to embed the linear predictor inside a nonlinear function. The logistic model takes the form:
 
 $$
 \pi_i = \frac{1}{1 + \exp(-\boldsymbol{x}_i'\boldsymbol{\beta})}
@@ -69,7 +70,7 @@ This keeps the probability values within [0, 1] no matter how large or small the
 
 linear_percip_fit <- 
   logistic_reg() %>% 
-  fit(class ~ log10(annual_precipitation), data = forested_train)
+  fit(class ~ log10(precip_annual), data = forested_train)
 
 linear_percip_coef <- 
   linear_percip_fit %>% 
@@ -171,16 +172,16 @@ server <- function(input, output) {
   
   percip <- 
     forested_train %>% 
-    mutate(annual_precipitation = log10(annual_precipitation))
+    mutate(precip_annual = log10(precip_annual))
   
   percip_bin <- 
     percip %>% 
-    select(class, annual_precipitation) %>% 
-    mutate(percip_bin = ntile(annual_precipitation, 50)) %>% 
+    select(class, precip_annual) %>% 
+    mutate(percip_bin = ntile(precip_annual, 50)) %>% 
     summarize(
       rate = mean(class == "Yes"),
-      percip = median(annual_precipitation),
-      n = length(annual_precipitation),
+      percip = median(precip_annual),
+      n = length(precip_annual),
       .by = c(percip_bin)
     ) %>% 
     mutate(logit = binomial()$linkfun(rate))
@@ -188,11 +189,11 @@ server <- function(input, output) {
   percip_rng <- extendrange(percip_bin$percip)
   # percip_rng[1] <- 0.0
   
-  percip_grid <- tibble(annual_precipitation = seq(percip_rng[1], percip_rng[2], length.out = 100))
+  percip_grid <- tibble(precip_annual = seq(percip_rng[1], percip_rng[2], length.out = 100))
   
   linear_fit <- 
     logistic_reg() %>% 
-    fit(class ~ annual_precipitation, data = percip)
+    fit(class ~ precip_annual, data = percip)
   
   linear_pred <- 
     augment(linear_fit, new_data = percip_grid) %>% 
@@ -201,7 +202,7 @@ server <- function(input, output) {
   num_spline <- 9
   spline_fit <- 
     logistic_reg() %>% 
-    fit(class ~ naturalSpline(annual_precipitation, df = num_spline), data = percip)
+    fit(class ~ naturalSpline(precip_annual, df = num_spline), data = percip)
   
   spline_lab <- paste0("Natural Splines (", num_spline, " df)")
   
@@ -212,7 +213,7 @@ server <- function(input, output) {
   gam_fit <- 
     gen_additive_mod() %>% 
     set_mode("classification") %>% 
-    fit(class ~ s(annual_precipitation), data = percip)
+    fit(class ~ s(precip_annual), data = percip)
   gam_lab <- paste0("GAM (", round(sum(gam_fit$fit$edf[-1]), 1), " df)")
   
   gam_pred <- 
@@ -255,12 +256,12 @@ server <- function(input, output) {
         if (input$yaxis == "rate") {
           p <- p +
             geom_line(data = curve_data, 
-                      aes(x = annual_precipitation, y = .pred_Yes, color = Model),
+                      aes(x = precip_annual, y = .pred_Yes, color = Model),
                       linewidth = 1)
         } else {
           p <- p +
             geom_line(data = curve_data, 
-                      aes(x = annual_precipitation, y = logit, color = Model),
+                      aes(x = precip_annual, y = logit, color = Model),
                       linewidth = 1) 
         }
         
@@ -287,13 +288,13 @@ Overlaying the estimated event rates shows that the model does a poor job of rep
 
 TODO Segue to GLMs
 
-Logistic regression belongs to a broader class of _generalized linear models_, or GLMs [@glm]. These models can be used with different types of outcomes, such as numeric outcomes or count data. The idea is to have a model regress the linear predictor against a function of the outcome data. In our current case, the _logit_ function is applicable^[ref oragins paper]: 
+Logistic regression belongs to a broader class of _generalized linear models_, or GLMs [@glm]. These models can be used with different types of outcomes, such as numeric outcomes or count data. The idea is to have a model regress the linear predictor against a function of the outcome data. In our current case, the _logit_ function (the inverse of @eq-logistic) is applicable^[ref oragins paper]: 
 
 $$
-log\left(\frac{\pi_i}{1 - \pi_i}\right) =\boldsymbol{x}_i'\boldsymbol{\beta}
+log\left(\frac{\pi_i}{1 - \pi_i}\right) = \eta_i = \boldsymbol{x}_i'\boldsymbol{\beta}
 $$ {#eq-logit}
 
-This form can be found by solving @eq-logistic for the linear predictor. Looking back to @fig-precipitation, we can change the y-axis data and show how the logit changes for our fitted model. The line visualizes the estimated linear predictor for these data. Sadly, when the representation of our data is similarly changed, the pattern is not linear; our linear model isn't effectively emulating the nonlinear pattern in the data. 
+Looking back to @fig-precipitation, we can change the y-axis data and show how the logit changes for our fitted model. The line visualizes the estimated linear predictor for these data. Sadly, when the representation of our data is similarly changed, the pattern is not linear; our linear model isn't effectively emulating the nonlinear pattern in the data. 
 
 The logit function has a meaningful interpretation since it contains the _odds_ of an event occurring. TODO more here. 
 
@@ -330,12 +331,12 @@ forest_rec <-
 forest_int_rec <- 
   forest_rec %>% 
   step_interact(
-    ~ dew_temperature:elevation + longitude:minimum_vapor + 
-      longitude:maximum_vapor + dew_temperature:january_minimum_temperature + 
-      dew_temperature:maximum_vapor + latitude:longitude + 
-      longitude:roughness + annual_maximum_temperature:dew_temperature + 
-      annual_minimum_temperature:dew_temperature + 
-      annual_maximum_temperature:maximum_vapor
+    ~ dew_temp:elevation + longitude:vapor_min + 
+      longitude:vapor_max + dew_temp:temp_january_min + 
+      dew_temp:vapor_max + latitude:longitude + 
+      longitude:roughness + temp_annual_max:dew_temp + 
+      temp_annual_min:dew_temp + 
+      temp_annual_max:vapor_max
   )
 
 forest_spline_rec <- 
@@ -347,9 +348,9 @@ forest_spline_rec <-
 
 forest_set <- 
   workflow_set(
-    preproc = list(simple = bare_rec, transformations = transformed_rec, 
-                   encoded = forest_rec, interactions = forest_int_rec, 
-                   splines = forest_spline_rec),
+    preproc = list(simple = bare_rec, "encoded + transformations" = transformed_rec, 
+                   encoded = forest_rec, "encoded + interactions" = forest_int_rec, 
+                   "encoded + transformations + splines" = forest_spline_rec),
     model = list(logistic_mle = logistic_reg())
   )
 
@@ -437,7 +438,7 @@ forest_res %>%
 #| include: false
 logistic_mtr <- 
   forest_res %>% 
-  extract_workflow_set_result("splines_logistic_mle") %>% 
+  extract_workflow_set_result("encoded + transformations + splines_logistic_mle") %>% 
   collect_metrics(summarize = TRUE)
 ```
 
@@ -453,10 +454,10 @@ Along with the Brier score values of `r signif(logistic_mtr$mean[logistic_mtr$.m
 
 logistic_pred <- 
   forest_res %>% 
-  extract_workflow_set_result("splines_logistic_mle") %>% 
+  extract_workflow_set_result("encoded + transformations + splines_logistic_mle") %>% 
   collect_predictions(summarize = TRUE)
 
-logitic_cal <- cal_plot_windowed(logistic_pred, class, .pred_Yes)
+logitic_cal <- cal_plot_windowed(logistic_pred, class, .pred_Yes, step_size = 0.02)
 logitic_roc <- 
   logistic_pred %>% 
   roc_curve(class, .pred_Yes) %>% 
