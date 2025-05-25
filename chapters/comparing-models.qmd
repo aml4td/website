@@ -1,0 +1,1072 @@
+---
+knitr:
+  opts_chunk:
+    cache.path: "../_cache/comparing-models/"
+---
+
+# Comparing Models {#sec-comparing-models}
+
+```{r}
+#| label: comparing-models-setup
+#| include: false
+
+source("../R/_common.R")
+source("../R/_themes.R")
+source("../R/_themes_ggplot.R")
+source("../R/_themes_gt.R")
+
+# ------------------------------------------------------------------------------
+# Required packages
+library(readr)
+library(tidymodels)
+library(patchwork)
+library(kableExtra)
+library(future.mirai)
+library(leaflet)
+library(ragg)
+library(bestNormalize)
+library(probably)
+library(rules) 
+library(gt)
+library(emmeans)
+library(tidyposterior)
+
+# ------------------------------------------------------------------------------
+# Set options
+plan(mirai_multisession)
+tidymodels_prefer()
+theme_set(thm_lt)
+set_options()
+
+# ------------------------------------------------------------------------------
+# Load previous data sets
+
+source("../R/setup_deliveries.R")
+```
+
+```{r}
+#| label: model-options
+#| include: false
+ctrl_rs <-
+  control_resamples(
+    save_pred = TRUE,
+    parallel_over = "everything",
+    save_workflow = TRUE
+  )
+
+get_iters <- function(x) {
+  fit <- extract_fit_engine(x)
+  tibble::tibble(iteration = seq(along = fit$loss), loss = fit$loss)
+}
+
+ctrl_grid <-
+  control_grid(
+    save_pred = TRUE,
+    parallel_over = "everything",
+    save_workflow = TRUE,
+    extract = get_iters
+  )
+reg_metrics <- metric_set(mae)
+
+delivery_folds <- vfold_cv(delivery_train, v = 10)
+
+```
+
+```{r}
+#| label: rf-fit
+#| include: false
+#| cache: true
+#| 
+rf_spec <-
+  rand_forest(trees = 1000, mtry = 10) %>%
+  set_engine("ranger") %>%
+  set_mode("regression")
+
+rf_wflow <-
+  workflow() %>%
+  add_model(rf_spec) %>%
+  add_formula(time_to_delivery ~ .)
+
+set.seed(3838)
+rf_res <-
+  fit_resamples(
+    rf_wflow,
+    resamples = delivery_folds,
+    control = ctrl_grid,
+    metrics = reg_metrics
+  )
+
+rf_metrics <- collect_metrics(rf_res, summarize = FALSE)
+```
+
+```{r}
+#| label: cubist-fit
+#| include: false
+#| cache: true
+
+cb_wflow <-
+  workflow() %>%
+  add_model(cubist_rules(committees = 5)) %>%
+  add_formula(time_to_delivery ~ .)
+
+set.seed(3838)
+cb_res <-
+  fit_resamples(
+    cb_wflow,
+    resamples = delivery_folds,
+    control = ctrl_grid,
+    metrics = reg_metrics
+  )
+
+cb_metrics <- collect_metrics(cb_res, summarize = FALSE)
+```
+
+```{r}
+#| label: nnet-fit-comps
+#| include: false
+#| cache: true
+
+norm_rec <-
+  recipe(time_to_delivery ~ ., data = delivery_train) %>%
+  step_dummy(day) %>%
+  step_zv(all_predictors()) %>%
+  step_normalize(all_predictors())
+
+nnet_spec <-
+  mlp(
+    hidden_units = 19,
+    penalty = 0.01,
+    learn_rate = 0.1,
+    epochs = 5000
+  ) %>%
+  set_mode("regression") %>%
+  set_engine("brulee", stop_iter = 10, rate_schedule = "cyclic")
+
+nnet_wflow <-
+  workflow() %>%
+  add_model(nnet_spec) %>%
+  add_recipe(norm_rec)
+
+set.seed(3838)
+nnet_res <-
+  fit_resamples(
+    nnet_wflow,
+    resamples = delivery_folds,
+    control = ctrl_grid,
+    metrics = reg_metrics
+  )
+
+nnet_metrics <- collect_metrics(nnet_res, summarize = FALSE)
+```
+
+In Chapters [-@sec-overfitting], [-@sec-resampling], and [-@sec-grid-search], we established several key fundamentals of building predictive models. To create an effective model, we must employ strategies to reduce overfitting, use resampling techniques to accurately measure predictive performance, and systematically search a tuning parameter space to identify values that optimize model accuracy. By following these approaches, we can have confidence that our model generalizes well to new, unseen data and provides a realistic estimate of its predictive performance.
+
+With this foundation in place, the next step is to select the best model for a given data set.  When presented with new data, we typically evaluate multiple machine learning models, each with different sets of tuning parameters. Our goal is to select the model and parameter combination that yields the best predictive performance. But how do we determine which model and corresponding parameters are truly the best?
+
+Making this decision requires considering several factors. As briefly discussed in @sec-whole-game, practical characteristics such as model complexity, interpretability, and deployability play an important role. These aspects are typically assessed qualitatively based on practical considerations.  Predictive performance, however, is an objective measure that can be evaluated quantitatively. However, comparing predictive performance across models raises an important question:  how can we be sure that one model's predictive performance is truly superior to another's?  Or, conversely, how can we conclude that multiple models have no significance difference in predictive performance?
+
+To address these questions, we will examine both graphical and statistical techniques for comparing the predictive performance of different models. During the model tuning and training process, these comparisons may involve assessing various configurations of tuning parameters within a single model or comparing fundamentally different modeling approaches.
+
+Cross-validation serves as the backbone of the tuning and training process. It systematically partitions the data into multiple subsets, enabling repeated estimation of model performance. The variability in predictions from the holdout sets provides critical information for selecting optimal tuning parameters or identifying the best-performing model.
+
+In the first part of this chapter, we will focus on methods for evaluating models when multiple performance metrics are available. This includes techniques grounded in both Frequentist and Bayesian frameworks.
+
+Once a final model is selected, we often want to assess its predictive performance on an independent holdout or validation set. In this setting, we no longer benefit from the distributional insight offered by repeated resampling. Therefore, in the final part of the chapter, we will present methods for evaluating model performance when only a single evaluation data set is available.
+
+## Resampled Data Sets {#sec-compare-resamples}
+
+### Statistical Foundations {#sec-stats}
+
+Regardless of whether we take a Frequentist or Bayesian approach to comparing model performance, both methods aim to identify key factors that influence the outcome. The chosen approach is then applied to the data to quantify the impact of these factors. Specifically, we seek to determine whether their effect on the outcome is statistically significant—that is, unlikely to be due to random chance.  
+
+In this chapter, we focus on tools for comparing predictive performance across models. These tools can be used to evaluate different tuning parameter settings within a single model or to compare performance across different model types. The insights gained from this analysis help inform decisions about which model(s) to use for predicting new samples.
+
+To illustrate these statistical techniques, we will use the food delivery time dataset introduced in @sec-introduction. The objective is to predict the number of minutes between when an order is placed and when it is delivered. Key predictors in this dataset include the distance from the restaurant to the delivery location, the date and time of the order, and the specific items in the order.  @sec-whole-game covered model development for a linear regression model, a neural network, and a Cubist model. In this chapter, we will focus on comparing the performance of a random forest, neural network, and Cubist model.
+
+### Frequentist Hypothesis Testing Methods {#sec-nhtm}
+
+Let's begin by building towards a statistical model that will enable us to formally compare the predictive performance among models.  For this illustration, we will evaluate the performance of three models using 10-fold cross-validation.
+
+To begin this illustration, let's suppose that each of these models were built separately using **different** 10-fold partitions of the training data.  In this scenario, the predictive performance on the first holdout fold would be unique, or independent, for each model.  If this was the case, then we could represent the desired performance metric with the following linear statistical model:
+
+$$
+y_{ij} = \mu_{\cdot\cdot} + \tau_j + \epsilon_{ij}
+$$ {#eq-one-way-model}
+
+In this equation $\mu_{\cdot\cdot}$ is the overall average model performance across all hold out sets and models.  The term $\tau_j$ represents the incremental impact on performance due to the $j^{th}$ model ($j$ = 1, 2, ..., $M$ = total number of models).  And $\epsilon_{ij}$ represents the part of the performance that is not explainable by the $i^{th}$ hold out set and $j^{th}$ model.  This is known as the residual or random error and is assumed to follow a Gaussian distribution with a mean of zero and an unknown variance.  The model along with the statistical assumption about the distribution of the residuals provides the statistical foundation for formally comparing models.  For a specific data set, $\mu_{\cdot\cdot}$ is estimated by the overall mean of the data, and $\tau_j$ is estimated by the difference between overall mean and the mean of the $j^{th}$ model.  @fig-variance-partition-one-way illustrates these separate components for the hold out set with the largest MAE value for the random forest model.
+
+```{r}
+#| label: fig-variance-partition-one-way
+#| echo: false
+#| fig-width: 6
+#| fig-height: 3.5
+#| fig-align: "center"
+#| out-width: "70%"
+#| fig-cap: An illustration of how variation is partitioned based on the effect of the model (blue) and unexplainable causes (orange) when distinct cross-validation partitions are used to train each model. 
+
+for_fig <-
+  bind_rows(
+    rf_metrics %>%
+      dplyr::select(id, .estimate) %>%
+      mutate(Model = "Random Forest"),
+    cb_metrics %>%
+      dplyr::select(id, .estimate) %>%
+      mutate(Model = "Cubist"),
+    nnet_metrics %>%
+      dplyr::select(id, .estimate) %>%
+      mutate(Model = "Neural Network")
+  ) %>%
+  rename(MAE = .estimate, Fold = id) %>%
+  mutate(
+    Model = factor(
+      Model,
+      levels = c("Random Forest", "Neural Network", "Cubist")
+    ),
+    Fold = factor(Fold)
+  )
+
+grand_mean <-
+  mean(for_fig$MAE)
+
+model_means <-
+  for_fig %>%
+  group_by(Model) %>%
+  summarize(MAE = mean(MAE)) %>%
+  ungroup() %>%
+  mutate(Fold = "Fold01") %>%
+  dplyr::filter(Model == "Random Forest")
+
+fold_means <-
+  for_fig %>%
+  group_by(Fold) %>%
+  summarize(MAE = mean(MAE)) %>%
+  ungroup()
+
+max_fold_mean_segment <-
+  tibble(
+    Model = 0.9,
+    y_begin = model_means %>%
+      dplyr::filter(Model == "Random Forest") %>%
+      dplyr::select(MAE) %>%
+      pull(),
+    y_end = fold_means %>%
+      dplyr::filter(MAE == max(MAE)) %>%
+      pull(),
+    MAE = grand_mean,
+    Fold = "Fold01"
+  )
+
+example_point <-
+  for_fig %>%
+  dplyr::filter(Model == "Random Forest" & MAE == max(MAE))
+
+grand_mean_segment <-
+  tibble(
+    Model = 0.9,
+    y_begin = grand_mean,
+    y_end = model_means %>%
+      dplyr::filter(Model == "Random Forest") %>%
+      dplyr::select(MAE) %>%
+      pull(),
+    MAE = grand_mean
+  ) %>%
+  mutate(Fold = "Fold01")
+
+error_segment <-
+  tibble(
+    Model = 0.84,
+    y_begin = model_means %>%
+      dplyr::filter(Model == "Random Forest") %>%
+      dplyr::select(MAE) %>%
+      pull(),
+    y_end = example_point$MAE,
+    MAE = grand_mean
+  )
+
+error_segment2 <-
+  tibble(
+    Model = 0.9,
+    y_begin = max_fold_mean_segment$y_end,
+    y_end = example_point$MAE,
+    MAE = grand_mean,
+    Fold = "Fold10"
+  )
+
+grand_mean_text <-
+  tibble(
+    Model = 0.7,
+    y = mean(c(grand_mean_segment$y_begin, grand_mean_segment$y_end)),
+    Fold = "Fold01"
+  )
+
+error_text <-
+  tibble(Model = 0.7, y = mean(c(error_segment$y_begin, error_segment$y_end)))
+
+fold_text <-
+  tibble(
+    Model = 0.7,
+    y = mean(c(max_fold_mean_segment$y_begin, max_fold_mean_segment$y_end)),
+    Fold = "Fold01"
+  )
+
+error_text2 <-
+  tibble(
+    Model = 0.7,
+    y = mean(c(error_segment2$y_begin, error_segment2$y_end)),
+    Fold = "Fold01"
+  )
+
+ggplot(for_fig, aes(x = Model, y = MAE)) +
+  geom_point(color = "black", shape = 1) +
+  geom_point(
+    data = example_point,
+    aes(x = Model, y = MAE),
+    color = "darkorange",
+    shape = 1,
+    size = 5
+  ) +
+  geom_hline(yintercept = grand_mean, linetype = 3, color = "black") +
+  geom_point(
+    data = model_means,
+    aes(x = Model, y = MAE),
+    shape = 95,
+    size = 10,
+    color = "royalblue"
+  ) +
+  geom_errorbar(
+    data = grand_mean_segment,
+    aes(ymin = y_begin, ymax = y_end),
+    color = "royalblue",
+    width = 0.05
+  ) +
+  geom_errorbar(
+    data = error_segment,
+    aes(ymin = y_begin, ymax = y_end),
+    color = "darkorange",
+    width = 0.05
+  ) +
+  geom_text(
+    data = grand_mean_text,
+    aes(x = Model, y = y),
+    label = "Model",
+    color = "royalblue"
+  ) +
+  geom_text(
+    data = error_text,
+    aes(x = Model, y = y),
+    label = "Error",
+    color = "darkorange"
+  )
+```
+
+```{r}
+#| label: anova-results
+#| include: false
+#| cache: true
+one_way_model <- glm(MAE ~ Model, data = for_fig)
+one_way_anova <- data.frame(anova(one_way_model))
+one_way_anova_f <- one_way_anova$F[2]
+one_way_anova_ndf <- one_way_anova$Df[2]
+one_way_anova_ddf <- one_way_anova$Resid..Df[2]
+one_way_anova_pvalue <- one_way_anova$Pr..F.[2]
+
+one_way_model_with_blocks <- glm(MAE ~ Model + Fold, data = for_fig)
+one_way_anova_with_blocks <- data.frame(anova(one_way_model_with_blocks))
+one_way_anova_with_blocks_f <- one_way_anova_with_blocks$F[2]
+one_way_anova_with_blocks_ndf <- one_way_anova_with_blocks$Df[2]
+one_way_anova_with_blocks_ddf <- one_way_anova_with_blocks$Resid..Df[2]
+one_way_anova_with_blocks_pvalue <- one_way_anova_with_blocks$Pr..F.[2]
+```
+
+This model enables us to distinctly partition the total variability in the data into two components:  
+
+1. Explained variability:  the portion attributable to differences among models, represented by the blue bar.  
+2. Unexplained variability:  the portion due to random or unaccounted-for factors, represented by the orange bar.  
+
+The variability explained by the model is often referred to as the **signal**, while the unexplained variability is known as **noise**.  
+
+Our key question is whether the observed differences in model performance (@fig-variance-partition-one-way) reflect genuine differences among models or if they could simply be due to random variation. The Frequentist approach addresses this question using hypothesis testing. In this framework:  
+
+- The null hypothesis ($H_0$) represents the assumption that all models have the same average performance. Formally, this can be written as $H_0: \mu_1 = \mu_2 = \mu_3$.
+
+- The alternative hypothesis ($H_A$) asserts that at least two models have significantly different average predictive performance: $H_A: \mu_i \neq \mu_j$
+
+Tying this notation back to @eq-one-way-model, we express the model means as:  
+
+$$
+\mu_j = \mu_{\cdot\cdot} + \tau_j
+$$  
+
+where $j$ = 1, 2, 3. To determine whether we have sufficient evidence to reject the null hypothesis, we compare:  
+
+- Between-group variability (signal): Differences in mean performance across models.  
+- Within-group variability (noise): Residual variation not explained by the models.  
+
+This comparison is conducted using an _F_-test [@kutner2004applied], which assesses whether the signal is large enough relative to the noise to conclude that differences among models are statistically significant.  
+
+In this case, the _F_-statistic is `r paste0("(", signif(one_way_anova_f, 3), ", ", paste0(one_way_anova_ndf), ", ", paste0(one_way_anova_ddf), ")")`^[This is common notation for reporting the _F_-statistic, where the first number represents the ratio of the mean square of the model to the mean square of the error.  The second and third numbers represent the degrees of freedom of the numerator and denominator, respectively.], with a corresponding p-value that is `r pval(one_way_anova_pvalue)`. Since the p-value is very small, we have strong evidence to reject the null hypothesis, indicating that there are significant differences in MAE among the models.  
+
+In practice when tuning and training models, we use the same cross-validation sets for evaluating model performance.  This is a more efficient approach since we only need to set up the cross-validation scheme once.  Moreover, the structure that is generated by using the same hold out sets will enable us to have a better ability to detect differences in predictive performance between models.
+
+In this setting, each hold out set forms what is known as a block, which is a group of units that are similar to each other.  This grouping is an important piece of information which will aid in assessing if models have statistically different performance.  The predictive performance when tuning multiple models using the same cross-validation hold out sets can now be represented as:
+
+$$
+y_{ij} = \mu_{\cdot\cdot} + \gamma_i + \tau_j + \epsilon_{ij}
+$$ {#eq-one-way-model-with-blocks}
+
+Notice that @eq-one-way-model-with-blocks is nearly the same as @eq-one-way-model, with the additional term $\gamma_i$.  This term represents the incremental impact on performance due to the $i^{th}$ hold out set ($i$ = 1, 2,..., $v$ = total number of validation folds). @fig-variance-partition-one-way-with-blocks illustrates these separate components for the hold out set with the largest MAE value for the random forest model.  In this figure, the points are connected based on the fold.  Notice that the amount of variability explained by the model is identical to @fig-variance-partition-one-way.  However, the unexplainable variability from @fig-variance-partition-one-way-with-blocks is now partially explained by the variation due to the fold, thus reducing the unexplainable variability.  To understand if there are differences in performance among models, we again compare the variability explained by the different models with the unexplainable variability.  The signal relative to the noise is now much stronger, enabling us to more easily see differences in model performance.  The _F_-statistic from this model is `r paste0("(", signif(one_way_anova_with_blocks_f, digits = 3), ", ", paste0(one_way_anova_with_blocks_ndf), ", ", paste0(one_way_anova_with_blocks_ddf), ")")` and has a corresponding p-value of `r pval(one_way_anova_with_blocks_pvalue)`.  By utilizing the same cross-validation scheme across models, we are able to greatly improve the significance.
+
+```{r}
+#| label: fig-variance-partition-one-way-with-blocks
+#| echo: false
+#| fig-width: 6
+#| fig-height: 3.5
+#| fig-align: "center"
+#| out-width: "70%"
+#| fig-cap: An illustration of how variation is partitioned based on the effect of the model (blue), folds (purple), and unexplainable causes (orange) when the same cross-validation partitions are used to train each model.  The lines connecting the points indicate the results for the same cross-validation fold.
+ 
+fold10 <-
+  for_fig %>%
+  dplyr::filter(Fold == "Fold10")
+
+max_fold_mean <-
+  fold_means %>%
+  dplyr::filter(MAE == max(MAE)) %>%
+  mutate(Model = "Random Forest")
+
+ggplot(for_fig, aes(x = Model, y = MAE, group = Fold)) +
+  geom_point(color = "black", shape = 1) +
+  geom_point(
+    data = example_point,
+    aes(x = Model, y = MAE),
+    color = "darkorange",
+    shape = 1,
+    size = 5
+  ) +
+  geom_line(alpha = 0.1) +
+  geom_line(
+    data = fold10,
+    aes(x = Model, y = MAE, group = Fold),
+    color = "purple"
+  ) +
+  geom_hline(yintercept = grand_mean, linetype = 2, color = "black") +
+  geom_point(
+    data = model_means,
+    aes(x = Model, y = MAE),
+    shape = 95,
+    size = 10,
+    color = "royalblue"
+  ) +
+  geom_errorbar(
+    data = grand_mean_segment,
+    aes(ymin = y_begin, ymax = y_end),
+    color = "royalblue",
+    width = 0.05
+  ) +
+  geom_point(
+    data = max_fold_mean,
+    aes(x = Model, y = MAE),
+    shape = 95,
+    size = 10,
+    color = "purple"
+  ) +
+  geom_errorbar(
+    data = max_fold_mean_segment,
+    aes(ymin = y_begin, ymax = y_end),
+    color = "purple",
+    width = 0.05
+  ) +
+  geom_errorbar(
+    data = error_segment2,
+    aes(ymin = y_begin, ymax = y_end),
+    color = "darkorange",
+    width = 0.05
+  ) +
+  geom_text(
+    data = grand_mean_text,
+    aes(x = Model, y = y),
+    label = "Model",
+    color = "royalblue"
+  ) +
+  geom_text(
+    data = fold_text,
+    aes(x = Model, y = y),
+    label = "Fold",
+    color = "purple"
+  ) +
+  geom_text(
+    data = error_text2,
+    aes(x = Model, y = y),
+    label = "Error",
+    color = "darkorange"
+  )
+```
+
+We have now established there is strong evidence of differences in average predictive performance among models.  But this result does not tell us which models are different.  To understand which models are different, we need to perform additional tests to compare each pair of models.  These tests are referred to as _post-hoc_ tests because they are performed after the initial hypothesis test among all means.
+
+#### Post-Hoc Pairwise Comparisons and Protecting Against False Positive Findings {#sec-post-hoc}
+
+After detecting a significant effect in a one-way analysis of variance (ANOVA), the next step is to determine which specific groups differ from each other. This is achieved using _post hoc_ pairwise comparisons, which assess all possible pairwise differences while controlling for false positive findings.
+
+When conducting multiple comparisons, the risk of making at least one Type I error (false positive) increases. If we compare many pairs of groups separately, the probability of incorrectly rejecting at least one null hypothesis accumulates, leading to spurious findings.  If this issue is not addressed, then we will eventually conclude that models are different when they actually are not.  To mitigate this, statistical procedures adjust for multiple comparisons to ensure that the overall false positive rate remains controlled.  Two methods for this purpose are Tukey's Honestly Significant Difference (HSD) [@tukey1949comparing] and the False Discovery Rate (FDR) procedures [@benjamini1995controlling].
+
+##### Tukey’s Honestly Significant Difference (HSD) {#sec-post-hoc-tukey}
+
+Tukey’s HSD test is specifically designed for one-way ANOVA _post hoc_ comparisons and ensures that the familywise error rate (FWER) remains at a pre-determined significance level ($\alpha$ = 0.05). The test considers all possible pairwise differences while maintaining a constant error rate across comparisons. The test statistic is calculated as:
+
+$$
+ q = \frac{\bar{x}_i - \bar{x}_j}{\sqrt{MS_{within} / n}}
+$$
+
+where, $\bar{x}_i$ and $\bar{x}_j$ are the sample means of groups $i$ and $j$, $MS_{within}$ is the mean square error from the ANOVA, and $n$ is the number of observations per group.
+
+The critical value for $q$ is obtained from the studentized range distribution, which depends on the number of groups and the degrees of freedom from the ANOVA error term.
+
+When we desire to compare the performance of each pair of models, then Tukey's HSD procedure will provide the appropriate adjustments to the p-values to protect against false positive findings.
+
+##### False Discovery Rate (FDR) {#sec-post-hoc-fdr}
+
+In settings where many hypotheses are tested simultaneously, controlling the false discovery rate (FDR)—the expected proportion of false positives among all rejected hypotheses—can be more appropriate than controlling the familywise error rate. The FDR procedure ranks the p-values from all pairwise comparisons from smallest to largest ($p_1$, $p_2$, ..., $p_m$) and compares them to an adjusted threshold:
+
+1. Rank the p-values in ascending order, assigning each a rank $i$.
+2. Compute the critical value for each comparison:
+
+$$
+p_{crit} = \frac{i}{m} \alpha
+$$
+
+where $m$ is the total number of comparisons and $\alpha$ is the desired FDR level.
+
+3. Find the largest $i$ where $p_i \leq p_{crit}$, and reject all hypotheses with p-values at or below this threshold.
+
+Unlike Tukey’s method, FDR control is more appropriate when performing many comparisons.  This procedure offers a balance between sensitivity (detecting true differences) and specificity (limiting false positives).
+
+Now, let's compare how these methods perform when evaluating each pair of models in our example. @tbl-post-hoc-pvalues presents the estimated differences in MAE, standard error, degrees of freedom, raw, unadjusted p-values and the p-values adjusted using the Tukey and FDR methods for each pairwise comparison. Notice that the Tukey adjustment results in less significant p-values than the FDR adjustment. Regardless of the adjustment method, the results indicate that each model's performance differs statistically significantly from the others. Specifically, the Cubist model has a lower MAE than both the random forest and neural network models, while the neural network model has a lower MAE than the random forest model.
+
+```{r}
+#| label: tbl-post-hoc-pvalues
+#| tbl-cap: "Pairwise comparisons among the three models for predicting delivery times.  The table includes the estimated difference in MAE, standard error, degrees of freedom, the raw unadjusted p-value, and the corrseponding Tukey and FDR adjusted p-values."
+
+#Pairwise comparison adjustments
+one_way_model_with_blocks_em <- 
+  emmeans(one_way_model_with_blocks, specs = "Model", data = for_fig)
+
+unadjusted_pairs <- 
+  one_way_model_with_blocks_em %>% 
+  pairs(adjust = "none") %>% 
+  tidy()
+
+tukey_pairs <-
+  one_way_model_with_blocks_em %>% 
+  pairs(adjust = "tukey") %>% 
+  tidy()
+
+fdr_pairs <- 
+  one_way_model_with_blocks_em %>% 
+  pairs(adjust = "fdr") %>% 
+  tidy()
+
+large_exp_diff <- 
+  unadjusted_pairs %>% 
+  slice_max(estimate, n = 1) %>% 
+  mutate(max_diff = round(60 * estimate), 0)
+  
+unadjusted_pairs %>%
+  select(
+    Comparison = contrast,
+    Estimate = estimate,
+    SE = std.error,
+    df,
+    Unadjusted = p.value
+  ) %>% 
+  bind_cols(
+    tukey_pairs %>% select(Tukey = adj.p.value),
+    fdr_pairs %>% select(FDR = adj.p.value)
+  ) %>%
+  mutate(
+    Unadjusted = map_chr(Unadjusted, pval, max_zeros = 3),
+    Tukey = map_chr(Tukey, pval, max_zeros = 3),
+    FDR = map_chr(FDR, pval, max_zeros = 3)
+  ) %>%
+  gt() %>%
+  cols_align(align = "center") %>%
+  fmt_markdown(columns = c(Unadjusted, Tukey, FDR)) %>% 
+  fmt_number(columns = c("Estimate", "SE"), n_sigfig = 3) %>%
+  tab_spanner(
+    label = "p-value Adjustment",
+    columns = c(Unadjusted, Tukey, FDR)
+  ) %>%
+  cols_width(Comparison ~ px(200)) %>%
+  tab_options(table.width = pct(100))
+```
+
+Although each pairwise difference is statistically significant, the largest difference (`r  large_exp_diff$max_diff`s) is between the random forest and Cubist models. However, this difference is likely not practically meaningful, suggesting that either model would be a suitable choice.
+
+#### Comparing Performance using Equivalence Tests {#sec-equivalence-tests}
+
+In the previous section, we explored how to determine whether one model significantly outperforms another in predictive performance. However, there are cases where we may instead want to assess whether the models perform similarly in a practically meaningful way. To do this, we use an equivalence test, which differs from the previous hypothesis test that aimed to detect differences between models.
+
+Equivalence testing is based on the concept that two models can be considered practically equivalent if their difference falls within a **predefined** margin of indifference, often denoted as $\theta$. This threshold represents the maximum difference that is considered practically insignificant.  To illustrate equivalence testing, let's begin by reviewing the hypothesis testing context for assessing differences between models.  Let $\mu_1$ and $\mu_2$ represent the mean predictive performance of two models. The null hypothesis for a standard two-sample test of difference is:
+
+$$
+H_O:  \mu_1 = \mu_2
+$$
+
+while the alternative hypothesis is:
+
+$$
+H_A:  \mu_1 \neq \mu_2
+$$
+However, an equivalence test reverses this logic. The null hypothesis is that the models are not equivalent, and the alternative hypothesis is that the models are practically insignificant:
+
+$$
+H_0:  |\mu_1 - \mu_2| \geq \theta
+$$ {#eq-equivalence-null}
+
+$$
+H_A:  |\mu_1 - \mu_2| \lt \theta
+$$ {#eq-equivalence-alternative}
+
+Rejecting the null hypothesis in under this framework will allow us to conclude that the models are equivalent within the predefined margin of indifference.
+
+A commonly used approach for equivalence testing is the Two One-Sided Test (TOST) procedure [@schuirmann1987comparison]. This method involves conducting two separate one-sided hypothesis tests as defined in @eq-equivalence-null and @eq-equivalence-alternative.  Specifically, one test assesses the lower bound comparison while the other test assesses the upper bound comparison as follows:
+
+Lower bound:
+$$
+H_0:  \mu_1 - \mu_2 \geq -\theta
+$$
+
+$$
+H_A:  \mu_1 - \mu_2 > -\theta
+$$
+Upper bound:
+
+$$
+H_0:  \mu_1 - \mu_2 \leq \theta
+$$
+$$
+H_A:  \mu_1 - \mu_2 > \theta
+$$
+Each test is conducted at a desired significance level $\alpha$, and if both null hypotheses are rejected, we conclude that the model performance is equivalent based on the predefined margin of indifference.
+
+Schuirmann showed that the two one-sided hypotheses can be practically evaluated by constructing a $100(1-2\alpha)\%$ confidence interval for $\mu_1 - \mu_2$.  If this interval is contained within the boundaries of $(-\theta, \theta)$, then we can reject the null hypothesis and conclude that the two models have equivalent predictive performance.
+
+Selecting an appropriate margin of indifference is crucial and should be determined prior to conducting the statistical test.  What value should we choose?  The answer to this question is problem specific and depends on what we believe makes a practical difference in performance.
+
+From the previous section we saw that the largest expected difference between any pair of models was `r large_exp_diff$exp_diff`s.  For the sake of this illustration, let's suppose that the margin of practical indifference between models is at least 5 seconds.  This means that two models will be considered practically equivalent if the MAE is for delivery times are within $\pm$ `r round(5/60, 2)`.  
+
+To perform the equivalence tests, we use the same ANOVA model for when testing for differences in @eq-one-way-model-with-blocks and estimate the 90% confidence intervals about each pairwise difference.  Because we are making multiple pairwise comparisons, the intervals need to be adjusted to minimize the chance of making a false positive finding.  This adjustment can be done using either the Tukey or FDR procedures.
+
+@fig-equivalence-intervals presents the Tukey adjusted 90% confidence intervals for each pairwise difference between models.  For the delivery time data, we would conclude that the random forest and neural network models are equivalent.  However, we could not conclude that the Cubist model was equivalent to either the neural network or random forest models. 
+
+```{r}
+#| label: fig-equivalence-intervals
+#| echo: false
+#| fig-width: 6
+#| fig-height: 3.5
+#| fig-align: "center"
+#| out-width: "70%"
+#| fig-cap: Pairwise comparisons of models using equivalence testing.  The Tukey adjusted 90% confidence interval of each pairwise difference is illustrated with vertical bands.  For these comparisons, the margin of practical equivalence was set to $\pm$ 5 seconds (MAE = $\pm$ 0.08).
+
+one_way_model_with_blocks %>% 
+  emmeans(specs = "Model", data = for_fig) %>% 
+  pairs(adjust = 'tukey') %>% 
+  confint(level = 0.90) %>%
+  mutate(
+    contrast = factor(
+      contrast,
+      levels = c(
+        "Random Forest - Neural Network",
+        "Random Forest - Cubist",
+        "Neural Network - Cubist"
+      )
+    )
+  ) %>% 
+  ggplot(aes(x = contrast, y = estimate)) +
+  geom_point(size = 2) +
+  geom_errorbar(
+    aes(ymin = lower.CL, ymax = upper.CL), width = 1 / 8
+  ) +
+  geom_hline(yintercept = c(-0.08, 0.08), linetype = 2) +
+  labs(x = NULL, y = "MAE Difference")
+```
+
+### Comparisons Using Bayesian Models {#sec-compare-resample-bayes}
+
+Thus far we have focused on the Frequentist approach which utilizes the hypothesis testing framework, a statistical model, and distributional assumptions to estimate the probability of rejecting the null hypothesis in favor of the alternative hypothesis.  A Bayesian approach can also be used to compare models.  We first saw this modeling approach in @sec-categorical-predictors where this technique was used to fit a linear mixed effect model.  As we will see, Bayesian modeling has some distinct advantages over a Frequentist approach. This framework can be more intuitive and incorporates prior knowledge about the process being measured.
+
+A Bayesian model applies Bayes' theorem to combine observed data with prior knowledge about parameter distributions. The key inputs to this process are:
+
+* Likelihood: Information derived from the observed data.
+* Prior distributions: Assumptions or knowledge about the parameters.
+
+Using Bayes' theorem, these inputs are used to produce posterior distributions, which represent our updated beliefs about the parameters after considering the data. The posterior distributions are then used to make decisions.
+
+If prior knowledge about the parameters is strong, we can specify precise prior distributions. However, when little or no prior information is available, we typically use vague or uninformative priors, which exert minimal influence on the results.  An excellent introduction to Bayesian modeling is @Rethinking.
+
+To compare the predictive performance of different models using a Bayesian approach, we start with a model that represents the data, which is similar to the Frequentist approach. The model from the previous section  (@eq-one-way-model-with-blocks) accounts for variation due to differences in predictive model performance, cross-validation folds, and random error.
+
+We assume each sample follows a normal distribution:  
+
+$$
+y_{ij} \sim \mathcal{N}(\mu_j + \gamma_i, \sigma)
+$$
+The parameters from this model represent the delivery time ($\mu_j$), the impact of cross-validation folds ($\gamma_i$), and the impact of random variation ($\sigma$).  Since we have no prior information about these parameters, we will use uninformative priors:
+
+$$
+\mu_j \sim \mathcal{N}[1.5, 0.5]
+$$
+
+$$
+\gamma_i \sim \mathcal{U}(0,0.5)
+$$
+
+$$
+\sigma \sim exponential(1)
+$$
+
+The prior distribution for the model mean is gaussian with a mean of 1.5 and standard deviation of 0.5, which allows more than 99% of values between 0 and 3--a fairly wide range.  The prior for fold effect is also gaussian centered at 0 with a standard deviation of 0.5 and reflects no preference towards positive or negative effects.  The prior distribution for the random variation follows an exponential distribution, which ensures that it remains positive.  The diffuse nature of the priors allow the data to have greater effect on the posterior distribution of the parameters.
+
+Although the model has multiple parameters, our primary focus is $\mu_j$. By analyzing the posterior distributions of $\mu$, we can assess and compare the predictive impact of different models, guiding our decision-making process.
+
+For our example modeling food delivery times, the posterior distributions of $\mu_j$ are illustrated in @fig-bayesian-model-posterior.  The results are similar to the Frequentist approach where the Cubist model posterior distribution exhibits lower MAE values, while the random forest exhibits the largest MAE values.  The posterior distribution is the foundation from which decisions can be made.  From this distribution we can derive a *credible interval* which is a probabilistic statement about where the parameter lies given that the observed data and prior information are valid.
+
+At face value, it seems like a confidence interval and credible interval are conveying the same information.  While these intervals may be numerically similar, their interpretations are different.  Confidence intervals are build on distributional assumptions such that a proportion of intervals will contain the true parameter in repeated sampling of the same population.  In contrast, a Bayesian credible interval allows us to make a direct probability statement about the parameter itself, which is more intuitive.
+
+A credible interval can be derived for any parameter or function of parameters from the posterior distributions.  For example, we may be interested in the 95% credible interval for the MAE performance of each model.  To derive these intervals, we compute quantiles of the posterior distributions.  These intervals are illustrated by vertical lines in @fig-bayesian-model-posterior.
+
+```{r}
+#| label: bayesian-calcs
+#| include: false
+#| cache: true
+MAE_values <-
+  for_fig %>%
+  pivot_wider(id_cols = "Fold", names_from = "Model", values_from = "MAE") %>%
+  rename(id = Fold)
+
+bayes_model <-
+  perf_mod(MAE_values, seed = 310, iter = 5000, chains = 5, refresh = 0)
+
+#Get posterior samples
+posterior_samples <-
+  tidy(bayes_model) %>%
+  mutate(
+    model = factor(
+      model,
+      levels = c("Random Forest", "Neural Network", "Cubist")
+    )
+  )
+
+#Credible intervals for posterior distribution of model performance
+credible_intervals <-
+  posterior_samples %>%
+  group_by(model) %>%
+  summarize(
+    Lower = quantile(posterior, probs = 0.025),
+    Upper = quantile(posterior, probs = 0.975)
+  ) %>%
+  ungroup()
+
+#Get pairwise contrasts between models
+pairwise_diffs <-
+  contrast_models(
+    bayes_model,
+    list_1 = c("Neural Network", "Random Forest", "Random Forest"),
+    list_2 = c("Cubist", "Cubist", "Neural Network"),
+    seed = 310
+  ) %>%
+  mutate(
+    color_group_equiv = ifelse(
+      difference >= 0.08 | difference <= -0.08,
+      "Not Equivalent",
+      "Equivalent"
+    )
+  ) %>%
+  mutate(color_group_equiv = factor(color_group_equiv))
+
+contrast_credible_intervals <-
+  pairwise_diffs %>%
+  mutate(
+    contrast = factor(
+      contrast,
+      levels = c(
+        "Neural Network vs. Cubist",
+        "Random Forest vs. Cubist",
+        "Random Forest vs. Neural Network"
+      )
+    )
+  ) %>%
+  group_by(contrast) %>%
+  summarize(
+    Lower = quantile(difference, probs = 0.025),
+    Upper = quantile(difference, probs = 0.975)
+  ) %>%
+  ungroup()
+
+pairwise_diffs_nn_rf <-
+  pairwise_diffs %>%
+  dplyr::filter(contrast == "Random Forest vs. Neural Network")
+
+#Define the region of practical equivalence
+#and get the probability of practical equivalence
+difference_summary <-
+  summary(pairwise_diffs, size = 0.08)
+```
+
+```{r}
+#| label: fig-bayesian-model-posterior
+#| echo: false
+#| fig-width: 6
+#| fig-height: 3.5
+#| fig-align: "center"
+#| out-width: "70%"
+#| fig-cap: Posterior distributions of MAE for each of the models.  The vertical dashed lines represent the 95% credible intervals about the posterior MAE values for each model.
+
+ggplot(posterior_samples, aes(x = posterior)) +
+  geom_histogram(bins = 50, color = "white", fill = "blue", alpha = 0.4) +
+  facet_wrap(~model, ncol = 1) +
+  geom_vline(
+    data = credible_intervals,
+    aes(xintercept = Lower),
+    color = "black",
+    linetype = 2
+  ) +
+  geom_vline(
+    data = credible_intervals,
+    aes(xintercept = Upper),
+    color = "black",
+    linetype = 2
+  ) +
+  xlab("Posterior MAE")
+```
+
+We may also be interested in assessing the probability of a meaningful difference in performance between models. To quantify this, we generate posterior distributions for the pairwise differences in model performance. @fig-bayesian-contrast-posterior presents these distributions along with their corresponding 95% credible intervals. Based on these intervals, the probability of a difference between each pair of models is substantial. Among them, the neural network and random forest models exhibit the smallest difference, with a `r round(length(which(pairwise_diffs_nn_rf$difference < 0))/nrow(pairwise_diffs_nn_rf), 3)` probability that the neural network achieves a lower MAE than the random forest.
+
+```{r}
+#| label: fig-bayesian-contrast-posterior
+#| echo: false
+#| fig-width: 6
+#| fig-height: 3.5
+#| fig-align: "center"
+#| out-width: "70%"
+#| fig-cap: Posterior distributions of pairwise differences in MAE for each pair of models.  The vertical dashed lines represent the 95% credible intervals for each contrast.
+
+ggplot(pairwise_diffs, aes(x = difference, fill = color_group_diff)) +
+  geom_histogram(bins = 50, color = "white", fill = "blue", alpha = 0.4) +
+  facet_wrap(~contrast, ncol = 1) +
+  geom_vline(
+    data = contrast_credible_intervals,
+    aes(xintercept = Lower),
+    color = "black",
+    linetype = 2
+  ) +
+  geom_vline(
+    data = contrast_credible_intervals,
+    aes(xintercept = Upper),
+    color = "black",
+    linetype = 2
+  ) +
+  xlab("MAE Difference") +
+  theme(legend.position = "none")
+```
+
+#### Region of Practical Equivalence (ROPE) {#sec-rope}
+
+In addition to utilizing the posterior distribution to compute probabilities of difference, we can also utilize this distribution to compute probabilities of similarity or equivalence.  The region of practical equivalence (ROPE) defines a region of the parameter space that we would consider practically insignificant [@kruschke2014doing].  When using the equivalence testing from @sec-equivalence-tests, we considered models to be equivalent if their predictions were within 5 seconds.  Using this region, the posterior distribution of the parameter of interest is used to generate a probability that the parameter is within this region.  If a large proportion of the posterior distribution falls within the ROPE, then we can conclude that the difference is minimal.
+
+The primary difference between the Frequentist and Bayesian equivalence testing lies in interpretation and flexibility. Frequentist equivalence testing is based on pre-specified significance levels and long-run error rates. Bayesian ROPE, on the other hand, provides a probability-based assessment of practical equivalence. This is particularly useful in predictive modeling, where small differences in performance may not be operationally relevant.
+
+@fig-bayesian-ROPE illustrates the ROPE for the delivery time data, defined as $\pm$ 5 seconds or $\pm$ 0.08 MAE. The probability mass within this region, shown in blue, represents the likelihood that the models have equivalent performance based on this criterion. @tbl-bayesian-ROPE summarizes the probabilities for each model comparison.
+
+For instance, the probability of practical equivalence between the Cubist and neural network models is `r pval(difference_summary$pract_equiv[which(difference_summary$contrast=="Neural Network vs Cubist")])`, suggesting a moderate likelihood that these models produce similar results within the defined threshold. In contrast, the probability of practical equivalence between the Cubist and random forest models is a meager `r pval(difference_summary$pract_equiv[which(difference_summary$contrast=="Random Forest vs Cubist")])`, indicating that the Cubist model is likely to have superior predictive performance relative to the random forest, based on the $\pm$ 5 second criterion.
+
+```{r}
+#| label: fig-bayesian-ROPE
+#| echo: false
+#| fig-width: 6
+#| fig-height: 3.5
+#| fig-align: "center"
+#| out-width: "70%"
+#| fig-cap: Posterior distributions of pairwise differences in MAE for each pair of models.  The vertical dashed lines represent the region of practical equivalence.  The probability mass within this region represents the probability that the models are practically equivalent within $\pm$ 5 seconds ($\pm$ 0.08 MAE).
+
+#Histogram of posterior distributions between models
+#Color bars of histogram differently on either side of +/- 0.08
+ggplot(pairwise_diffs, aes(x = difference, fill = color_group_equiv)) +
+  geom_histogram(bins = 100, alpha = 0.75, color = "white") +
+  facet_wrap(~contrast, ncol = 1) +
+  scale_fill_manual(
+    values = c("Equivalent" = "blue", "Not Equivalent" = "red")
+  ) +
+  geom_vline(xintercept = c(-0.08, 0.08), color = "black", linetype = 2) +
+  xlab("MAE Difference") +
+  theme(legend.position = "none")
+```
+
+```{r}
+#| label: tbl-bayesian-ROPE
+#| tbl-cap: "Probability of practical equivalence between each pair of models' performance."
+
+difference_summary %>%
+  dplyr::select(contrast, pract_equiv) %>%
+  rename(
+    Comparison = contrast,
+    `Probability of Practical Equivalence` = pract_equiv
+  ) %>%
+  gt() %>%
+  cols_align(
+    align = "center"
+  ) %>%
+  fmt_number(columns = c("Probability of Practical Equivalence"), n_sigfig = 3)
+```
+
+## Single Holdout Data Sets {#sec-compare-holdout}
+
+### Bootstrap Techniques {#sec-boot-ci}
+
+After selecting the optimal tuning parameters, the training and testing data are combined to fit the final model. To evaluate this model’s predictive performance, we reserve a portion of the original data—often referred to as a validat set. If the validation set is representative of the training and testing data, we expect the model’s performance metric on the validatin set to be consistent with the results observed during cross-validation.
+
+However, unlike cross-validation, which yields a distribution of performance metrics across multiple resampled data sets, evaluation on a holdout set provides only a single performance estimate. Given the effort invested in model development, relying on just one value to assess predictive ability on unseen data may feel inadequate, especially since, by chance, the validation set result might deviate from the cross-validation results.
+
+Can we quantify our uncertainty around the validation set performance?  Yes, we can use a statistical technique called the bootstrap to gain greater confidence in the performance estimate from a single data set [@Efron1979boot].
+
+You were first introduced to the bootstrap in @sec-bootstrap, where it was applied to estimate model performance during tuning. In essence, the bootstrap involves resampling with replacement from the available data to estimate the sampling variability of a statistic. This variability can then be used to construct confidence intervals of the performance metrics of interest, offering a range of plausible values for model performance on similar validation sets.
+
+@fig-bootstrap-scheme illustrates the bootstrap process during the model building tuning phase. Recall that resampling with replacement from the training data generates multiple bootstrap samples of the same size as the original. Because sampling is done with replacement, some observations may appear multiple times within a sample, while others may be omitted. The omitted samples are used as holdout sets to evaluate model performance.
+
+To adapt this idea to a single validation set, we treat the validation set as our data source and repeatedly draw bootstrap samples from the validation set itself. Each bootstrap sample is the same size as the validation set and is created via random sampling with replacement (as illustrated in @fig-bootstrap-single-holdout-graphic). The final trained model is used to predict outcomes for each bootstrap sample, and the selected performance metric is computed for each.
+
+```{r}
+#| label: fig-bootstrap-single-holdout-graphic
+#| echo: false
+#| out-width: 50%
+#| fig-cap: "A schematic of how bootstrap sample statistics are created from a validation set."
+
+ knitr::include_graphics("../premade/boostrap_stat.svg")
+```
+
+This process yields a distribution of performance metrics, from which bootstrap confidence intervals can be derived. These intervals offer an estimate of the uncertainty around the validation set performance and give us a sound way to express the expected range of performance across other validation sets of similar size.
+
+The bootstrap approach was applied to the three models for the food delivery time data.  @fig-bootstrap-validation-delivery illustrates the 90% bootstrap confidence intervals for each of the models.  Notice that these intervals are narrow.  This is because the number of validation set samples is large (n = `r nrow(delivery_test)`).
+
+```{r}
+#| label: fig-bootstrap-validation-delivery
+#| echo: false
+#| warning: false
+#| cache: true
+#| fig-width: 6
+#| fig-height: 3.5
+#| fig-align: "center"
+#| out-width: "70%"
+#| fig-cap: 90% bootstrap confidence intervals of the validation set MAE for each model.  The circle represent the MAE estimate of the validation set for each model.
+
+# Get validation set performance and corresponding bootstrap CI
+rf_validation_res <-
+  rf_spec %>%
+  last_fit(time_to_delivery ~ ., split = delivery_split, metrics = reg_metrics)
+
+rf_validation_boot <- int_pctl(rf_validation_res, alpha = 0.90)
+
+cb_spec <-
+  cubist_rules(committees = 5)
+
+cb_validation_res <-
+  cb_spec %>%
+  last_fit(time_to_delivery ~ ., split = delivery_split, metrics = reg_metrics)
+
+cb_validation_boot <- int_pctl(cb_validation_res, alpha = 0.90)
+
+nnet_validation_res <-
+  nnet_wflow %>%
+  last_fit(time_to_delivery ~ ., split = delivery_split, metrics = reg_metrics)
+
+nnet_validation_boot <- int_pctl(nnet_validation_res, alpha = 0.90)
+
+validation_boot_mae <-
+  bind_rows(
+    rf_validation_boot %>% mutate(Model = "Random Forest"),
+    cb_validation_boot %>% mutate(Model = "Cubist"),
+    nnet_validation_boot %>% mutate(Model = "Neural Network")
+  ) %>%
+  dplyr::filter(.metric == "mae") %>%
+  mutate(
+    Model = factor(
+      Model,
+      levels = c("Random Forest", "Neural Network", "Cubist")
+    )
+  )
+
+ggplot(validation_boot_mae, aes(x = Model, y = .estimate)) +
+  geom_point(color = "black", shape = 1) +
+  geom_errorbar(
+    data = validation_boot_mae,
+    aes(ymin = .lower, ymax = .upper),
+    color = "black",
+    width = 0.05
+  ) +
+  ylab("MAE")
+```
+
+As the validation set size increases, the variation we expect to see in the summary statistic will decrease.  This concept is illustrated in @fig-bootstrap-single-holdout-varying-size.  In this figure, we have randomly selected subsets of varying size of the validation set and then applied the bootstrapping approach to these smaller sets.  Notice that as the sample size decreases, the width of the confidence interval increases.  Therefore, the smaller the validation set, the higher the variability will be in the estimate of model performance and the the important it is to understand the range of potential predictive performance.
+
+```{r}
+#| label: fig-bootstrap-single-holdout-varying-size
+#| echo: false
+#| fig-width: 6
+#| fig-height: 3.5
+#| fig-align: "center"
+#| out-width: "70%"
+#| fig-cap: 90% bootstrap confidence intervals of MAE for validation sets of varying size for the random forest model.  The smaller the size of the validation set, the wider the interval.
+
+n_validation <- nrow(rf_validation_res$.predictions[[1]])
+set.seed(405)
+rf_validation_res_10 <- rf_validation_res
+n_10 <- sample(c(1:n_validation), size = 10)
+rf_validation_res_10$.predictions[[1]] <-
+  rf_validation_res$.predictions[[1]][n_10, ]
+rf_validation_boot_10 <- int_pctl(rf_validation_res_10, alpha = 0.90)
+rm(rf_validation_res_10)
+
+rf_validation_res_100 <- rf_validation_res
+n_100 <- sample(c(1:n_validation), size = 100)
+rf_validation_res_100$.predictions[[1]] <-
+  rf_validation_res$.predictions[[1]][n_100, ]
+rf_validation_boot_100 <- int_pctl(rf_validation_res_100, alpha = 0.90)
+rm(rf_validation_res_100)
+
+rf_validation_res_1000 <- rf_validation_res
+n_1000 <- sample(c(1:n_validation), size = 1000)
+rf_validation_res_1000$.predictions[[1]] <-
+  rf_validation_res$.predictions[[1]][n_1000, ]
+rf_validation_boot_1000 <- int_pctl(rf_validation_res_1000, alpha = 0.90)
+rm(rf_validation_res_1000)
+
+rf_boot_mae <-
+  bind_rows(
+    rf_validation_boot_10 %>% mutate(Size = "10"),
+    rf_validation_boot_100 %>% mutate(Size = "100"),
+    rf_validation_boot_1000 %>% mutate(Size = "1000"),
+    rf_validation_boot %>% mutate(Size = "Original")
+  ) %>%
+  dplyr::filter(.metric == "mae") %>%
+  mutate(Size = factor(Size, levels = c("10", "100", "1000", "Original")))
+
+ggplot(rf_boot_mae, aes(x = Size, y = .estimate)) +
+  geom_point(color = "black", shape = 1) +
+  geom_errorbar(
+    data = rf_boot_mae,
+    aes(ymin = .lower, ymax = .upper),
+    color = "black",
+    width = 0.05
+  ) +
+  ylab("MAE")
+```
+
+## Conclusion
+
+Selecting the best predictive model involves assessing performance metrics and accounting for practical considerations. Thus far, this chapter outlined both Frequentist and Bayesian approaches to comparing model performance, emphasizing the importance of appropriate statistical techniques when evaluating differences. The Frequentist approach provides a formal hypothesis testing framework, while the Bayesian approach offer a more intuitive probability-based interpretation of model differences.  When there is just one data set for evaluation, like a validation set, then the bootstrap technique can be used to create an interval about the performance metric.
+
+Ultimately, while statistical significance can indicate meaningful differences between models, practical significance should also guide decision-making. Equivalence testing and Bayesian ROPE analysis help determine whether models perform similarly within a defined threshold of practical relevance. In our food delivery time example, these methods suggested that while the Cubist model demonstrated superior predictive performance overall, differences between models may not always be large enough to drive a clear choice.
+
+In practice, model selection is rarely based on performance alone. Factors such as interpretability, computational cost, and deployment feasibility must also be considered. By combining quantitative performance assessment with practical domain knowledge, we can make informed decisions that balance accuracy with real-world constraints.
+
+## Chapter References {.unnumbered}
