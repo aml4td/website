@@ -19,6 +19,21 @@ options(
 key <- readLines("census_api_key.txt")
 
 # ------------------------------------------------------------------------------
+# To re-calculate geocodes and strip off geometry column
+
+re_geocode <- function(x) {
+  x$longitude <- sf::st_coordinates(x)[, 1]
+  x$latitude <- sf::st_coordinates(x)[, 2]
+  st_drop_geometry(x)
+}
+
+no_geometry <- function(split) {
+  dat <- re_geocode(split$data)
+  split$data <- dat
+  split
+}
+
+# ------------------------------------------------------------------------------
 
 # These computations take a while so we do them in batch mode then load the
 # results in later chapters
@@ -72,6 +87,8 @@ cli::cli_alert(
 
 forested_sf <- forested_sf |>
   filter(!is.na(county))
+
+forested_df <- re_geocode(forested_sf)
 
 # ------------------------------------------------------------------------------
 # Conduct the initial split using block sampling and buffering
@@ -139,19 +156,6 @@ forested_rs <- spatial_block_cv(
 )
 
 # ------------------------------------------------------------------------------
-# re-calculate geocodes and strip off geometry column
-
-re_geocode <- function(x) {
-  x$longitude <- sf::st_coordinates(x)[, 1]
-  x$latitude <- sf::st_coordinates(x)[, 2]
-  st_drop_geometry(x)
-}
-
-no_geometry <- function(split) {
-  dat <- re_geocode(split$data)
-  split$data <- dat
-  split
-}
 
 forested_train <- re_geocode(forested_sf_train)
 forested_test <- re_geocode(forested_sf_test)
@@ -234,7 +238,7 @@ save(
   forested_cv_split_info,
   file = "forested_split_info.RData"
 )
-save(forested_sf, file = "forested_sf.RData")
+save(forested_sf, forested_df, file = "forested_all.RData")
 
 # ------------------------------------------------------------------------------
 # Session versions
