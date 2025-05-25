@@ -40,6 +40,36 @@ load("../RData/forested_data.RData")
 ## Exploring Forestation Data  {#sec-forestation-eda}
 
 
+```{r}
+#| label: county
+#| include: false
+
+obs_rates <- 
+  forested_train |> 
+  summarize(
+    rate = mean(class == "Yes"),
+    events = sum(class == "Yes"),
+    total = length(class),
+    .by = c(county)
+  ) |> 
+  mutate(
+    hstat = map2(events, total, binom.test, conf.level = 0.9),
+    pct = rate * 100,
+    .lower = map_dbl(hstat, ~ .x$conf.int[1]),
+    .upper = map_dbl(hstat, ~ .x$conf.int[2]),
+    county = tools::toTitleCase(gsub("_", " ", county)),
+    county = factor(county),
+    county = reorder(county, rate),
+    `# Locations` = total
+  )
+
+# obs_rates |> 
+#   ggplot(aes(y = county, col = `# Locations`)) + 
+#   geom_point(aes(x = rate)) + 
+#   geom_errorbar(aes(xmin = .lower, xmax = .upper)) + 
+#   labs(x = "Percent Forested", y = NULL)
+```
+
 ## Logistic Regression {#sec-logistic-reg}
 
 Logistic regression is a classification model that can be used when there are $C = 2$ classes. As with all binary classification models, we want to accurately estimate the probability of an event^[We'll assume that class $j = 1$ is the class that is considered the event, for $j = 1, \ldots, C$ classes.]. As discussed in the previous chapter, the probability parameter $\pi$ should be between zero and one, and we often frame the problem in terms of the probability model based on the Bernoulli likelihood function: 
@@ -62,7 +92,7 @@ $$
 \pi_i = \frac{1}{1 + \exp(-\boldsymbol{x}_i'\boldsymbol{\beta})}
 $$ {#eq-logistic}
 
-This keeps the probability values within [0, 1] no matter how large or small the linear predictor becomes^[Technically, logistic regression uses this nonlinear function, but there are many other functions to choose from. Examples are the probit, complementary log-log, or TODO function. In these cases, we might refer to our model as "binary regression."]. This nonlinear function can be derived using differential equations for growth curves. Although the model has been rediscovered several times, it was first derived in the 1800s and was not commonly known as the "logistic" model until 1925. See @cramer2004early for a history. 
+This keeps the probability values within [0, 1] no matter how large or small the linear predictor becomes^[Technically, logistic regression uses this nonlinear function, but there are many other functions to choose from. The probit and complementary log-log transformations can be used [@glm] as well as many others. See @morgan2018analysis for more specialized "link functions." From a broader view, we might refer to our model as "binary regression" or "binomial regression."]. This nonlinear function can be derived using differential equations for growth curves. Although the model has been rediscovered several times, it was first derived in the 1800s and was not commonly known as the "logistic" model until 1925. See @cramer2004early for a history. 
 
 ```{r}
 #| label: precipitation-fit
@@ -84,9 +114,7 @@ linear_percip_coef <- format(linear_percip_coef, digits = 3)
 
 For a single predictor, $x$, the logistic model results in a symmetric, sigmoidal function across values of $x$. To demonstrate, a simple logistic regression model was fit to the binary outcome data with a single predictor: the annual precipitation. That predictor has a fairly right-skewed distribution, so a log (base 10) transformation was used on the data prior to training the model. 
 
-There are various ways to find parameter estimates, which will be discussed in subsequent subsections. The most basic method is maximum likelihood estimation, where we use a numerical optimization method to minimize the loss function, which is the negative log-likelihood. The log-likelihood is more numerically stable to work with, and it is generally not challenging to find maximum likelihood estimates (MLEs) of our $\boldsymbol{\beta}$ parameters. Statistically, the MLEs are estimates that best explain the data.
-
-UNBIASED TOO
+There are various ways to find parameter estimates, which will be discussed in subsequent subsections. The most basic method is maximum likelihood estimation, where we use a numerical optimization method to minimize the loss function, which is the negative log-likelihood. The log-likelihood is more numerically stable to work with, and it is generally not challenging to find maximum likelihood estimates (MLEs) of our $\boldsymbol{\beta}$ parameters. Statistically, the MLEs are estimates that best explain the data. They are also unbiased estimates of the true parameters^[Recall from @sec-variance-bias that unbiased estimates might have high variance. For the forestation data, we'll see that some of our logistic regression parameter estimates have irrationally large variances. Later in this chapter, biased methods (via regularization) are also discussed.].
 
 We solved the log-likelihood equations (based on @eq-bernoulli) to estimate the parameters, producing the linear predictor function:  
 
@@ -286,17 +314,15 @@ An example of a logistic regression model with a single predictor (annual precip
 
 Overlaying the estimated event rates shows that the model does a poor job of representing the relationship between the probability of forestation and precipitation. The data trend is not monotonically increasing; in the middle of the precipitation range, there is a small drop in the binned rates that recovers and begins to increase once more. Our simple linear predictor is not flexible enough to emulate this motif.
 
-TODO Segue to GLMs
+### Generalized Linear Models {.unnumbered}
 
-Logistic regression belongs to a broader class of _generalized linear models_, or GLMs [@glm]. These models can be used with different types of outcomes, such as numeric outcomes or count data. The idea is to have a model regress the linear predictor against a function of the outcome data. In our current case, the _logit_ function (the inverse of @eq-logistic) is applicable^[ref oragins paper]: 
+Logistic regression belongs to a broader class of _generalized linear models_, or GLMs [@glm]. These models can be used with different types of outcomes, such as numeric outcomes or count data. The idea is to have a model regress the linear predictor against a function of the outcome data. In our current case, the _logit_ function (the inverse of @eq-logistic) is applicable: 
 
 $$
 log\left(\frac{\pi_i}{1 - \pi_i}\right) = \eta_i = \boldsymbol{x}_i'\boldsymbol{\beta}
 $$ {#eq-logit}
 
 Looking back to @fig-precipitation, we can change the y-axis data and show how the logit changes for our fitted model. The line visualizes the estimated linear predictor for these data. Sadly, when the representation of our data is similarly changed, the pattern is not linear; our linear model isn't effectively emulating the nonlinear pattern in the data. 
-
-The logit function has a meaningful interpretation since it contains the _odds_ of an event occurring. TODO more here. 
 
 There are significant benefits to framing logistic regression inside the class of generalized linear models. First, it gives us some nice theoretical guarantees about the likelihood function, allowing us to use simple gradient-based optimization methods to optimize the log-likelihood. Second, it provides an inferential framework for our parameters. This enables us to understand how important our predictors are by way of hypothesis tests and confidence intervals. 
 
@@ -394,6 +420,8 @@ brier_perm <-
   )
 ```
 
+### Forestation Model Development {.unnumbered}
+
 We can assess each of these feature engineering steps by fitting logistic regression pipelines that sequentially add steps: 
 
 - A **simple** preprocessor that only converts the `r length(levels(forested_train$county))` counties to binary indicators and removes potential zero-variance predictors. 
@@ -472,6 +500,103 @@ logitic_cal + logitic_roc
 From here, we could investigate which terms had the greatest influence on the model. Were the 10 interactions that we identified important or statistically significant? Should we have added more or less? We might plot the predicted values to see if there are specific geographic locations that corresponded to the poorly calibrated values. Perhaps we could also refine the model by using a supervised feature filter, and so on. 
 
 Instead, we’ll move on to a different way to estimate the logistic model’s unknown parameters using different objective functions that use the likelihood but in different ways. 
+
+### Interpretation {.unnumbered}
+
+```{r}
+#| label: odds-calc
+#| include: false
+ref_level <- "yakima"
+ref_cnty <- tools::toTitleCase(gsub("_", " ", ref_level))
+other_level <- "skamania"
+other_term <- paste0("county", other_level)
+other_cnty <- tools::toTitleCase(gsub("_", " ", other_level))
+
+releveled <- forested_train |> 
+  mutate(county = relevel(county, ref = ref_level))
+
+county_coef <- 
+  logistic_reg() |> 
+  fit(class ~ county, data = releveled) |> 
+  tidy(conf.int = TRUE, conf.level = 0.90)
+
+ref_coef <- 
+  county_coef |> 
+  filter(term %in% c("(Intercept)")) |> 
+  mutate(
+    coef = format(-estimate, digits = 3, scientific = FALSE),
+    odds = format(exp(-estimate), digits = 3, scientific = FALSE),
+    prob = binomial()$linkinv(-estimate),
+    xin = format(1/prob, digits = 2, scientific = FALSE),
+    prob = format(prob * 100, digits = 3)
+    )
+
+other_coef <- 
+  county_coef |> 
+  filter(term %in% c(other_term)) |> 
+  mutate(
+    coef = format(-estimate, digits = 3, scientific = FALSE),
+    .upper = format(exp(-conf.low), digits = 3, scientific = FALSE),
+    .lower= format(exp(-conf.high), digits = 3, scientific = FALSE),
+    odds = format(exp(-estimate), digits = 3, scientific = FALSE),
+    prob = binomial()$linkinv(-estimate),
+    xin = format(1/prob, digits = 2, scientific = FALSE),
+    prob = format(prob * 100, digits = 3)
+  )
+
+other_change_coef <- 
+  county_coef |> 
+  filter(term %in% c("(Intercept)", other_term)) |> 
+  summarize(estimate = sum(estimate)) |> 
+  mutate(
+    coef = format(-estimate, digits = 3, scientific = FALSE),
+    odds = format(exp(-estimate), digits = 3, scientific = FALSE),
+    prob = binomial()$linkinv(-estimate),
+    xin = format(1/prob, digits = 2, scientific = FALSE),
+    prob = format(prob * 100, digits = 3)
+  )
+```
+
+The logit function has a meaningful interpretation since it contains the _odds_ of an event occurring. Let's consider a simple case where we are modeling the change by county. If we use `r ref_cnty` county as the reference cell (recall @sec-indicators), the intercept of a logistic model is `r ref_coef$coef`. This corresponds to a probability of `r ref_coef$prob`%. The odds of some event that occurs with probability $\pi$ is 
+
+$$
+odds = \pi / (1-\pi)
+$$ 
+
+or "one in $1/\pi$." For `r ref_cnty`, this relates to the logistic regression model since
+
+
+$$
+log\left(\frac{Pr[\text{`r ref_cnty` forested}]}{Pr[\text{`r ref_cnty` unforested}]}\right) = log\left(\text{`r ref_cnty` odds}\right) = \beta_0
+$$
+
+Therefore, the odds of a tree being forested in this county are _exp_(`r ref_coef$coef`) = `r ref_coef$odds` or, one in about `r ref_coef$xin` locations. 
+
+Alternatively, consider Skamania County, which contains  Gifford Pinchot National Forest. It's model coefficient is `r other_coef$coef` However, recall that with a reference cell encoding, this is the change in the logit relative to the reference value (`r ref_cnty` County). If we are interested in the probability of forestation for Skamania, we have to look at the sum of both coefficients (`r other_change_coef$coef` logit units) which means that the probability of forestation estimated to be about `r other_change_coef$prob`%.
+
+One way of assessing how much more likely an event is to occur is the odds ratio. For example, if we wanted to compute the odds ratio of forestation between `r ref_cnty` and Skamania counties, we can use different sets of coefficients from the linear predictor. Since the forestation rate is higher in Skamania than `r ref_cnty`, the odds ratio of interest is
+
+$$
+\frac{\text{Skamania odds}}{\text{`r ref_cnty` odds}}
+$$
+
+We know that 
+
+$$
+log\left(\text{Skamania odds}\right) = log\left(\frac{Pr[\text{Skamania forested}]}{Pr[\text{Skamania unforested}]}\right) = \beta_0 +\beta_1
+$$
+
+so that 
+
+$$
+\frac{\text{Skamania odds}}{\text{`r ref_cnty` odds}} = \frac{exp(\beta_0 +\beta_1)}{exp(\beta_0)} = exp(\beta_0 + \beta_1 - \beta_0) = exp(\beta_1)
+$$
+
+From our estimated coefficient, the odds of being forested in Skamania is `r other_coef$odds` times larger than in `r ref_cnty`. Since we are using maximum likelihood estimation, we can also compute confidence intervals for this odds ratio; the 90% interval is (`r other_coef$.lower`, `r other_coef$.upper`). 
+
+For numeric predictors, such as eastness or elevation, exponentiating the coefficient gives us a _per unit_ odds ratio. Since the predictors might be in different units, the interpretation can be more complex depending on the situation^[This might be one factor that leads some to discretize numeric predictors; they can compute odds ratios for "low" and "high" predictor ranges.].
+
+In either case, the logistic regression model does have a structure that lends itself to natural probabilistic interpretation. 
 
 ### Multicollinearity
 
