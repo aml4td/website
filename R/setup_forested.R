@@ -15,8 +15,10 @@ options(
   pillar.min_title_chars = Inf,
   future.rng.onMisuse = "ignore"
 )
+
 # Read in api key; in .gitignore
 key <- readLines("census_api_key.txt")
+census_api_key(key)
 
 # ------------------------------------------------------------------------------
 # To re-calculate geocodes and strip off geometry column
@@ -88,13 +90,11 @@ cli::cli_alert(
 forested_sf <- forested_sf |>
   filter(!is.na(county))
 
-forested_df <- re_geocode(forested_sf)
-
 # ------------------------------------------------------------------------------
 # Conduct the initial split using block sampling and buffering
 
 set.seed(318)
-forested_split <-
+forested_sf_split <-
   spatial_initial_split(
     forested_sf,
     prop = 1 / 5,
@@ -105,15 +105,38 @@ forested_split <-
     square = FALSE
   )
 
-forested_sf_train <- training(forested_split)
-forested_sf_test <- testing(forested_split)
+forested_sf_split
+
+forested_sf_train <- training(forested_sf_split)
+forested_sf_test <- testing(forested_sf_split)
+
+# ------------------------------------------------------------------------------
+# Make non-sf versions plus an initial split object that can be used with last_fit()
+
+# Non-sf objects
+forested_train <- re_geocode(forested_sf_train)
+forested_test <- re_geocode(forested_sf_test)
+forested_both <- bind_rows(forested_train, forested_test)
+
+forested_split <- make_splits(
+  x = list(analysis = 1:nrow(forested_train),
+           assessment = (nrow(forested_train) + 1):nrow(forested_both)),
+  data = forested_both
+)
+
+# To make it look like an object produced by initial_split
+class(forested_split) <- c("initial_split", class(forested_split))
+forested_split
+
+all.equal(forested_train, training(forested_split))
+all.equal(forested_test, testing(forested_split))
 
 # ------------------------------------------------------------------------------
 # Make a data frame to use for plotting
 
 split_groups <- tibble(.row = 1:nrow(forested_sf), group = "buffer")
-split_groups$group[forested_split$in_id] <- "training"
-split_groups$group[forested_split$out_id] <- "testing"
+split_groups$group[forested_sf_split$in_id] <- "training"
+split_groups$group[forested_sf_split$out_id] <- "testing"
 
 forested_split_info <-
   for_analysis |>
@@ -140,13 +163,40 @@ if (rlang::is_installed("leaflet") & interactive()) {
       radius = 1500,
       popup = htmltools::htmlEscape(forested_split_info$group)
     )
+  
+  # training set only
+  leaflet() %>%
+    addProviderTiles(providers$CartoDB.PositronNoLabels) %>%
+    addCircles(
+      data = forested_train,
+      lng = ~longitude,
+      lat = ~latitude,
+      fill = TRUE,
+      opacity = .01,
+      fillOpacity = 1 / 2,
+      radius = 1500,
+      popup = htmltools::htmlEscape(forested_split_info$group)
+    )
+  # test set only
+  leaflet() %>%
+    addProviderTiles(providers$CartoDB.PositronNoLabels) %>%
+    addCircles(
+      data = forested_test,
+      lng = ~longitude,
+      lat = ~latitude,
+      fill = TRUE,
+      opacity = .01,
+      fillOpacity = 1 / 2,
+      radius = 1500,
+      popup = htmltools::htmlEscape(forested_split_info$group)
+    )
 }
 
 # ------------------------------------------------------------------------------
 # Resample the training set
 
 set.seed(670)
-forested_rs <- spatial_block_cv(
+forested_sf_rs <- spatial_block_cv(
   forested_sf_train,
   v = 10,
   buffer = 80 * 80,
@@ -155,11 +205,14 @@ forested_rs <- spatial_block_cv(
   square = FALSE
 )
 
+forested_sf_rs
+
 # ------------------------------------------------------------------------------
 
-forested_train <- re_geocode(forested_sf_train)
-forested_test <- re_geocode(forested_sf_test)
+forested_rs <- forested_sf_rs
 forested_rs$splits <- map(forested_rs$splits, no_geometry)
+map_int(forested_rs$splits, ~ nrow(analysis(.x)))
+map_int(forested_rs$splits, ~ nrow(assessment(.x)))
 
 # ------------------------------------------------------------------------------
 # Make map for a single cv iteration
@@ -226,6 +279,7 @@ name_list <-
 # Save various things
 
 save(
+  forested_split,
   forested_train,
   forested_test,
   forested_rs,
@@ -238,7 +292,8 @@ save(
   forested_cv_split_info,
   file = "forested_split_info.RData"
 )
-save(forested_sf, forested_df, file = "forested_all.RData")
+save(forested_sf, forested_sf_split, forested_sf_rs, 
+     file = "forested_sf_all.RData")
 
 # ------------------------------------------------------------------------------
 # Session versions
