@@ -65,7 +65,8 @@ ui <- fluidPage(
             "Lasso" = "Lasso",
             "glmnet" = "glmnet",
             "SCAD" = "SCAD",
-            "MCP" = "MCP"
+            "MCP" = "MCP",
+            "UniLasso" = "UniLasso"
           )
         )
       ),
@@ -94,13 +95,13 @@ server <- function(input, output) {
       p <-
         dat |> 
         ggplot(aes(penalty, estimate, col = Term, pch = Term))  +
-        geom_hline(yintercept = 0 , col = "red", linewidth = 1.1, alpha = 1 / 5) +
+        geom_hline(yintercept = 0 , col = "red", linewidth = 1.1, alpha = 1 / 8) +
         geom_hline(data = mle_est, aes(yintercept = estimate, col = Term), 
                    lty = 2, alpha = 3 / 4) +
         geom_line(alpha = 1 / 2) +
         geom_point(alpha = 1 / 2) +
         scale_x_log10(labels = label_log()) +
-        scale_color_brewer(palette = "Dark2") +
+        scale_color_manual(values = c("#3381A8FF", "#5E9546FF")) +
         labs(x = "Penalty", y = "Parameter Estimate") +
         theme_bw() +
         theme(legend.position = "top")
