@@ -94,6 +94,7 @@ server <- function(input, output) {
       p <-
         dat |> 
         ggplot(aes(penalty, estimate, col = Term, pch = Term))  +
+        geom_hline(yintercept = 0 , col = "red", linewidth = 1.1, alpha = 1 / 5) +
         geom_hline(data = mle_est, aes(yintercept = estimate, col = Term), 
                    lty = 2, alpha = 3 / 4) +
         geom_line(alpha = 1 / 2) +
