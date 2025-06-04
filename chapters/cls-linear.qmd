@@ -24,6 +24,7 @@ library(patchwork)
 library(future.mirai)
 library(gt)
 library(gtExtras)
+library(ggrepel)
 
 # ------------------------------------------------------------------------------
 # set options
@@ -42,14 +43,78 @@ load("../RData/logistic_bayes.RData")
 
 ## Exploring Forestation Data  {#sec-forestation-eda}
 
+These data have been discussed in Sections [-@sec-spatial-splitting], [-@sec-spatial-resampling], and [-@sec-unsupervised-selection]. As a refresher, locations in Washington state were surveyed, and specific criteria were applied to determine whether they were sufficiently forested. Using predictors on the climate,  terrain, and location, we want to accurately predict the probability of forestation at other sites within the state. 
 
+As previously mentioned, this type of data exhibits spatial autocorrelation, where objects close to each other tend to have similar attributes. This is not a book specific to spatial analysis; ordinary machine learning tools will be used to analyze these data. Our analyses might be, to some degree, suboptimal for the task. However, for our data, @FIA2015 describes the sampling methodology, in which the on-site inspection locations are sampled from a collection of 6,000-acre hexagonal regions. While spatial autocorrelation is very relevant, the space between points may reduce the risk of using spatially aware modeling methodologies. Despite this, our data spending methodologies _are_ spatially aware, and this might further mitigate any issues. 
 
-:::: {.columns}
+To learn more about spatial machine learning, @kopczewska2022spatial is a nice overview. We also recommend @nikparvar2021machine, @kanevski2009machine, and @cressie2015statistics.
 
-::: {.column width="8%"}
-:::
+```{r}
+#| label: vert-forest
+#| include: false
+#| cache: true
 
-::: {.column width="84%"}
+vert_forest <- 
+  forested_train |> 
+  pivot_longer(cols = c(-class, -county), names_to = "Predictor", values_to = "value") |> 
+  full_join(name_key |> rename(Predictor = variable), by = "Predictor") |> 
+  mutate(
+    text = ifelse(is.na(text), Predictor, text),
+    Predictor = tools::toTitleCase(text)
+  ) |> 
+  select(-text)
+
+num_unique <- 
+  vert_forest %>% 
+  select(-class, -county) |> 
+  summarize(
+    num_vals = min(21, vctrs::vec_unique_count(value)), 
+    .by = c(Predictor)
+  )
+
+percentiles <- 
+  vert_forest %>% 
+  full_join(num_unique, by = "Predictor") %>% 
+  group_nest(Predictor, num_vals) %>% 
+  mutate(
+    pctl = map2(data, num_vals, 
+                ~ tibble(group = ntile(.x$value, n = .y), class = .x$class))
+  ) %>% 
+  select(-data) %>% 
+  unnest(c(pctl)) %>% 
+  mutate(pctl = (group - 1) / num_vals * 100) %>% 
+  summarize(
+    events = sum(class == "Yes"), 
+    total = length(class),
+    .by = c(Predictor, pctl)
+  ) %>% 
+  mutate(
+    prop_obj = map2(events, total, ~ tidy(binom.test(.x, .y, conf.level = 0.9)))
+  ) %>% 
+  select(-events) %>% 
+  unnest(c(prop_obj))
+
+obs_rates <- 
+  forested_train |> 
+  summarize(
+    rate = mean(class == "Yes"),
+    events = sum(class == "Yes"),
+    total = length(class),
+    .by = c(county)
+  ) |> 
+  mutate(
+    hstat = map2(events, total, binom.test, conf.level = 0.9),
+    pct = rate * 100,
+    .lower = map_dbl(hstat, ~ .x$conf.int[1]),
+    .upper = map_dbl(hstat, ~ .x$conf.int[2]),
+    county = tools::toTitleCase(gsub("_", " ", county)),
+    county = factor(county),
+    county = reorder(county, rate),
+    `# Locations` = total
+  )
+```
+
+As with any ML project, we conduct preliminary exploratory data analysis to determine whether any data characteristics might affect how we model them. @tbl-forested-numeric has statistical and visual summaries of the `r ncol(forested_train) - 2` numeric predictors using the training data. Several of the predictors exhibit pronounced skew (right or left leaning). Also, the annual minimum temperature, dew temperature, January minimum temperature, and maximum vapor show bimodality in the distributions. The year of inspection is also interesting; the data collection was sparse before 2011, and subsequent years contain a few hundred data points per year before beginning to drop off in 2021. 
 
 ::: {#tbl-forested-numeric}
 
@@ -57,15 +122,7 @@ load("../RData/logistic_bayes.RData")
 #| label: forested-numeric
 #| echo: false
 
-forested_train |> 
-  select(-class, -county) |> 
-  pivot_longer(cols = c(everything()), names_to = "Predictor", values_to = "value") |> 
-  full_join(name_key |> rename(Predictor = variable), by = "Predictor") |> 
-  mutate(
-    text = ifelse(is.na(text), Predictor, text),
-    Predictor = tools::toTitleCase(text)
-  ) |> 
-  select(-text) |> 
+vert_forest |> 
   summarize(
     Minimum = min(value),
     Mean = mean(value), 
@@ -88,44 +145,50 @@ Summaries of numeric predictors in the training set.
 
 :::
 
-:::
 
-::: {.column width="8%"}
-:::
+Also, recall that @fig-corr-plot previously described the correlation structure of these predictors. There were several clusters of predictors with strong magnitudes of correlation. This implies that there is some redundancy of information in these features. However, machine learning is often “a game of inches,” where even redundant predictors can contribute incremental improvements in performance. In any case, the analyses in this chapter will be profoundly affected by this characteristic; it will be discussed in more detail below. 
 
-:::: 
-
+Individually, how does each of these features appear to relate to the outcome? To assess this, we binned each predictor into roughly 20 groups based on percentiles and used these groups (each containing about `r floor(mean(percentiles$total))` locations) to compute the rate of forestation and 90% confidence intervals. As an exploratory tool, we can use these binned versions of the data to see potential relationships with the outcome. @fig-forest-percentiles shows the profiles.
 
 
 ```{r}
-#| label: county
-#| include: false
+#| label: fig-forest-percentiles
+#| echo: false
+#| out-width: 80%
+#| fig-width: 8
+#| fig-height: 6
+#| fig-cap: Binned rates of forestation over percentiles of the numeric predictors. The shaded regions are 90% confidence intervals. 
 
-obs_rates <- 
-  forested_train |> 
-  summarize(
-    rate = mean(class == "Yes"),
-    events = sum(class == "Yes"),
-    total = length(class),
-    .by = c(county)
-  ) |> 
-  mutate(
-    hstat = map2(events, total, binom.test, conf.level = 0.9),
-    pct = rate * 100,
-    .lower = map_dbl(hstat, ~ .x$conf.int[1]),
-    .upper = map_dbl(hstat, ~ .x$conf.int[2]),
-    county = tools::toTitleCase(gsub("_", " ", county)),
-    county = factor(county),
-    county = reorder(county, rate),
-    `# Locations` = total
-  )
-
-# obs_rates |> 
-#   ggplot(aes(y = county, col = `# Locations`)) + 
-#   geom_point(aes(x = rate)) + 
-#   geom_errorbar(aes(xmin = .lower, xmax = .upper)) + 
-#   labs(x = "Percent Forested", y = NULL)
+percentiles %>% 
+  ggplot(aes(pctl, estimate)) + 
+  geom_line() + 
+  geom_ribbon(aes(ymin = conf.low, ymax = conf.high), alpha = 1 / 5, fill = "#D85434FF") + 
+  facet_wrap(~ Predictor, ncol = 3) + 
+  labs(x = "Percentile", y = "Rate of Forestation") 
 ```
+
+Quite a few predictors show considerable nonlinear trends, and a few are not monotonic (i.e., the sign of the slope changes over the range of values). The Eastness and Northness features, which capture the landscape orientation at the location, show flat trends. This means that these predictors are less likely to be important. However, once in a model with other predictors, the model may be able to extract some utility from them, perhaps via interaction terms. The primary takeaway from this visualization is that models that are able to express nonlinear trends will probably do better than those restricted to linear classification boundaries. 
+
+In addition to longitude and latitude, the data contains a qualitative location-based predictor: the county in Washington. There are data on `r nrow(obs_rates)` counties. The number of locations within each county can vary with `r obs_rates$county[which.min(obs_rates$total)]` county having the least training set samples (`r min(obs_rates$total)`) and `r obs_rates$county[which.max(obs_rates$total)]` having the most (`r max(obs_rates$total)`). @fig-counties shows how the rate of forestation changes and the uncertainty in these estimates. Several counties in the training set have no forested locations. Given the number of counties and their varying frequencies of data, an effect encoding strategy might be appropriate for this predictor. 
+
+```{r}
+#| label: fig-counties
+#| echo: false
+#| out-width: 40%
+#| fig-width: 4
+#| fig-height: 6
+#| fig-cap: Outcome rates for different counties in Washington State. 
+
+obs_rates |>
+  ggplot(aes(y = county, col = `# Locations`)) +
+  geom_point(aes(x = rate)) +
+  geom_errorbar(aes(xmin = .lower, xmax = .upper)) +
+  labs(x = "Rate of Forestation", y = NULL) + 
+  theme(legend.position = "top") + 
+  scale_color_viridis_c(option = "mako", begin = .2, end = .8)
+```
+
+The next section will describe a mainstay of machine learning models for two classes: logistic regression. We’ll examine many different facets of this model and a few methods for estimating parameters. After this, the focus is on how to extend the logistic model to more than two classes via multinomial models. We’ll also describe a similar approach called generalized additive models (GAMs) and take a little time to describe a model called linear discriminant analysis (LDA). LDA is briefly described; it is more important when extended to nonlinear models, and these methods are described in the next chapter. 
 
 ## Logistic Regression {#sec-logistic-reg}
 
@@ -544,7 +607,7 @@ Along with the Brier score values of `r signif(logistic_mtr$mean[logistic_mtr$.m
 logistic_pred <- 
   forest_res %>% 
   extract_workflow_set_result("encoded + transformations + splines_logistic_mle") %>% 
-  collect_predictions(summarize = TRUE)
+  augment()
 
 logitic_cal <- cal_plot_windowed(logistic_pred, class, .pred_Yes, step_size = 0.02)
 logitic_roc <- 
@@ -658,9 +721,49 @@ For numeric predictors, such as eastness or elevation, exponentiating the coeffi
 
 In either case, the logistic regression model does have a structure that lends itself to natural probabilistic interpretation. See @hosmer2013applied for a broader discussion. 
 
-### Multicollinearity
+### Examining Our Model
 
-It can be problematix when multiple predictors have a high degree of correlation with one another, commonly called _multicollinearity_[Meaning that multiple predictors are “co-linear” or have a strong linear relationship with one another] and is a fairly frequent occurrence in many data sets. For example, recall the visualization of the correlation matrix in @fig-corr-plot. The heatmap shows that there are a number of climate-related predictors that have high degrees of correlation with one another.
+
+```{r}
+#| label: best-glm-fit
+#| include: false
+
+best_mle_wflow <- 
+  forest_set |> 
+  extract_workflow(id = "encoded + transformations + splines_logistic_mle")
+
+best_mle_fit <- 
+  best_mle_wflow |> 
+  fit(forested_train)
+
+best_mle_coef <- 
+  tidy(best_mle_fit) |> 
+  mutate(
+    Type = case_when(
+      grepl("(_10)|(_0[1-9])", term) ~ "Spline",
+      grepl("_x_", term) ~ "Interaction",
+      TRUE ~ "Main Effect"
+    ),
+    Type = factor(Type, levels = c("Spline", "Interaction", "Main Effect"))
+  )
+
+# best_mle_coef |>
+#   mutate(`|Estimate|` = abs(estimate)) |> 
+#   select(term, Type, `|Estimate|` , `Standard Error` = std.error) |>
+#   pivot_longer(cols = c(-term, -Type), values_to = "value", names_to = "statistic") |>
+#   ggplot(aes(Type, value)) +
+#   geom_boxplot() + 
+#   facet_wrap(~ statistic) +
+#   scale_y_log10() +
+#   labs(y = NULL, x = "Feature Type")
+```
+
+overall trends
+
+
+### A Lurking Problem: Multicollinearity
+
+It can be problematic when multiple predictors have a high degree of correlation with one another, commonly called _multicollinearity_^[Meaning that multiple predictors are “co-linear” or have a strong linear relationship with one another] and is a fairly frequent occurrence in many data sets. For example, recall the visualization of the correlation matrix in @fig-corr-plot. The heatmap shows that there are a number of climate-related predictors that have high degrees of correlation with one another.
 
 ```{r}
 #| label: two-param-colin-calc
@@ -892,8 +995,119 @@ group lasso; interactions
 
 bootstrapping
 
+```{r}
+#| label: glmn-calc
+#| include: false
+#| cache: true
+
+glmn_pen <- 10^seq(-7, -1, length.out = 50)
+glmn_grid <- crossing(penalty = glmn_pen, mixture = c(0:4) / 4)
+
+glmn_spec <- 
+  logistic_reg(penalty = tune(), mixture = tune()) |> 
+  set_engine("glmnet", path_values = !!glmn_pen)
+
+glmn_wflow <- 
+  best_mle_wflow |> 
+  update_model(glmn_spec)
+
+glmn_res <- 
+  glmn_wflow |> 
+  tune_grid(
+    resamples = forested_rs,
+    grid = glmn_grid,
+    control = control_grid(save_pred = TRUE, save_workflow = TRUE),
+    metrics = cls_mtr
+  )
+
+glmn_best_param <- select_best(glmn_res, metric = "brier_class")
+glmn_best_fit <- fit_best(glmn_res, metric = "brier_class")
+
+lr_coefs <- 
+  inner_join(
+    tidy(best_mle_fit) |> select(term, MLE = estimate),
+    tidy(glmn_best_fit) |> select(term, glmnet = estimate),
+    by = "term"
+  ) |> 
+  filter(term != "(Intercept)") |> 
+  mutate(
+    Type = case_when(
+      grepl("(_10)|(_0[1-9])", term) ~ "Spline",
+      grepl("_x_", term) ~ "Interaction",
+      TRUE ~ "Main Effect"
+    ),
+    Type = factor(Type, levels = c("Spline", "Interaction", "Main Effect"))
+  )
+
+p_glmnet_tune <- 
+  autoplot(glmn_res, metric = "brier_class") + 
+  theme(legend.position = "top") + 
+  labs(y = "Brier (Resampled)")
+
+# ------------------------------------------------------------------------------
+
+glmn_best_coef <- 
+  glmn_best_fit |> 
+  extract_fit_engine() |> 
+  tidy() |> 
+  filter(term != "(Intercept)")
+
+feature_nms <- unname(name_list)
+for (i in seq_along(name_list)) {
+  glmn_best_coef$term <- gsub(name_list[[i]], names(name_list)[i], glmn_best_coef$term, fixed = TRUE)
+}
+
+glmn_best_coef$term <- gsub("_x_", " X ", glmn_best_coef$term)
+glmn_best_coef$term <- gsub("_", " ", glmn_best_coef$term)
+
+top_best <- 5
+show_pen <- glmn_pen[which.min(abs(glmn_pen - 10^(-6)))]
+at_best <- 
+  glmn_best_coef |> 
+  filter(lambda == glmn_best_param$penalty) |> 
+  slice_max(abs(estimate), n = top_best) 
+
+best_path <- 
+  inner_join(glmn_best_coef, at_best |> select(term), by = "term")
+
+at_show <- 
+  best_path |> 
+  filter(lambda == show_pen) |> 
+  mutate(label = term)
+```
 
 
+```{r}
+#| label: fig-logistic-glmnet-tune
+#| fig-width: 5.5
+#| fig-height: 4.25
+#| fig-align: center
+#| out-width: 60%
+#| fig-cap: Results of tuning the complex logistic model using the glmnet penalty.
+#| warning: false
+
+p_glmnet_tune
+```
+
+```{r}
+#| label: fig-logistic-glmnet-path
+#| fig-width: 5
+#| fig-height: 5
+#| fig-align: center
+#| out-width: 50%
+#| fig-cap: Results of tuning the complex logistic model using the glmnet penalty.
+#| warning: false
+
+p_glmnet_param <- 
+  glmn_best_coef |> 
+  ggplot(aes(lambda, estimate, group = term, col = term)) + 
+  geom_vline(xintercept = glmn_best_param$penalty, lty = 2) +
+  geom_line(show.legend = FALSE, alpha = 1 / 5) + 
+  geom_line(data = best_path, show.legend = FALSE, alpha = 1, linewidth = 1.1) + 
+  geom_label_repel(data = at_show, aes(label = label), show.legend = FALSE) +
+  scale_x_log10()
+p_glmnet_param
+```
 
 ### Bayesian Estimation {#sec-logistic-bayes} 
 
