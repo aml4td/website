@@ -215,42 +215,42 @@ $$ {#eq-logistic}
 This keeps the probability values within [0, 1] no matter how large or small the linear predictor becomes. This nonlinear function can be derived using differential equations for growth curves. Although the model has been rediscovered several times, it was first derived in the 1800s and was not commonly known as the "logistic" model until 1925. See @cramer2004early for a history. 
 
 ```{r}
-#| label: precipitation-fit
+#| label: longitude-fit
 #| include: false
 
-linear_percip_fit <- 
+linear_long_fit <- 
   logistic_reg() %>% 
-  fit(class ~ log10(precip_annual), data = forested_train)
+  fit(class ~ longitude, data = forested_train)
 
-linear_percip_coef <- 
-  linear_percip_fit %>% 
+linear_long_coef <- 
+  linear_long_fit %>% 
   extract_fit_engine() %>% 
   coef() 
 # glm models the probability of the second factor level
-linear_percip_coef <- -linear_percip_coef
-linear_percip_coef <- format(linear_percip_coef, digits = 3)
+linear_long_coef <- -linear_long_coef
+linear_long_coef <- format(linear_long_coef, digits = 3)
 ```
 
-For a single predictor, $x$, the logistic model results in a symmetric, sigmoidal function across values of $x$. To demonstrate, a simple logistic regression model was fit to the binary outcome data with a single predictor: the annual precipitation. That predictor has a fairly right-skewed distribution, so a log (base 10) transformation was used on the data prior to training the model. 
+For a single predictor, $x$, the logistic model results in a symmetric, sigmoidal function across values of $x$. To demonstrate, a simple logistic regression model was fit to the binary outcome data with a single predictor: the location's longitude. 
 
 There are various ways to find parameter estimates, which will be discussed in subsequent subsections. The most basic method is maximum likelihood estimation, where we use a numerical optimization method to minimize the loss function, which is the negative log-likelihood. The log-likelihood is more numerically stable to work with, and it is generally not challenging to find maximum likelihood estimates (MLEs) of our $\boldsymbol{\beta}$ parameters. Statistically, the MLEs are estimates that best explain the data. They are also unbiased estimates of the true parameters^[Recall from @sec-variance-bias that unbiased estimates might have high variance. For the forestation data, we'll see that some of our logistic regression parameter estimates have irrationally large variances. Later in this chapter, biased methods (via regularization) are also discussed.].
 
 We solved the log-likelihood equations (based on @eq-bernoulli) to estimate the parameters, producing the linear predictor function:  
 
 $$
-\boldsymbol{x}_i'\boldsymbol{\beta} = `r linear_percip_coef[1]` + `r linear_percip_coef[2]` \log_{10}(precipitation_i)
+\boldsymbol{x}_i'\boldsymbol{\beta} = `r linear_long_coef[1]` + `r linear_long_coef[2]` longitude_i
 $$
 
-@fig-precipitation shows this pattern using the annual precipitation predictor in the forestation data in green. The curve shows a smooth function that increases in $x$ and has an asymptote of 1.0. 
+@fig-longitude shows this pattern using the longitude predictor in the forestation data in green. The curve shows a smooth function that increases in $x$ and has an asymptote of 1.0. 
 
-Since the outcome data have only two qualitative values, it is difficult to visualize how well the curve fits the data. However, our training set for this example is fairly large, and we can show the observed event rate over the range of precipitation by binning the data into 50 groups. The breakpoints for the bins are quantiles of the log-10 training set predictor values. @fig-precipitation has an option to overlay these data with the model fit. 
+Since the outcome data have only two qualitative values, it is difficult to visualize how well the curve fits the data. However, our training set for this example is fairly large, and we can show the observed event rate over the range of longitude by binning the data into 50 groups. The breakpoints for the bins are quantiles of the training set predictor values. @fig-longitude has an option to overlay these data with the model fit. 
 
-::: {#fig-precipitation}
+::: {#fig-longitude}
 
 ::: {.figure-content}
 
 ```{shinylive-r}
-#| label: fig-precipitation
+#| label: fig-longitude
 #| out-width: "80%"
 #| viewerHeight: 600
 #| standalone: true
@@ -320,54 +320,51 @@ ui <- page_fillable(
 server <- function(input, output) {
   load(url("https://raw.githubusercontent.com/aml4td/website/main/RData/forested_data.RData"))
   
-  percip <- 
-    forested_train %>% 
-    mutate(precip_annual = log10(precip_annual))
   
-  percip_bin <- 
-    percip %>% 
-    dplyr::select(class, precip_annual) %>% 
-    mutate(percip_bin = ntile(precip_annual, 50)) %>% 
+  lng_bin <- 
+    forested_train %>% 
+    dplyr::select(class, longitude) %>% 
+    mutate(lng_bin = ntile(longitude, 50)) %>% 
     dplyr::summarize(
       rate = mean(class == "Yes"),
-      percip = median(precip_annual),
-      n = length(precip_annual),
-      .by = c(percip_bin)
+      lng = median(longitude),
+      n = length(longitude),
+      .by = c(lng_bin)
     ) %>% 
     mutate(logit = binomial()$linkfun(rate))
   
-  percip_rng <- extendrange(percip_bin$percip)
-  # percip_rng[1] <- 0.0
+  lng_rng <- extendrange(lng_bin$lng)
+  # lng_rng[1] <- 0.0
   
-  percip_grid <- tibble(precip_annual = seq(percip_rng[1], percip_rng[2], length.out = 100))
+  lng_grid <- tibble(longitude = seq(lng_rng[1], lng_rng[2], length.out = 100))
   
   linear_fit <- 
     logistic_reg() %>% 
-    fit(class ~ precip_annual, data = percip)
+    fit(class ~ longitude, data = forested_train)
   
   linear_pred <- 
-    augment(linear_fit, new_data = percip_grid) %>% 
+    augment(linear_fit, new_data = lng_grid) %>% 
     mutate(Model = "Linear Term", group = "fit_linear")
   
   num_spline <- 9
   spline_fit <- 
     logistic_reg() %>% 
-    fit(class ~ naturalSpline(precip_annual, df = num_spline), data = percip)
+    fit(class ~ naturalSpline(longitude, df = num_spline), data = forested_train)
   
   spline_lab <- paste0("Natural Splines (", num_spline, " df)")
   
   spline_pred <- 
-    augment(spline_fit, new_data = percip_grid) %>% 
+    augment(spline_fit, new_data = lng_grid) %>% 
     mutate(Model = spline_lab, group = "fit_spline")
   
   gam_fit <- 
     gen_additive_mod() %>% 
     set_mode("classification") %>% 
-    fit(class ~ s(precip_annual), data = percip)
+    fit(class ~ s(longitude), data = forested_train)
   gam_lab <- paste0("GAM (", round(sum(gam_fit$fit$edf[-1]), 1), " df)")
   
   gam_pred <- 
-    augment(gam_fit, new_data = percip_grid) %>% 
+    augment(gam_fit, new_data = lng_grid) %>% 
     mutate(Model = gam_lab, group = "fit_gam")
   
   predictions <- 
@@ -380,15 +377,15 @@ server <- function(input, output) {
       
       if (input$yaxis == "rate") {
         p <- 
-          percip_bin %>% 
-          ggplot(aes(percip)) + 
-          labs(x = "Log10 Annual Percipitation", y = "Probability of Forestation") + 
+          lng_bin %>% 
+          ggplot(aes(lng)) + 
+          labs(x = "Longitude", y = "Probability of Forestation") + 
           lims(y = 0:1)
       } else {
         p <- 
-          percip_bin %>% 
-          ggplot(aes(percip)) + 
-          labs(x = "Log10 Annual Percipitation", y = "Logit")
+          lng_bin %>% 
+          ggplot(aes(lng)) + 
+          labs(x = "Longitude", y = "Logit")
       }
       
       
@@ -406,12 +403,12 @@ server <- function(input, output) {
         if (input$yaxis == "rate") {
           p <- p +
             geom_line(data = curve_data, 
-                      aes(x = precip_annual, y = .pred_Yes, color = Model),
+                      aes(x = longitude, y = .pred_Yes, color = Model),
                       linewidth = 1)
         } else {
           p <- p +
             geom_line(data = curve_data, 
-                      aes(x = precip_annual, y = logit, color = Model),
+                      aes(x = longitude, y = logit, color = Model),
                       linewidth = 1) 
         }
         
@@ -426,15 +423,16 @@ server <- function(input, output) {
 }
 
 app <- shinyApp(ui = ui, server = server)
+app
 ```
 
 :::
 
-An example of a logistic regression model with a single predictor (annual precipitation, in log10 units)
+An example of a logistic regression model with a single predictor (longitude)
 
 :::
 
-Overlaying the estimated event rates shows that the model does a poor job of representing the relationship between the probability of forestation and precipitation. The data trend is not monotonically increasing; in the middle of the precipitation range, there is a small drop in the binned rates that recovers and begins to increase once more. Our simple linear predictor is not flexible enough to emulate this motif.
+Overlaying the estimated event rates shows that the model does a poor job of representing the relationship between the probability of forestation and longitude. The data trend is not monotonically increasing; in the middle of the longitude range, there is a small drop in the binned rates that recovers and begins to increase once more. Our simple linear predictor is not flexible enough to emulate this motif.
 
 ### Generalized Linear Models {.unnumbered}
 
@@ -446,7 +444,7 @@ $$ {#eq-logit}
 
 This nonlinear function is called the *link function*, and most models have multiple options. Technically, logistic regression uses the logit link, but there are many other functions to choose from. The probit and complementary log-log transformations can be used [@glm] as well as many others. See @morgan2018analysis for more specialized "link functions." From a broader view, we might refer to our model as "binary regression" or "binomial regression." 
 
-Looking back to @fig-precipitation, we can change the y-axis data and show how the logit changes for our fitted model. The line visualizes the estimated linear predictor for these data. Sadly, when the representation of our data is similarly changed, the pattern is not linear; our linear model isn't effectively emulating the nonlinear pattern in the data. 
+Looking back to @fig-longitude, we can change the y-axis data and show how the logit changes for our fitted model. The line visualizes the estimated linear predictor for these data. Sadly, when the representation of our data is similarly changed, the pattern is not linear; our linear model isn't effectively emulating the nonlinear pattern in the data. 
 
 There are significant benefits to framing logistic regression inside the class of generalized linear models. First, it gives us some nice theoretical guarantees about the likelihood function, allowing us to use simple gradient-based optimization methods to optimize the log-likelihood. Second, it provides an inferential framework for our parameters. This enables us to understand how important our predictors are by way of hypothesis tests and confidence intervals. 
 
@@ -454,7 +452,7 @@ It's easy to take these benefits for granted. Suppose we were to find parameter 
 
 Before proceeding further, let's talk about the linear predictor. The "linear" in "linear predictor" and "generalized linear model" means that the model is _linear in the parameters_ $\boldsymbol{\beta}$. This does not mean that the model can only produce linear class boundaries. Our model terms $x_{ij}$ can represent any function of one or more parameters. We can use the feature engineering tools shown in Chapters [-@sec-numeric-predictors] through [-@sec-interactions-nonlinear] to create a better model. 
 
-For example, in @fig-precipitation, we saw that using the log precipitation values as our single predictor $x$ didn't work well. When plotted on the logit scale, there is a clear nonlinear function in the binned rates. We know how to estimate a general nonlinear function of a parameter: spline functions. @fig-precipitation can also show the results when nine natural spline features are used in the model. Visually, we can see that this expansion is far more effective at predicting the outcome. We can also quantify this using several metrics mentioned in the previous chapter (e.g., Brier score, cross-entropy, etc).  
+For example, in @fig-longitude, we saw that using the longitude values as our single predictor $x$ didn't work well. When plotted on the logit scale, there is a clear nonlinear function in the binned rates. We know how to estimate a general nonlinear function of a parameter: spline functions. @fig-longitude can also show the results when nine natural spline features are used in the model. Visually, we can see that this expansion is far more effective at predicting the outcome. We can also quantify this using several metrics mentioned in the previous chapter (e.g., Brier score, cross-entropy, etc).  
 
 Logistic regression models can be drastically improved by including better representations of our predictors. Since it is an interpretable and stable model, we might be motivated to spend more time developing this model via exploratory data analysis and feature engineering. In many teaching materials and websites, we see analyses that quickly label the results of a logistic model as ineffective (due to the use of simple model terms) before moving on to more black-box machine-learning methods. The virtue of learning about your data and how the predictors related to the outcome can not only improve the logistic model but enable a more complete understanding and description of _why_ it works. 
 
@@ -891,7 +889,7 @@ Ridge regression is effective when the matrix of features is _ill-conditioned_, 
 
 The amount of regularization is a tuning parameter, and effective values are between zero and 0.1 (although they can be larger). When the penalty becomes excessively large, all of the coefficients are shrunk so close to zero that the model is effectively mean only, and all predictions will be approximately equal. We typically think about the penalty in 1og-10 units. 
 
-@fig-two-feature-penalty shows how the parameter estimates for the forestry model containing elevation and the mean annual precipitation are used. To standardize the parameters, the orderNorm transformation was used on each so that the precipitation data are no longer skewed and both predictors are in the same units. The dashed horizontal lines indicate the parameter estimates from using ordinary maximum likelihood estimation with no penalty. As the penalty increases, each estimate decreases towards zero. At a very large penalty, the elevation coefficient changes to become negative before approaching values that are nearly zero.
+@fig-two-feature-penalty shows how the parameter estimates for the forestry model containing elevation and the mean annual percipitation are used. To standardize the parameters, the orderNorm transformation was used on each so that the percipitation data are no longer skewed and both predictors are in the same units. The dashed horizontal lines indicate the parameter estimates from using ordinary maximum likelihood estimation with no penalty. As the penalty increases, each estimate decreases towards zero. At a very large penalty, the elevation coefficient changes to become negative before approaching values that are nearly zero.
 
 ::: {#fig-two-feature-penalty}
 
