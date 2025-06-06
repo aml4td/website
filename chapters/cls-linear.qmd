@@ -32,13 +32,15 @@ library(ggrepel)
 tidymodels_prefer()
 theme_set(theme_bw())
 set_options()
-plan(mirai_multisession)
+# plan(mirai_multisession)
+plan(multisession)
 
 # ------------------------------------------------------------------------------
 # load data 
 
 load("../RData/forested_data.RData")
 load("../RData/logistic_bayes.RData")
+load("../RData/forested_interactions.RData")
 ```
 
 ## Exploring Forestation Data  {#sec-forestation-eda}
@@ -78,7 +80,8 @@ percentiles <-
   group_nest(Predictor, num_vals) %>% 
   mutate(
     pctl = map2(data, num_vals, 
-                ~ tibble(group = ntile(.x$value, n = .y), class = .x$class))
+                ~ tibble(group = ntile(.x$value, n = .y), class = .x$class)),
+    mid = map_dbl(data, ~ median(.x$value)),
   ) %>% 
   select(-data) %>% 
   unnest(c(pctl)) %>% 
@@ -188,6 +191,26 @@ obs_rates |>
   scale_color_viridis_c(option = "mako", begin = .2, end = .8)
 ```
 
+Finally, it might be a good idea to assess potential interaction effects prior to modeling. Since almost all of our features are numeric, it can be difficult to assess interactions visually, so the H-statistics for two-way interactions were calculated using a boosted tree as the base model using the numeric features. Since there are only `r choose(15, 2)` possible interactions, the H-statistics were recomputed 25 times using different random number generators so that we can compute a mean statistic and a standard error. 
+ 
+```{r}
+#| label: fig-forested-interactions
+#| echo: false
+#| out-width: 90%
+#| fig-width: 8
+#| fig-height: 4.5
+#| fig-cap: Results for the top 25 H-statistic interactions. The error bars are 90% intervals based on replicate computations. 
+
+forested_hstats_text |> 
+  slice_max(mean_score, n = 25) |> 
+  ggplot(aes(y = term)) + 
+  geom_point(aes(x = mean_score)) + 
+  geom_errorbar(aes(xmin = .lower, xmax = .upper), alpha = 1/2, width = 1 / 2) + 
+  labs(x = "Mean H-Statistic", y = NULL)
+```
+
+The vast majority of the `r choose(15, 2)`  H-statistics are less than `r signif(quantile(forested_hstats_text$mean_score, probs = 0.95), 3)` and there are a handful of interactions that are greater than that value; we’ll take the five interactions and use them in a logistic regression shown below.
+
 The next section will describe a mainstay of machine learning models for two classes: logistic regression. We’ll examine many different facets of this model and a few methods for estimating parameters. After this, the focus is on how to extend the logistic model to more than two classes via multinomial models. We’ll also describe a similar approach called generalized additive models (GAMs) and take a little time to describe a model called linear discriminant analysis (LDA). LDA is briefly described; it is more important when extended to nonlinear models, and these methods are described in the next chapter. 
 
 ## Logistic Regression {#sec-logistic-reg}
@@ -238,12 +261,10 @@ There are various ways to find parameter estimates, which will be discussed in s
 We solved the log-likelihood equations (based on @eq-bernoulli) to estimate the parameters, producing the linear predictor function:  
 
 $$
-\boldsymbol{x}_i'\boldsymbol{\beta} = `r linear_long_coef[1]` + `r linear_long_coef[2]` longitude_i
+\boldsymbol{x}_i'\boldsymbol{\beta} = `r linear_long_coef[1]` + `r linear_long_coef[2]`\: longitude_i
 $$
 
-@fig-longitude shows this pattern using the longitude predictor in the forestation data in green. The curve shows a smooth function that increases in $x$ and has an asymptote of 1.0. 
-
-Since the outcome data have only two qualitative values, it is difficult to visualize how well the curve fits the data. However, our training set for this example is fairly large, and we can show the observed event rate over the range of longitude by binning the data into 50 groups. The breakpoints for the bins are quantiles of the training set predictor values. @fig-longitude has an option to overlay these data with the model fit. 
+@fig-longitude shows this pattern using the longitude predictor in the forestation data in green. The data points shown are the binned data from @fig-forest-percentiles; the model is actually fit on the individual locations in the training set. The model fit initially underestimates the rate of forestation for the most Eastern locations, and the predicted probability slowly decreases in a fairly flat sigmoid. Given the ups and downs of the observed event rates over longitude, this model fit misses almost all of the nuance in the data. 
 
 ::: {#fig-longitude}
 
@@ -320,11 +341,10 @@ ui <- page_fillable(
 server <- function(input, output) {
   load(url("https://raw.githubusercontent.com/aml4td/website/main/RData/forested_data.RData"))
   
-  
   lng_bin <- 
     forested_train %>% 
     dplyr::select(class, longitude) %>% 
-    mutate(lng_bin = ntile(longitude, 50)) %>% 
+    mutate(lng_bin = ntile(longitude, 21)) %>% 
     dplyr::summarize(
       rate = mean(class == "Yes"),
       lng = median(longitude),
@@ -346,7 +366,7 @@ server <- function(input, output) {
     augment(linear_fit, new_data = lng_grid) %>% 
     mutate(Model = "Linear Term", group = "fit_linear")
   
-  num_spline <- 9
+  num_spline <- 10
   spline_fit <- 
     logistic_reg() %>% 
     fit(class ~ naturalSpline(longitude, df = num_spline), data = forested_train)
@@ -428,13 +448,13 @@ app
 
 :::
 
-An example of a logistic regression model with a single predictor (longitude)
+An example of a logistic regression model with a single predictor (longitude). The binned data points are the same as those shown in @fig-forest-percentiles and are for visualization purposes only; the models are trained on the individual rows in the training set. 
 
 :::
 
-Overlaying the estimated event rates shows that the model does a poor job of representing the relationship between the probability of forestation and longitude. The data trend is not monotonically increasing; in the middle of the longitude range, there is a small drop in the binned rates that recovers and begins to increase once more. Our simple linear predictor is not flexible enough to emulate this motif.
+Overlaying the estimated event rates shows that the model does a poor job of representing the relationship between the probability of forestation and longitude. The data trend is not monotonically decreasing. Our simple linear predictor is doing its best but is not flexible enough to emulate this motif.
 
-### Generalized Linear Models {.unnumbered}
+#### Generalized Linear Models {.unnumbered}
 
 Logistic regression belongs to a broader class of _generalized linear models_, or GLMs [@glm]. These models can be used with different types of outcomes, such as numeric outcomes or count data. The idea is to have a model a function of the outcome data using the linear predictor. In our current case, the _logit_ function (the inverse of @eq-logistic) is applicable: 
 
@@ -444,7 +464,7 @@ $$ {#eq-logit}
 
 This nonlinear function is called the *link function*, and most models have multiple options. Technically, logistic regression uses the logit link, but there are many other functions to choose from. The probit and complementary log-log transformations can be used [@glm] as well as many others. See @morgan2018analysis for more specialized "link functions." From a broader view, we might refer to our model as "binary regression" or "binomial regression." 
 
-Looking back to @fig-longitude, we can change the y-axis data and show how the logit changes for our fitted model. The line visualizes the estimated linear predictor for these data. Sadly, when the representation of our data is similarly changed, the pattern is not linear; our linear model isn't effectively emulating the nonlinear pattern in the data. 
+Looking back to @fig-longitude, we can change the y-axis data and show how the logit changes for our fitted model. The line visualizes the estimated linear predictor for these data. Sadly, when the representation of our data is similarly changed, the data pattern is not linear; our linear model isn't effectively emulating the nonlinear pattern in the data. 
 
 There are significant benefits to framing logistic regression inside the class of generalized linear models. First, it gives us some nice theoretical guarantees about the likelihood function, allowing us to use simple gradient-based optimization methods to optimize the log-likelihood. Second, it provides an inferential framework for our parameters. This enables us to understand how important our predictors are by way of hypothesis tests and confidence intervals. 
 
@@ -452,7 +472,7 @@ It's easy to take these benefits for granted. Suppose we were to find parameter 
 
 Before proceeding further, let's talk about the linear predictor. The "linear" in "linear predictor" and "generalized linear model" means that the model is _linear in the parameters_ $\boldsymbol{\beta}$. This does not mean that the model can only produce linear class boundaries. Our model terms $x_{ij}$ can represent any function of one or more parameters. We can use the feature engineering tools shown in Chapters [-@sec-numeric-predictors] through [-@sec-interactions-nonlinear] to create a better model. 
 
-For example, in @fig-longitude, we saw that using the longitude values as our single predictor $x$ didn't work well. When plotted on the logit scale, there is a clear nonlinear function in the binned rates. We know how to estimate a general nonlinear function of a parameter: spline functions. @fig-longitude can also show the results when nine natural spline features are used in the model. Visually, we can see that this expansion is far more effective at predicting the outcome. We can also quantify this using several metrics mentioned in the previous chapter (e.g., Brier score, cross-entropy, etc).  
+For example, in @fig-longitude, we saw that using the longitude values as our single predictor $x$ didn't work well. When plotted on the logit scale, there is a clear nonlinear function in the binned rates. We know how to estimate a general nonlinear function of a parameter: spline functions. @fig-longitude can also show the results when ten natural spline features are used in the model. Visually, we can see that this expansion is far more effective at predicting the outcome. We can also quantify this using several metrics mentioned in the previous chapter (e.g., Brier score, cross-entropy, etc).  
 
 Logistic regression models can be drastically improved by including better representations of our predictors. Since it is an interpretable and stable model, we might be motivated to spend more time developing this model via exploratory data analysis and feature engineering. In many teaching materials and websites, we see analyses that quickly label the results of a logistic model as ineffective (due to the use of simple model terms) before moving on to more black-box machine-learning methods. The virtue of learning about your data and how the predictors related to the outcome can not only improve the logistic model but enable a more complete understanding and description of _why_ it works. 
 
@@ -478,14 +498,7 @@ forest_rec <-
 
 forest_int_rec <- 
   forest_rec %>% 
-  step_interact(
-    ~ dew_temp:elevation + longitude:vapor_min + 
-      longitude:vapor_max + dew_temp:temp_january_min + 
-      dew_temp:vapor_max + latitude:longitude + 
-      longitude:roughness + temp_annual_max:dew_temp + 
-      temp_annual_min:dew_temp + 
-      temp_annual_max:vapor_max
-  )
+  step_interact(!!forested_int_form)
 
 forest_spline_rec <- 
   forest_int_rec %>% 
@@ -540,9 +553,21 @@ brier_perm <-
     lower = permutation - qnorm(.95) * std_err,
     upper = permutation + qnorm(.95) * std_err
   )
+
+glm_best <- 
+    forest_res |> 
+    rank_results(rank_metric = "brier_class") %>% 
+    filter(.metric == "brier_class") %>% 
+    slice_min(mean, n = 1)
+
+set.seed(799)
+glm_best_int <- 
+  forest_res |> 
+  extract_workflow_set_result(glm_best$wflow_id) |> 
+  int_pctl(times = 2000, metrics = cls_mtr)
 ```
 
-### Forestation Model Development {.unnumbered}
+#### Forestation Model Development {.unnumbered}
 
 We can assess each of these feature engineering steps by fitting logistic regression pipelines that sequentially add steps: 
 
@@ -623,7 +648,7 @@ From here, we could investigate which terms had the greatest influence on the mo
 
 Instead, we’ll move on to a different way to estimate the logistic model’s unknown parameters using different objective functions that use the likelihood but in different ways. 
 
-### Interpretation {.unnumbered}
+#### Interpretation {.unnumbered}
 
 ```{r}
 #| label: odds-calc
@@ -719,8 +744,7 @@ For numeric predictors, such as eastness or elevation, exponentiating the coeffi
 
 In either case, the logistic regression model does have a structure that lends itself to natural probabilistic interpretation. See @hosmer2013applied for a broader discussion. 
 
-### Examining Our Model
-
+#### Examining Our Model  {.unnumbered}
 
 ```{r}
 #| label: best-glm-fit
@@ -759,7 +783,7 @@ best_mle_coef <-
 overall trends
 
 
-### A Lurking Problem: Multicollinearity
+#### A Lurking Problem: Multicollinearity  {.unnumbered}
 
 It can be problematic when multiple predictors have a high degree of correlation with one another, commonly called _multicollinearity_^[Meaning that multiple predictors are “co-linear” or have a strong linear relationship with one another] and is a fairly frequent occurrence in many data sets. For example, recall the visualization of the correlation matrix in @fig-corr-plot. The heatmap shows that there are a number of climate-related predictors that have high degrees of correlation with one another.
 
@@ -959,9 +983,15 @@ $$
 \mathcal{P}_{gn}(\boldsymbol{\beta};\lambda, \alpha) =  \lambda \left[(1 - \alpha) \sum_{j=1}^{p} \beta_j^2 + \alpha \sum_{j=1}^{p} |\beta_j|  \right]
 $$ {#eq-glmnet-penalty}
 
-where $\lambda$ is the total amount of regularization and $\alpha$  controls the mixture of the two methods so that $\alpha = 1$ is a Lasso model and $\alpha = 0$ is ridge regression. The glmnet penalty tends to be favored. 
+where $\lambda$ is the total amount of regularization and $\alpha$  controls the mixture of the two methods so that $\alpha = 1$ is a Lasso model and $\alpha = 0$ is ridge regression. The format glmnet penalty tends to be favored by users. 
 
-@fig-two-feature-penalty shows the results for twp features. 
+The combination strategy can help the model move between the goals of dealing with multicollinearity (and similar issues) and feature selection. By tuning the penalty and the mixing parameters, we can let the data decide which penalty it needs most (and how much). As we’ll see below, a typical pattern is a fairly flat plain where there isn’t much change in our preferred metric for a wide range of penalty values. Also, the relationship between the penalty and performance can be similar for different mixtures but shows a lagging over values of $\alpha$. As such, we can achieve virtually the same performance but with different numbers of non-zero coefficients. When choosing the best parameters for glmnet, we might want to factor in the number of “active features” along with performance. For example, we could use desirability functions to blend the two outcomes or create a more direct rule, such as “choose $\lambda$ and $\alpha$ with the fewest number of predictors as long as the area under the ROC curve is greater than 0.85.”
+
+@fig-two-feature-penalty shows the results for the two feature model. For a 50/50 mix of ridge and lasso penalties, both predictors are active until a penalty value increases to XXX when the evavation parameter is selected out of the model via a zero coefficient. Until that point, both parameter estimates were being pulled more and more towards zero at about the same rate. After elevation is removed, the rate of shrinkage for the annual mean temperature is smaller than before. Eventually, this parameter also reaches zero, and the model contains only the intercept. 
+
+If we change the mixture to only 10% lasso, *TODO, does it actually get set to zero*? The rate of shrinkage is lower than that of the 50% mixture; it takes much more penalty to move the coefficients to the vicinity of zero. 
+
+Conversely, the pattern shown with 90% mixture is more similar to the 50/50 case but occurs for larger penalty values. 
 
 There are other methods for combining the two penalties. @fan2001variable and @mcp defined the SCAD and MCP models, respectively. There configurations are:  
 
@@ -982,23 +1012,26 @@ $$
 	\end{cases} 
 $$ {#eq-mcp-penalty}
 
-The models include an additional tuning parameter, $\gamma$, that provides a “clipping” effect where, once the sum of the absolute values is “large” ($\gamma\lambda$) the penalty becomes constant.
+The models include an additional tuning parameter, $\gamma$, that provides a “clipping” effect where, once the sum of the absolute values is “large” ($\gamma\lambda$) the penalty becomes constant. The virtue of these methods are TODO, perhaps making them more attractive for cases where the ratio of features to training set samples is exceedingly large.
 
+Penalization of generalized linear models has been a very fertile area of research, and there are many more variations of these models.
 
-Finally, there are adaptive and/or two-stage methods that combine the unpenalized parameters.  
+- _Groups_ of predictors can be defined that have a common penalty so that they all stay in (or leave) the model _en masse_ [@simon2013sparse;@bien2013lasso]. This might be helpful to have specific penalization for natural groupings, such as spline terms generated by a specific parameter, or a set of dummy indicators for a high cardinality predictor, etc. 
 
-@zou2006adaptive @meinshausen2007relaxed  @chatterjee2025univariate
+- We can regularize models with a large set of interactions so that they can only be removed if their main effects are also removed from the model (enforcing the hierarchy principle for interactions) [@lim2015learning;@bien2013lasso]. 
 
-group lasso; interactions
+- Two-stage methods and adaptive methods use an initial fit to inform the estimation and penalization [@zou2006adaptive;@meinshausen2007relaxed]. For example, the UniLasos method of @chatterjee2025univariate uses the slope coefficient from a collection of unpenalized models with a single predictor to improve lasso penalization.  
 
-bootstrapping
+Most of these penalization methods have the disadvantage that they disable traditional statistical inference^[The main exception is the pure ridge regression model, where we can compute a covariance matrix once we have finalized the penalty value.]. It is difficult to measure uncertainty for models using feature selection via a lasso penalty. Even bootstrapping the model is difficult; the bootstrap distribution for many parameters is bimodal since it is a mixture of parameter estimates when the coefficient is retained and a large spike at zero when it was not. @EfronHastie2016a
+
+#### Refitting the Forestation Model  {.unnumbered}
 
 ```{r}
 #| label: glmn-calc
 #| include: false
 #| cache: true
 
-glmn_pen <- 10^seq(-7, -1, length.out = 50)
+glmn_pen <- 10^seq(-6, -1, length.out = 50)
 glmn_grid <- crossing(penalty = glmn_pen, mixture = c(0:4) / 4)
 
 glmn_spec <- 
@@ -1019,7 +1052,29 @@ glmn_res <-
   )
 
 glmn_best_param <- select_best(glmn_res, metric = "brier_class")
-glmn_best_fit <- fit_best(glmn_res, metric = "brier_class")
+glmn_best_metric <- show_best(glmn_res, metric = "brier_class", n = 1)
+```
+
+```{r}
+#| label: aly-glmn-penalty
+#| include: false
+
+pen_target <- -3
+glmn_sel_param <- 
+  glmn_res |> 
+  collect_metrics() |> 
+  mutate(diff = abs(log10(penalty) - pen_target)) |> 
+  slice_min(diff, n = 1) |> 
+  filter(mixture == glmn_best_param$mixture) |> 
+  slice_head(n = 1) |> 
+  select(penalty, mixture, .config)
+
+glmn_best_fit <- fit_best(glmn_res,  parameters = glmn_sel_param)
+
+set.seed(799)
+glmn_sel_int <- 
+  glmn_res |> 
+  int_pctl(times = 2000, metrics = cls_mtr, allow_par = FALSE, parameters = glmn_sel_param) 
 
 lr_coefs <- 
   inner_join(
@@ -1036,6 +1091,8 @@ lr_coefs <-
     ),
     Type = factor(Type, levels = c("Spline", "Interaction", "Main Effect"))
   )
+
+num_rm <- sum(lr_coefs$glmnet == 0)
 
 p_glmnet_tune <- 
   autoplot(glmn_res, metric = "brier_class") + 
@@ -1059,7 +1116,7 @@ glmn_best_coef$term <- gsub("_x_", " X ", glmn_best_coef$term)
 glmn_best_coef$term <- gsub("_", " ", glmn_best_coef$term)
 
 top_best <- 5
-show_pen <- glmn_pen[which.min(abs(glmn_pen - 10^(-6)))]
+show_pen <- glmn_pen[which.min(abs(glmn_pen - 10^(-4)))]
 at_best <- 
   glmn_best_coef |> 
   filter(lambda == glmn_best_param$penalty) |> 
@@ -1074,38 +1131,49 @@ at_show <-
   mutate(label = term)
 ```
 
+Let’s take our previous logistic regression model and create a penalized fit via the glmnet. We’ll tune over the amount of penalization and the mixture of lasso. For the former we evaluated `r length(glmn_pen)` values from 10<sup>`r log10(min(glmn_pen))`</sup> to 10<sup>`r log10(max(glmn_pen))`</sup>. For mixing, we looked as pure ridge and lasso mixes along with 25%, 50%, and 75% lasso. 
+
+@fig-logistic-glmnet (top) shows the results. The Brier score was used to measure model effectiveness. The curves show that, when the penalty is too large, important features are eliminated and the model begins to underfit. At the other end of the range, there is very little difference in the Brier scores across the mixture values. The numerically best value corresponds to  `r glmn_best_param$mixture * 100`% lasso and a penalty value of 10<sup>`r signif(log10(glmn_best_param$penalty), 2)`</sup>; however, there are many different combinations with near equal Brier scores. 
+
+The bottom of @fig-logistic-glmnet shows that, despite the Brier scores being relatively constant, the parameter estimates fluctuate significantly. The labeled predictors are those with the largest absolute coefficient values at the best penalty/mixture combination. These values are spline basis expansion terms for several different predictors. 
 
 ```{r}
-#| label: fig-logistic-glmnet-tune
-#| fig-width: 5.5
-#| fig-height: 4.25
+#| label: fig-logistic-glmnet
+#| fig-width: 7
+#| fig-height: 8
 #| fig-align: center
-#| out-width: 60%
-#| fig-cap: Results of tuning the complex logistic model using the glmnet penalty.
+#| out-width: 70%
+#| fig-cap: "Top: Results of tuning the complex logistic model using the glmnet penalty. The dotted vertical line designates the numerically optimal result while the dashed line is the selected penalty value. Bottom: Parameter estimates over penalty values for the best model. The features with the largest values at the selected penalty are highlighted."
 #| warning: false
 
-p_glmnet_tune
-```
-
-```{r}
-#| label: fig-logistic-glmnet-path
-#| fig-width: 5
-#| fig-height: 5
-#| fig-align: center
-#| out-width: 50%
-#| fig-cap: Results of tuning the complex logistic model using the glmnet penalty.
-#| warning: false
-
+set.seed(836)
 p_glmnet_param <- 
   glmn_best_coef |> 
-  ggplot(aes(lambda, estimate, group = term, col = term)) + 
-  geom_vline(xintercept = glmn_best_param$penalty, lty = 2) +
-  geom_line(show.legend = FALSE, alpha = 1 / 5) + 
-  geom_line(data = best_path, show.legend = FALSE, alpha = 1, linewidth = 1.1) + 
-  geom_label_repel(data = at_show, aes(label = label), show.legend = FALSE) +
-  scale_x_log10()
-p_glmnet_param
+  ggplot(aes(lambda, estimate, group = term)) + 
+  geom_vline(xintercept = glmn_sel_param$penalty, lty = 2) +
+  geom_vline(xintercept = glmn_best_param$penalty, lty = 3) +
+  geom_line(show.legend = FALSE, alpha = 1 / 3, col = "grey") + 
+  geom_line(data = best_path, aes(col = term), show.legend = TRUE, alpha = 1, linewidth = 1.1) + 
+  # geom_label_repel(data = at_show, aes(col = term, label = label), show.legend = FALSE, alpha = 0.9) +
+  scale_x_log10() +
+  labs(x = penalty()$label, y = "Estimate") + 
+  scale_color_brewer(palette = "Dark2") + 
+  theme(legend.position = "bottom") + 
+  guides(colour = guide_legend(ncol = 3, title = ""))
+
+mix_colors <- scales::brewer_pal(palette = "Blues")(9)[-(1:2)]
+
+(
+  p_glmnet_tune  + 
+    geom_vline(xintercept = glmn_sel_param$penalty, lty = 2)  + 
+    geom_vline(xintercept = glmn_best_param$penalty, lty = 3) + 
+    scale_color_manual(values = mix_colors)
+  ) / 
+  p_glmnet_param + 
+  plot_layout(heights = c(2, 3))
 ```
+
+However, when we use the numerically optimal settings, a strong case can be made that there is appreciable multicollinearity occurring; the magnitudes of the parameters are still large. For this analysis, we decided to reduce the penalty value back to a value of about 10<sup>`r pen_target`</sup> (designated as the vertical dashed line). The parameters are more attenuated at this value, and there is no real increase in the Brier score, which is estimated to be `r signif(glmn_sel_int$.estimate[glmn_sel_int$.metric == "brier_class"], 3)` with 90% confidence interval (`r signif(glmn_sel_int$.lower[glmn_sel_int$.metric == "brier_class"], 3)`, `r signif(glmn_sel_int$.upper[glmn_sel_int$.metric == "brier_class"], 3)`). With these tuning parameter values, `r cli::format_inline("{num_rm} parameter{?s} {?was/were}")` were set to zero. 
 
 ### Bayesian Estimation {#sec-logistic-bayes} 
 
