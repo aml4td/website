@@ -1,6 +1,7 @@
 ui <- fluidPage(
   theme = grid_theme,
   fluidRow(
+
     column(
       width = 4,
       sliderInput(
@@ -44,11 +45,8 @@ ui <- fluidPage(
         radioButtons(
           inputId = "initial",
           label = "Initialization",
-          choices = list(
-            "Laplacian Eigenmap" = "spectral",
-            "PCA" = "pca",
-            "Random" = "random"
-          )
+          choices = list("Laplacian Eigenmap" = "spectral", "PCA" = "pca", 
+                         "Random" = "random")
         )
       ),
       column(
@@ -61,12 +59,11 @@ ui <- fluidPage(
 )
 
 server <- function(input, output) {
-  load(url(
-    "https://raw.githubusercontent.com/aml4td/website/main/RData/umap_results.RData"
-  ))
+  load(url("https://raw.githubusercontent.com/aml4td/website/main/RData/umap_results.RData"))
 
   output$umap <-
     renderPlot({
+      
       dat <-
         umap_results[
           umap_results$neighbors == input$neighbors &
@@ -86,6 +83,7 @@ server <- function(input, output) {
         guides(col = guide_colourbar(barheight = 0.5))
 
       print(p)
+
     })
 }
 
