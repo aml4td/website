@@ -48,27 +48,25 @@ load("../RData/forested_data.RData")
 ```{r}
 #| label: model-options
 #| include: false
-
 ctrl_rs <-
-  control_resamples(
-    save_pred = TRUE,
-    parallel_over = "everything",
-    save_workflow = TRUE
-  )
+    control_resamples(
+        save_pred = TRUE,
+        parallel_over = "everything",
+        save_workflow = TRUE
+    )
 
 get_iters <- function(x) {
-  fit <- extract_fit_engine(x)
-  tibble::tibble(iteration = seq(along = fit$loss), 
-                 loss = fit$loss)
+    fit <- extract_fit_engine(x)
+    tibble::tibble(iteration = seq(along = fit$loss), loss = fit$loss)
 }
 
 ctrl_grid <-
-  control_grid(
-    save_pred = TRUE,
-    parallel_over = "everything",
-    save_workflow = TRUE,
-    extract = get_iters
-  )
+    control_grid(
+        save_pred = TRUE,
+        parallel_over = "everything",
+        save_workflow = TRUE,
+        extract = get_iters
+    )
 
 class_metrics <- metric_set(accuracy)
 ```
@@ -78,35 +76,35 @@ class_metrics <- metric_set(accuracy)
 #| include: false
 #| cache: true
 
-c50_spec <- 
-  C5_rules(trees = tune(),
-           min_n = tune()) %>%
-  set_engine("C5.0") %>%
-  set_mode("classification")
+c50_spec <-
+    C5_rules(trees = tune(), min_n = tune()) %>%
+    set_engine("C5.0") %>%
+    set_mode("classification")
 
-c50_wflow <- 
-  workflow() %>% 
-  add_model(c50_spec) %>% 
-  add_formula(class ~ .)
+c50_wflow <-
+    workflow() %>%
+    add_model(c50_spec) %>%
+    add_formula(class ~ .)
 
-c50_grid <-
-  expand.grid(trees=c(60,70,80,90), min_n=c(8,10,12,20))
+c50_grid <- expand.grid(trees = c(60, 70, 80, 90), min_n = c(8, 10, 12, 20))
 
 set.seed(526)
 c50_res <-
-  tune_grid(c50_wflow,
-            resamples = forested_rs,
-            control = ctrl_grid,
-            grid = c50_grid,
-            metrics = class_metrics)
+    tune_grid(
+        c50_wflow,
+        resamples = forested_rs,
+        control = ctrl_grid,
+        grid = c50_grid,
+        metrics = class_metrics
+    )
 
 c50_best <-
-  select_best(c50_res, metric="accuracy")
+    select_best(c50_res, metric = "accuracy")
 
 c50_metrics <-
-  c50_res %>%
-  filter_parameters(parameters = c50_best) %>%
-  collect_metrics(summarize=FALSE)
+    c50_res %>%
+    filter_parameters(parameters = c50_best) %>%
+    collect_metrics(summarize = FALSE)
 
 c50_final_wflow <- finalize_workflow(c50_wflow, c50_best)
 ```
@@ -116,42 +114,45 @@ c50_final_wflow <- finalize_workflow(c50_wflow, c50_best)
 #| include: false
 #| cache: true
 
-norm_rec <- 
-  recipe(class ~ ., data = forested_train) %>% 
-  step_dummy(all_nominal_predictors()) %>%
-  step_zv(all_predictors()) %>% 
-  step_normalize(all_predictors())
+norm_rec <-
+    recipe(class ~ ., data = forested_train) %>%
+    step_dummy(all_nominal_predictors()) %>%
+    step_zv(all_predictors()) %>%
+    step_normalize(all_predictors())
 
 glmnet_spec <-
-  logistic_reg(penalty = tune(),
-               mixture = tune()) %>%
-  set_engine("glmnet") %>%
-  set_mode("classification")
+    logistic_reg(penalty = tune(), mixture = tune()) %>%
+    set_engine("glmnet") %>%
+    set_mode("classification")
 
-glmnet_wflow <- 
-  workflow() %>% 
-  add_model(glmnet_spec) %>% 
-  add_recipe(norm_rec)
+glmnet_wflow <-
+    workflow() %>%
+    add_model(glmnet_spec) %>%
+    add_recipe(norm_rec)
 
 glmnet_grid <-
-  expand.grid(penalty=c(10^-4, 10^-3, 10^-2, 10^-1, 10^0), 
-              mixture=c(0.001, 0.01, 0.03))
+    expand.grid(
+        penalty = c(10^-4, 10^-3, 10^-2, 10^-1, 10^0),
+        mixture = c(0.001, 0.01, 0.03)
+    )
 
 set.seed(526)
 glmnet_res <-
-  tune_grid(glmnet_wflow,
-            resamples = forested_rs,
-            control = ctrl_grid,
-            grid = glmnet_grid,
-            metrics = class_metrics)
+    tune_grid(
+        glmnet_wflow,
+        resamples = forested_rs,
+        control = ctrl_grid,
+        grid = glmnet_grid,
+        metrics = class_metrics
+    )
 
 glmnet_best <-
-  select_best(glmnet_res, metric="accuracy")
+    select_best(glmnet_res, metric = "accuracy")
 
 glmnet_metrics <-
-  glmnet_res %>%
-  filter_parameters(parameters = glmnet_best) %>%
-  collect_metrics(summarize=FALSE)
+    glmnet_res %>%
+    filter_parameters(parameters = glmnet_best) %>%
+    collect_metrics(summarize = FALSE)
 
 glmnet_final_wflow <- finalize_workflow(glmnet_wflow, glmnet_best)
 ```
@@ -161,30 +162,32 @@ glmnet_final_wflow <- finalize_workflow(glmnet_wflow, glmnet_best)
 #| include: false
 #| cache: true
 
-norm_rec_ns <- 
-  norm_rec %>%
-  step_ns(all_predictors())
+norm_rec_ns <-
+    norm_rec %>%
+    step_ns(all_predictors())
 
-glmnet_wflow_ns <- 
-  workflow() %>% 
-  add_model(glmnet_spec) %>% 
-  add_recipe(norm_rec_ns)
+glmnet_wflow_ns <-
+    workflow() %>%
+    add_model(glmnet_spec) %>%
+    add_recipe(norm_rec_ns)
 
 set.seed(526)
 glmnet_res_ns <-
-  tune_grid(glmnet_wflow_ns,
-            resamples = forested_rs,
-            control = ctrl_grid,
-            grid = glmnet_grid,
-            metrics = class_metrics)
+    tune_grid(
+        glmnet_wflow_ns,
+        resamples = forested_rs,
+        control = ctrl_grid,
+        grid = glmnet_grid,
+        metrics = class_metrics
+    )
 
 glmnet_best_ns <-
-  select_best(glmnet_res_ns, metric="accuracy")
+    select_best(glmnet_res_ns, metric = "accuracy")
 
 glmnet_metrics_ns <-
-  glmnet_res_ns %>%
-  filter_parameters(parameters = glmnet_best_ns) %>%
-  collect_metrics(summarize=FALSE)
+    glmnet_res_ns %>%
+    filter_parameters(parameters = glmnet_best_ns) %>%
+    collect_metrics(summarize = FALSE)
 
 glmnet_final_wflow_ns <- finalize_workflow(glmnet_wflow_ns, glmnet_best_ns)
 ```
@@ -233,117 +236,167 @@ In this equation $y_{ij}$ represents the model performance from the $i^{th}$ hol
 #| fig-align: "center"
 #| out-width: "70%"
 #| fig-cap: An illustration of how variation is partitioned based on the effect of the model (blue) and unexplainable causes (orange) when distinct cross-validation partitions are used to train each model. 
-
 for_fig <-
-  bind_rows(c50_metrics %>% 
-              dplyr::filter(.metric == "accuracy") %>% 
-              dplyr::select(id, .estimate) %>% 
-              mutate(Model = "C5.0"),
-            glmnet_metrics %>% 
-              dplyr::filter(.metric == "accuracy") %>% 
-              dplyr::select(id, .estimate) %>% 
-              mutate(Model = "glmnet"),
-            glmnet_metrics_ns %>%
-              dplyr::filter(.metric == "accuracy") %>% 
-              dplyr::select(id, .estimate) %>% 
-              mutate(Model = "glmnet+NS")) %>%
-  rename(accuracy = .estimate,
-         Fold = id) %>%
-  mutate(Model = factor(Model, levels=c("C5.0", "glmnet+NS", "glmnet")),
-         Fold = factor(Fold))
+    bind_rows(
+        c50_metrics %>%
+            dplyr::filter(.metric == "accuracy") %>%
+            dplyr::select(id, .estimate) %>%
+            mutate(Model = "C5.0"),
+        glmnet_metrics %>%
+            dplyr::filter(.metric == "accuracy") %>%
+            dplyr::select(id, .estimate) %>%
+            mutate(Model = "glmnet"),
+        glmnet_metrics_ns %>%
+            dplyr::filter(.metric == "accuracy") %>%
+            dplyr::select(id, .estimate) %>%
+            mutate(Model = "glmnet+NS")
+    ) %>%
+    rename(accuracy = .estimate, Fold = id) %>%
+    mutate(
+        Model = factor(Model, levels = c("C5.0", "glmnet+NS", "glmnet")),
+        Fold = factor(Fold)
+    )
 
 intercept_value <-
-  for_fig %>%
-  group_by(Model) %>%
-  summarize(accuracy = mean(accuracy)) %>%
-  ungroup() %>%
-  dplyr::filter(Model == "glmnet+NS") %>%
-  dplyr::select(accuracy) %>%
-  pull()
- 
+    for_fig %>%
+    group_by(Model) %>%
+    summarize(accuracy = mean(accuracy)) %>%
+    ungroup() %>%
+    dplyr::filter(Model == "glmnet+NS") %>%
+    dplyr::select(accuracy) %>%
+    pull()
+
 model_means <-
-  for_fig %>%
-  group_by(Model) %>%
-  summarize(accuracy = mean(accuracy)) %>%
-  ungroup() %>%
-  mutate(Fold = "Fold03") %>%
-  dplyr::filter(Model == "C5.0")
+    for_fig %>%
+    group_by(Model) %>%
+    summarize(accuracy = mean(accuracy)) %>%
+    ungroup() %>%
+    mutate(Fold = "Fold03") %>%
+    dplyr::filter(Model == "C5.0")
 
 fold_means <-
-  for_fig %>%
-  group_by(Fold) %>%
-  summarize(accuracy = mean(accuracy)) %>%
-  ungroup()
+    for_fig %>%
+    group_by(Fold) %>%
+    summarize(accuracy = mean(accuracy)) %>%
+    ungroup()
 
 max_fold_mean_segment <-
-  tibble(Model = 0.9,
-         y_begin = model_means %>% 
-           dplyr::filter(Model == "C5.0") %>% 
-           dplyr::select(accuracy) %>% pull(),
-         y_end = fold_means %>% 
-           dplyr::filter(accuracy == max(accuracy)) %>% 
-           pull(),
-         accuracy = intercept_value,
-         Fold = "Fold03")
+    tibble(
+        Model = 0.9,
+        y_begin = model_means %>%
+            dplyr::filter(Model == "C5.0") %>%
+            dplyr::select(accuracy) %>%
+            pull(),
+        y_end = fold_means %>%
+            dplyr::filter(accuracy == max(accuracy)) %>%
+            pull(),
+        accuracy = intercept_value,
+        Fold = "Fold03"
+    )
 
 example_point <-
-  for_fig %>%
-  dplyr::filter(Model == "C5.0") %>%
-  dplyr::filter(accuracy == max(accuracy))
+    for_fig %>%
+    dplyr::filter(Model == "C5.0") %>%
+    dplyr::filter(accuracy == max(accuracy))
 
 intercept_segment <-
-  tibble(Model = 0.9,
-         y_begin = intercept_value,
-         y_end = model_means %>% 
-           dplyr::filter(Model == "C5.0") %>% 
-           dplyr::select(accuracy) %>% pull(),
-         accuracy = intercept_value) %>%
-  mutate(Fold = "Fold03")
+    tibble(
+        Model = 0.9,
+        y_begin = intercept_value,
+        y_end = model_means %>%
+            dplyr::filter(Model == "C5.0") %>%
+            dplyr::select(accuracy) %>%
+            pull(),
+        accuracy = intercept_value
+    ) %>%
+    mutate(Fold = "Fold03")
 
 error_segment <-
-  tibble(Model = 0.9,
-         y_begin = model_means %>% 
-           dplyr::filter(Model == "C5.0") %>% 
-           dplyr::select(accuracy) %>% pull(),
-         y_end = example_point$accuracy,
-         accuracy = intercept_value)
+    tibble(
+        Model = 0.9,
+        y_begin = model_means %>%
+            dplyr::filter(Model == "C5.0") %>%
+            dplyr::select(accuracy) %>%
+            pull(),
+        y_end = example_point$accuracy,
+        accuracy = intercept_value
+    )
 
 error_segment2 <-
-  tibble(Model = 0.9,
-         y_begin = max_fold_mean_segment$y_end,
-         y_end = example_point$accuracy,
-         accuracy = intercept_value,
-         Fold = "Fold10")
+    tibble(
+        Model = 0.9,
+        y_begin = max_fold_mean_segment$y_end,
+        y_end = example_point$accuracy,
+        accuracy = intercept_value,
+        Fold = "Fold10"
+    )
 
 intercept_text <-
-  tibble(Model = 0.7,
-         y = mean(c(intercept_segment$y_begin, intercept_segment$y_end)),
-         Fold = "Fold03")
+    tibble(
+        Model = 0.7,
+        y = mean(c(intercept_segment$y_begin, intercept_segment$y_end)),
+        Fold = "Fold03"
+    )
 
 error_text <-
-  tibble(Model = 0.7,
-         y = mean(c(error_segment$y_begin, error_segment$y_end)))
+    tibble(Model = 0.7, y = mean(c(error_segment$y_begin, error_segment$y_end)))
 
 fold_text <-
-  tibble(Model = 0.7,
-         y = mean(c(max_fold_mean_segment$y_begin, max_fold_mean_segment$y_end)),
-         Fold = "Fold03")
+    tibble(
+        Model = 0.7,
+        y = mean(c(max_fold_mean_segment$y_begin, max_fold_mean_segment$y_end)),
+        Fold = "Fold03"
+    )
 
 error_text2 <-
-  tibble(Model = 0.7,
-         y = mean(c(error_segment2$y_begin, error_segment2$y_end)),
-         Fold = "Fold03")
+    tibble(
+        Model = 0.7,
+        y = mean(c(error_segment2$y_begin, error_segment2$y_end)),
+        Fold = "Fold03"
+    )
 
-ggplot(for_fig, aes(x=Model, y=accuracy)) +
-  geom_point(color="black", shape=1) +
-  geom_point(data=example_point, aes(x=Model, y=accuracy), color="darkorange", shape=1, size=5) +
-  geom_hline(yintercept=intercept_value, linetype=2, color="black") +
-  geom_point(data=model_means, aes(x=Model, y=accuracy), shape=95, size=10, color="royalblue") +
-  geom_errorbar(data=intercept_segment, aes(ymin=y_begin, ymax=y_end), color="royalblue", width=0.05) +
-  geom_errorbar(data=error_segment, aes(ymin=y_begin, ymax=y_end), color="darkorange", width=0.05) +
-  geom_text(data=intercept_text, aes(x=Model, y=y), label="Model", color="royalblue") +
-  geom_text(data=error_text, aes(x=Model, y=y), label="Error", color="darkorange") + 
-  ylab("Accuracy")
+ggplot(for_fig, aes(x = Model, y = accuracy)) +
+    geom_point(color = "black", shape = 1) +
+    geom_point(
+        data = example_point,
+        aes(x = Model, y = accuracy),
+        color = "darkorange",
+        shape = 1,
+        size = 5
+    ) +
+    geom_hline(yintercept = intercept_value, linetype = 2, color = "black") +
+    geom_point(
+        data = model_means,
+        aes(x = Model, y = accuracy),
+        shape = 95,
+        size = 10,
+        color = "royalblue"
+    ) +
+    geom_errorbar(
+        data = intercept_segment,
+        aes(ymin = y_begin, ymax = y_end),
+        color = "royalblue",
+        width = 0.05
+    ) +
+    geom_errorbar(
+        data = error_segment,
+        aes(ymin = y_begin, ymax = y_end),
+        color = "darkorange",
+        width = 0.05
+    ) +
+    geom_text(
+        data = intercept_text,
+        aes(x = Model, y = y),
+        label = "Model",
+        color = "royalblue"
+    ) +
+    geom_text(
+        data = error_text,
+        aes(x = Model, y = y),
+        label = "Error",
+        color = "darkorange"
+    ) +
+    ylab("Accuracy")
 ```
 
 ```{r}
@@ -413,31 +466,83 @@ Notice that @eq-one-way-model-with-blocks is nearly the same as @eq-one-way-mode
 #| fig-align: "center"
 #| out-width: "70%"
 #| fig-cap: An illustration of how variation is partitioned based on the effect of the model (blue), folds (purple), and unexplainable causes (orange) when the same cross-validation partitions are used to train each model.  The lines connecting the points indicate the results for the same cross-validation fold.
- 
-Fold03 <-
-  for_fig %>%
-  dplyr::filter(Fold == "Fold03")
+ Fold03 <-
+    for_fig %>%
+    dplyr::filter(Fold == "Fold03")
 
 max_fold_mean <-
-  fold_means %>%
-  dplyr::filter(accuracy == max(accuracy)) %>%
-  mutate(Model = "C5.0")
+    fold_means %>%
+    dplyr::filter(accuracy == max(accuracy)) %>%
+    mutate(Model = "C5.0")
 
-ggplot(for_fig, aes(x=Model, y=accuracy, group=Fold)) +
-  geom_point(color="black", shape=1) +
-  geom_point(data=example_point, aes(x=Model, y=accuracy), color="darkorange", shape=1, size=5) +
-  geom_line(alpha=0.1) +
-  geom_line(data=Fold03, aes(x=Model, y=accuracy, group=Fold), color="purple") +
-  geom_hline(yintercept=intercept_value, linetype=2, color="black") +
-  geom_point(data=model_means, aes(x=Model, y=accuracy), shape=95, size=10, color="royalblue") +
-  geom_errorbar(data=intercept_segment, aes(ymin=y_begin, ymax=y_end), color="royalblue", width=0.05) +
-  geom_point(data=max_fold_mean, aes(x=Model, y=accuracy), shape=95, size=10, color="purple") +
-  geom_errorbar(data=max_fold_mean_segment, aes(ymin=y_begin, ymax=y_end), color="purple", width=0.05) +
-  geom_errorbar(data=error_segment2, aes(ymin=y_begin, ymax=y_end), color="darkorange", width=0.05) +
-  geom_text(data=intercept_text, aes(x=Model, y=y), label="Model", color="royalblue") +
-  geom_text(data=fold_text, aes(x=Model, y=y), label="Fold", color="purple") +
-  geom_text(data=error_text2, aes(x=Model, y=y), label="Error", color="darkorange") +
-  ylab("Accuracy")
+ggplot(for_fig, aes(x = Model, y = accuracy, group = Fold)) +
+    geom_point(color = "black", shape = 1) +
+    geom_point(
+        data = example_point,
+        aes(x = Model, y = accuracy),
+        color = "darkorange",
+        shape = 1,
+        size = 5
+    ) +
+    geom_line(alpha = 0.1) +
+    geom_line(
+        data = Fold03,
+        aes(x = Model, y = accuracy, group = Fold),
+        color = "purple"
+    ) +
+    geom_hline(yintercept = intercept_value, linetype = 2, color = "black") +
+    geom_point(
+        data = model_means,
+        aes(x = Model, y = accuracy),
+        shape = 95,
+        size = 10,
+        color = "royalblue"
+    ) +
+    geom_errorbar(
+        data = intercept_segment,
+        aes(ymin = y_begin, ymax = y_end),
+        color = "royalblue",
+        width = 0.05
+    ) +
+    geom_point(
+        data = max_fold_mean,
+        aes(x = Model, y = accuracy),
+        shape = 95,
+        size = 10,
+        color = "purple"
+    ) +
+    geom_errorbar(
+        data = max_fold_mean_segment,
+        aes(ymin = y_begin, ymax = y_end),
+        color = "purple",
+        width = 0.05
+    ) +
+    geom_errorbar(
+        data = error_segment2,
+        aes(ymin = y_begin, ymax = y_end),
+        color = "darkorange",
+        width = 0.05
+    ) +
+    geom_text(
+        data = intercept_text,
+        aes(x = Model, y = y),
+        label = "Model",
+        color = "royalblue"
+    ) +
+    geom_text(
+        data = fold_text,
+        aes(x = Model, y = y),
+        label = "Fold",
+        color = "purple"
+    ) +
+    geom_text(
+        data = error_text2,
+        aes(x = Model, y = y),
+        label = "Error",
+        color = "darkorange"
+    ) +
+    ylab("Accuracy")
+
 ```
 
 We have now established there is strong evidence of differences in average predictive performance among models.  But this result does not tell us which models are different.  To understand which models are different, we need to perform additional tests to compare each pair of models.  These tests are referred to as _post-hoc_ tests because they are performed after the initial hypothesis test among all means.
@@ -486,35 +591,57 @@ Now, let's compare how these methods perform when evaluating each pair of models
 emmeans_results <- emmeans(one_way_model_random_intercept, ~Model)
 pairwise_comparisons <- pairs(emmeans_results, adjust = "tukey")
 
-one_way_model_random_intercept_em <- emmeans(one_way_model_random_intercept, "Model", data=for_fig)
-unadjusted_pairs <- data.frame(pairs(one_way_model_random_intercept_em, adjust="none"))
-tukey_pairs <- data.frame(pairs(one_way_model_random_intercept_em, adjust="tukey"))
-fdr_pairs <- data.frame(pairs(one_way_model_random_intercept_em, adjust="fdr"))
+one_way_model_random_intercept_em <- emmeans(
+    one_way_model_random_intercept,
+    "Model",
+    data = for_fig
+)
+unadjusted_pairs <- data.frame(
+    pairs(
+        one_way_model_random_intercept_em,
+        adjust = "none"
+    )
+)
+tukey_pairs <- data.frame(
+    pairs(
+        one_way_model_random_intercept_em,
+        adjust = "tukey"
+    )
+)
+fdr_pairs <- data.frame(
+    pairs(
+        one_way_model_random_intercept_em,
+        adjust = "fdr"
+    )
+)
 
 pairwise_comparison_table <-
-  bind_cols(
-    unadjusted_pairs %>% dplyr::select(contrast, estimate, SE, df, p.value) %>% rename(Unadjusted = p.value),
-    tukey_pairs %>% dplyr::select(p.value) %>% rename(Tukey = p.value),
-    fdr_pairs %>% dplyr::select(p.value) %>% rename(`FDR` = p.value)
-  ) %>%
-  rename(Comparison = contrast,
-         Estimate = estimate,
-         DF = df)
+    bind_cols(
+        unadjusted_pairs %>%
+            dplyr::select(contrast, estimate, SE, df, p.value) %>%
+            rename(Unadjusted = p.value),
+        tukey_pairs %>% dplyr::select(p.value) %>% rename(Tukey = p.value),
+        fdr_pairs %>% dplyr::select(p.value) %>% rename(`FDR` = p.value)
+    ) %>%
+    rename(Comparison = contrast, Estimate = estimate, DF = df)
 
 pairwise_comparison_table %>%
-  gt() %>%
-  cols_align(
-    align = "center"
-  ) %>%
-  fmt_scientific(columns = c("Unadjusted", "Tukey", "FDR"), 
-                 exp_style = "e1",
-                 decimals = 2) %>%
-  fmt_number(columns = c("Estimate", "SE"),
-             decimals = 3) %>%
-  tab_spanner(label = "p-value Adjustment", 
-              columns = c(Unadjusted, Tukey, FDR)) %>%
-  cols_width(Comparison ~ px(200)) %>%
-  tab_options(table.width = pct(100))
+    gt() %>%
+    cols_align(
+        align = "center"
+    ) %>%
+    fmt_scientific(
+        columns = c("Unadjusted", "Tukey", "FDR"),
+        exp_style = "e1",
+        decimals = 2
+    ) %>%
+    fmt_number(columns = c("Estimate", "SE"), decimals = 3) %>%
+    tab_spanner(
+        label = "p-value Adjustment",
+        columns = c(Unadjusted, Tukey, FDR)
+    ) %>%
+    cols_width(Comparison ~ px(200)) %>%
+    tab_options(table.width = pct(100))
 ```
 
 In this table, the comparison between C5.0 and the glmnet model using natural splines is not significant at the 0.05 level.  However, the comparison between the C5.0 and glmnet model not using natural splines, and the comparison between the glmnet model without and with natural splines are significantly different.  The largest difference (`r round(unadjusted_pairs$estimate[which(unadjusted_pairs$estimate == max(unadjusted_pairs$estimate))],3)` is between the C5.0 and glmnet model without including natural splines.
@@ -586,20 +713,35 @@ To perform the equivalence tests, we use the same ANOVA model for when testing f
 #| out-width: "70%"
 #| fig-cap: Pairwise comparisons of models using equivalence testing.  The Tukey adjusted 90% confidence interval of each pairwise difference is illustrated with vertical bands.  For these comparisons, the margin of practical equivalence was set to +/- 3% accuracy.
 
-pairwise_comparisons <- pairs(one_way_model_random_intercept_em, adjust='tukey')
-conf_int <- 
-  tibble(confint(pairwise_comparisons, adjust = "tukey", level=0.90)) %>%
-  mutate(contrast = factor(contrast, levels=c("C5.0 - (glmnet+NS)",
-                                              "C5.0 - glmnet",
-                                              "(glmnet+NS) - glmnet")))
+pairwise_comparisons <- pairs(
+    one_way_model_random_intercept_em,
+    adjust = 'tukey'
+)
+conf_int <-
+    tibble(confint(pairwise_comparisons, adjust = "tukey", level = 0.90)) %>%
+    mutate(
+        contrast = factor(
+            contrast,
+            levels = c(
+                "C5.0 - (glmnet+NS)",
+                "C5.0 - glmnet",
+                "(glmnet+NS) - glmnet"
+            )
+        )
+    )
 
-ggplot(conf_int, aes(x=contrast, y=estimate)) +
-  geom_point(size=2, color="black") +
-  geom_segment(aes(x=contrast, y=lower.CL, xend=contrast, yend=upper.CL)) +
-  geom_hline(yintercept=c(-0.03,0.03), linetype=2, color="black") +
-  ylim(-0.07, 0.07) +
-  xlab("Comparison") +
-  ylab("Accuracy Difference")
+ggplot(conf_int, aes(x = contrast, y = estimate)) +
+    geom_point(size = 2, color = "black") +
+    geom_segment(aes(
+        x = contrast,
+        y = lower.CL,
+        xend = contrast,
+        yend = upper.CL
+    )) +
+    geom_hline(yintercept = c(-0.03, 0.03), linetype = 2, color = "black") +
+    ylim(-0.07, 0.07) +
+    xlab("Comparison") +
+    ylab("Accuracy Difference")
 ```
 
 
@@ -653,54 +795,76 @@ A credible interval can be derived for any parameter or function of parameters f
 #| cache: true
 
 accuracy_values <-
-  for_fig %>%
-  pivot_wider(id_cols="Fold", names_from="Model", values_from="accuracy") %>%
-  rename(id = Fold)
+    for_fig %>%
+    pivot_wider(
+        id_cols = "Fold",
+        names_from = "Model",
+        values_from = "accuracy"
+    ) %>%
+    rename(id = Fold)
 
 bayes_model <-
-  perf_mod(accuracy_values, seed=310, iter=5000, chains=5, refresh=0)
+    perf_mod(accuracy_values, seed = 310, iter = 5000, chains = 5, refresh = 0)
 
 #Get posterior samples
-posterior_samples <- 
-  tidy(bayes_model) %>%
-  mutate(model = factor(model, levels=c("C5.0", "glmnet+NS", "glmnet")))
+posterior_samples <-
+    tidy(bayes_model) %>%
+    mutate(model = factor(model, levels = c("C5.0", "glmnet+NS", "glmnet")))
 
 #Credible intervals for posterior distribution of model performance
 credible_intervals <-
-  posterior_samples %>%
-  group_by(model) %>%
-  summarize(Lower = quantile(posterior, probs=0.025),
-            Upper = quantile(posterior, probs=0.975)) %>%
-  ungroup()
+    posterior_samples %>%
+    group_by(model) %>%
+    summarize(
+        Lower = quantile(posterior, probs = 0.025),
+        Upper = quantile(posterior, probs = 0.975)
+    ) %>%
+    ungroup()
 
 #Get pairwise contrasts between models
-pairwise_diffs <- 
-  contrast_models(bayes_model, 
-                  list_1 = c("C5.0", "C5.0", "glmnet+NS"),
-                  list_2 = c("glmnet+NS", "glmnet", "glmnet"),
-                  seed=310) %>%
-  mutate(color_group_equiv = ifelse(difference >= 0.03 | difference <= -0.03, "Not Equivalent", 
-                                    "Equivalent")) %>%
-  mutate(color_group_equiv = factor(color_group_equiv))
+pairwise_diffs <-
+    contrast_models(
+        bayes_model,
+        list_1 = c("C5.0", "C5.0", "glmnet+NS"),
+        list_2 = c("glmnet+NS", "glmnet", "glmnet"),
+        seed = 310
+    ) %>%
+    mutate(
+        color_group_equiv = ifelse(
+            difference >= 0.03 | difference <= -0.03,
+            "Not Equivalent",
+            "Equivalent"
+        )
+    ) %>%
+    mutate(color_group_equiv = factor(color_group_equiv))
 
 contrast_credible_intervals <-
-  pairwise_diffs %>%
-  mutate(contrast = factor(contrast, levels=c("C5.0 vs. glmnet+NS", 
-                                              "C5.0 vs. glmnet",
-                                              "glmnet+NS vs. glmnet"))) %>%
-  group_by(contrast) %>%
-  summarize(Lower = quantile(difference, probs=0.025),
-            Upper = quantile(difference, probs=0.975)) %>%
-  ungroup()
+    pairwise_diffs %>%
+    mutate(
+        contrast = factor(
+            contrast,
+            levels = c(
+                "C5.0 vs. glmnet+NS",
+                "C5.0 vs. glmnet",
+                "glmnet+NS vs. glmnet"
+            )
+        )
+    ) %>%
+    group_by(contrast) %>%
+    summarize(
+        Lower = quantile(difference, probs = 0.025),
+        Upper = quantile(difference, probs = 0.975)
+    ) %>%
+    ungroup()
 
 pairwise_diffs_c50_glmnet_ns <-
-  pairwise_diffs %>%
-  dplyr::filter(contrast == "C5.0 vs. glmnet+NS")
+    pairwise_diffs %>%
+    dplyr::filter(contrast == "C5.0 vs. glmnet+NS")
 
 #Define the region of practical equivalence
 #and get the probability of practical equivalence
 difference_summary <-
-  summary(pairwise_diffs,  size = 0.03)
+    summary(pairwise_diffs, size = 0.03)
 ```
 
 ```{r}
@@ -713,11 +877,21 @@ difference_summary <-
 #| fig-cap: Posterior distributions of accuracy for each of the models.  The vertical dashed lines represent the 95% credible intervals about the posterior accuracy values for each model.
 
 ggplot(posterior_samples, aes(x = posterior)) +
-  geom_histogram(bins = 50, color = "white", fill = "blue", alpha = 0.4) +
-  facet_wrap(~ model, ncol = 1) +
-  geom_vline(data=credible_intervals, aes(xintercept=Lower), color = "black", linetype = 2) +
-  geom_vline(data=credible_intervals, aes(xintercept=Upper), color = "black", linetype = 2) +
-  xlab("Posterior Accuracy")
+    geom_histogram(bins = 50, color = "white", fill = "blue", alpha = 0.4) +
+    facet_wrap(~model, ncol = 1) +
+    geom_vline(
+        data = credible_intervals,
+        aes(xintercept = Lower),
+        color = "black",
+        linetype = 2
+    ) +
+    geom_vline(
+        data = credible_intervals,
+        aes(xintercept = Upper),
+        color = "black",
+        linetype = 2
+    ) +
+    xlab("Posterior Accuracy")
 ```
 
 We may also be interested in assessing the probability of a meaningful difference in performance between models. To quantify this, we generate posterior distributions for the pairwise differences in model performance. @fig-bayesian-contrast-posterior presents these distributions along with their corresponding 95% credible intervals. Based on these intervals, the probability of a difference between each pair of models is substantial. Among them, the C5.0 and glmnet model with natural splines exhibit the smallest difference, with a `r round(length(which(pairwise_diffs_c50_glmnet_ns$difference > 0))/nrow(pairwise_diffs_c50_glmnet_ns), 3)` probability that the C5.0 model exhibits a higher accuracy than the glmnet model with natural splines.
@@ -731,13 +905,23 @@ We may also be interested in assessing the probability of a meaningful differenc
 #| out-width: "70%"
 #| fig-cap: Posterior distributions of pairwise differences in accuracy for each pair of models.  The vertical dashed lines represent the 95% credible intervals for each contrast.
 
-ggplot(pairwise_diffs, aes(x = difference, fill=color_group_diff)) +
-  geom_histogram(bins = 50, color = "white", fill = "blue", alpha = 0.4) +
-  facet_wrap(~ contrast, ncol = 1) +
-  geom_vline(data=contrast_credible_intervals, aes(xintercept=Lower), color = "black", linetype = 2) +
-  geom_vline(data=contrast_credible_intervals, aes(xintercept=Upper), color = "black", linetype = 2) +
-  xlab("Accuracy Difference") +
-  theme(legend.position = "none")
+ggplot(pairwise_diffs, aes(x = difference, fill = color_group_diff)) +
+    geom_histogram(bins = 50, color = "white", fill = "blue", alpha = 0.4) +
+    facet_wrap(~contrast, ncol = 1) +
+    geom_vline(
+        data = contrast_credible_intervals,
+        aes(xintercept = Lower),
+        color = "black",
+        linetype = 2
+    ) +
+    geom_vline(
+        data = contrast_credible_intervals,
+        aes(xintercept = Upper),
+        color = "black",
+        linetype = 2
+    ) +
+    xlab("Accuracy Difference") +
+    theme(legend.position = "none")
 ```
 
 
@@ -760,33 +944,37 @@ For instance, the probability of practical equivalence between the C5.0 and glmn
 #| out-width: "70%"
 #| fig-cap: Posterior distributions of pairwise differences in accuracy for each pair of models.  The vertical dashed lines represent the region of practical equivalence.  The probability mass within this region represents the probability that the models are practically equivalent within +/- 3% accuracy.
 
-
 #Histogram of posterior distributions between models
 #Color bars of histogram differently on either side of +/- 3%
-ggplot(pairwise_diffs, aes(x = difference, fill=color_group_equiv)) +
-  geom_histogram(bins = 100, alpha = 0.75, color = "white") +
-  facet_wrap(~ contrast, ncol = 1) +
-  scale_fill_manual(values = c("Equivalent" = "blue", "Not Equivalent" = "red")) +
-  geom_vline(xintercept = c(-0.03, 0.03), color="black", linetype=2) +
-  xlab("Accuracy Difference") +
-  theme(legend.position = "none")
+ggplot(pairwise_diffs, aes(x = difference, fill = color_group_equiv)) +
+    geom_histogram(bins = 100, alpha = 0.75, color = "white") +
+    facet_wrap(~contrast, ncol = 1) +
+    scale_fill_manual(
+        values = c("Equivalent" = "blue", "Not Equivalent" = "red")
+    ) +
+    geom_vline(xintercept = c(-0.03, 0.03), color = "black", linetype = 2) +
+    xlab("Accuracy Difference") +
+    theme(legend.position = "none")
 ```
 
 ```{r}
 #| label: tbl-bayesian-ROPE
 #| tbl-cap: "Probability of practical equivalence between each pair of models' performance."
 
-
 difference_summary %>%
-  dplyr::select(contrast, pract_equiv) %>%
-  rename(Comparison = contrast,
-         `Probability of Practical Equivalence` = pract_equiv) %>%
-  gt() %>%
-  cols_align(
-    align = "center"
-  ) %>%
-  fmt_number(columns = c("Probability of Practical Equivalence"),
-             decimals = 3)
+    dplyr::select(contrast, pract_equiv) %>%
+    rename(
+        Comparison = contrast,
+        `Probability of Practical Equivalence` = pract_equiv
+    ) %>%
+    gt() %>%
+    cols_align(
+        align = "center"
+    ) %>%
+    fmt_number(
+        columns = c("Probability of Practical Equivalence"),
+        decimals = 3
+    )
 ```
 
 ## Single Holdout Data Sets {#sec-compare-holdout}
@@ -828,39 +1016,45 @@ The bootstrap approach was applied to the three models for the forestation class
 #| fig-align: "center"
 #| out-width: "70%"
 #| fig-cap: 90% bootstrap confidence intervals of the validation set accuracy for each model.  The circle represent the accuracy estimate of the validation set for each model.
-
 # Get validation set performance and corresponding bootstrap CI
-glmnet_validation_res <- 
-  glmnet_final_wflow %>% 
-  last_fit(class ~ ., split = forested_split, metrics = class_metrics)
+glmnet_validation_res <-
+    glmnet_final_wflow %>%
+    last_fit(class ~ ., split = forested_split, metrics = class_metrics)
 
-glmnet_validation_boot <- int_pctl(glmnet_validation_res, alpha = 0.90)
+glmnet_validation_boot <- int_pctl(glmnet_validation_res, alpha = 0.10)
 
 
-c50_validation_res <- 
-  c50_final_wflow %>% 
-  last_fit(class ~ ., split = forested_split, metrics = class_metrics)
+c50_validation_res <-
+    c50_final_wflow %>%
+    last_fit(class ~ ., split = forested_split, metrics = class_metrics)
 
-c50_validation_boot <- int_pctl(c50_validation_res, alpha = 0.90)
+c50_validation_boot <- int_pctl(c50_validation_res, alpha = 0.10)
 
-glmnet_validation_res_ns <- 
-  glmnet_final_wflow_ns %>% 
-  last_fit(class ~ ., split = forested_split, metrics = class_metrics)
+glmnet_validation_res_ns <-
+    glmnet_final_wflow_ns %>%
+    last_fit(class ~ ., split = forested_split, metrics = class_metrics)
 
-glmnet_validation_boot_ns <- int_pctl(glmnet_validation_res_ns, alpha = 0.90)
+glmnet_validation_boot_ns <- int_pctl(glmnet_validation_res_ns, alpha = 0.10)
 
 validation_boot_accuracy <-
-  bind_rows(c50_validation_boot %>% mutate(Model = "C5.0"),
-            glmnet_validation_boot_ns %>% mutate(Model = "glmnet+NS"),
-            glmnet_validation_boot %>% mutate(Model = "glmnet")) %>%
-  dplyr::filter(.metric == "accuracy") %>%
-  mutate(Model = factor(Model, levels=c("C5.0", "glmnet+NS", "glmnet")))
+    bind_rows(
+        c50_validation_boot %>% mutate(Model = "C5.0"),
+        glmnet_validation_boot_ns %>% mutate(Model = "glmnet+NS"),
+        glmnet_validation_boot %>% mutate(Model = "glmnet")
+    ) %>%
+    dplyr::filter(.metric == "accuracy") %>%
+    mutate(Model = factor(Model, levels = c("C5.0", "glmnet+NS", "glmnet")))
 
 
-ggplot(validation_boot_accuracy, aes(x=Model, y=.estimate)) +
-  geom_point(color="black", shape=1) +
-  geom_errorbar(data=validation_boot_accuracy, aes(ymin=.lower, ymax=.upper), color="black", width=0.05) +
-  ylab("Accuracy")
+ggplot(validation_boot_accuracy, aes(x = Model, y = .estimate)) +
+    geom_point(color = "black", shape = 1) +
+    geom_errorbar(
+        data = validation_boot_accuracy,
+        aes(ymin = .lower, ymax = .upper),
+        color = "black",
+        width = 0.05
+    ) +
+    ylab("Accuracy")
 ```
 
 As the validation set size increases, the variation we expect to see in the summary statistic will decrease.  This concept is illustrated in @fig-bootstrap-single-holdout-varying-size.  In this figure, we have randomly selected subsets of varying size of the validation set and then applied the bootstrapping approach to these smaller sets.  Notice that as the sample size decreases, the width of the confidence interval increases.  Therefore, the smaller the validation set, the higher the variability will be in the estimate of model performance and the more important it is to understand the range of potential predictive performance.
@@ -878,36 +1072,43 @@ n_validation <- nrow(c50_validation_res$.predictions[[1]])
 set.seed(405)
 
 c50_validation_res_200 <- c50_validation_res
-n_200 <- sample(c(1:n_validation), size=200)
+n_200 <- sample(c(1:n_validation), size = 200)
 c50_validation_res_200$.predictions[[1]] <-
-  c50_validation_res$.predictions[[1]][n_200,]
-c50_validation_boot_200 <- int_pctl(c50_validation_res_200, alpha = 0.90)
+    c50_validation_res$.predictions[[1]][n_200, ]
+c50_validation_boot_200 <- int_pctl(c50_validation_res_200, alpha = 0.10)
 rm(c50_validation_res_200)
 
 c50_validation_res_1000 <- c50_validation_res
-n_1000 <- sample(c(1:n_validation), size=1000)
+n_1000 <- sample(c(1:n_validation), size = 1000)
 c50_validation_res_1000$.predictions[[1]] <-
-  c50_validation_res$.predictions[[1]][n_1000,]
-c50_validation_boot_1000 <- int_pctl(c50_validation_res_1000, alpha = 0.90)
+    c50_validation_res$.predictions[[1]][n_1000, ]
+c50_validation_boot_1000 <- int_pctl(c50_validation_res_1000, alpha = 0.10)
 rm(c50_validation_res_1000)
 
 c50_boot_accuracy <-
-  bind_rows(c50_validation_boot_200 %>% mutate(Size = "200"),
-            c50_validation_boot_1000 %>% mutate(Size = "1000"),
-            c50_validation_boot %>% mutate(Size = "Original")) %>%
-  dplyr::filter(.metric == "accuracy") %>%
-  mutate(Size = factor(Size, levels=c("200", "1000", "Original")))
+    bind_rows(
+        c50_validation_boot_200 %>% mutate(Size = "200"),
+        c50_validation_boot_1000 %>% mutate(Size = "1000"),
+        c50_validation_boot %>% mutate(Size = "Original")
+    ) %>%
+    dplyr::filter(.metric == "accuracy") %>%
+    mutate(Size = factor(Size, levels = c("200", "1000", "Original")))
 
-ggplot(c50_boot_accuracy, aes(x=Size, y=.estimate)) +
-  geom_point(color="black", shape=1) +
-  geom_errorbar(data=c50_boot_accuracy, aes(ymin=.lower, ymax=.upper), color="black", width=0.05) +
-  ylab("Accuracy")
+ggplot(c50_boot_accuracy, aes(x = Size, y = .estimate)) +
+    geom_point(color = "black", shape = 1) +
+    geom_errorbar(
+        data = c50_boot_accuracy,
+        aes(ymin = .lower, ymax = .upper),
+        color = "black",
+        width = 0.05
+    ) +
+    ylab("Accuracy")
 ```
 
 
 ## Conclusion
 
-Selecting the best predictive model involves assessing performance metrics and accounting for practical considerations. Thus far, this chapter outlined both frequentist and Bayesian approaches to comparing model performance, emphasizing the importance of appropriate statistical techniques when evaluating differences. The frequentist approach provides a formal hypothesis testing framework, while the Bayesian approach offers a more intuitive probability-based interpretation of model differences.  When there is just one data set for evaluation, like a validation set, then the bootstrap technique can be used to create an interval about the performance metric.
+Selecting the best predictive model involves assessing performance metrics and accounting for practical considerations. Thus far, this chapter outlined both frequentist and Bayesian approaches to comparing model performance, emphasizing the importance of appropriate statistical techniques when evaluating differences. The requentist approach provides a formal hypothesis testing framework, while the Bayesian approach offers a more intuitive probability-based interpretation of model differences.  When there is just one data set for evaluation, like a validation set, then the bootstrap technique can be used to create an interval about the performance metric.
 
 Ultimately, while statistical significance can indicate meaningful differences between models, practical significance should also guide decision-making. Equivalence testing and Bayesian ROPE analysis help determine whether models perform similarly within a defined threshold of practical relevance. In our forestation classification example, these methods suggested that while the Cubist model demonstrated superior predictive performance overall, differences between models may not always be large enough to drive a clear choice.
 
