@@ -711,6 +711,7 @@ To perform the equivalence tests, we use the same ANOVA model for when testing f
 #| fig-height: 3.5
 #| fig-align: "center"
 #| out-width: "70%"
+#| warning: false
 #| fig-cap: Pairwise comparisons of models using equivalence testing.  The Tukey adjusted 90% confidence interval of each pairwise difference is illustrated with vertical bands.  For these comparisons, the margin of practical equivalence was set to +/- 3% accuracy.
 
 pairwise_comparisons <- pairs(
@@ -741,7 +742,8 @@ ggplot(conf_int, aes(x = contrast, y = estimate)) +
     geom_hline(yintercept = c(-0.03, 0.03), linetype = 2, color = "black") +
     ylim(-0.07, 0.07) +
     xlab("Comparison") +
-    ylab("Accuracy Difference")
+    ylab("Accuracy Difference") +
+  scale_y_continuous(label = label_percent()) 
 ```
 
 
@@ -891,7 +893,8 @@ ggplot(posterior_samples, aes(x = posterior)) +
         color = "black",
         linetype = 2
     ) +
-    xlab("Posterior Accuracy")
+    xlab("Posterior Accuracy") + 
+  scale_x_continuous(label = label_percent()) 
 ```
 
 We may also be interested in assessing the probability of a meaningful difference in performance between models. To quantify this, we generate posterior distributions for the pairwise differences in model performance. @fig-bayesian-contrast-posterior presents these distributions along with their corresponding 95% credible intervals. Based on these intervals, the probability of a difference between each pair of models is substantial. Among them, the C5.0 and glmnet model with natural splines exhibit the smallest difference, with a `r round(length(which(pairwise_diffs_c50_glmnet_ns$difference > 0))/nrow(pairwise_diffs_c50_glmnet_ns), 3)` probability that the C5.0 model exhibits a higher accuracy than the glmnet model with natural splines.
@@ -921,7 +924,8 @@ ggplot(pairwise_diffs, aes(x = difference, fill = color_group_diff)) +
         linetype = 2
     ) +
     xlab("Accuracy Difference") +
-    theme(legend.position = "none")
+    theme(legend.position = "none") +
+  scale_x_continuous(label = label_percent()) 
 ```
 
 
@@ -947,14 +951,15 @@ For instance, the probability of practical equivalence between the C5.0 and glmn
 #Histogram of posterior distributions between models
 #Color bars of histogram differently on either side of +/- 3%
 ggplot(pairwise_diffs, aes(x = difference, fill = color_group_equiv)) +
-    geom_histogram(bins = 100, alpha = 0.75, color = "white") +
+    geom_histogram(bins = 100, alpha = 0.5, color = "white") +
     facet_wrap(~contrast, ncol = 1) +
     scale_fill_manual(
         values = c("Equivalent" = "blue", "Not Equivalent" = "red")
     ) +
     geom_vline(xintercept = c(-0.03, 0.03), color = "black", linetype = 2) +
     xlab("Accuracy Difference") +
-    theme(legend.position = "none")
+    theme(legend.position = "none") +
+  scale_x_continuous(labels = label_percent())
 ```
 
 ```{r}
@@ -1006,54 +1011,172 @@ This process yields a distribution of performance metrics, from which bootstrap 
 The bootstrap approach was applied to the three models for the forestation classification data.  @fig-bootstrap-validation-forested illustrates the 90% bootstrap confidence intervals of accuracy for each of the models.  Notice that these intervals are narrow.  This is because the number of validation set samples is large (n = `r nrow(forested_test)`).
 
 ```{r}
-#| label: fig-bootstrap-validation-forested
-#| echo: false
-#| warning: false
+#| label: boot-int-calc
+#| include: false
 #| cache: true
-#| fig-width: 6
-#| fig-height: 3.5
-#| fig-align: "center"
-#| out-width: "70%"
-#| fig-cap: 90% bootstrap confidence intervals of the validation set accuracy for each model.  The circle represent the accuracy estimate of the validation set for each model.
-# Get validation set performance and corresponding bootstrap CI
+
+both_intervals <- function(x, ...) {
+  preds <- collect_predictions(x)
+  trad <- 
+    preds |>
+    summarize(
+      agree = sum(.pred_class == class),
+      total = length(class)
+    ) |> 
+    mutate(hstat = list(tidy(binom.test(agree, total, conf.level = 0.9)))) |> 
+    pluck("hstat") |> 
+    pluck(1) |> 
+    select(.lower = conf.low, .upper = conf.high, .estimate = estimate) |> 
+    mutate(
+      Method = "Analytical", 
+      data = list(NA)
+    )
+  bt <- 
+    bootstraps(preds, ...) |> 
+    mutate(
+      acc = 
+        map_dbl(splits, 
+                ~ analysis(.x) |> 
+                  accuracy(class, .pred_class) |> 
+                  pluck(".estimate"))
+    ) |> 
+    summarize(
+      .lower = quantile(acc, probs = 0.05),
+      .estimate = mean(acc),
+      .upper = quantile(acc, probs = 0.95),
+      data = list(acc)
+    ) |> 
+    mutate(Method = "Bootstrap")
+
+  bind_rows(trad, bt)
+}  
+
+# ------------------------------------------------------------------------------
+
 glmnet_validation_res <-
     glmnet_final_wflow %>%
     last_fit(class ~ ., split = forested_split, metrics = class_metrics)
-
-glmnet_validation_boot <- int_pctl(glmnet_validation_res, alpha = 0.10)
-
-
-c50_validation_res <-
-    c50_final_wflow %>%
-    last_fit(class ~ ., split = forested_split, metrics = class_metrics)
-
-c50_validation_boot <- int_pctl(c50_validation_res, alpha = 0.10)
 
 glmnet_validation_res_ns <-
     glmnet_final_wflow_ns %>%
     last_fit(class ~ ., split = forested_split, metrics = class_metrics)
 
-glmnet_validation_boot_ns <- int_pctl(glmnet_validation_res_ns, alpha = 0.10)
+c50_validation_res <-
+    c50_final_wflow %>%
+    last_fit(class ~ ., split = forested_split, metrics = class_metrics)
 
-validation_boot_accuracy <-
+# ------------------------------------------------------------------------------
+
+set.seed(382)
+both_int_res <- 
+  both_intervals(glmnet_validation_res, times = 2000) |> 
+  mutate(Model = "glmnet") |> 
+  bind_rows(
+    both_intervals(glmnet_validation_res_ns, times = 2000) |> 
+      mutate(Model = "glmnet+NS") 
+  ) |> 
+  bind_rows(
+    both_intervals(c50_validation_res, times = 2000) |> 
+      mutate(Model = "C5.0") 
+  ) |> 
+  mutate(
+    Model = factor(Model),
+    Model = reorder(Model, -.estimate)
+  )
+
+boot_acc_reps <- 
+  both_int_res |> 
+  filter(Method == "Bootstrap") |> 
+  select(Model, data) |> 
+  unnest(data)
+
+acc_ints <- 
+  both_int_res |> 
+  mutate(
+    ref = if_else(Method == "Analytical", 450, 400)
+  )
+
+# ------------------------------------------------------------------------------
+
+acc_diff_comps <- function(split) {
+  acc <- 
+    analysis(split) |> 
+    select(-.row) |> 
+    pivot_longer(cols = c(-class), values_to = ".pred_class", names_to = "Model") |> 
+    group_by(Model) |> 
+    accuracy(class, .pred_class) |> 
+    arrange(Model)
+  
+  diffs <- 
     bind_rows(
-        c50_validation_boot %>% mutate(Model = "C5.0"),
-        glmnet_validation_boot_ns %>% mutate(Model = "glmnet+NS"),
-        glmnet_validation_boot %>% mutate(Model = "glmnet")
-    ) %>%
-    dplyr::filter(.metric == "accuracy") %>%
-    mutate(Model = factor(Model, levels = c("C5.0", "glmnet+NS", "glmnet")))
+      tibble(
+        term = paste(acc$Model[1], acc$Model[2], sep = " vs "),
+        estimate = acc$.estimate[1]- acc$.estimate[2]
+      ),
+      tibble(
+        term = paste(acc$Model[1], acc$Model[3], sep = " vs "),
+        estimate = acc$.estimate[1]- acc$.estimate[3]
+      ),
+      tibble(
+        term = paste(acc$Model[3], acc$Model[2], sep = " vs "),
+        estimate = acc$.estimate[3]- acc$.estimate[2]
+      )
+    )
+  
+  diffs
+}
 
+set.seed(524)
+acc_boot_diif <- 
+  collect_predictions(glmnet_validation_res) |> 
+  mutate(Model = "glmnet") |> 
+  bind_rows(
+    collect_predictions(glmnet_validation_res_ns) |> 
+      mutate(Model = "glmnet+NS") 
+  ) |> 
+  bind_rows(
+    collect_predictions(c50_validation_res) |> 
+      mutate(Model = "C5.0") 
+  ) |> 
+  select(.row, Model, .pred_class, class) |> 
+  pivot_wider(id_cols = c(.row, class), names_from = Model, values_from = .pred_class) |> 
+  bootstraps(times = 2000) |> 
+  mutate(stats = map(splits, acc_diff_comps)) |> 
+  int_pctl(stats, alpha = .1)
+```
 
-ggplot(validation_boot_accuracy, aes(x = Model, y = .estimate)) +
-    geom_point(color = "black", shape = 1) +
-    geom_errorbar(
-        data = validation_boot_accuracy,
-        aes(ymin = .lower, ymax = .upper),
-        color = "black",
-        width = 0.05
-    ) +
-    ylab("Accuracy")
+```{r}
+#| label: fig-bootstrap-validation-forested
+#| echo: false
+#| warning: false
+#| cache: true
+#| fig-width: 6
+#| fig-height: 6
+#| fig-align: "center"
+#| out-width: "65%"
+#| fig-cap: For each model, the bootstrap distributions of the accuracy statistics are shown as histograms. The intervals at the top of each panel show the 90% confidence intervals computed using the bootstrap and via the traditional analytical method. 
+
+boot_acc_reps |>
+  ggplot() +
+  geom_histogram(aes(x = data), col = "white", bins = 24) +
+  facet_wrap( ~ Model, ncol = 1) +
+  geom_point(
+    data = acc_ints, 
+    aes(x = .estimate, col = Method, pch = Method, y = ref),
+    cex = 2
+  ) +
+  geom_errorbar(
+    data = acc_ints, 
+    aes(
+      xmin = .lower,
+      xmax = .upper,
+      col = Method,
+      y = ref
+    )
+  ) +
+  labs(x = "Accuracy", y = "count") +
+  scale_x_continuous(label = label_percent()) +
+  scale_shape_manual(values = 15:16)
 ```
 
 As the validation set size increases, the variation we expect to see in the summary statistic will decrease.  This concept is illustrated in @fig-bootstrap-single-holdout-varying-size.  In this figure, we have randomly selected subsets of varying size of the validation set and then applied the bootstrapping approach to these smaller sets.  Notice that as the sample size decreases, the width of the confidence interval increases.  Therefore, the smaller the validation set, the higher the variability will be in the estimate of model performance and the more important it is to understand the range of potential predictive performance.
@@ -1066,6 +1189,8 @@ As the validation set size increases, the variation we expect to see in the summ
 #| fig-align: "center"
 #| out-width: "70%"
 #| fig-cap: 90% bootstrap confidence intervals of accuracy for validation sets of varying size for the C5.0 model.  The smaller the size of the validation set, the wider the interval.
+
+c50_validation_boot <- int_pctl(c50_validation_res, alpha = 0.10)
 
 n_validation <- nrow(c50_validation_res$.predictions[[1]])
 set.seed(405)
