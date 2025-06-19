@@ -55,20 +55,14 @@ ctrl_rs <-
         save_workflow = TRUE
     )
 
-get_iters <- function(x) {
-    fit <- extract_fit_engine(x)
-    tibble::tibble(iteration = seq(along = fit$loss), loss = fit$loss)
-}
-
 ctrl_grid <-
     control_grid(
         save_pred = TRUE,
         parallel_over = "everything",
-        save_workflow = TRUE,
-        extract = get_iters
+        save_workflow = TRUE
     )
 
-class_metrics <- metric_set(accuracy)
+cls_mtr <- metric_set(accuracy)
 ```
 
 ```{r}
@@ -77,13 +71,13 @@ class_metrics <- metric_set(accuracy)
 #| cache: true
 
 c50_spec <-
-    C5_rules(trees = tune(), min_n = tune()) %>%
-    set_engine("C5.0") %>%
+    C5_rules(trees = tune(), min_n = tune()) |>
+    set_engine("C5.0") |>
     set_mode("classification")
 
 c50_wflow <-
-    workflow() %>%
-    add_model(c50_spec) %>%
+    workflow() |>
+    add_model(c50_spec) |>
     add_formula(class ~ .)
 
 c50_grid <- expand.grid(trees = c(60, 70, 80, 90), min_n = c(8, 10, 12, 20))
@@ -95,15 +89,15 @@ c50_res <-
         resamples = forested_rs,
         control = ctrl_grid,
         grid = c50_grid,
-        metrics = class_metrics
+        metrics = cls_mtr
     )
 
 c50_best <-
     select_best(c50_res, metric = "accuracy")
 
 c50_metrics <-
-    c50_res %>%
-    filter_parameters(parameters = c50_best) %>%
+    c50_res |>
+    filter_parameters(parameters = c50_best) |>
     collect_metrics(summarize = FALSE)
 
 c50_final_wflow <- finalize_workflow(c50_wflow, c50_best)
@@ -114,47 +108,52 @@ c50_final_wflow <- finalize_workflow(c50_wflow, c50_best)
 #| include: false
 #| cache: true
 
-norm_rec <-
-    recipe(class ~ ., data = forested_train) %>%
-    step_dummy(all_nominal_predictors()) %>%
-    step_zv(all_predictors()) %>%
-    step_normalize(all_predictors())
+glmn_rec <- 
+  recipe(class ~ ., data = forested_train) |>
+  step_orderNorm(all_numeric_predictors()) |>
+  step_lencode_mixed(county, outcome = "class") |> 
+  step_interact(!!forested_int_form)
 
-glmnet_spec <-
-    logistic_reg(penalty = tune(), mixture = tune()) %>%
-    set_engine("glmnet") %>%
-    set_mode("classification")
+glmn_ns_rec <- 
+  glmn_rec |> 
+  step_spline_natural(
+    all_numeric_predictors(), -county, -eastness, -northness, -year, -contains("_x_"),
+    deg_free = 10) |>
+  step_lincomb(all_predictors())
 
-glmnet_wflow <-
-    workflow() %>%
-    add_model(glmnet_spec) %>%
-    add_recipe(norm_rec)
+# ------------------------------------------------------------------------------
 
-glmnet_grid <-
-    expand.grid(
-        penalty = c(10^-4, 10^-3, 10^-2, 10^-1, 10^0),
-        mixture = c(0.001, 0.01, 0.03)
-    )
+glmn_pen <- 10^seq(-6, -1, length.out = 50)
+glmn_grid <- crossing(penalty = glmn_pen, mixture = c(0:4) / 4)
 
-set.seed(526)
-glmnet_res <-
-    tune_grid(
-        glmnet_wflow,
-        resamples = forested_rs,
-        control = ctrl_grid,
-        grid = glmnet_grid,
-        metrics = class_metrics
-    )
+glmn_spec <- 
+  logistic_reg(penalty = tune(), mixture = tune()) |> 
+  set_engine("glmnet", path_values = !!glmn_pen)
 
-glmnet_best <-
-    select_best(glmnet_res, metric = "accuracy")
+# ------------------------------------------------------------------------------
 
-glmnet_metrics <-
-    glmnet_res %>%
-    filter_parameters(parameters = glmnet_best) %>%
+glmn_wflow <- workflow(glmn_rec, glmn_spec)
+
+glmn_res <- 
+  glmn_wflow |> 
+  tune_grid(
+    resamples = forested_rs,
+    grid = glmn_grid,
+    control = ctrl_grid,
+    metrics = cls_mtr
+  )
+
+# ------------------------------------------------------------------------------
+
+glmn_best <-
+    select_best(glmn_res, metric = "accuracy")
+
+glmn_metrics <-
+    glmn_res |>
+    filter_parameters(parameters = glmn_best) |>
     collect_metrics(summarize = FALSE)
 
-glmnet_final_wflow <- finalize_workflow(glmnet_wflow, glmnet_best)
+glmn_final_wflow <- finalize_workflow(glmn_wflow, glmn_best)
 ```
 
 ```{r}
@@ -162,34 +161,26 @@ glmnet_final_wflow <- finalize_workflow(glmnet_wflow, glmnet_best)
 #| include: false
 #| cache: true
 
-norm_rec_ns <-
-    norm_rec %>%
-    step_ns(all_predictors())
+glmn_ns_wflow <- workflow(glmn_ns_rec, glmn_spec)
 
-glmnet_wflow_ns <-
-    workflow() %>%
-    add_model(glmnet_spec) %>%
-    add_recipe(norm_rec_ns)
+glmn_ns_res <- 
+  glmn_ns_wflow |> 
+  tune_grid(
+    resamples = forested_rs,
+    grid = glmn_grid,
+    control = ctrl_grid,
+    metrics = cls_mtr
+  )
 
-set.seed(526)
-glmnet_res_ns <-
-    tune_grid(
-        glmnet_wflow_ns,
-        resamples = forested_rs,
-        control = ctrl_grid,
-        grid = glmnet_grid,
-        metrics = class_metrics
-    )
+glmn_ns_best <-
+    select_best(glmn_ns_res, metric = "accuracy")
 
-glmnet_best_ns <-
-    select_best(glmnet_res_ns, metric = "accuracy")
-
-glmnet_metrics_ns <-
-    glmnet_res_ns %>%
-    filter_parameters(parameters = glmnet_best_ns) %>%
+glmn_ns_metrics <-
+    glmn_ns_res |>
+    filter_parameters(parameters = glmn_ns_best) |>
     collect_metrics(summarize = FALSE)
 
-glmnet_final_wflow_ns <- finalize_workflow(glmnet_wflow_ns, glmnet_best_ns)
+glmn_ns_final_wflow <- finalize_workflow(glmn_ns_wflow, glmn_ns_best)
 ```
 
 In chapters [-@sec-overfitting], [-@sec-resampling], and [-@sec-grid-search], we established several key fundamentals of building predictive models. To create an effective model, we must employ strategies to reduce overfitting, use resampling techniques to accurately measure predictive performance, and systematically search a tuning parameter space to identify values that optimize model accuracy. By following these approaches, we can have confidence that our model generalizes well to new, unseen data and provides a realistic estimate of its predictive performance.
@@ -216,13 +207,21 @@ Regardless of whether we take a Frequentist or Bayesian approach to comparing mo
 
 In this chapter, we focus on tools for comparing predictive performance across models. These tools can be used to evaluate different tuning parameter settings within a single model or to compare performance across different model types. The insights gained from this analysis help inform decisions about which model(s) to use for predicting new samples.
 
-To illustrate these statistical techniques, we will use the Washington State forestation data introduced in @sec-data-splitting. Our goal is to predict whether a location is classified as forested or non-forested. The key predictors in this dataset include elevation, annual precipitation, longitude, and latitude. Because the data points are geographically located, samples that are closer to each other are more related than those that are farther apart. When training a model, it is crucial to ensure that geographically close locations are not split between the training and test sets. @sec-data-splitting outlined a method to minimize the impact of geographic proximity, which we will apply throughout our modeling process. In this chapter, we will tune both a C5.0 model and a glmnet model, with and without the use of natural splines. We will then demonstrate how to compare the performance of these models.
+To illustrate these statistical techniques, we will use the same data that will be used in later chapters on classification: the Washington State forestation data introduced in @sec-data-splitting. Our goal is to predict whether a location is classified as forested or non-forested. The dataset includes predictors such as elevation, annual precipitation, longitude, latitude, and so on. 
+
+Without going into much detail, we'll focus on comparing three modeling strategies that will be described in Part 3: 
+
+ - A boosted tree ensemble using C5.0 trees as the base learner.  This model was tuned over the number of trees in the ensemble and the amount of data required to make additional splits (a.k.a. $n_{min}$). Grid search found that `r c50_best$trees` trees in the ensemble were optimal, in conjunction with $n_{min}$ = `r c50_best$min_n` training set points. 
+ - A logistic regression model that was trained using penalization (@sec-logistic-penalized). Feature engineering included an effect encoding parameterization of the counties, and a small set of interaction terms (described in  @sec-forestation-eda). This model was tuned over the amount of penalization and the mixture of Lasso and ridge penalization.  The best candidate determined by grid search was a penalization value of 10<sup>`r round(log10(glmn_best$penalty), 2)`</sup> and `r round(glmn_best$mixture * 100)`% Lasso penalization. 
+ - The same logistic regression model as above, but extended with ten spline terms for several of its numeric predictors. With these additional terms, the optimal tuning parameter values were a penalization value of 10<sup>`r round(log10(glmn_ns_best$penalty), 2)`</sup> and `r round(glmn_ns_best$mixture * 100)`% Lasso penalization. 
+
+One difference between these analyses and those to come in Part 3 is that we've chosen to use classification accuracy as our metric^[This isn't normally our first choice. However, the outcome classes are fairly balanced. Also, accuracy is intuitively understandable, and the broader set of classification metrics has yet to be described in detail.]. Some of these results may differ from upcoming analyses. Previously, the spatially aware resampling scheme that was used generated `r nrow(forested_rs)` resamples of the training set. For this reason, there are `r nrow(forested_rs)` different accuracy "replicates" for each candidate value that was evaluated. 
+
+Similar to previous sections, we'll produce models where these replicated peformance statistics $\widehat{Q}_{ij}$ are the outcomes of the model for resample $i$ and model $j$. This is the same general approach shown in @eq-perf-mod-racing and @eq-surrogate.
 
 ### Frequentist Hypothesis Testing Methods {#sec-nhtm}
 
-Let's begin by building towards a statistical model that will enable us to formally compare the predictive performance among models.  For this illustration, we will evaluate the performance of three models using 10-fold cross-validation.
-
-To begin this illustration, let's suppose that each of these models were built separately using **different** 10-fold partitions of the training data.  In this scenario, the predictive performance on the first holdout fold would be unique, or independent, for each model.  If this was the case, then we could represent the desired performance metric with the following linear statistical model:
+Let's begin by building towards a statistical model that will enable us to formally compare the predictive performance among models. To begin this illustration, let's suppose that each of these models were built separately using **different** 10-fold partitions of the training data.  In this scenario, the predictive performance on the first holdout fold would be unique, or independent, for each model.  If this was the case, then we could represent the desired performance metric with the following linear statistical model:
 
 $$
 y_{ij} = \beta_0 + \sum_{j=1}^{M-1}\beta_jx_{ij} + \epsilon_{ij}
@@ -240,85 +239,82 @@ In this equation $y_{ij}$ represents the model performance from the $i^{th}$ hol
 #| fig-cap: An illustration of how variation is partitioned based on the effect of the model (blue) and unexplainable causes (orange) when distinct cross-validation partitions are used to train each model. 
 for_fig <-
     bind_rows(
-        c50_metrics %>%
-            dplyr::filter(.metric == "accuracy") %>%
-            dplyr::select(id, .estimate) %>%
+        c50_metrics |>
+            dplyr::select(id, .estimate) |>
             mutate(Model = "C5.0"),
-        glmnet_metrics %>%
-            dplyr::filter(.metric == "accuracy") %>%
-            dplyr::select(id, .estimate) %>%
+        glmn_metrics |>
+            dplyr::select(id, .estimate) |>
             mutate(Model = "glmnet"),
-        glmnet_metrics_ns %>%
-            dplyr::filter(.metric == "accuracy") %>%
-            dplyr::select(id, .estimate) %>%
+        glmn_ns_metrics |>
+            dplyr::select(id, .estimate) |>
             mutate(Model = "glmnet+NS")
-    ) %>%
-    rename(accuracy = .estimate, Fold = id) %>%
+    ) |>
+    rename(accuracy = .estimate, Fold = id) |>
     mutate(
         Model = factor(Model, levels = c("C5.0", "glmnet+NS", "glmnet")),
         Fold = factor(Fold)
     )
 
 intercept_value <-
-    for_fig %>%
-    group_by(Model) %>%
-    summarize(accuracy = mean(accuracy)) %>%
-    ungroup() %>%
-    dplyr::filter(Model == "glmnet+NS") %>%
-    dplyr::select(accuracy) %>%
+    for_fig |>
+    group_by(Model) |>
+    summarize(accuracy = mean(accuracy)) |>
+    ungroup() |>
+    dplyr::filter(Model == "glmnet+NS") |>
+    dplyr::select(accuracy) |>
     pull()
 
 model_means <-
-    for_fig %>%
-    group_by(Model) %>%
-    summarize(accuracy = mean(accuracy)) %>%
-    ungroup() %>%
-    mutate(Fold = "Fold03") %>%
+    for_fig |>
+    group_by(Model) |>
+    summarize(accuracy = mean(accuracy)) |>
+    ungroup() |>
+    mutate(Fold = "Fold03") |>
     dplyr::filter(Model == "C5.0")
 
 fold_means <-
-    for_fig %>%
-    group_by(Fold) %>%
-    summarize(accuracy = mean(accuracy)) %>%
+    for_fig |>
+    group_by(Fold) |>
+    summarize(accuracy = mean(accuracy)) |>
     ungroup()
 
 max_fold_mean_segment <-
     tibble(
         Model = 0.9,
-        y_begin = model_means %>%
-            dplyr::filter(Model == "C5.0") %>%
-            dplyr::select(accuracy) %>%
+        y_begin = model_means |>
+            dplyr::filter(Model == "C5.0") |>
+            dplyr::select(accuracy) |>
             pull(),
-        y_end = fold_means %>%
-            dplyr::filter(accuracy == max(accuracy)) %>%
+        y_end = fold_means |>
+            dplyr::filter(accuracy == max(accuracy)) |>
             pull(),
         accuracy = intercept_value,
         Fold = "Fold03"
     )
 
 example_point <-
-    for_fig %>%
-    dplyr::filter(Model == "C5.0") %>%
+    for_fig |>
+    dplyr::filter(Model == "C5.0") |>
     dplyr::filter(accuracy == max(accuracy))
 
 intercept_segment <-
     tibble(
         Model = 0.9,
         y_begin = intercept_value,
-        y_end = model_means %>%
-            dplyr::filter(Model == "C5.0") %>%
-            dplyr::select(accuracy) %>%
+        y_end = model_means |>
+            dplyr::filter(Model == "C5.0") |>
+            dplyr::select(accuracy) |>
             pull(),
         accuracy = intercept_value
-    ) %>%
+    ) |>
     mutate(Fold = "Fold03")
 
 error_segment <-
     tibble(
         Model = 0.9,
-        y_begin = model_means %>%
-            dplyr::filter(Model == "C5.0") %>%
-            dplyr::select(accuracy) %>%
+        y_begin = model_means |>
+            dplyr::filter(Model == "C5.0") |>
+            dplyr::select(accuracy) |>
             pull(),
         y_end = example_point$accuracy,
         accuracy = intercept_value
@@ -469,12 +465,12 @@ Notice that @eq-one-way-model-with-blocks is nearly the same as @eq-one-way-mode
 #| out-width: "70%"
 #| fig-cap: An illustration of how variation is partitioned based on the effect of the model (blue), folds (purple), and unexplainable causes (orange) when the same cross-validation partitions are used to train each model.  The lines connecting the points indicate the results for the same cross-validation fold.
  Fold03 <-
-    for_fig %>%
+    for_fig |>
     dplyr::filter(Fold == "Fold03")
 
 max_fold_mean <-
-    fold_means %>%
-    dplyr::filter(accuracy == max(accuracy)) %>%
+    fold_means |>
+    dplyr::filter(accuracy == max(accuracy)) |>
     mutate(Model = "C5.0")
 
 ggplot(for_fig, aes(x = Model, y = accuracy, group = Fold)) +
@@ -619,30 +615,30 @@ fdr_pairs <- data.frame(
 
 pairwise_comparison_table <-
     bind_cols(
-        unadjusted_pairs %>%
-            dplyr::select(contrast, estimate, SE, df, p.value) %>%
+        unadjusted_pairs |>
+            dplyr::select(contrast, estimate, SE, df, p.value) |>
             rename(Unadjusted = p.value),
-        tukey_pairs %>% dplyr::select(p.value) %>% rename(Tukey = p.value),
-        fdr_pairs %>% dplyr::select(p.value) %>% rename(`FDR` = p.value)
-    ) %>%
+        tukey_pairs |> dplyr::select(p.value) |> rename(Tukey = p.value),
+        fdr_pairs |> dplyr::select(p.value) |> rename(`FDR` = p.value)
+    ) |>
     rename(Comparison = contrast, Estimate = estimate, DF = df)
 
-pairwise_comparison_table %>%
-    gt() %>%
+pairwise_comparison_table |>
+    gt() |>
     cols_align(
         align = "center"
-    ) %>%
+    ) |>
     fmt_scientific(
         columns = c("Unadjusted", "Tukey", "FDR"),
         exp_style = "e1",
         decimals = 2
-    ) %>%
-    fmt_number(columns = c("Estimate", "SE"), decimals = 3) %>%
+    ) |>
+    fmt_number(columns = c("Estimate", "SE"), decimals = 3) |>
     tab_spanner(
         label = "p-value Adjustment",
         columns = c(Unadjusted, Tukey, FDR)
-    ) %>%
-    cols_width(Comparison ~ px(200)) %>%
+    ) |>
+    cols_width(Comparison ~ px(200)) |>
     tab_options(table.width = pct(100))
 ```
 
@@ -721,7 +717,7 @@ pairwise_comparisons <- pairs(
     adjust = 'tukey'
 )
 conf_int <-
-    tibble(confint(pairwise_comparisons, adjust = "tukey", level = 0.90)) %>%
+    tibble(confint(pairwise_comparisons, adjust = "tukey", level = 0.90)) |>
     mutate(
         contrast = factor(
             contrast,
@@ -799,12 +795,12 @@ A credible interval can be derived for any parameter or function of parameters f
 #| cache: true
 
 accuracy_values <-
-    for_fig %>%
+    for_fig |>
     pivot_wider(
         id_cols = "Fold",
         names_from = "Model",
         values_from = "accuracy"
-    ) %>%
+    ) |>
     rename(id = Fold)
 
 bayes_model <-
@@ -812,17 +808,17 @@ bayes_model <-
 
 #Get posterior samples
 posterior_samples <-
-    tidy(bayes_model) %>%
+    tidy(bayes_model) |>
     mutate(model = factor(model, levels = c("C5.0", "glmnet+NS", "glmnet")))
 
 #Credible intervals for posterior distribution of model performance
 credible_intervals <-
-    posterior_samples %>%
-    group_by(model) %>%
+    posterior_samples |>
+    group_by(model) |>
     summarize(
         Lower = quantile(posterior, probs = 0.025),
         Upper = quantile(posterior, probs = 0.975)
-    ) %>%
+    ) |>
     ungroup()
 
 #Get pairwise contrasts between models
@@ -832,18 +828,18 @@ pairwise_diffs <-
         list_1 = c("C5.0", "C5.0", "glmnet+NS"),
         list_2 = c("glmnet+NS", "glmnet", "glmnet"),
         seed = 310
-    ) %>%
+    ) |>
     mutate(
         color_group_equiv = ifelse(
             difference >= 0.03 | difference <= -0.03,
             "Not Equivalent",
             "Equivalent"
         )
-    ) %>%
+    ) |>
     mutate(color_group_equiv = factor(color_group_equiv))
 
 contrast_credible_intervals <-
-    pairwise_diffs %>%
+    pairwise_diffs |>
     mutate(
         contrast = factor(
             contrast,
@@ -853,16 +849,16 @@ contrast_credible_intervals <-
                 "glmnet+NS vs. glmnet"
             )
         )
-    ) %>%
-    group_by(contrast) %>%
+    ) |>
+    group_by(contrast) |>
     summarize(
         Lower = quantile(difference, probs = 0.025),
         Upper = quantile(difference, probs = 0.975)
-    ) %>%
+    ) |>
     ungroup()
 
-pairwise_diffs_c50_glmnet_ns <-
-    pairwise_diffs %>%
+pairwise_diffs_c50_glmn_ns <-
+    pairwise_diffs |>
     dplyr::filter(contrast == "C5.0 vs. glmnet+NS")
 
 #Define the region of practical equivalence
@@ -899,7 +895,7 @@ ggplot(posterior_samples, aes(x = posterior)) +
   scale_x_continuous(label = label_percent()) 
 ```
 
-We may also be interested in assessing the probability of a meaningful difference in performance between models. To quantify this, we generate posterior distributions for the pairwise differences in model performance. @fig-bayesian-contrast-posterior presents these distributions along with their corresponding 95% credible intervals. Based on these intervals, the probability of a difference between each pair of models is substantial. Among them, the C5.0 and glmnet model with natural splines exhibit the smallest difference, with a `r round(length(which(pairwise_diffs_c50_glmnet_ns$difference > 0))/nrow(pairwise_diffs_c50_glmnet_ns), 3)` probability that the C5.0 model exhibits a higher accuracy than the glmnet model with natural splines.
+We may also be interested in assessing the probability of a meaningful difference in performance between models. To quantify this, we generate posterior distributions for the pairwise differences in model performance. @fig-bayesian-contrast-posterior presents these distributions along with their corresponding 95% credible intervals. Based on these intervals, the probability of a difference between each pair of models is substantial. Among them, the C5.0 and glmnet model with natural splines exhibit the smallest difference, with a `r round(length(which(pairwise_diffs_c50_glmn_ns$difference > 0))/nrow(pairwise_diffs_c50_glmn_ns), 3)` probability that the C5.0 model exhibits a higher accuracy than the glmnet model with natural splines.
 
 ```{r}
 #| label: fig-bayesian-contrast-posterior
@@ -968,16 +964,16 @@ ggplot(pairwise_diffs, aes(x = difference, fill = color_group_equiv)) +
 #| label: tbl-bayesian-ROPE
 #| tbl-cap: "Probability of practical equivalence between each pair of models' performance."
 
-difference_summary %>%
-    dplyr::select(contrast, pract_equiv) %>%
+difference_summary |>
+    dplyr::select(contrast, pract_equiv) |>
     rename(
         Comparison = contrast,
         `Probability of Practical Equivalence` = pract_equiv
-    ) %>%
-    gt() %>%
+    ) |>
+    gt() |>
     cols_align(
         align = "center"
-    ) %>%
+    ) |>
     fmt_number(
         columns = c("Probability of Practical Equivalence"),
         decimals = 3
@@ -1055,26 +1051,26 @@ both_intervals <- function(x, ...) {
 
 # ------------------------------------------------------------------------------
 
-glmnet_validation_res <-
-    glmnet_final_wflow %>%
-    last_fit(class ~ ., split = forested_split, metrics = class_metrics)
+glmn_validation_res <-
+    glmn_final_wflow |>
+    last_fit(class ~ ., split = forested_split, metrics = cls_mtr)
 
-glmnet_validation_res_ns <-
-    glmnet_final_wflow_ns %>%
-    last_fit(class ~ ., split = forested_split, metrics = class_metrics)
+glmn_ns_validation_res <-
+    glmn_ns_final_wflow |>
+    last_fit(class ~ ., split = forested_split, metrics = cls_mtr)
 
 c50_validation_res <-
-    c50_final_wflow %>%
-    last_fit(class ~ ., split = forested_split, metrics = class_metrics)
+    c50_final_wflow |>
+    last_fit(class ~ ., split = forested_split, metrics = cls_mtr)
 
 # ------------------------------------------------------------------------------
 
 set.seed(382)
 both_int_res <- 
-  both_intervals(glmnet_validation_res, times = 2000) |> 
+  both_intervals(glmn_validation_res, times = 2000) |> 
   mutate(Model = "glmnet") |> 
   bind_rows(
-    both_intervals(glmnet_validation_res_ns, times = 2000) |> 
+    both_intervals(glmn_ns_validation_res, times = 2000) |> 
       mutate(Model = "glmnet+NS") 
   ) |> 
   bind_rows(
@@ -1130,10 +1126,10 @@ acc_diff_comps <- function(split) {
 
 set.seed(524)
 acc_boot_diif <- 
-  collect_predictions(glmnet_validation_res) |> 
+  collect_predictions(glmn_validation_res) |> 
   mutate(Model = "glmnet") |> 
   bind_rows(
-    collect_predictions(glmnet_validation_res_ns) |> 
+    collect_predictions(glmn_ns_validation_res) |> 
       mutate(Model = "glmnet+NS") 
   ) |> 
   bind_rows(
@@ -1213,11 +1209,11 @@ rm(c50_validation_res_1000)
 
 c50_boot_accuracy <-
     bind_rows(
-        c50_validation_boot_200 %>% mutate(Size = "200"),
-        c50_validation_boot_1000 %>% mutate(Size = "1000"),
-        c50_validation_boot %>% mutate(Size = "Original")
-    ) %>%
-    dplyr::filter(.metric == "accuracy") %>%
+        c50_validation_boot_200 |> mutate(Size = "200"),
+        c50_validation_boot_1000 |> mutate(Size = "1000"),
+        c50_validation_boot |> mutate(Size = "Original")
+    ) |>
+    dplyr::filter(.metric == "accuracy") |>
     mutate(Size = factor(Size, levels = c("200", "1000", "Original")))
 
 ggplot(c50_boot_accuracy, aes(x = Size, y = .estimate)) +
