@@ -30,6 +30,7 @@ library(gt)
 library(emmeans)
 library(tidyposterior)
 library(nlme)
+library(broom.mixed)
 
 # ------------------------------------------------------------------------------
 # Set options
@@ -561,47 +562,53 @@ ggplot(for_fig, aes(x = Model, y = accuracy, group = Fold)) +
 
 To understand if there are differences in performance among models, we again compare the variability explained by the different models with the unexplainable variability.  The signal relative to the noise is now much stronger, enabling us to more easily see differences in model performance.  The _F_-statistic from this model is `r paste0("(", round(anova_one_way_model_random_intercept_f,2), ", ", paste0(anova_one_way_model_random_intercept_ndf), ", ", paste0(anova_one_way_model_random_intercept_ddf), ")")` and has a corresponding p-value of `r pval(anova_one_way_model_random_intercept_pvalue)`.  By utilizing the same cross-validation scheme across models, there now is strong evidence of a difference in performance among the models.
 
-We have now established that there is strong evidence of differences in average predictive performance among models.  But this result does not tell us which models are different.  To understand which models are different, we need to perform additional tests to compare each pair of models.  These tests are referred to as _post-hoc_ tests because they are performed after the initial hypothesis test among all means.
+We have now established that there is strong evidence of differences in average predictive performance among models.  But this result does not tell us which models are different.  To understand which models are different, we need to perform additional tests to compare each pair of models.  These tests are referred to as _post hoc_ tests because they are performed after the initial hypothesis test among all means.
 
-#### Post-hoc Pairwise Comparisons and Protecting against False Positive Findings {#sec-post-hoc}
+#### Post Hoc Pairwise Comparisons and Protecting against False Positive Findings {#sec-post-hoc}
 
-After detecting a significant effect in a one-way analysis of variance (ANOVA), the next step is to determine which specific groups differ from each other. This is achieved using post-hoc pairwise comparisons, which assess all possible pairwise differences while controlling for false positive findings.
+After detecting a significant effect in a one-way analysis of variance (ANOVA), the next step is to determine which specific groups differ from each other. This is achieved using post hoc pairwise comparisons, which assess all possible pairwise differences while controlling for false positive findings.
 
-When conducting multiple comparisons, the risk of making at least one Type I error (false positive) increases. If we compare many pairs of groups separately, the probability of incorrectly rejecting at least one null hypothesis accumulates, leading to spurious findings.  If this issue is not addressed, then we will eventually conclude that models are different when they actually are not.  To mitigate this, statistical procedures adjust for multiple comparisons to ensure that the overall false positive rate remains controlled.  Two methods for this purpose are Tukey's Honestly Significant Difference (HSD) [@tukey1949comparing] and the False Discovery Rate (FDR) procedures [@benjamini1995controlling].
+When conducting multiple comparisons, the risk of making at least one Type I error (false positive) increases. If we compare many pairs of groups separately, the probability of incorrectly rejecting at least one null hypothesis accumulates, leading to spurious findings.  If this issue is not addressed, then we will eventually conclude that models are different when they actually are not.  To mitigate this, statistical procedures adjust for multiple comparisons to ensure that the overall false positive rate remains controlled.  Two methods for this purpose are Tukey's Honestly Significant Difference (HSD) [@tukey1949comparing] and the False Discovery Rate (FDR) procedures [@EfronHastie2016a,chap. 15].
 
-##### Tukey’s Honestly Significant Difference (HSD) {#sec-post-hoc-tukey}
+##### Tukey’s Honestly Significant Difference (HSD) {.unnumbered}
 
-Tukey’s HSD test is specifically designed for one-way ANOVA post-hoc comparisons and ensures that the familywise error rate (FWER) remains at a pre-determined significance level ($\alpha$ = 0.05). The test considers all possible pairwise differences while maintaining a constant error rate across comparisons. The test statistic is calculated as:
+Tukey’s HSD test focuses on controlling the probability of making at least one false discoveries; this is known as the familywise error rate (FWER). The HSD test is specifically designed for one-way ANOVA _post hoc_ comparisons and ensures that the FWER remains at a pre-determined significance level ($\alpha$ = 0.05). 
+
+The test considers all possible pairwise differences while maintaining a constant error rate across comparisons. The test statistic is calculated as:
 
 $$
- q = \frac{\bar{x}_i - \bar{x}_j}{\sqrt{MS_{within} / n}}
+T_{HSD} = \frac{\bar{Q}_i - \bar{Q}_j}{\sqrt{MS_{within} / n}}
 $$
 
 where, $\bar{x}_i$ and $\bar{x}_j$ are the sample means of groups $i$ and $j$, $MS_{within}$ is the mean square error from the ANOVA, and $n$ is the number of observations per group.
 
-The critical value for $q$ is obtained from the studentized range distribution, which depends on the number of groups and the degrees of freedom from the ANOVA error term.
+The critical value for $T_{HSD}$ is obtained from the studentized range distribution, which depends on the number of groups and the degrees of freedom from the ANOVA error term.
 
 When we desire to compare the performance of each pair of models, then Tukey's HSD procedure will provide the appropriate adjustments to the p-values to protect against false positive findings.
 
-##### False Discovery Rate (FDR) {#sec-post-hoc-fdr}
+##### False Discovery Rate (FDR) {.unnumbered}
 
-In settings where many hypotheses are tested simultaneously, controlling the false discovery rate (FDR)—the expected proportion of false positives among all rejected hypotheses—can be more appropriate than controlling the familywise error rate. The FDR procedure ranks the p-values from all pairwise comparisons from smallest to largest ($p_1$, $p_2$, ..., $p_m$) and compares them to an adjusted threshold:
+In settings where _many hypotheses_ are tested simultaneously, we may be more interested in the false discovery rate (FDR): the expected proportion of false positives among all rejected hypotheses. With many comparisons, this can be more appropriate than controlling the familywise error rate. 
+
+There are numerous FDR procedures in the literature. The method by @benjamini1995controlling is the simplest. It ranks the p-values from all pairwise comparisons from smallest to largest ($p_1$, $p_2$, ..., $p_m$) and compares them to an adjusted threshold:
 
 1. Rank the p-values in ascending order, assigning each a rank $i$.
+
 2. Compute the critical value for each comparison:
    $$
    p_{crit} = \frac{i}{m} \alpha
    $$
    where $m$ is the total number of comparisons and $\alpha$ is the desired FDR level.
+   
 3. Find the largest $i$ where $p_i \leq p_{crit}$, and reject all hypotheses with p-values at or below this threshold.
 
 Unlike Tukey’s method, FDR control is more appropriate when performing many comparisons.  This procedure offers a balance between sensitivity (detecting true differences) and specificity (limiting false positives).
 
-Now, let's compare how these methods perform when evaluating each pair of models in our example. @tbl-post-hoc-pvalues presents the estimated differences in accuracy, standard error, degrees of freedom, raw, unadjusted p-values and the p-values adjusted using the Tukey and FDR methods for each pairwise comparison. Notice that the Tukey adjustment results in less significant p-values than the FDR adjustment. Regardless of the adjustment method, the results indicate that each model's performance differs statistically significantly from the others. Specifically, the Cubist model has a higher accuracy than both the glmnet model with and without incorporating natural splines.
+Now, let's compare how these methods perform when evaluating each pair of models in our example. @tbl-post-hoc-pvalues presents the estimated differences in accuracy, standard error, degrees of freedom, raw, unadjusted p-values, and the p-values adjusted using the Tukey and FDR methods for each pairwise comparison. Notice that the Tukey adjustment results in less significant p-values than the FDR adjustment. Regardless of the adjustment method, the results indicate that each model's performance differs statistically significantly from the others. Specifically, the Cubist model has a higher accuracy than both the glmnet model with and without incorporating natural splines. 
 
 ```{r}
 #| label: tbl-post-hoc-pvalues
-#| tbl-cap: "Pairwise comparisons among the three models for predicting forestation classification.  The table includes the estimated difference in accuracy, standard error, degrees of freedom, the raw unadjusted p-value, and the corrseponding Tukey and FDR adjusted p-values."
+#| tbl-cap: "Pairwise comparisons among the three models for predicting forestation classification.  The table includes the estimated difference in accuracy, standard error, degrees of freedom, the raw unadjusted p-value, and the corresponding Tukey and FDR adjusted p-values."
 
 #Pairwise comparison adjustments
 emmeans_results <- emmeans(one_way_model_random_intercept, ~Model)
@@ -632,32 +639,36 @@ fdr_pairs <- data.frame(
 )
 
 pairwise_comparison_table <-
-    bind_cols(
-        unadjusted_pairs |>
-            dplyr::select(contrast, estimate, SE, df, p.value) |>
-            rename(Unadjusted = p.value),
-        tukey_pairs |> dplyr::select(p.value) |> rename(Tukey = p.value),
-        fdr_pairs |> dplyr::select(p.value) |> rename(`FDR` = p.value)
-    ) |>
-    rename(Comparison = contrast, Estimate = estimate, DF = df)
+  bind_cols(
+    unadjusted_pairs |>
+      dplyr::select(contrast, estimate, SE, df, p.value) |>
+      rename(Unadjusted = p.value),
+    tukey_pairs |> dplyr::select(p.value) |> rename(Tukey = p.value),
+    fdr_pairs |> dplyr::select(p.value) |> rename(`FDR` = p.value)
+  ) |>
+  rename(Comparison = contrast, Estimate = estimate, DF = df) |> 
+  mutate(
+    Unadjusted = map_chr(Unadjusted, pval),
+    Tukey = map_chr(Tukey, pval),
+    FDR = map_chr(FDR, pval)
+  )
 
 pairwise_comparison_table |>
-    gt() |>
-    cols_align(
-        align = "center"
-    ) |>
-    fmt_scientific(
-        columns = c("Unadjusted", "Tukey", "FDR"),
-        exp_style = "e1",
-        decimals = 2
-    ) |>
-    fmt_number(columns = c("Estimate", "SE"), decimals = 3) |>
-    tab_spanner(
-        label = "p-value Adjustment",
-        columns = c(Unadjusted, Tukey, FDR)
-    ) |>
-    cols_width(Comparison ~ px(200)) |>
-    tab_options(table.width = pct(100))
+  gt() |>
+  cols_align(
+    align = "center"
+  ) |>
+  cols_align(
+    columns = c("Unadjusted", "Tukey", "FDR"),
+    align = "right"
+  ) |>
+  fmt_percent(columns = c("Estimate", "SE"), decimals = 2) |>
+  tab_spanner(
+    label = "p-value Adjustment",
+    columns = c(Unadjusted, Tukey, FDR)
+  ) |>
+  cols_width(Comparison ~ px(200)) |>
+  tab_options(table.width = pct(100))
 ```
 
 In this table, the comparison between C5.0 and the glmnet model using natural splines is not significant at the 0.05 level.  However, the comparison between the C5.0 and glmnet model not using natural splines, and the comparison between the glmnet model without and with natural splines are significantly different.  The largest difference (`r round(unadjusted_pairs$estimate[which(unadjusted_pairs$estimate == max(unadjusted_pairs$estimate))],3)` is between the C5.0 and glmnet model without including natural splines.
@@ -671,11 +682,13 @@ Equivalence testing is based on the concept that two models can be considered pr
 $$
 H_O:  \beta_1 = \beta_2
 $$
+
 while the alternative hypothesis is:
 
 $$
 H_A:  \beta_1 \neq \beta_2
 $$
+
 However, an equivalence test reverses this logic. The null hypothesis is that the models are not equivalent, and the alternative hypothesis is that the models are practically insignificant:
 
 $$
@@ -686,13 +699,12 @@ $$
 H_A:  |\beta_1 - \beta_2| \lt \theta
 $$ {#eq-equivalence-alternative}
 
-Rejecting the null hypothesis in under this framework will allow us to conclude that the models are equivalent within the predefined margin of indifference.
-
-##### The Two One-Sided Test (TOST) Procedure
+Rejecting the null hypothesis using this framework will allow us to conclude that the models are equivalent within the predefined margin of indifference.
 
 A commonly used approach for equivalence testing is the Two One-Sided Test (TOST) procedure [@schuirmann1987comparison]. This method involves conducting two separate one-sided hypothesis tests as defined in @eq-equivalence-null and @eq-equivalence-alternative.  Specifically, one test assesses the lower bound comparison while the other test assesses the upper bound comparison as follows:
 
 Lower bound:
+
 $$
 H_0:  \beta_1 - \beta_2 \geq -\theta
 $$
@@ -708,17 +720,18 @@ $$
 $$
 H_A:  \beta_1 - \beta_2 > \theta
 $$
+
 Each test is conducted at a desired significance level $\alpha$, and if both null hypotheses are rejected, we conclude that the model performance is equivalent based on the predefined margin of indifference.
 
 Schuirmann showed that the two one-sided hypotheses can be practically evaluated by constructing a $100(1-2\alpha)\%$ confidence interval for $\beta_1 - \beta_2$.  If this interval is contained within the boundaries of ($-\theta$, $\theta$), then we can reject the null hypothesis and conclude that the two models have equivalent predictive performance.
 
-Selecting an appropriate margin of indifference is crucial and should be determined prior to conducting the statistical test.  What value should we choose?  The answer to this question is problem specific and depends on what we believe makes a practical difference in performance.
+Selecting an appropriate margin of indifference is crucial and should be determined prior to conducting the statistical test.  What value should we choose?  The answer to this question is problem-specific and depends on what we believe makes a practical difference in performance.
 
-From the previous section we saw that the largest expected difference between any pair of models was `r round(unadjusted_pairs$estimate[which(unadjusted_pairs$estimate == max(unadjusted_pairs$estimate))],3)`.  For the sake of this illustration, let's suppose that the margin of practical indifference between models is at least \pm 3 percent in accuracy.^[When performing an equivalence test, the margin of practical indifference should be specified _before_ the test is performed.]
+From the previous section, we saw that the largest expected difference between any pair of models was `r round(unadjusted_pairs$estimate[which(unadjusted_pairs$estimate == max(unadjusted_pairs$estimate))],3)`.  For the sake of this illustration, let's suppose that the margin of practical indifference between models is at least \pm 3 percent in accuracy.^[When performing an equivalence test, the margin of practical indifference should be specified _before_ the test is performed.]
 
-To perform the equivalence tests, we use the same ANOVA model for when testing for differences in @eq-one-way-model-with-blocks and estimate the 90% confidence intervals about each pairwise difference.  Because we are making multiple pairwise comparisons, the intervals need to be adjusted to minimize the chance of making a false positive finding.  This adjustment can be done using either the Tukey or FDR procedures.
+To perform the equivalence tests, we use the same ANOVA model as when testing for differences in @eq-one-way-model-with-blocks and estimate the 90% confidence intervals about each pairwise difference.  Because we are making multiple pairwise comparisons, the intervals need to be adjusted to minimize the chance of making a false positive finding.  This adjustment can be done using either the Tukey or FDR procedures.
 
-@fig-equivalence-intervals presents the Tukey adjusted 90% confidence intervals for each pairwise difference between models.  For the forestation data, we would conclude that the C5.0 and glmnet model including natural splines are equivalent.  However, we could not conclude that the glmnet model without natural splines was equivalent to either the C5.0 model or the glmnet model with natural splines. 
+@fig-equivalence-intervals presents the Tukey-adjusted 90% confidence intervals for each pairwise difference between models. For the forestation data, we would conclude that the C5.0 ensemble and the glmnet model that includes natural splines are equivalent. However, we could not conclude that the glmnet model without splines was equivalent to either the C5.0 model or the glmnet model with splines.  
 
 ```{r}
 #| label: fig-equivalence-intervals
@@ -728,7 +741,7 @@ To perform the equivalence tests, we use the same ANOVA model for when testing f
 #| fig-align: "center"
 #| out-width: "70%"
 #| warning: false
-#| fig-cap: Pairwise comparisons of models using equivalence testing.  The Tukey adjusted 90% confidence interval of each pairwise difference is illustrated with vertical bands.  For these comparisons, the margin of practical equivalence was set to +/- 3% accuracy.
+#| fig-cap: Pairwise comparisons of models using equivalence testing.  The Tukey-adjusted 90% confidence interval of each pairwise difference is illustrated with vertical bands.  For these comparisons, the margin of practical equivalence was set to +/- 3% accuracy.
 
 pairwise_comparisons <- pairs(
     one_way_model_random_intercept_em,
@@ -748,70 +761,32 @@ conf_int <-
     )
 
 ggplot(conf_int, aes(x = contrast, y = estimate)) +
-    geom_point(size = 2, color = "black") +
-    geom_segment(aes(
-        x = contrast,
-        y = lower.CL,
-        xend = contrast,
-        yend = upper.CL
-    )) +
-    geom_hline(yintercept = c(-0.03, 0.03), linetype = 2, color = "black") +
-    ylim(-0.07, 0.07) +
-    xlab("Comparison") +
-    ylab("Accuracy Difference") +
+  geom_point(size = 2) +
+  geom_errorbar(aes(ymin = lower.CL, ymax = upper.CL), width = 1 / 7) +
+  geom_hline(yintercept = c(-0.03, 0.03), linetype = 2) +
+  ylim(-0.07, 0.07) +
+  labs(x = "Comparison", y = "Accuracy Difference") +
   scale_y_continuous(label = label_percent()) 
 ```
 
 
 ### Comparisons Using Bayesian Models {#sec-compare-resample-bayes}
 
-Thus far we have focused on the Frequentist approach which utilizes the hypothesis testing framework, a statistical model, and distributional assumptions to estimate the probability of rejecting the null hypothesis in favor of the alternative hypothesis.  A Bayesian approach can also be used to compare models.  We first saw this modeling approach in @chapter-categorical-predictors where this technique was used to fit a linear mixed effect model.  As we will see, Bayesian modeling has some distinct advantages over a Frequentist approach. This framework can be more intuitive and incorporates prior knowledge about the process being measured.
+How would we use a Bayesian approach to fit the model from @eq-one-way-model-with-blocks? To start, we can again assume a Gaussian distribution for the errors with standard deviation $\sigma$. One commonly used prior for this parameter is the exponential distribution; it is highly right-skewed and has a single parameter. Our strategy here is to use very uninformative priors so that the data has more say in the final posterior estimates than the prior. If our model were useless, the standard deviation would be very large and would probably be bounded by the standard deviation of the outcome. For our data, that value for the accuracy is `r round(sd(for_fig$accuracy), 3)`.  We'll specify an exponential prior to use this as the mean of its distribution. 
 
-A Bayesian model applies Bayes' theorem to combine observed data with prior knowledge about parameter distributions. The key inputs to this process are:
+We'll also need to specify priors for the three $\beta$ parameters. A fairly wide Gaussian would suffice. We'll use $\beta_j \sim N(0, 5)$ for each. 
 
-* Likelihood: Information derived from the observed data.
-* Prior distributions: Assumptions or knowledge about the parameters.
+For the random effects $\beta_{0i}$, the sample size is fairly low (`r nrow(forested_rs)` samples per model). Let's specify a bell-shaped distribution with a wide tail: a $t$-distribution with a single degree of freedom. This would enable the Bayesian model to have some resample-to-resample effects that might be considered outliers if we assumed a Gaussian distribution. 
 
-Using Bayes' theorem, these inputs are used to produce posterior distributions, which represent our updated beliefs about the parameters after considering the data. The posterior distributions are then used to make decisions.
+We'll discuss training Bayesian models in @sec-logistic-bayes, so we'll summarize here. Given our priors, there is no analytically defined distribution for the posterior. To train the model, we'll use a Markov-chain Monte Carlo (MCMC) method to slowly iterate the posterior to an optimal location, not unlike the simulated annealing process previously described. To do this, we create chains of parameters. These are a controlled random walk from a starting point. Once that walk appears to converge, we continue generating random data points that are consistent with the optimized posterior. These random points will numerically approximate the posterior, and from these, we can make inferences. We'll create 10 independent chains, and each will have a warm-up phase of 5,000 iterations and then another 5,000 samples to approximate the posterior. If all goes well, we will have a random sample of 50,000 posterior samples. 
 
-If prior knowledge about the parameters is strong, we can specify precise prior distributions. However, when little or no prior information is available, we typically use vague or uninformative priors, which exert minimal influence on the results.  An excellent introduction to Bayesian modeling is @Rethinking.
 
-To compare the predictive performance of different models using a Bayesian approach, we start with a model that represents the data, which is similar to the Frequentist approach. The model from the previous section  (@eq-one-way-model-with-blocks) accounts for variation due to differences in predictive model performance, cross-validation folds, and random error.
-
-We assume each sample follows a normal distribution:  
-
-$$
-Q_{ij} \sim \mathcal{N}(\mu_j + \gamma_i, \sigma)
-$$
-The parameters from this model represent the average accuracy ($\mu_j$), the impact of cross-validation folds ($\gamma_i$), and the impact of random variation ($\sigma$).  Since we have no prior information about these parameters, we will use uninformative priors:
-
-$$
-\mu_j \sim \mathcal{N}[0.5, 0.1]
-$$
-
-$$
-\gamma_i \sim \mathcal{U}(0,0.1)
-$$
-
-$$
-\sigma \sim exponential(1)
-$$
-
-The prior distribution for the model mean is gaussian with a mean of 0.5 and standard deviation of 0.1, which allows more than 99% of values between 0.2 and 0.8--a fairly wide range.  The prior for fold effect is also gaussian centered at 0 with a standard deviation of 0.1 and reflects no preference towards positive or negative effects.  The prior distribution for the random variation follows an exponential distribution, which ensures that it remains positive.  The diffuse nature of the priors allow the data to have greater effect on the posterior distribution of the parameters.
-
-Although the model has multiple parameters, our primary focus is $\mu_j$. By analyzing the posterior distributions of $\mu$, we can assess and compare the predictive impact of different models, guiding our decision-making process.
-
-For our example modeling forestation classification, the posterior distributions of $\mu_j$ are illustrated in @fig-bayesian-model-posterior.  The results are similar to the Frequentist approach where the C5.0 model posterior distribution exhibits higher accuracy values, while the glmnet models exhibits lower accuracy values.  The posterior distribution is the foundation from which decisions can be made.  From this distribution we can derive a *credible interval* which is a probabilistic statement about where the parameter lies given that the observed data and prior information are valid.
-
-At face value, it seems like a confidence interval and credible interval are conveying the same information.  While these intervals may be numerically similar, their interpretations are different.  Confidence intervals are build on distributional assumptions such that a proportion of intervals will contain the true parameter in repeated sampling of the same population.  In contrast, a Bayesian credible interval allows us to make a direct probability statement about the parameter itself, which is more intuitive.
-
-A credible interval can be derived for any parameter or function of parameters from the posterior distributions.  For example, we may be interested in the 95% credible interval for the accuracy of each model.  To derive these intervals, we compute quantiles of the posterior distributions.  These intervals are illustrated by vertical lines in @fig-bayesian-model-posterior.
 
 ```{r}
 #| label: bayesian-calcs
 #| include: false
 #| cache: true
-
+equiv_val <- 0.03
 accuracy_values <-
     for_fig |>
     pivot_wider(
@@ -822,7 +797,30 @@ accuracy_values <-
     rename(id = Fold)
 
 bayes_model <-
-    perf_mod(accuracy_values, seed = 310, iter = 5000, chains = 5, refresh = 0)
+  perf_mod(
+    accuracy_values,
+    seed = 310,
+    iter = 10000,
+    chains = 10,
+    refresh = 0,
+    prior_aux = rstanarm::exponential(floor(1/sd(for_fig$accuracy))), 
+    prior_intercept = rstanarm::cauchy(0, 1),
+    prior = rstanarm::normal(0, 5)
+  )
+
+# get resample correlation
+variances <- 
+  bayes_model$stan |> 
+  tidy() |> 
+  filter(!is.na(group)) |> 
+  mutate(
+    variances = estimate^2,
+    total = sum(variances),
+    pct = variances / total * 100
+  ) |> 
+  filter(term == "sd_(Intercept).id") |> 
+  pluck("pct") |> 
+  round(1)
 
 #Get posterior samples
 posterior_samples <-
@@ -831,13 +829,15 @@ posterior_samples <-
 
 #Credible intervals for posterior distribution of model performance
 credible_intervals <-
-    posterior_samples |>
-    group_by(model) |>
-    summarize(
-        Lower = quantile(posterior, probs = 0.025),
-        Upper = quantile(posterior, probs = 0.975)
-    ) |>
-    ungroup()
+  posterior_samples |>
+  group_by(model) |>
+  summarize(
+    Lower = quantile(posterior, probs = 0.05),
+    Upper = quantile(posterior, probs = 0.95),
+    Mid = quantile(posterior, probs = 0.5)
+  ) |>
+  ungroup() |> 
+  mutate(ref = 6100) # A location just above the histogram
 
 #Get pairwise contrasts between models
 pairwise_diffs <-
@@ -849,7 +849,7 @@ pairwise_diffs <-
     ) |>
     mutate(
         color_group_equiv = ifelse(
-            difference >= 0.03 | difference <= -0.03,
+            difference >= equiv_val | difference <= -equiv_val,
             "Not Equivalent",
             "Equivalent"
         )
@@ -870,10 +870,12 @@ contrast_credible_intervals <-
     ) |>
     group_by(contrast) |>
     summarize(
-        Lower = quantile(difference, probs = 0.025),
-        Upper = quantile(difference, probs = 0.975)
+        Lower = quantile(difference, probs = 0.05),
+        Upper = quantile(difference, probs = 0.95),
+        Mid = quantile(difference, probs = 0.5)
     ) |>
-    ungroup()
+    ungroup() |> 
+  mutate(ref = 6100) # A location just above the histogram
 
 pairwise_diffs_c50_glmn_ns <-
     pairwise_diffs |>
@@ -885,6 +887,10 @@ difference_summary <-
     summary(pairwise_diffs, size = 0.03)
 ```
 
+The posterior distributions for the mean accuracy for each of the three models are shown in @fig-bayesian-model-posterior along with 90% credible intervals. The posteriors are relatively bell-shaped, and although there are discernible shifts between the models, there are overlaps in these distributions.
+
+We can also use the posteriors to estimate how much of the error in the data was associated with the resample-to-resample effect (i.e., the previously described nuisance parameter). The percentage of total error attributable to the resample-to-resample effects is `r variances`%. This illustrates how important it is to account for all of the systematic effects, wanted or unwanted, in the model. 
+
 ```{r}
 #| label: fig-bayesian-model-posterior
 #| echo: false
@@ -892,28 +898,28 @@ difference_summary <-
 #| fig-height: 3.5
 #| fig-align: "center"
 #| out-width: "70%"
-#| fig-cap: Posterior distributions of accuracy for each of the models.  The vertical dashed lines represent the 95% credible intervals about the posterior accuracy values for each model.
+#| fig-cap: Posterior distributions of accuracy for each of the models.  The horizontal bars represent the 90% credible intervals about the posterior accuracy values for each model.
 
-ggplot(posterior_samples, aes(x = posterior)) +
-    geom_histogram(bins = 50, color = "white", fill = "blue", alpha = 0.4) +
-    facet_wrap(~model, ncol = 1) +
-    geom_vline(
-        data = credible_intervals,
-        aes(xintercept = Lower),
-        color = "black",
-        linetype = 2
-    ) +
-    geom_vline(
-        data = credible_intervals,
-        aes(xintercept = Upper),
-        color = "black",
-        linetype = 2
-    ) +
-    xlab("Posterior Accuracy") + 
+ggplot(posterior_samples) +
+  geom_histogram(
+    aes(x = posterior),
+    bins = 50,
+    color = "white",
+    fill = "blue",
+    alpha = 0.4
+  ) +
+  facet_wrap(~model, ncol = 1) +
+  geom_errorbar(
+    data = credible_intervals,
+    aes(y = ref, xmin = Lower, xmax = Upper),
+    width = 800
+  ) +
+  geom_point(data = credible_intervals, aes(y = ref, x = Mid)) +
+  labs(x = "Posterior Accuracy", y = "count") + 
   scale_x_continuous(label = label_percent()) 
 ```
 
-We may also be interested in assessing the probability of a meaningful difference in performance between models. To quantify this, we generate posterior distributions for the pairwise differences in model performance. @fig-bayesian-contrast-posterior presents these distributions along with their corresponding 95% credible intervals. Based on these intervals, the probability of a difference between each pair of models is substantial. Among them, the C5.0 and glmnet model with natural splines exhibit the smallest difference, with a `r round(length(which(pairwise_diffs_c50_glmn_ns$difference > 0))/nrow(pairwise_diffs_c50_glmn_ns), 3)` probability that the C5.0 model exhibits a higher accuracy than the glmnet model with natural splines.
+Since we are interested in contrasting models, we can get a sample of the posterior and take the difference between the parameters that correspond to the model terms (i.e., $\beta$ parameters). We can create a large number of these samples to form posterior distributions of the pairwise contrasts and compute credible intervals. @fig-bayesian-contrast-posterior illustrates these results. 
 
 ```{r}
 #| label: fig-bayesian-contrast-posterior
@@ -922,36 +928,31 @@ We may also be interested in assessing the probability of a meaningful differenc
 #| fig-height: 3.5
 #| fig-align: "center"
 #| out-width: "70%"
-#| fig-cap: Posterior distributions of pairwise differences in accuracy for each pair of models.  The vertical dashed lines represent the 95% credible intervals for each contrast.
+#| fig-cap: Posterior distributions of pairwise differences in accuracy for each pair of models.  The vertical dashed lines represent the 90% credible intervals for each contrast.
 
-ggplot(pairwise_diffs, aes(x = difference, fill = color_group_diff)) +
-    geom_histogram(bins = 50, color = "white", fill = "blue", alpha = 0.4) +
-    facet_wrap(~contrast, ncol = 1) +
-    geom_vline(
-        data = contrast_credible_intervals,
-        aes(xintercept = Lower),
-        color = "black",
-        linetype = 2
-    ) +
-    geom_vline(
-        data = contrast_credible_intervals,
-        aes(xintercept = Upper),
-        color = "black",
-        linetype = 2
-    ) +
-    xlab("Accuracy Difference") +
-    theme(legend.position = "none") +
+ggplot(pairwise_diffs) +
+  geom_histogram(aes(x = difference), 
+                 bins = 50, fill = "#EFB344FF", col = "white",  alpha = 0.8) +
+  facet_wrap(~ contrast, ncol = 1)  +
+  geom_vline(xintercept = 0, lty = 3) +
+   geom_errorbar(
+    data = contrast_credible_intervals,
+    aes(y = ref, xmin = Lower, xmax = Upper),
+    width = 800
+   ) + 
+  geom_point(data = contrast_credible_intervals, aes(y = ref, x = Mid)) +
+  labs(x = "Posterior for the Differnece in Accuracy", y = "count") + 
   scale_x_continuous(label = label_percent()) 
 ```
 
 
-#### Region of Practical Equivalence (ROPE) {#sec-rope}
+Based on these intervals, the probability of a difference between each pair of models is substantial. Among them, the C5.0 and glmnet model with natural splines exhibit the smallest difference, with a `r round(length(which(pairwise_diffs_c50_glmn_ns$difference > 0))/nrow(pairwise_diffs_c50_glmn_ns) * 100, 1)`% probability that the C5.0 model exhibits a higher accuracy than the glmnet model with natural splines. 
 
-In addition to utilizing the posterior distribution to compute probabilities of difference, we can also utilize this distribution to compute probabilities of similarity or equivalence.  The region of practical equivalence (ROPE) defines a region of the parameter space that we would consider practically insignificant [@kruschke2014doing].  When using the equivalence testing from @sec-comparing-models-equivalence-tests, we considered models to be equivalent if the accuracy was within 3%.  Using this region, the posterior distribution of the parameter of interest is used to generate a probability that the parameter is within this region.  If a large proportion of the posterior distribution falls within the ROPE, then we can conclude that the difference is minimal.
+In addition to utilizing the posterior distribution to compute probabilities of difference, we can also use this distribution to calculate probabilities of similarity or equivalence.  The region of practical equivalence (ROPE) defines an area of the parameter space that we consider practically insignificant [@kruschke2014doing].  When using the equivalence testing from @sec-comparing-models-equivalence-tests, we considered models equivalent if the accuracy was within 3%.  Using this region, the posterior distribution of the parameter of interest is used to generate a probability that the parameter is within this region.  If a large proportion of the posterior distribution falls within the ROPE, we can conclude that the difference is minimal.
 
-The primary difference between the Frequentist and Bayesian equivalence testing lies in interpretation and flexibility. Frequentist equivalence testing is based on pre-specified significance levels and long-run error rates. Bayesian ROPE, on the other hand, provides a probability-based assessment of practical equivalence. This is particularly useful in predictive modeling, where small differences in performance may not be operationally relevant.
+The primary difference between the Frequentist and Bayesian equivalence testing lies in interpretation and flexibility. Frequentist equivalence testing is based on pre-specified significance levels and long-run error rates. Bayesian ROPE, on the other hand, provides a probability-based assessment of practical equivalence. This is particularly useful in predictive modeling, where slight differences in performance may not be operationally relevant.
 
-@fig-bayesian-ROPE illustrates the ROPE for the forestation data, defined as +/-3% accuracy. The probability mass within this region, shown in blue, represents the likelihood that the models have equivalent performance based on this criterion. @tab-bayesian-ROPE summarizes the probabilities for each model comparison.
+@fig-bayesian-ROPE illustrates the ROPE for the forestation data, defined as +/-3% accuracy. The probability mass within this region, shown in blue, represents the likelihood that the models have equivalent performance based on this criterion. @tab-bayesian-ROPE summarizes the probabilities for each model comparison. 
 
 For instance, the probability of practical equivalence between the C5.0 and glmnet model including natural splines is `r round(difference_summary$pract_equiv[which(difference_summary$contrast=="C5.0 vs glmnet+NS")],3)`, suggesting a high likelihood that these models produce similar results within the defined threshold. In contrast, the probability of practical equivalence between the C5.0 model and the base glmnet model is `r round(difference_summary$pract_equiv[which(difference_summary$contrast=="C5.0 vs glmnet")],3)`, indicating that the C5.0 model is likely to have superior predictive performance relative to the base glmnet model, based on the +/-3% accuracy criterion.
 
@@ -967,7 +968,7 @@ For instance, the probability of practical equivalence between the C5.0 and glmn
 #Histogram of posterior distributions between models
 #Color bars of histogram differently on either side of +/- 3%
 ggplot(pairwise_diffs, aes(x = difference, fill = color_group_equiv)) +
-    geom_histogram(bins = 100, alpha = 0.5, color = "white") +
+    geom_histogram(bins = 50, alpha = 0.5, color = "white") +
     facet_wrap(~contrast, ncol = 1) +
     scale_fill_manual(
         values = c("Equivalent" = "blue", "Not Equivalent" = "red")
@@ -999,8 +1000,6 @@ difference_summary |>
 ```
 
 ## Single Holdout Data Sets {#sec-compare-holdout}
-
-### Bootstrap Techniques {#sec-boot-ci}
 
 After selecting the optimal tuning parameters, the training and testing data are combined to fit the final model. To evaluate this model’s predictive performance, we reserve a portion of the original data—often referred to as a validation set. If the validation set is representative of the training and testing data, we expect the model’s performance metric on the validation set to be consistent with the results observed during cross-validation.
 
