@@ -562,7 +562,7 @@ ggplot(for_fig, aes(x = Model, y = accuracy, group = Fold)) +
 
 To understand if there are differences in performance among models, we again compare the variability explained by the different models with the unexplainable variability.  The signal relative to the noise is now much stronger, enabling us to more easily see differences in model performance.  The _F_-statistic from this model is `r paste0("(", round(anova_one_way_model_random_intercept_f,2), ", ", paste0(anova_one_way_model_random_intercept_ndf), ", ", paste0(anova_one_way_model_random_intercept_ddf), ")")` and has a corresponding p-value of `r pval(anova_one_way_model_random_intercept_pvalue)`.  By utilizing the same cross-validation scheme across models, there now is strong evidence of a difference in performance among the models.
 
-We have now established that there is strong evidence of differences in average predictive performance among models.  But this result does not tell us which models are different.  To understand which models are different, we need to perform additional tests to compare each pair of models.  These tests are referred to as _post hoc_ tests because they are performed after the initial hypothesis test among all means.
+We have now established that there is strong evidence of differences in average predictive performance among models.  But this result does not tell us which models are different.  To understand which models are different, we need to perform additional tests to compare each pair of models.  These tests are referred to as _post hoc_ tests because they are performed after the initial hypothesis test among all means. To learn more details about _post hoc_tests and the field of multiple comparisons, see @hsu1996multiple and/or @dudoit2008multiple .
 
 #### Post Hoc Pairwise Comparisons and Protecting against False Positive Findings {#sec-post-hoc}
 
@@ -952,9 +952,7 @@ In addition to utilizing the posterior distribution to compute probabilities of 
 
 The primary difference between the Frequentist and Bayesian equivalence testing lies in interpretation and flexibility. Frequentist equivalence testing is based on pre-specified significance levels and long-run error rates. Bayesian ROPE, on the other hand, provides a probability-based assessment of practical equivalence. This is particularly useful in predictive modeling, where slight differences in performance may not be operationally relevant.
 
-@fig-bayesian-ROPE illustrates the ROPE for the forestation data, defined as +/-3% accuracy. The probability mass within this region, shown in blue, represents the likelihood that the models have equivalent performance based on this criterion. @tab-bayesian-ROPE summarizes the probabilities for each model comparison. 
-
-For instance, the probability of practical equivalence between the C5.0 and glmnet model including natural splines is `r round(difference_summary$pract_equiv[which(difference_summary$contrast=="C5.0 vs glmnet+NS")],3)`, suggesting a high likelihood that these models produce similar results within the defined threshold. In contrast, the probability of practical equivalence between the C5.0 model and the base glmnet model is `r round(difference_summary$pract_equiv[which(difference_summary$contrast=="C5.0 vs glmnet")],3)`, indicating that the C5.0 model is likely to have superior predictive performance relative to the base glmnet model, based on the +/-3% accuracy criterion.
+@fig-bayesian-ROPE illustrates the ROPE for the forestation data, defined as +/-3% accuracy. The probability mass within this region, shown in blue, represents the likelihood that the models have equivalent performance based on this criterion. @tbl-bayesian-ROPE summarizes the probabilities for each model comparison. 
 
 ```{r}
 #| label: fig-bayesian-ROPE
@@ -979,6 +977,8 @@ ggplot(pairwise_diffs, aes(x = difference, fill = color_group_equiv)) +
   scale_x_continuous(labels = label_percent())
 ```
 
+For instance, the probability of practical equivalence between the C5.0 and glmnet model including natural splines is `r round(difference_summary$pract_equiv[which(difference_summary$contrast=="C5.0 vs glmnet+NS")],3)`, suggesting a high likelihood that these models produce similar results within the defined threshold. In contrast, the probability of practical equivalence between the C5.0 model and the base glmnet model is `r round(difference_summary$pract_equiv[which(difference_summary$contrast=="C5.0 vs glmnet")],3)`, indicating that the C5.0 model is likely to have superior predictive performance relative to the base glmnet model, based on the +/-3% accuracy criterion.
+
 ```{r}
 #| label: tbl-bayesian-ROPE
 #| tbl-cap: "Probability of practical equivalence between each pair of models' performance."
@@ -1001,11 +1001,9 @@ difference_summary |>
 
 ## Single Holdout Data Sets {#sec-compare-holdout}
 
-After selecting the optimal tuning parameters, the training and testing data are combined to fit the final model. To evaluate this model’s predictive performance, we reserve a portion of the original data—often referred to as a validation set. If the validation set is representative of the training and testing data, we expect the model’s performance metric on the validation set to be consistent with the results observed during cross-validation.
+Unlike resampled data sets, validation sets and test sets offer a single "look" at how well the model operates. In the case of the validation set, we would repeatedly use it to guide our model development process, much like how we would rely on resamples. For the test set, it should only be evaluated once, hopefully on a single model, but perhaps to make a final choice between a select few. It is not intended for repeat use. We'd like to conduct similar analyses to those described above. 
 
-However, unlike cross-validation, which yields a distribution of performance metrics across multiple resampled data sets, evaluation on a holdout set provides only a single performance estimate. Given the effort invested in model development, relying on just one value to assess predictive ability on unseen data may feel inadequate, especially since, by chance, the validation set result might deviate from the cross-validation results.
-
-Can we quantify our uncertainty around the validation set performance?  Yes, we can use a statistical technique called the bootstrap to gain greater confidence in the performance estimate from a single data set [@Efron1979boot].
+For the case of a single holdout, the focus will be on Frequentist methods by way of bootstrap sampling [@Efron1979boot;@efron2003second], which we have seen previously. 
 
 You were first introduced to the bootstrap in @sec-bootstrap, where it was applied to estimate model performance during tuning. In essence, the bootstrap involves resampling with replacement from the available data to estimate the sampling variability of a statistic. This variability can then be used to construct confidence intervals of the performance metrics of interest, offering a range of plausible values for model performance on similar validation sets.
 
@@ -1023,7 +1021,6 @@ knitr::include_graphics("../premade/boostrap_stat.svg")
 
 This process yields a distribution of performance metrics, from which bootstrap confidence intervals can be derived. These intervals offer an estimate of the uncertainty around the validation set performance and give us a sound way to express the expected range of performance across other validation sets of similar size.
 
-The bootstrap approach was applied to the three models for the forestation classification data.  @fig-bootstrap-validation-forested illustrates the 90% bootstrap confidence intervals of accuracy for each of the models.  Notice that these intervals are narrow.  This is because the number of validation set samples is large (n = `r nrow(forested_test)`).
 
 ```{r}
 #| label: boot-int-calc
@@ -1068,10 +1065,6 @@ both_intervals <- function(x, ...) {
 
 # ------------------------------------------------------------------------------
 
-glmn_validation_res <-
-    glmn_final_wflow |>
-    last_fit(class ~ ., split = forested_split, metrics = cls_mtr)
-
 glmn_ns_validation_res <-
     glmn_ns_final_wflow |>
     last_fit(class ~ ., split = forested_split, metrics = cls_mtr)
@@ -1082,16 +1075,27 @@ c50_validation_res <-
 
 # ------------------------------------------------------------------------------
 
+paired_class_pred <- 
+  glmn_ns_validation_res |> 
+  collect_predictions() |> 
+  select(.row, class, logistic = .pred_class) |> 
+  full_join(
+    c50_validation_res |> 
+      collect_predictions() |> 
+      select(.row, boosting = .pred_class),
+    by = ".row"
+  )
+
+agreement <- mean(paired_class_pred$logistic == paired_class_pred$boosting) * 100
+
+# ------------------------------------------------------------------------------
+
 set.seed(382)
 both_int_res <- 
-  both_intervals(glmn_validation_res, times = 2000) |> 
-  mutate(Model = "glmnet") |> 
+  both_intervals(glmn_ns_validation_res, times = 5000) |> 
+  mutate(Model = "glmnet+NS") |> 
   bind_rows(
-    both_intervals(glmn_ns_validation_res, times = 2000) |> 
-      mutate(Model = "glmnet+NS") 
-  ) |> 
-  bind_rows(
-    both_intervals(c50_validation_res, times = 2000) |> 
+    both_intervals(c50_validation_res, times = 5000) |> 
       mutate(Model = "C5.0") 
   ) |> 
   mutate(
@@ -1108,7 +1112,7 @@ boot_acc_reps <-
 acc_ints <- 
   both_int_res |> 
   mutate(
-    ref = if_else(Method == "Analytical", 450, 400)
+    ref = if_else(Method == "Analytical", 750, 800) # y-axis location to place the intervals
   )
 
 # ------------------------------------------------------------------------------
@@ -1122,54 +1126,46 @@ acc_diff_comps <- function(split) {
     accuracy(class, .pred_class) |> 
     arrange(Model)
   
-  diffs <- 
-    bind_rows(
-      tibble(
-        term = paste(acc$Model[1], acc$Model[2], sep = " vs "),
-        estimate = acc$.estimate[1]- acc$.estimate[2]
-      ),
-      tibble(
-        term = paste(acc$Model[1], acc$Model[3], sep = " vs "),
-        estimate = acc$.estimate[1]- acc$.estimate[3]
-      ),
-      tibble(
-        term = paste(acc$Model[3], acc$Model[2], sep = " vs "),
-        estimate = acc$.estimate[3]- acc$.estimate[2]
-      )
-    )
-  
-  diffs
+  tibble(
+    term = "C5.0 vs. glmnet+NS",
+    estimate = acc$.estimate[1]- acc$.estimate[2]
+  )
 }
 
 set.seed(524)
 acc_boot_diif <- 
-  collect_predictions(glmn_validation_res) |> 
-  mutate(Model = "glmnet") |> 
-  bind_rows(
-    collect_predictions(glmn_ns_validation_res) |> 
-      mutate(Model = "glmnet+NS") 
-  ) |> 
+  collect_predictions(glmn_ns_validation_res) |> 
+  mutate(Model = "glmnet+NS")  |> 
   bind_rows(
     collect_predictions(c50_validation_res) |> 
       mutate(Model = "C5.0") 
   ) |> 
   select(.row, Model, .pred_class, class) |> 
   pivot_wider(id_cols = c(.row, class), names_from = Model, values_from = .pred_class) |> 
-  bootstraps(times = 2000) |> 
+  bootstraps(times = 5000) |> 
   mutate(stats = map(splits, acc_diff_comps)) |> 
   int_pctl(stats, alpha = .1)
 ```
 
+There are several methods for computing bootstrap confidence intervals. See @davison1997bootstrap and Chapter 11 of @EfronHastie2016a. We'll describe one that is straightforward and often used: percentile intervals. The idea is simple: for an interval with $100 (1 - \alpha)$% confidence, we compute the $\alpha/2$ quantiles on both ends of the bootstrap distribution. For our 90% intervals, we determine the 5% and 95% quantiles. Since the method relies on the extreme tails, it is important to create many bootstrap samples (i.e., thousands) to guarantee dependable results. 
+
+Let's suppose that we considered a wide variety of models and feature sets, and still found our boosted tree and logistic regression (with splines) to be the best. We've previously seen that, while the ensemble appears to perform best, the results are fairly similar, and the logistic model is simpler and perhaps more explainable. We might take both of these pipelines to the test set to make one final comparison before making a choice.  
+
+We fit the final models on the entire training set and then predict the test set of `r format(nrow(forested_test), big.mark = ",")` locations. The accuracies for the boosting and logistic models were very close; they were `r round(c50_validation_res$.metrics[[1]]$.estimate * 100, 1)`% and `r round(glmn_ns_validation_res$.metrics[[1]]$.estimate * 100, 1)`%, respectively. Is this difference within the experimental noise or could there be a (statistical) difference? 
+
+We arrange the data so that there are separate columns for the boosted tree and logistic regression predictions (i.e., they are merged by the row number of the test set). Using this data, 5,000 bootstrap samples were created. From each of these, we can compute intervals for the accuracy of each and the difference in accuracy between them. 
+
+@fig-bootstrap-test shows the bootstrap distributions of the individual model results. They are fairly similar, with a small shift between them. Above each histogram are two 90% confidence intervals. One is the bootstrap percentile interval, and the other is a theoretically based asymmetric interval that assumes that the correct/incorrect data for each model follows a Bernoulli distribution. For each model, these intervals are almost identical. We computed each to demonstrate that the bootstrap has very good statistical performance (compared to its theoretical counterpart). 
+
 ```{r}
-#| label: fig-bootstrap-validation-forested
+#| label: fig-bootstrap-test
 #| echo: false
 #| warning: false
-#| cache: true
 #| fig-width: 6
 #| fig-height: 6
 #| fig-align: "center"
 #| out-width: "65%"
-#| fig-cap: For each model, the bootstrap distributions of the accuracy statistics are shown as histograms. The intervals at the top of each panel show the 90% confidence intervals computed using the bootstrap and via the traditional analytical method. 
+#| fig-cap: For both models, the bootstrap distributions of the accuracy statistics are shown as histograms. The intervals at the top of each panel show the 90% confidence intervals computed using the bootstrap and via the traditional analytical method. 
 
 boot_acc_reps |>
   ggplot() +
@@ -1194,64 +1190,56 @@ boot_acc_reps |>
   scale_shape_manual(values = 15:16)
 ```
 
-As the validation set size increases, the variation we expect to see in the summary statistic will decrease.  This concept is illustrated in @fig-bootstrap-single-holdout-varying-size.  In this figure, we have randomly selected subsets of varying size of the validation set and then applied the bootstrapping approach to these smaller sets.  Notice that as the sample size decreases, the width of the confidence interval increases.  Therefore, the smaller the validation set, the higher the variability will be in the estimate of model performance and the more important it is to understand the range of potential predictive performance.
+::: {.dangerous-box}
+The confidence intervals between models substantially overlap. _Ordinarily_, we should take that as reliable information that there is no statistical difference between the two models. However, this is not true for this particular situation. 
+:::
+
+The issue is that the two sets of predictions are highly correlated. On the test set, they agree `r round(agreement, 1)`% of the time. 
+
+When computing the difference between two things (A and B), the variance of their difference is: 
+
+$$
+Var[A-B] = Var[A] + Var[B] - 2Cov[A, B]
+$$ {#eq-diff-var}
+
+When A and B are related, their covariance will be very high and, if we ignore it, the power of any statistical test on that difference can be severely underpowered. This is the same issue as shown in @sec-nhtm.  When we didn't account for the resampling effect, we accidentally sabotaged the test's ability to find a difference (if there was one).  
+
+For the test set, we compute the difference in accuracy by resampling the matched pairs of predictions. From this, the bootstrap estimate of the difference was `r round(acc_boot_diif$.estimate * 100, 1)`% with 90% bootstrap interval (`r round(acc_boot_diif$.lower * 100, 1)`%, `r round(acc_boot_diif$.upper* 100, 1)`%). This does indicate that the models have statistically indistinguishable accuracies, but the lower bound is _very_ close to zero. With slightly different models or a different random split of the data, they might very well be considered different^[One reason to avoid using metrics based on qualitative predictions (e.g., "yes" or "no") is that they have a diminished capability to detect differences. They tend to contain far less information than their corresponding class probabilities. A metric such as the Brier score would have additional precision and might be able to tell the two models apart.]. There is an overwhelmingly strong case to make that they are practically different, though. 
+
+Also, as the data set size increases, the variation we expect to see in the summary statistic will decrease.  This concept is illustrated in @fig-interval-width.  In this figure, we have randomly selected subsets of varying size from the data set and then computed a 90% confidence interval using these smaller sets.  Notice that as the sample size decreases, the width of the confidence interval increases.  Therefore, the smaller the data set, the higher the variability will be in the estimate of model performance, and the more important it is to understand the range of potential predictive performance. This pattern is true of any interval procedure.
 
 ```{r}
-#| label: fig-bootstrap-single-holdout-varying-size
+#| label: fig-interval-width
 #| echo: false
 #| fig-width: 6
 #| fig-height: 3.5
 #| fig-align: "center"
 #| out-width: "70%"
-#| fig-cap: 90% bootstrap confidence intervals of accuracy for validation sets of varying size for the C5.0 model.  The smaller the size of the validation set, the wider the interval.
+#| fig-cap: 90% confidence interval widths of accuracy for data sets of varying size, assuming the same performance as the boosted ensemble.  
+#| 
+n_test <- nrow(forested_test)
 
-c50_validation_boot <- int_pctl(c50_validation_res, alpha = 0.10)
+totals <- floor(seq(250, n_test, length.out = 100))
+events <- accuracy(paired_class_pred, class, boosting)$.estimate * totals
+events <- floor(events)
 
-n_validation <- nrow(c50_validation_res$.predictions[[1]])
-set.seed(405)
-
-c50_validation_res_200 <- c50_validation_res
-n_200 <- sample(c(1:n_validation), size = 200)
-c50_validation_res_200$.predictions[[1]] <-
-    c50_validation_res$.predictions[[1]][n_200, ]
-c50_validation_boot_200 <- int_pctl(c50_validation_res_200, alpha = 0.10)
-rm(c50_validation_res_200)
-
-c50_validation_res_1000 <- c50_validation_res
-n_1000 <- sample(c(1:n_validation), size = 1000)
-c50_validation_res_1000$.predictions[[1]] <-
-    c50_validation_res$.predictions[[1]][n_1000, ]
-c50_validation_boot_1000 <- int_pctl(c50_validation_res_1000, alpha = 0.10)
-rm(c50_validation_res_1000)
-
-c50_boot_accuracy <-
-    bind_rows(
-        c50_validation_boot_200 |> mutate(Size = "200"),
-        c50_validation_boot_1000 |> mutate(Size = "1000"),
-        c50_validation_boot |> mutate(Size = "Original")
-    ) |>
-    dplyr::filter(.metric == "accuracy") |>
-    mutate(Size = factor(Size, levels = c("200", "1000", "Original")))
-
-ggplot(c50_boot_accuracy, aes(x = Size, y = .estimate)) +
-    geom_point(color = "black", shape = 1) +
-    geom_errorbar(
-        data = c50_boot_accuracy,
-        aes(ymin = .lower, ymax = .upper),
-        color = "black",
-        width = 0.05
-    ) +
-    ylab("Accuracy")
+map2_dfr(events, totals, ~ tidy(binom.test(.x, .y, conf.level = 0.90))) |> 
+  mutate(
+    size = totals,
+    width = conf.high - conf.low) |> 
+  ggplot(aes(x = totals)) + 
+  geom_line(aes(y = width)) + 
+  labs(x = "Data Set Size", y = "90% Confidence Interval Width") + 
+  scale_y_continuous(label = label_percent()) 
 ```
 
 
 ## Conclusion
 
-Selecting the best predictive model involves assessing performance metrics and accounting for practical considerations. Thus far, this chapter outlined both Frequentist and Bayesian approaches to comparing model performance, emphasizing the importance of appropriate statistical techniques when evaluating differences. The requentist approach provides a formal hypothesis testing framework, while the Bayesian approach offers a more intuitive probability-based interpretation of model differences.  When there is just one data set for evaluation, like a validation set, then the bootstrap technique can be used to create an interval about the performance metric.
+Selecting the best predictive model involves assessing performance metrics and accounting for practical considerations. Thus far, this chapter has outlined both Frequentist and Bayesian approaches to comparing model performance, emphasizing the importance of appropriate statistical techniques when evaluating differences. The Frequentist approach provides a formal hypothesis testing framework, while the Bayesian approach offers a more direct probability-based interpretation of model differences.  When there is just one data set for evaluation, like a validation set or test set, then the bootstrap technique can be used to create an interval about the performance metric (or differences between models).
 
 Ultimately, while statistical significance can indicate meaningful differences between models, practical significance should also guide decision-making. Equivalence testing and Bayesian ROPE analysis help determine whether models perform similarly within a defined threshold of practical relevance. In our forestation classification example, these methods suggested that while the Cubist model demonstrated superior predictive performance overall, differences between models may not always be large enough to drive a clear choice.
 
 In practice, model selection is rarely based on performance alone. Factors such as interpretability, computational cost, and deployment feasibility must also be considered. By combining quantitative performance assessment with practical domain knowledge, we can make informed decisions that balance accuracy with real-world constraints.
-
 
 ## Chapter References {.unnumbered}
