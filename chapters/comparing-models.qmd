@@ -188,17 +188,17 @@ nb_metrics <-
     collect_metrics(summarize = FALSE)
 ```
 
-So far, we established several key fundamentals of building predictive models. To create an effective model, we must employ strategies to reduce overfitting, use empirical validation techniques to accurately measure predictive performance, and systematically search a tuning parameter space to identify values that optimize model quality. By following these approaches, we can have confidence that our model generalizes well to new, unseen data and provides a realistic estimate of its efficacy.
+So far, we have established several key fundamentals of building predictive models. To create an effective model, we must employ strategies to reduce overfitting, use empirical validation techniques to accurately measure predictive performance, and systematically search a tuning parameter space to identify values that optimize model quality. By following these approaches, we can have confidence that our model generalizes well to new, unseen data and provides a realistic estimate of its efficacy.
 
 With this foundation in place, the next step is to select the best model for a given data set.  When presented with new data, we typically evaluate multiple machine learning models, each with different sets of tuning parameters. Our goal is to select the model and parameter combination that yields the best results. But how do we determine which is truly the best?
 
-Making this decision requires considering several factors. As briefly discussed in @sec-whole-game, practical characteristics such as model complexity, interpretability, and deployability play an important role. Predictive ability, however, is an objective measure that can be evaluated quantitatively. However, comparing metrics across models raises an important question:  how can we be sure that one model's quality is truly superior to another's?  Or, conversely, how can we conclude that multiple models have no significant difference in performance?
+Making this decision requires considering several factors. As briefly discussed in @sec-whole-game, practical characteristics such as model complexity, interpretability, and deployability play an important role. Predictive ability, however, is an objective measure that can be evaluated quantitatively. Comparing metrics across models raises an important question: How can we be sure that one model's quality is truly superior to another's? Or, conversely, how can we conclude that multiple models have no significant difference in performance?
 
 To address these questions, we will examine both graphical and statistical techniques for comparing the performance statistics of different models. During the model tuning and training process, these comparisons may involve assessing various configurations of tuning parameters within a single model or comparing fundamentally different modeling approaches.
 
 Empirical validation (e.g., resampling) serves as the backbone of the tuning and training process. It systematically partitions the data into multiple subsets, enabling repeated estimation of performance metrics. The variability from the different assessment sets provides critical information for selecting optimal tuning parameters or identifying the best-performing model.
 
-In the first part of this chapter, we will focus on methods for evaluating models when replicate estimates of performance metrics are available. This includes techniques grounded in both Frequentist and Bayesian frameworks. After that, the case of a single data set is explored. This is relevant when a single holdout set is used during model development (i.e., a validation set) and also when the test set is evaluated.
+In the first part of this chapter, we will focus on methods for evaluating models when replicate estimates of performance metrics are available. This includes techniques grounded in Frequentist and Bayesian frameworks. After that, we will explore the case of a single data set. This is relevant when a single holdout set is used during model development (i.e., a validation set) and also when the test set is evaluated.
 
 ## Resampled Data Sets {#sec-compare-resamples}
 
@@ -214,7 +214,7 @@ To illustrate these statistical techniques, we will use the same data that will 
 
 Without going into much detail, we'll focus on comparing three modeling strategies that will be described in Part 4: 
  - A boosted tree ensemble using C5.0 trees as the base learner.  This model was tuned over the number of trees in the ensemble and the amount of data required to make additional splits (a.k.a. $n_{min}$). Grid search found that `r c50_best$trees` trees in the ensemble were optimal, in conjunction with $n_{min}$ = `r c50_best$min_n` training set points. 
- - A logistic regression model that was trained using penalization (@sec-logistic-penalized). Feature engineering included an effect encoding parameterization of the county associated with locations, a small set of interaction terms (described in  @sec-forestation-eda), and ten spline terms for several of its numeric predictors.The optimal tuning parameter values were a penalization value of 10<sup>`r round(log10(logistic_best$penalty), 2)`</sup> and `r round(logistic_best$mixture * 100)`% Lasso penalization. 
+ - A logistic regression model that was trained using penalization (@sec-logistic-penalized). Feature engineering included an effect encoding parameterization of the county associated with locations, a small set of interaction terms (described in  @sec-forestation-eda), and ten spline terms for several of its numeric predictors. The optimal tuning parameter values were a penalization value of 10<sup>`r round(log10(logistic_best$penalty), 2)`</sup> and `r round(logistic_best$mixture * 100)`% Lasso penalization. 
  - A naive Bayes model (@sec-naive-bayes]) was used where the conditional distributions were modeled using a nonparametric density estimate. No feature preprocessing was used.
  
 One difference between these analyses and those to come in Part 4 is that we've chosen to use classification accuracy as our metric^[This isn't normally our first choice. However, the outcome classes are fairly balanced. Also, accuracy is intuitively understandable, and the broader set of classification metrics has yet to be described in detail.]. Some of these results may differ from upcoming analyses. Previously, the spatially aware resampling scheme that was used generated `r nrow(forested_rs)` resamples of the training set. For this reason, there are `r nrow(forested_rs)` different accuracy "replicates" for each candidate value that was evaluated. 
@@ -223,15 +223,15 @@ Similar to previous sections, we'll produce models where the replicated performa
 
 ### Frequentist Hypothesis Testing Methods {#sec-nhtm}
 
-Let's begin by building towards an appropriate statistical model that will enable us to formally compare the efficacy of models. To begin this illustration, let's suppose that each of these models were built separately using **different** 10-fold partitions of the training data.  In this scenario, the metrics on the first holdout fold would be unique, or independent, for each model.  If this was the case, then we could represent the desired performance metric with the following linear statistical model:
+Let's begin by building towards an appropriate statistical model that will enable us to formally compare the efficacy of models. To begin this illustration, let's suppose that each of these models was built separately using **different** 10-fold partitions of the training data.  In this scenario, the metrics on the first holdout fold would be unique, or independent, for each model.  If this were the case, then we could represent the desired performance metric with the following linear statistical model:
 
 $$
 Q_{ij} = \beta_0 + \sum_{j=1}^{M-1}\beta_jx_{ij} + \epsilon_{ij}
 $$ {#eq-one-way-model}
 
-In this equation $\beta_0$ is the overall average performance statistic across all assessment sets and models^[This is another example of an analysis of variance (ANOVA) model.].  The term $\beta_{j}$ represents the incremental impact on the outcome due to the $j^{th}$ model ($j$ = 1, 2, ..., $M-1$ = total number of models), and $x_{ij}$ is an indicator function for the $j^{th}$ model.  In this example, the $\beta_j$ will be considered as a _fixed_ effect.  This indicates that these are the only models that we are considering.  If we were to have taken a random sample of models, then the $\beta_j$ would be treated a _random_ effect which would have a corresponding statistical distribution.  The distinction between fixed and random effects will come into play shortly.  Finally, $\epsilon_{ij}$) represents the part of the performance that is not explainable by the $i^{th}$ assessment set and $j^{th}$ model.  We'll assumed these residuals follow a Gaussian distribution with a mean of zero and an unknown variance^[It may seem odd that we would assume a Gaussian distribution for a variable with values between zero and one. Almost all performance statistics are means; accuracy is the average of 0/1 data. The Central Limit Theorem tells us that, despite the original data distribution, the mean tends to normality as the sample size increases. Assessment and test sets often have enough data points to trust this assumption.].  The model, along with the statistical assumption about the distribution of the residuals, provides the statistical foundation for formally comparing models. 
+In this equation $\beta_0$ is the overall average performance statistic across all assessment sets and models^[This is another example of an analysis of variance (ANOVA) model.].  The term $\beta_{j}$ represents the incremental impact on the outcome due to the $j^{th}$ model ($j$ = 1, 2, ..., $M-1$ = total number of models), and $x_{ij}$ is an indicator function for the $j^{th}$ model.  In this example, the $\beta_j$ will be considered as a _fixed_ effect.  This indicates that these are the only models that we are considering.  If we were to have taken a random sample of models, then the $\beta_j$ would be treated a _random_ effect which would have a corresponding statistical distribution.  The distinction between fixed and random effects will come into play shortly.  Finally, $\epsilon_{ij}$) represents the part of the performance that is not explainable by the $i^{th}$ assessment set and $j^{th}$ model.  We'll assume these residuals follow a Gaussian distribution with a mean of zero and an unknown variance^[It may seem odd that we would assume a Gaussian distribution for a variable with values between zero and one. Almost all performance statistics are means; accuracy is the average of 0/1 data. The Central Limit Theorem tells us that, despite the original data distribution, the mean tends to normality as the sample size increases. Assessment and test sets often have enough data points to trust this assumption.].  The model, along with the statistical assumption about the distribution of the residuals, provides the statistical foundation for formally comparing models. 
 
-@fig-variance-partition-one-way illustrates these separate components for the assessment set with the largest accuracy value for the boosting ensemble, where the overall intercept is determined by the logistic regression. The horizontal dashed line represents the overall mean of the accuracy estimates, and the blue bar shows the mean of the boosting estimates alone. It is slightly higher than the average. For that model, the orange line shows the  residual ($\epsilon_{ij}$ for the largest boosted tree accuracy replicate. The totality of such errors are used to measure the overall error in the model.
+@fig-variance-partition-one-way illustrates these separate components for the assessment set with the largest accuracy value for the boosting ensemble, where the overall intercept is determined by the logistic regression. The horizontal dashed line represents the overall mean of the accuracy estimates, and the blue bar shows the mean of the boosting estimates alone. It is slightly higher than the average. For that model, the orange line shows the residual ($\epsilon_{ij}$ for the largest boosted tree accuracy replicate. The totality of such errors is used to measure the overall error in the model.
 
 ```{r}
 #| label: fig-variance-partition-one-way
@@ -240,7 +240,7 @@ In this equation $\beta_0$ is the overall average performance statistic across a
 #| fig-height: 3.5
 #| fig-align: "center"
 #| out-width: "70%"
-#| fig-cap: An illustration of how variation is partitioned based on the effect of the model (blue) and unexplainable causes (orange) when distinct cross-validation partitions are used to train each model. 
+#| fig-cap: An illustration of how variation is partitioned based on the effect of the model (blue) and unexplained causes (orange) when distinct cross-validation partitions are used to train each model. 
 for_fig <-
     bind_rows(
         c50_metrics |>
@@ -429,7 +429,7 @@ anova_one_way_model_random_intercept_pvalue <- anova_one_way_model_random_interc
 @eq-one-way-model enables us to distinctly partition the total variability in the outcome data into two components:  
 
 1. Explained variability:  The portion attributable to differences among models, represented by the blue bar. This is the **signal** in the data set. 
-2. Unexplained variability: The portion due to random or unaccounted-for factors, represented by the orange bar, commonly called the **noise**.  
+2. Unexplained variability: The portion due to random or unaccounted-for factors, represented by the orange bar, is commonly called the **noise**.  
 
 Our key question is whether the observed differences in the mean performance for each model reflect genuine differences among models or if they could simply be due to random variation. The Frequentist approach addresses this question using hypothesis testing. In this framework:  
 
@@ -452,21 +452,21 @@ To determine whether we have sufficient evidence to reject the null hypothesis, 
 
 This comparison is conducted using a test whose statistic follows an _F_ distribution [@kutner2004applied], which assesses whether the signal is large enough relative to the noise to conclude that differences among models are statistically significant.  
 
-In this case, the _F_-statistic is `r paste0("(", round(one_way_anova_f,2), ", ", paste0(one_way_anova_ndf), ", ", paste0(one_way_anova_ddf), ")")`^[This is common notation for reporting the _F_-statistic, where the first number represents the ratio of the mean square of the model to the mean square of the error.  The second and third numbers represent the degrees of freedom of the numerator and denominator, respectively.], with a corresponding p-value of `r pval(one_way_anova_pvalue)`. The p-value is small, however, is not small enough to conclude that there is strong evidence to reject the null hypothesis.  Therefore, we would **not** conclude that there are differences in accuracy among the three models.  However, remember that we treated these data as if the resamples were completely different, which was not the case. As you'll see shortly, this is a seriously flawed analysis of our data. 
+In this case, the _F_-statistic is `r paste0("(", round(one_way_anova_f,2), ", ", paste0(one_way_anova_ndf), ", ", paste0(one_way_anova_ddf), ")")`^[This is common notation for reporting the _F_-statistic, where the first number represents the ratio of the mean square of the model to the mean square of the error.  The second and third numbers represent the degrees of freedom of the numerator and denominator, respectively.], with a corresponding p-value of `r pval(one_way_anova_pvalue)`. The p-value is small. However, it is not small enough to conclude that there is strong evidence to reject the null hypothesis.  Therefore, we would **not** conclude that there are differences in accuracy among the three models.  However, remember that we treated these data as if the resamples were completely different, which was not the case. As you'll see shortly, this is a seriously flawed analysis of our data. 
 
-In practice when tuning and training models, we use the same resampling sets for evaluating model performance.  This is a more efficient approach since we only need to set up the resampling scheme once.  Moreover, the structure that is generated by using the same assessment sets will enable us to have a better ability to detect differences in quality between models.
+In practice, when tuning and training models, we use the same resampling sets to evaluate their performance. This is a more efficient approach since we only need to set up the resampling scheme once. Moreover, the structure generated by using the same assessment sets will enable us to detect differences in quality between models more effectively.
 
-In this setting, each assessment set forms what is known as a block, which is a group of units that are similar to each other.  This grouping is an important piece of information which will aid in assessing if models have statistically different performance.  The predictive performance when tuning multiple models using the same cross-validation assessment sets can now be represented as:
+In this setting, each assessment set forms what is known as a block, which is a group of units that are similar to each other.  This grouping is an important piece of information that will aid in assessing whether models have statistically different performance.  The predictive performance when tuning multiple models using the same cross-validation assessment sets can now be represented as:
 
 $$
 Q_{ij} = (\beta_0 + \beta_{0i}) + \sum_{j=1}^{M-1}\beta_jx_{ij} + \epsilon_{ij}
 $$ {#eq-one-way-model-with-blocks}
 
-Notice that @eq-one-way-model-with-blocks is nearly the same as @eq-one-way-model, with the additional term $\beta_{0i}$.  This term represents the incremental impact on performance due to the $i^{th}$ assessment set ($i$ = 1, 2,..., $B$ resamples).  In this model, the impact of the $B$ resamples, represented by $\beta_{0i}$ are a random effect.  The reason the resamples are considered as random effect is because the 10 folds were selected at random from an overall distribution of resamples.  The impacts of each model are still considered as fixed effects.  When a model contains both fixed and random effects, it is called a _mixed_ effect model.  
+Notice that @eq-one-way-model-with-blocks is nearly the same as @eq-one-way-model, with the additional term $\beta_{0i}$.  This term represents the incremental impact on performance due to the $i^{th}$ assessment set ($i$ = 1, 2,..., $B$ resamples).  In this model, the impact of the $B$ resamples, represented by $\beta_{0i}$ are a random effect.  The reason the resamples are considered as random effects is because the 10 folds were selected at random from an overall distribution of resamples.  The impacts of each model are still considered as fixed effects.  When a model contains both fixed and random effects, it is called a _mixed_ effect model.  
 
 @fig-variance-partition-one-way-with-blocks illustrates these separate components for the assessment set with the largest accuracy value for the boosted tree.  In this figure, the points are connected based on the fold. The green line shows that the residual for the best boosting accuracy can be explained by the fact that it comes from this specific fold (i.e., resample). For whatever reason, this specific assessment set was easier to predict since all models had the highest accuracies. The resample that is associated with each accuracy is a systematic and explainable effect in these data. It's also a "_nuisance_ parameter" because we don't care about this specific trend. 
 
-The mixed model can quantify the effect of this nuisance parameter, we can subtract its effect from the overall error, yielding a much smaller value of $\epsilon_{ij}$ as evidenced by the updated vertical orange bar.  Notice that the total amount of variability explained by the model is identical to @fig-variance-partition-one-way.  However, the previously unexplainable variability from @fig-variance-partition-one-way-with-blocks is now mostly explained by the variation due to the fold, thus reducing the _unexplainable_ variability.  We have made our analysis much more precise by accounting for the resample effect^[This again echoes the discussion of racing from @sec-racing.]. 
+The mixed model can quantify the effect of this nuisance parameter; we can subtract its effect from the overall error, yielding a much smaller value of $\epsilon_{ij}$ as evidenced by the updated vertical orange bar.  Notice that the total amount of variability explained by the model is identical to @fig-variance-partition-one-way.  However, the previously unexplainable variability from @fig-variance-partition-one-way-with-blocks is now mostly explained by the variation due to the fold, thus reducing the _unexplainable_ variability.  We have made our analysis much more precise by accounting for the resample effect^[This again echoes the discussion of racing from @sec-racing.]. 
 
 ```{r}
 #| label: fig-variance-partition-one-way-with-blocks
@@ -559,7 +559,7 @@ ggplot(for_fig, aes(x = Model, y = accuracy, group = Fold)) +
 
 ```
 
-To understand if there are differences between models, we again compare the variability explained by the different models with the unexplainable variability.  The signal relative to the noise is now much stronger, enabling us to more easily see differences in model performance.  The _F_-statistic from this model is `r paste0("(", round(anova_one_way_model_random_intercept_f,2), ", ", paste0(anova_one_way_model_random_intercept_ndf), ", ", paste0(anova_one_way_model_random_intercept_ddf), ")")` and has a corresponding p-value of `r pval(anova_one_way_model_random_intercept_pvalue)`.  By utilizing the same cross-validation scheme across models, there now is strong evidence of a difference in performance among the models.
+To understand if there are differences between models, we again compare the variability explained by the different models with the unexplainable variability.  The signal relative to the noise is now much stronger, enabling us to more easily see differences in model performance.  The _F_-statistic from this model is `r paste0("(", round(anova_one_way_model_random_intercept_f,2), ", ", paste0(anova_one_way_model_random_intercept_ndf), ", ", paste0(anova_one_way_model_random_intercept_ddf), ")")` and has a corresponding p-value of `r pval(anova_one_way_model_random_intercept_pvalue)`.  By utilizing the same cross-validation scheme across models, there is now strong evidence of a difference in performance among the models.
 
 This result does not tell us _which_ models are different.  To understand that, we need to perform additional tests to compare each pair of models.  These tests are referred to as _post hoc_ tests because they are performed after the initial hypothesis test among all means. To learn more details about _post hoc_ tests and the field of multiple comparisons, see @hsu1996multiple and/or @dudoit2008multiple .
 
@@ -579,7 +579,7 @@ $$
 
 where, $\bar{Q}_i$ and $\bar{Q}_j$ are the sample means of each model's outcome data, $MS_{within}$ is the mean square error from the ANOVA, and $n$ is the number of observations per group. The critical value for $T_{HSD}$ is obtained from the studentized range distribution, which depends on the number of groups and the degrees of freedom from the ANOVA error term.
 
-When we desire to compare the performance of each pair of models, then Tukey's HSD procedure will provide the appropriate adjustments to the p-values to protect against false positive finding as it becomes overly conservative.
+When we desire to compare the performance of each pair of models, then Tukey's HSD procedure will provide the appropriate adjustments to the p-values to protect against false positive findings as it becomes overly conservative.
 
 In settings where _many hypotheses_ are tested simultaneously, we may be more interested in the false discovery rate (FDR): the expected proportion of false positives among all rejected hypotheses. With many comparisons, this can be more appropriate than controlling the familywise error rate. 
 
@@ -664,11 +664,11 @@ pairwise_comparison_table |>
   tab_options(table.width = pct(100))
 ```
 
-In this table we can see that we have no evidence that boosting and logistic regression have different accuracies but bith of these models are statistically different than naive Bayes (no matter the adjustment type). 
+In this table, we can see that we have no evidence that boosting and logistic regression have different accuracies, but both of these models are statistically different from naive Bayes (no matter the adjustment type). 
 
 #### Comparing Performance using Equivalence Tests {#sec-comparing-models-equivalence-tests}
 
-In the previous section, we explored how to determine whether one model significantly outperforms another in metric of choice. However, there are cases where we may instead want to assess whether the models perform similarly in a practically meaningful way. To do this, we use an equivalence test, which differs from the traditional hypothesis test that aimed to detect differences between models.
+In the previous section, we explored how to determine whether one model significantly outperforms another in a metric of choice. However, there are cases where we may instead want to assess whether the models perform similarly in a practically meaningful way. To do this, we use an equivalence test, which differs from the traditional hypothesis test, which aimed to detect differences between models.
 
 Equivalence testing is based on the concept that two models can be considered practically equivalent if their difference falls within a **predefined** margin of indifference, often denoted as $\theta$. This threshold represents the maximum difference that is considered practically insignificant.  To illustrate equivalence testing, let's begin by reviewing the hypothesis testing context for assessing differences between models.  Let $\beta_1$ and $\beta_2$ represent the mean quality of two models. The null hypothesis for a standard two-sample test of difference is:
 
@@ -692,7 +692,7 @@ $$
 H_A:  |\beta_1 - \beta_2| \lt \theta
 $$ {#eq-equivalence-alternative}
 
-Rejecting the null hypothesis using this framework will allow us to conclude that the models are equivalent within the predefined margin of indifference.
+Using this framework, we might reject the null hypothesis and conclude that the models are equivalent within the predefined margin of indifference.
 
 A commonly used approach for equivalence testing is the Two One-Sided Test (TOST) procedure [@schuirmann1987comparison]. This method involves conducting two separate one-sided hypothesis tests as defined in @eq-equivalence-null and @eq-equivalence-alternative.  Specifically, one test assesses the lower bound comparison while the other test assesses the upper bound comparison as follows:
 
@@ -716,7 +716,7 @@ $$
 
 Each test is conducted at a desired significance level $\alpha$, and if both null hypotheses are rejected, we conclude that the model performance is equivalent based on the predefined margin of indifference.
 
-Schuirmann showed that the two one-sided hypotheses can be practically evaluated by constructing a $100(1-2\alpha)\%$ confidence interval for $\beta_1 - \beta_2$.  If this interval is contained within the boundaries of ($-\theta$, $\theta$), then we can reject the null hypothesis and conclude that the two models have equivalent  performance.
+Schuirmann showed that the two one-sided hypotheses can be practically evaluated by constructing a $100(1-2\alpha)\%$ confidence interval for $\beta_1 - \beta_2$.  If this interval is contained within the boundaries of ($-\theta$, $\theta$), then we can reject the null hypothesis and conclude that the two models have equivalent performance.
 
 Selecting an appropriate margin of indifference is crucial and should be determined prior to conducting the statistical test.  What value should we choose?  The answer to this question is problem-specific and depends on what we believe makes a sensible difference in performance.
 
@@ -935,7 +935,7 @@ ggplot(pairwise_diffs) +
   scale_x_continuous(label = label_percent()) 
 ```
 
-Based on these results we would reach the same conclusion as the Frequentist results; the boosting and logistic regression models are the only pair to appear to have comparable accuracies. We can compute probability statements such as "There is a `r round(length(which(pairwise_diffs_c50_logistic$difference > 0))/nrow(pairwise_diffs_c50_logistic) * 100, 1)`% probability that the boosting ensemble exhibits a higher accuracy than logistic regression."
+Based on these results, we would reach the same conclusion as the Frequentist results; the boosting and logistic regression models are the only pair to appear to have comparable accuracies. We can compute probability statements such as "There is a `r round(length(which(pairwise_diffs_c50_logistic$difference > 0))/nrow(pairwise_diffs_c50_logistic) * 100, 1)`% probability that the boosting ensemble exhibits a higher accuracy than logistic regression."
 
 In addition to utilizing the posterior distribution to compute probabilities of difference, we can also use this distribution to calculate probabilities of similarity or equivalence.  The region of practical equivalence (ROPE) defines a range of metric values that we believe contains practically insignificant results [@kruschke2014doing].  When using the equivalence testing from @sec-comparing-models-equivalence-tests, we considered models equivalent if the accuracy was within 3%.  Using this region, the posterior distribution of the parameter of interest is used to generate a probability that the parameter is within this region.  If a large proportion of the posterior distribution falls within the ROPE, we can conclude that the difference is minimal.
 
@@ -990,15 +990,13 @@ difference_summary |>
 
 ## Single Holdout Data Sets {#sec-compare-holdout}
 
-Unlike resampled data sets, validation sets and test sets offer a single "look" at how well the model operates. In the case of the validation set, we would repeatedly use it to guide our model development process, much like how we would rely on resamples. For the test set, it should only be evaluated once, hopefully on a single model, but perhaps to make a final choice between a select few. It is not intended for repeat use. We'd like to conduct similar analyses to those described above. 
-
-For the case of a single holdout, the focus will be on Frequentist methods by way of bootstrap sampling [@Efron1979boot;@efron2003second], which we have seen previously. 
+Unlike resampled data sets, validation sets and test sets offer a single "look" at how well the model operates. In the case of the validation set, we would repeatedly use it to guide our model development process, much like how we would rely on resamples. For the test set, it should only be evaluated once, hopefully on a single model, but perhaps to make a final choice between a select few. It is not intended for repeat use. In the discussions below, we'll use the term "holdout set" to describe the validation or test set, without loss of generality.  In this scenario, the focus will be on Frequentist methods by way of bootstrap sampling [@Efron1979boot;@efron2003second], which we have seen previously. 
 
 You were first introduced to the bootstrap in @sec-bootstrap, where it was applied to estimate model performance during tuning. In essence, the bootstrap involves resampling with replacement from the available data to estimate the sampling variability of a statistic. This variability can then be used to construct confidence intervals of the performance metrics of interest, offering a range of plausible values for model performance on similar validation sets.
 
-@fig-bootstrap-scheme illustrates the bootstrap process during the model building tuning phase. Recall that resampling with replacement from the training data generates multiple bootstrap samples of the same size as the original. Because sampling is done with replacement, some observations may appear multiple times within a sample, while others may be omitted. The omitted samples are used as holdout sets to evaluate model performance.
+@fig-bootstrap-scheme illustrates the bootstrap process during the model-building tuning phase. Recall that resampling with replacement from the training data generates multiple bootstrap samples of the same size as the original. Because sampling is done with replacement, some observations may appear multiple times within a sample, while others may be omitted. The omitted samples are used as holdout sets to evaluate model performance.
 
-To adapt this idea to a single validation set, we treat the validation set as our data source and repeatedly draw bootstrap samples from the validation set itself. Each bootstrap sample is the same size as the validation set and is created via random sampling with replacement (as illustrated in @fig-bootstrap-single-holdout-graphic). The final trained model is used to predict outcomes for each bootstrap sample, and the selected performance metric is computed for each.
+To adapt this idea to make predictions on the single holdout set, then repeatedly draw bootstrap samples from it. Each bootstrap sample is the same size as the holdout set and is created via random sampling with replacement (as illustrated in @fig-bootstrap-single-holdout-graphic). We compute our metric(s) of interest on each analysis set, which are just the bootstrap samples. The corresponding assessment sets are not used in this process. 
 
 ```{r}
 #| label: fig-bootstrap-single-holdout-graphic
@@ -1008,7 +1006,7 @@ To adapt this idea to a single validation set, we treat the validation set as ou
 knitr::include_graphics("../premade/boostrap_stat.svg")
 ```
 
-This process yields a distribution of performance metrics, from which bootstrap confidence intervals can be derived. These intervals offer an estimate of the uncertainty around the validation set performance and give us a sound way to express the expected range of performance across other validation sets of similar size.
+This process yields a distribution of performance metrics, from which bootstrap confidence intervals can be derived. These intervals offer an estimate of the uncertainty around the holdout set's performance and give us a sound way to express the expected range of performance across other holdout sets drawn from the same population.
 
 ```{r}
 #| label: boot-int-calc
@@ -1125,7 +1123,7 @@ acc_boot_diif <-
   int_pctl(stats, alpha = .1)
 ```
 
-There are several methods for computing bootstrap confidence intervals. See @davison1997bootstrap and Chapter 11 of @EfronHastie2016a. We'll describe one that is straightforward and often used: percentile intervals. The idea is simple: for an interval with $100 (1 - \alpha)$% confidence, we compute the $\alpha/2$ quantiles on both ends of the bootstrap distribution. For our 90% intervals, we determine the 5% and 95% quantiles. Since the method relies on the extreme tails, it is important to create many bootstrap samples (i.e., thousands) to guarantee dependable results. 
+There are several methods for computing bootstrap confidence intervals. See @davison1997bootstrap and Chapter 11 of @EfronHastie2016a. We'll describe one that is straightforward and often used: percentile intervals. The idea is simple: for an interval with $100 (1 - \alpha)$% confidence, we compute the $\alpha/2$ quantiles on both ends of the bootstrap distribution. For our 90% intervals, we determine the 5% and 95% quantiles. Since the method relies on estimating very small areas in the distributional tails, it is important to create many bootstrap samples (i.e., thousands) to guarantee dependable results. 
 
 Let's suppose that we considered a wide variety of models and feature sets, and still found our boosted tree and logistic regression to be the best. We've previously seen that, while the ensemble appears to perform best, the results are fairly similar, and the logistic model is simpler and perhaps more explainable. We might take both of these pipelines to the test set to make one final comparison before making a choice.  
 
@@ -1172,7 +1170,7 @@ boot_acc_reps |>
 The confidence intervals between models substantially overlap. _Ordinarily_, we should take that as reliable information that there is no statistical difference between the two models. However, this is not true for this particular situation. 
 :::
 
-The issue is that the two sets of predictions are highly correlated. On the test set, they agree `r round(agreement, 1)`% of the time. 
+The issue is that the two sets of predictions are highly correlated. On the test set, they agree `r round(agreement, 1)`% of the time. Unlike our previous mixed model approach from @eq-one-way-model-with-blocks, the individual confidence intervals have no way to correct for this issue (since they evaluate one model at a time).
 
 When computing the difference between two things (A and B), the variance of their difference is: 
 
@@ -1182,7 +1180,7 @@ $$ {#eq-diff-var}
 
 When A and B are related, their covariance will be very high and, if we ignore it, the power of any statistical test on that difference can be severely underpowered. This is the same issue as shown in @sec-nhtm.  When we didn't account for the resampling effect, we accidentally sabotaged the test's ability to find a difference (if there was one).  
 
-For the test set, we compute the difference in accuracy by resampling the matched pairs of predictions. From this, the bootstrap estimate of the difference was `r round(acc_boot_diif$.estimate * 100, 1)`% with 90% bootstrap interval (`r round(acc_boot_diif$.lower * 100, 1)`%, `r round(acc_boot_diif$.upper* 100, 1)`%). This does indicate that the models have statistically indistinguishable accuracies, but the lower bound is _very_ close to zero. With slightly different models or a different random split of the data, they might very well be considered different^[One reason to avoid using metrics based on qualitative predictions (e.g., "yes" or "no") is that they have a diminished capability to detect differences. They tend to contain far less information than their corresponding class probabilities. A metric such as the Brier score would have additional precision and might be able to tell the two models apart.]. There is an overwhelmingly strong case to make that they are practically different, though. 
+For the test set, we compute the difference in accuracy by resampling the matched pairs of predictions. From this, the bootstrap estimate of the difference was `r round(acc_boot_diif$.estimate * 100, 1)`% with 90% bootstrap interval (`r round(acc_boot_diif$.lower * 100, 1)`%, `r round(acc_boot_diif$.upper* 100, 1)`%). This does indicate that the models have statistically indistinguishable accuracies, but the lower bound is _very_ close to zero. With slightly different models or a different random split of the data, they might very well be considered different^[One reason to avoid using metrics based on qualitative predictions (e.g., "yes" or "no") is that they have a diminished capability to detect differences. They tend to contain far less information than their corresponding class probabilities. A metric such as the Brier score would have additional precision and might be able to tell the two models apart.]. There is an overwhelmingly strong case to make that they are practically equivalent, though. 
 
 Also, as the data set size increases, the variation we expect to see in the summary statistic will decrease.  This concept is illustrated in @fig-interval-width.  In this figure, we have randomly selected subsets of varying size from the data set and then computed a 90% confidence interval using these smaller sets.  Notice that as the sample size decreases, the width of the confidence interval increases.  Therefore, the smaller the data set, the higher the variability will be in the estimate of model quality, and the more important it is to understand the range of potential uncertainty. This pattern is true of any interval procedure.
 
@@ -1215,7 +1213,7 @@ map2_dfr(events, totals, ~ tidy(binom.test(.x, .y, conf.level = 0.90))) |>
 
 Selecting the best predictive model involves assessing performance metrics and accounting for practical considerations. Thus far, this chapter has outlined both Frequentist and Bayesian approaches to comparing model performance, emphasizing the importance of appropriate statistical techniques when evaluating differences. The Frequentist approach provides a formal hypothesis testing framework, while the Bayesian approach offers a more direct probability-based interpretation of model differences.  When there is just one data set for evaluation, like a validation set or test set, then the bootstrap technique can be used to create an interval about the performance metric (or differences between models).
 
-Ultimately, while statistical significance can indicate meaningful differences between models, practical significance should also guide decision-making. Equivalence testing and Bayesian ROPE analysis help determine whether models perform similarly within a defined threshold of practical relevance. In our forestation classification example, these methods suggested that while the Cubist model demonstrated superior predictive performance overall, differences between models may not always be large enough to drive a clear choice.
+Ultimately, while statistical significance can indicate meaningful differences between models, practical significance should also guide decision-making. Equivalence testing and Bayesian ROPE analysis help determine whether models perform similarly within a defined threshold of practical relevance. In our forestation classification example, these methods suggested that while the boosting model demonstrated superior predictive performance overall, differences between some models may not always be large enough to drive a clear choice.
 
 In practice, model selection is rarely based on performance alone. Factors such as interpretability, computational cost, and deployment feasibility must also be considered. By combining quantitative performance assessment with practical domain knowledge, we can make informed decisions that balance accuracy with real-world constraints.
 
