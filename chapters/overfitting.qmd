@@ -483,5 +483,40 @@ The animation shows that the search evaluated very disparate values, including t
 
 All of our optimization methods assume that a reasonable range of tuning parameters is known. The range is naturally bounded in some cases, such as the number of PCA components. Otherwise, you (and/or the ML community) will develop a sense of appropriate ranges of these parameters. We will suggest basic ranges here. For example, for the learning rate, we know it has to be greater than zero but the fuzzy upper bound of about 0.1 is a convention learned by trial and error. 
 
+## Sidebar: How Bad Can the Model Be?  {#sec-permutations}
+
+```{r}
+#| label: permutate
+#| include: false
+svm_high_pred <- 
+  svm_rbf(cost = 2^20, rbf_sigma = 10^-1, mode = "classification") |>
+  fit(class ~ A + B, sim_tr) |> 
+  augment(new_data = sim_tr)
+  
+svm_brier_perm <- 
+  svm_high_pred |> 
+  permutations(permute = class, times = 50) %>% 
+  mutate(
+    brier_perm = map_dbl(splits, ~ brier_class(analysis(.x), class, .pred_one)$.estimate)
+  ) %>% 
+  pluck("brier_perm") %>% 
+  mean() %>% 
+  signif(digits = 3)
+```
+
+When a model is overfit, the results can be unduly optimistic. Let's take a minute to consider the opposite: ff we compute some performance measure, what's the worst value we can achieve? 
+
+For some metrics, the possible range of values is well-defined. For example, for the coefficient of determination (a.k.a. R<sup>2</sup>), a value of zero means that the model explains none of the variation in the outcome. In classification, when computing the area under the ROC curve [@sec-roc], a value of 0.5 indicates that the model has no ability to discriminate between the classes. In these instances, the range of metric values is not dependent on the outcome data distribution. 
+
+As a counter-example, the mean absolute deviation (MAE) used in @sec-whole-game to measure the effectiveness of our time-to-delivery models does depend on the outcome data. We know a value of zero is best, but what is the worst it can be? 
+
+The worst performance occurs when no relationship exists between the observed and predicted outcomes. To translate this to a worst-case metric value, we can use a permutation strategy where we _break_ the relationship by randomly shuffling the outcome data and then compute the metric.  
+
+Since it is possible to get "a bad shuffle" that doesn't completely break the relationship, we can do this multiple times and then take the average of these values. 
+
+For example, we've said above that the best Brier score is zero and that poor models "have values $\ge$ 0.25." We used the predictions from the high complexity fit from @fig-two-class-overfit and shuffled the outcome 50 times. The average permuted Brier score for this data set was `r signif(svm_brier_perm, 3)`. 
+
+Permuted performance values will show up several times in subsequent chapters.
+
 ## Chapter References {.unnumbered}
 

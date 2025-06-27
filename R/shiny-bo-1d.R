@@ -15,6 +15,11 @@ ui <- page_fillable(
 )
 
 server <- function(input, output) {
+  rd_url <- function(nm) {
+    rd_base <- "https://raw.githubusercontent.com/aml4td/website/main/RData"
+    url(file.path(rd_base, nm))
+  }
+  
 	load(rd_url("bayesian_opt_1d.RData"))
 
 	y_rng <- extendrange(true_curve$y)
