@@ -3,8 +3,7 @@
 # - titles but not in title case
 # - no fancy quotes
 
-
-# See this repo for a much more sophisticated and rigorour approach: 
+# See this repo for a much more sophisticated and rigorour approach:
 # https://github.com/DavidAnson/markdownlint
 
 get_title <- function(txt) {
@@ -34,13 +33,13 @@ has_label <- function(x) {
 
 qc_qmd <- function(path) {
   suppressPackageStartupMessages(library(dplyr))
-  
+
   content <- readLines(path)
   file_nm <- basename(path)
 
   # check apostrophes
   content <- gsub("(”)|(“)", "\"", content)
-  
+
   # check data are plural
   # TODO
 
@@ -52,11 +51,13 @@ qc_qmd <- function(path) {
     content[i] <- get_title(content[i])
     ## check that there is a stub for each section
     if (needs_stub(content[i])) {
-      cli::cli_inform(c(x = "Needs a stub: {.val {content[i]}} at {.file {path}:{i}}"))
+      cli::cli_inform(c(
+        x = "Needs a stub: {.val {content[i]}} at {.file {path}:{i}}"
+      ))
       content[i] <- paste(content[i], "{#sec-TODO}")
     }
   }
-  
+
   # mutiple blank lines
   blank_line <- grepl("^\\s*$", content)
   blank_line <- which(blank_line)
@@ -68,14 +69,14 @@ qc_qmd <- function(path) {
     for (blank_i in blank_start) {
       cat(cli::rule(), "\n")
       cli::cli_inform(c(x = "Extra blank line at {.file {path}:{blank_i}}:"))
-      cat(content[(blank_i-2):(blank_i+2)], sep = "\n")
+      cat(content[(blank_i - 2):(blank_i + 2)], sep = "\n")
       removals <- c(removals, blank_i)
       cat(cli::rule(), "\n")
     }
     removals <- unique(removals)
     content <- content[-removals]
   }
-  
+
   # No yaml "label" value at top of R chunk
   chunk_start <- rev(which(grepl("^```\\{r\\}", content)))
   # List from highest to lowest to preserve line numbers below current
@@ -83,16 +84,19 @@ qc_qmd <- function(path) {
   if (any(!check_has_label)) {
     lns <- chunk_start[which(!check_has_label)]
     for (ln in lns) {
-      cli::cli_inform(c(x = "No chunk {.code #| label:} at {.file {path}:{ln}}:"))
+      cli::cli_inform(c(
+        x = "No chunk {.code #| label:} at {.file {path}:{ln}}:"
+      ))
     }
   }
-  
+
   # write out results
   cat(content, file = path, sep = "\n")
   invisible(TRUE)
 }
 
-qmd_files <- list.files(path = "chapters", pattern = "\\.qmd$", full.names = TRUE)
-qmd_files <- qmd_files[!grepl("(news)|(contri)", qmd_files)]
-linted <- purrr::map_lgl(qmd_files, qc_qmd)
+# qmd_files <- list.files(path = "chapters", pattern = "\\.qmd$", full.names = TRUE)
+# qmd_files <- qmd_files[!grepl("(news)|(contri)", qmd_files)]
+# linted <- purrr::map_lgl(qmd_files, qc_qmd)
 
+qc_qmd("chapters/cls-metrics.qmd")

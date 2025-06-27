@@ -11,20 +11,21 @@ scholar_url <- function(title, year) {
   if (grepl("href", title)) {
     return(title)
   }
-  
+
   tags <- c("em", "it", "tt", "bf")
 
   for (pat in tags) {
     pattern <- glue::glue("\\{\\\\|pat| (.*?)\\}", .open = "|", .close = "|")
     title <- gsub(pattern, "\\1", title)
   }
-  
 
   title <- gsub("[[:punct:]]", " ", title)
   title <- gsub("[[:space:]]+", " ", title)
   title <- gsub("[[:space:]]", "+", title)
   # default to english :-(
-  glue::glue("https://scholar.google.com/scholar?hl=en&as_sdt=0%2C7&q={title}{year}&btnG=")
+  glue::glue(
+    "https://scholar.google.com/scholar?hl=en&as_sdt=0%2C7&q={title}{year}&btnG="
+  )
 }
 
 
@@ -41,9 +42,13 @@ insert_link <- function(x, type) {
 
   title <- x$title
   article_url <- scholar_url(title, yr_txt)
-  href <- glue::glue("\\href{|article_url|}{|title|}", .open = "|", .close = "|")
+  href <- glue::glue(
+    "\\href{|article_url|}{|title|}",
+    .open = "|",
+    .close = "|"
+  )
   x$title <- href
-  
+
   x
 }
 
