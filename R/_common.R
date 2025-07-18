@@ -9,31 +9,6 @@
 teardown <- TRUE
 
 # ------------------------------------------------------------------------------
-
-light_bg <- "#fcfefe" # from aml4td.scss
-
-# ------------------------------------------------------------------------------
-# ggplot stuff
-
-theme_transparent <- function(...) {
-
-  ret <- ggplot2::theme_bw(...)
-
-  transparent_rect <- ggplot2::element_rect(fill = "transparent", colour = NA)
-  ret$panel.background  <- transparent_rect
-  ret$plot.background   <- transparent_rect
-  ret$legend.background <- transparent_rect
-  ret$legend.key        <- transparent_rect
-
-  ret$legend.position <- "top"
-
-  ret
-}
-
-log_2_breaks <- scales::trans_breaks("log2", function(x) 2^x)
-log_2_labs   <- scales::trans_format("log2", scales::math_format(2^.x))
-
-# ------------------------------------------------------------------------------
 # formatting for package names
 
 pkg <- function(x) {
@@ -47,7 +22,6 @@ pkg_chr <- function(x) {
 }
 
 # ------------------------------------------------------------------------------
-
 
 holdout_plots <- function(x, resid_rng, alpha = 3/4) {
   require(patchwork)
@@ -210,7 +184,6 @@ if (is_html) {
     comment = "#>",
     collapse = TRUE,
     fig.align = 'center',
-    fig.path = "../figures/",
     fig.width = 10,
     fig.height = 6,
     out.width = "95%",
@@ -224,7 +197,6 @@ if (is_html) {
     comment = "#>",
     collapse = TRUE,
     fig.align = 'center',
-    fig.path = "../figures/",
     fig.width = 10,
     fig.height = 6,
     out.width = "95%",
@@ -236,51 +208,48 @@ if (is_html) {
 
 # ------------------------------------------------------------------------------
 
-lightsvglite <- function(file, width, height, ...) {
-  on.exit(ggplot2::reset_theme_settings())
-  
-  theme_transparent <- function(...) {
-    
-    ret <- ggplot2::theme_bw(...)
-    
-    transparent_rect <- ggplot2::element_rect(fill = "transparent", colour = NA)
-    ret$panel.background  <- transparent_rect
-    ret$plot.background   <- transparent_rect
-    ret$legend.background <- transparent_rect
-    ret$legend.key        <- transparent_rect
-    
-    ret$legend.position <- "top"
-    
-    ret
-  }
-  
-  ggplot2::theme_set(theme_transparent())
-  ggsave(
-    filename = file, #fs::path("figures", file),
-    width = width,
-    height = height,
-    dev = "svg",
-    bg = "transparent",
-    ...
-  )
-}
-
-darksvglite <- function(file, width, height, ...) {
-  on.exit(ggplot2::reset_theme_settings())
-  ggplot2::theme_set(ggdark::dark_theme_grey())
-  ggsave(
-    filename = file, #fs::path("figures", file),
-    width = width,
-    height = height,
-    dev = "svg",
-    bg = "transparent",
-    ...
-  )
-}
-
 r_comp <- function(stub) {
   glue::glue(
     '<a href="https://tidymodels.aml4td.org/chapters/[stub]">{{< fa brands r-project size=Large >}}</a>',
     .open = "[", .close = "]"
   )
 }
+
+# ------------------------------------------------------------------------------
+# formatting data
+
+pval <- function(x, format = "html", max_zeros = 4) {
+  if (is.na(x)) {
+    return("")
+  }
+
+  min_log <- floor(-log10(x))
+  if (min_log < max_zeros) {
+    res <- format(x, digits = 3, scientific = FALSE)
+  } else {
+    if (format == "plain") {
+      res <- paste0("<10^-", min_log)
+    } else if (format == "html") {
+      res <- paste0("< 10<sup>-", min_log, "</sup>")
+    } else {
+      res <- paste0("$<10^{-", min_log, "}$")
+    }
+  }
+  res
+}
+
+# ------------------------------------------------------------------------------
+# From recipes::names0 and used in shinylive chunks; see https://github.com/aml4td/website/pull/80
+
+names_zero_padded <- function(num, prefix = "x", call = rlang::caller_env()) {
+  rlang:::check_number_whole(num, min = 1, call = call)
+  ind <- format(seq_len(num))
+  ind <- gsub(" ", "0", ind)
+  paste0(prefix, ind)
+}
+
+# ------------------------------------------------------------------------------
+
+log_2_breaks <- scales::trans_breaks("log2", function(x) 2^x)
+log_2_labs   <- scales::trans_format("log2", scales::math_format(2^.x))
+

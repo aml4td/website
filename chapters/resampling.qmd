@@ -11,6 +11,9 @@ knitr:
 #| include: false
 
 source("../R/_common.R")
+source("../R/_themes.R")
+source("../R/_themes_ggplot.R")
+source("../R/_themes_gt.R")
 
 # ------------------------------------------------------------------------------
 # Required packages
@@ -18,7 +21,7 @@ library(readr)
 library(tidymodels)
 library(patchwork)
 library(kableExtra)
-library(future)
+library(future.mirai)
 library(leaflet)
 
 # Also requires:
@@ -27,9 +30,9 @@ library(leaflet)
 
 # ------------------------------------------------------------------------------
 # Set options
-plan("multisession")
+plan(mirai_multisession)
 tidymodels_prefer()
-theme_set(theme_transparent())
+theme_set(thm_lt)
 set_options()
 
 # ------------------------------------------------------------------------------
@@ -120,7 +123,7 @@ The resampling process fits a model to an analysis set and predicts the correspo
     \State Generate assessment set predictions $\hat{y}_b$ by applying model $\hat{f}_{b}$ to $\mathfrak{D}_b^{pred}$.
     \State Estimate performance statistic $\hat{Q}_{b}$.
   \EndFor 
-  \State Compute reampling estimate $\hat{Q} = \sum_{b=1}^B \hat{Q}_{b}$.
+  \State Compute resampling estimate $\hat{Q} = \sum_{b=1}^B \hat{Q}_{b}$.
   \Return $\hat{Q}$.
 \Endprocedure
 \end{algorithmic}
@@ -189,7 +192,7 @@ We’ve already described a validation set; it is typically created via a three-
 knitr::include_graphics("../premade/validation.svg")
 ```
 
-While not precisely the same, a validation set is extremely similar to an approach described below called Monte Carlo cross-validation (MCCV). If we used a single MCCV resample, the results would be effectively the same as those of a validation set; the difference not substantive. 
+While not precisely the same, a validation set is extremely similar to an approach described below called Monte Carlo cross-validation (MCCV). If we used a single MCCV resample, the results would be effectively the same as those of a validation set; the difference is not substantive. 
 
 One aspect of using the validation set is what to do with it after you’ve made your final decision about the model pipeline. Ordinarily, the entire training set is used for the final model fit.
 
@@ -217,7 +220,7 @@ Each resampling method has different trade-offs between bias and variance. Let�
 
 ### Another Simulation Study  {.unnumbered}
 
-@sec-complexity described a simulated data set that included 200 training set points. In that section, @fig-two-class-overfit illustrates the effect of overfitting using a particular model (KNN). This chapter will use the same training set but with a simple logistic regression model where a four-degree of freedom spline was used with each of the two predictors. 
+@sec-complexity described a simulated data set that included 200 training set points. In that section, @fig-two-class-overfit illustrates the effect of overfitting using a particular model (KNN). This chapter will use the same training set but with a simple logistic regression model where a four-degree-of-freedom spline was used with each of the two predictors. 
 
 Since these are simulated data, an additional, very large data set was simulated and used to approximate the model's true performance, once again evaluated using a Brier score. Our logistic model has a Brier score value of $Q \approx$ `r signif(br_lr$large_sample[1], 3)`, which demonstrates a good fit. Using this estimate, the model bias can be computed by subtracting the resampling estimate from `r signif(br_lr$large_sample[1], 3)`.
 
@@ -287,7 +290,7 @@ This method is extremely computationally expensive^[However, for linear regressi
 
 ### Repeated Cross-Validation {.unnumbered}
 
-One way improve precision of this method is to use **repeated V-fold cross-validation**. In this case, _V_-fold CV is repeated multiple times using different random number seeds.  For example, two repeats of 10-fold cross-validation^[This isn’t the same as using _V_ = 20. That scheme has very different bias properties than two repetitions of _V_ = 10.] create two sets of _V_ folds, which are treated as a collection of twenty resamples (e.g., _B_ = _V_ $\times$ _R_ for _R_ repeats). Again, increasing the number of resamples does not generally change the bias. 
+One way to improve precision of this method is to use **repeated V-fold cross-validation**. In this case, _V_-fold CV is repeated multiple times using different random number seeds.  For example, two repeats of 10-fold cross-validation^[This isn’t the same as using _V_ = 20. That scheme has very different bias properties than two repetitions of _V_ = 10.] create two sets of _V_ folds, which are treated as a collection of twenty resamples (e.g., _B_ = _V_ $\times$ _R_ for _R_ repeats). Again, increasing the number of resamples does not generally change the bias. 
 
 ### Variance and Bias for v-Fold Cross-Validation {.unnumbered}
 
@@ -389,7 +392,7 @@ $$\prod_{i=1}^{n_{tr}} \left(1 - \frac{1}{n_{tr}}\right) = \left(1 - \frac{1}{n_
 
 Since the bootstrap sample contains the _selected_ data, each training point is selected with probability $1 - e^{-1} \approx `r round((1 - exp(-1)), 3)`$. The implication is that, on average, the analysis set, contains about `r round((1 - exp(-1)) * 100, 1)`% unique training set points and the assessment set includes, on average, 36.8% of the training data.  When comparing the number of unique training set points excluded by the bootstrap method to those excluded by V-fold cross-validation, the bootstrap method is roughly equivalent to using $V=3$ in cross-validation. 
 
-@fig-boot-stats shows bias and variance for the simulated data. As one might expect, there is considerable bias in the bootstrap estimate of performance. In comparison to the corresponding plot for MCCV, the bootstrap bias is worse than the MCCV curve where 60% were held out. The curve is also flat; the bias does't go away by increasing _B_.
+@fig-boot-stats shows bias and variance for the simulated data. As one might expect, there is considerable bias in the bootstrap estimate of performance. In comparison to the corresponding plot for MCCV, the bootstrap bias is worse than the MCCV curve where 60% were held out. The curve is also flat; the bias doesn't go away by increasing _B_.
 
 However, the precision is extremely good, even with very few resamples. 
 
@@ -437,7 +440,7 @@ boot_bias +
 ### Correcting for Bias {.unnumbered}
 
 ```{r}
-#| label: bootstrap-bias
+#| label: bootstrap-bias-comp
 #| include: false
 
 c_632 <- 1 - exp(-1)
@@ -555,9 +558,9 @@ There have been some attempts to de-bias the ordinary bootstrap estimate. The "6
 $$\hat{Q}_{632} = e^{-1}\, \hat{Q}_{rsub} + (1 - e^{-1})\, \hat{Q}_{bt} = 0.368\,\hat{Q}_{rsub} + 0.632\,\hat{Q}_{bt}$$
 @fig-boot-stats shows that there is a significant drop in the bias when using this correction. The 632 estimator combines two different statistical estimates, and we only know the standard error of $\hat{Q}_{bt}$. Therefore, the right-hand panel does not show a standard error curve for the 632 estimator.  
 
-Let's look at an average example from the simulated data sets with _B_ = 100. @tbl-bootstrap-bias has the estimator values and their intermediate values. Let's first focus on the values for the column labeld "Logistic." The ordinary bootstrap estimate was $\hat{Q}_{bt}$ = `r signif(Q_bt, 3)` and repredicting the training set produced $\hat{Q}_{rsub}$ = `r signif(Q_resub, 3)`. The 632 estimate shifts the Brier score downward to $\hat{Q}_{632}$ = `r signif(Q_632, 3)`. This reduces the pessimistic bias; our large sample estimate of the true Brier score is `r signif(Q_true, 3)` so we are closer to that value.
+Let's look at an average example from the simulated data sets with _B_ = 100. @tbl-bootstrap-bias has the estimator values and their intermediate values. Let's first focus on the values for the column labeled "Logistic." The ordinary bootstrap estimate was $\hat{Q}_{bt}$ = `r signif(Q_bt, 3)` and repredicting the training set produced $\hat{Q}_{rsub}$ = `r signif(Q_resub, 3)`. The 632 estimate shifts the Brier score downward to $\hat{Q}_{632}$ = `r signif(Q_632, 3)`. This reduces the pessimistic bias; our large sample estimate of the true Brier score is `r signif(Q_true, 3)` so we are closer to that value.
 
-Another technique, the 632+ estimator [@Efron1997tc], uses the same blending strategy but uses dynamic weights based on how much the model overfits (if at all). It factors in a model’s "no-information rate": the metric value if the predicted and true outcome values were independent. The author gives a formula for this, but it can also be estimated using a permutation approach where we repeatedly shuffle the outcome values and compute the metric.  We will denote this value as $\hat{Q}_{nir}$. For our simulated data set $\hat{Q}_{nir}$ = `r signif(Q_nir, 3)`; we believe that this is the worst case value for our metric. 
+Another technique, the 632+ estimator [@Efron1997tc], uses the same blending strategy but uses dynamic weights based on how much the model overfits (if at all). It factors in a model’s "no-information rate": the metric value if the predicted and true outcome values were independent. The author gives a formula for this, but it can also be estimated using a permutation approach where we repeatedly shuffle the outcome values and compute the metric ([@sec-permutations]).  We will denote this value as $\hat{Q}_{nir}$. For our simulated data set $\hat{Q}_{nir}$ = `r signif(Q_nir, 3)`; we believe that this is the worst case value for our metric. 
 
 We then compute the relative overfitting rate (ROR) as 
 
@@ -586,7 +589,7 @@ Plugging in our values, the final weight on the ordinary estimator ($w$ = `r sig
 ::: {.column width="30%"}
 
 ```{r}
-#| label: tbl-bootstrap-bias
+#| label: bootstrap-bias
 #| echo: false
 
 table_boot_632_sub <-
@@ -740,7 +743,7 @@ Also, if you are not using a single validation set, recall that none of these mo
 
 #### Is this some Sort of Ensemble?  {#sec-resampling-faq-ensemble .unnumbered}
 
-No. We'll talk model about ensembles in @sec-ensembles and how the assessment set predictions can be used to create an ensemble.  
+No. We'll talk more about ensembles in @sec-ensembles and how the assessment set predictions can be used to create an ensemble.  
 
 #### Can I Accidentally Resample Incorrectly?  {#sec-resampling-faq-error .unnumbered}
 
@@ -766,7 +769,7 @@ We will see nested resampling in the next chapter.
 
 #### Is Resampling Related to Permutation Tests? {#sec-resampling-faq-perm .unnumbered}
 
-Not really. Permutation methods are similar to resampling only in that they perform multiple calculations on different versions of the training set. 
+Not really. Permutation methods (@sec-permutations) are similar to resampling only in that they perform multiple calculations on different versions of the training set. 
 
 We used permutation methods in the bootstrapping section to estimate the no-information rate. Otherwise, they won’t be used to evaluate model performance. 
 
