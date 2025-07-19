@@ -26,7 +26,6 @@ library(gtExtras)
 library(ggrepel)
 library(future)
 
-
 # ------------------------------------------------------------------------------
 # set options
 
@@ -36,18 +35,26 @@ set_options()
 plan(multisession)
 
 # ------------------------------------------------------------------------------
-# load data 
+# load data
 
 load("../RData/forested_data.RData")
 load("../RData/logistic_bayes.RData")
 load("../RData/forested_interactions.RData")
 ```
 
+We often conceptualize classification models by the type of class boundary they produce. For example, in @fig-two-class-overfit, two predictors were visualized, and the colors and shapes of the data indicated their class memberships. For one model, the results for three different settings of a tuning parameter were shown. Additionally, the class boundary was visualized as a black line, dividing the data into two (or more) regions where the model predicted a specific class. When there are more than two predictors, visualizing this boundary becomes impossible, but we still use the idea of a line that demarcates different regions that have the same (hard) class prediction. 
+
+That figure also demonstrated that some models can produce simple boundaries while others produce very convoluted partitions. The simplest models produce **linear boundaries**, which are naturally constrained by over-adapting to localized trends in the data and overfitting. Unfortunately, this also increases the model bias so that, for cases where the true boundary is nonlinear, the model may dramatically underperform. 
+
+This chapter focuses on models that, at first appearance, produce linear class boundaries. Apart from feature engineering, they tend to be relatively easy and fast to train and are more likely to be interpretable due to their simplicity. We’ll start by discussing the most used classification model: logistic regression. This model has many important aspects to discuss, as well as numerous ways to estimate model parameters. An extension of this model for more than two classes, a.k.a. multinomial regression, is also discussed. Finally, we review a fairly antiquated classification model (discriminant analysis) that will lead to some effective generalizations in the next chapter. 
+
+However, before diving into modeling techniques, let’s take a deep look at the Washington State forestation data originally introduced in @sec-spatial-splitting. These data will be used to demonstrate the nuances of different classifications in this and the next two chapters. 
+
 ## Exploring Forestation Data  {#sec-forestation-eda}
 
 These data have been discussed in Sections [-@sec-spatial-splitting], [-@sec-spatial-resampling], and [-@sec-unsupervised-selection]. As a refresher, locations in Washington state were surveyed, and specific criteria were applied to determine whether they were sufficiently forested. Using predictors on the climate,  terrain, and location, we want to accurately predict the probability of forestation at other sites within the state. 
 
-As previously mentioned, this type of data exhibits spatial autocorrelation, where objects close to each other tend to have similar attributes. This is not a book specific to spatial analysis; ordinary machine learning tools will be used to analyze these data. Our analyses might be, to some degree, suboptimal for the task. However, for our data, @FIA2015 describes the sampling methodology, in which the on-site inspection locations are sampled from within a collection of 6,000-acre hexagonal regions. While spatial autocorrelation is very relevant, the large space between these points may reduce the risk of using spatially ignorant modeling methodologies. Despite this, our data spending methodologies _are_ spatially aware, and these might further mitigate any issues caused by ordinary ML models. 
+As previously mentioned, this type of data exhibits spatial autocorrelation, where objects close to each other tend to have similar attributes. This is not a book specific to spatial analysis; ordinary machine learning tools will be used to analyze these data. Our analyses might be, to some degree, suboptimal for the task. However, for our data, @FIA2015 describes the sampling methodology, in which the on-site inspection locations are sampled from within a collection of 6,000-acre hexagonal regions. While spatial autocorrelation is very relevant, the large space between these points may reduce the risk of using spatially ignorant modeling methodologies. Despite this, our data spending methodologies _are_ spatially aware, and these might further mitigate any issues caused by ordinary ML models. For example, when initially splitting (and resampling them), recall that we used a buffer to add some space between the data used to fit the model and those used for assessment (e.g., Figures [-@fig-forested-split] and [-@fig-forested-blockcv]). This can reduce the risk of ignoring the autocorrelation when estimating model parameters. 
 
 To learn more about spatial machine learning and data analysis, @kopczewska2022spatial is a nice overview. We also recommend @nikparvar2021machine, @kanevski2009machine, and @cressie2015statistics.
 
@@ -56,55 +63,62 @@ To learn more about spatial machine learning and data analysis, @kopczewska2022s
 #| include: false
 #| cache: true
 
-vert_forest <- 
-  forested_train |> 
-  pivot_longer(cols = c(-class, -county), names_to = "Predictor", values_to = "value") |> 
-  full_join(name_key |> rename(Predictor = variable), by = "Predictor") |> 
+vert_forest <-
+  forested_train |>
+  pivot_longer(
+    cols = c(-class, -county),
+    names_to = "Predictor",
+    values_to = "value"
+  ) |>
+  full_join(name_key |> rename(Predictor = variable), by = "Predictor") |>
   mutate(
     text = ifelse(is.na(text), Predictor, text),
     Predictor = tools::toTitleCase(text)
-  ) |> 
+  ) |>
   select(-text)
 
-num_unique <- 
-  vert_forest %>% 
-  select(-class, -county) |> 
+num_unique <-
+  vert_forest |>
+  select(-class, -county) |>
   summarize(
-    num_vals = min(21, vctrs::vec_unique_count(value)), 
+    num_vals = min(21, vctrs::vec_unique_count(value)),
     .by = c(Predictor)
   )
 
-percentiles <- 
-  vert_forest %>% 
-  full_join(num_unique, by = "Predictor") %>% 
-  group_nest(Predictor, num_vals) %>% 
+percentiles <-
+  vert_forest |>
+  full_join(num_unique, by = "Predictor") |>
+  group_nest(Predictor, num_vals) |>
   mutate(
-    pctl = map2(data, num_vals, 
-                ~ tibble(group = ntile(.x$value, n = .y), class = .x$class)),
+    pctl = map2(
+      data,
+      num_vals,
+      ~ tibble(group = ntile(.x$value, n = .y), class = .x$class)
+    ),
     mid = map_dbl(data, ~ median(.x$value)),
-  ) %>% 
-  select(-data) %>% 
-  unnest(c(pctl)) %>% 
-  mutate(pctl = (group - 1) / num_vals * 100) %>% 
+  ) |>
+  select(-data) |>
+  unnest(c(pctl)) |>
+  mutate(pctl = (group - 1) / num_vals * 100) |>
   summarize(
-    events = sum(class == "Yes"), 
+    events = sum(class == "Yes"),
     total = length(class),
     .by = c(Predictor, pctl)
-  ) %>% 
+  ) |>
   mutate(
     prop_obj = map2(events, total, ~ tidy(binom.test(.x, .y, conf.level = 0.9)))
-  ) %>% 
-  select(-events) %>% 
+  ) |>
+  select(-events) |>
   unnest(c(prop_obj))
 
-obs_rates <- 
-  forested_train |> 
+obs_rates <-
+  forested_train |>
   summarize(
     rate = mean(class == "Yes"),
     events = sum(class == "Yes"),
     total = length(class),
     .by = c(county)
-  ) |> 
+  ) |>
   mutate(
     hstat = map2(events, total, binom.test, conf.level = 0.9),
     pct = rate * 100,
@@ -117,7 +131,9 @@ obs_rates <-
   )
 ```
 
-As with any ML project, we conduct preliminary exploratory data analysis to determine whether any data characteristics might affect how we model them. @tbl-forested-numeric has statistical and visual summaries of the `r ncol(forested_train) - 2` numeric predictors using the training data. Several of the predictors exhibit pronounced skew (right or left leaning). Also, the annual minimum temperature, dew temperature, January minimum temperature, and maximum vapor show bimodality in the distributions. The year of inspection is also interesting; the data collection was sparse before 2011, and subsequent years contain a few hundred data points per year before beginning to drop off in 2021. 
+As with any ML project, we conduct preliminary exploratory data analysis to determine whether any data characteristics might affect how we model them. @tbl-forested-numeric has statistical and visual summaries of the `r ncol(forested_train) - 2` numeric predictors using the training data. Several of the predictors exhibit pronounced skew (right or left leaning). By coercing the distributions of some predictors to be more symmetric, we might gain robustness and perhaps an incremental improvement in performance (for some models). 
+
+Also, the annual minimum temperature, dew temperature, January minimum temperature, and maximum vapor show bimodality in the distributions. The year of inspection is also interesting; the data collection was sparse before 2011, and subsequent years contain a few hundred data points per year before beginning to drop off in 2021. These characteristics are not indicative of problems with data quality, but it can be important to know that they exist when debugging why a model is underperforming or showing odd results.
 
 ::: {#tbl-forested-numeric}
 
@@ -125,33 +141,38 @@ As with any ML project, we conduct preliminary exploratory data analysis to dete
 #| label: forested-numeric
 #| echo: false
 
-vert_forest |> 
+vert_forest |>
   summarize(
     Minimum = min(value),
-    Mean = mean(value), 
-    Max = max(value), 
+    Mean = mean(value),
+    Max = max(value),
     `Std. Dev` = sd(value),
     Skewness = e1071::skewness(value),
     Distribution = list(value),
     .by = c(Predictor)
-  ) |> 
-  arrange(Predictor) |> 
-  gt() %>%
-  fmt_number(columns = c(-Distribution), n_sigfig = 3) |> 
-  gt_plt_dist(Distribution, type = "histogram", same_limit = FALSE, 
-              line_color = "#222", fill_color = "white") |> 
+  ) |>
+  arrange(Predictor) |>
+  gt() |>
+  fmt_number(columns = c(-Distribution), n_sigfig = 3) |>
+  gt_plt_dist(
+    Distribution,
+    type = "histogram",
+    same_limit = FALSE,
+    line_color = "#222",
+    fill_color = "white"
+  ) |>
   cols_width(Predictor ~ pct(25))
 
 ```
 
-Summaries of numeric predictors in the training set. 
+Histograms and statistical summaries of the numeric predictors in the Washington State training set. 
 
 :::
 
 
 Also, recall that @fig-corr-plot previously described the correlation structure of these predictors. There were several clusters of predictors with strong magnitudes of correlation. This implies that there is some redundancy of information in these features. However, machine learning is often “a game of inches,” where even redundant predictors can contribute incremental improvements in performance. In any case, the analyses in this chapter will be profoundly affected by this characteristic; it will be discussed in more detail below. 
 
-Individually, how does each of these features appear to relate to the outcome? To assess this, we binned each predictor into roughly 20 groups based on percentiles and used these groups (each containing about `r floor(mean(percentiles$total))` locations) to compute the rate of forestation and 90% confidence intervals. As an exploratory tool, we can use these binned versions of the data to see potential relationships with the outcome. @fig-forest-percentiles shows the profiles.
+Individually, how does each of these features appear to relate to the outcome? To assess this, we binned each predictor into roughly 20 groups based on percentiles and used these groups (each containing about `r floor(mean(percentiles$total))` locations) to compute the rate of forestation and 90% confidence intervals^[Binning is used here as a visualization tool; we re-emphasize that converting numeric predictors into categorical features is problematic.]. As an exploratory tool, we can use these binned versions of the data to see potential relationships with the outcome. @fig-forest-percentiles shows the profiles. Note that there is enough data in each bin to make the confidence intervals very close to the estimated rates. 
 
 
 ```{r}
@@ -160,14 +181,18 @@ Individually, how does each of these features appear to relate to the outcome? T
 #| out-width: 80%
 #| fig-width: 8
 #| fig-height: 6
-#| fig-cap: Binned rates of forestation over percentiles of the numeric predictors. The shaded regions are 90% confidence intervals. 
+#| fig-cap: Binned rates of forestation over percentiles of the numeric predictors. The shaded regions are 90% confidence intervals.
 
-percentiles %>% 
-  ggplot(aes(pctl, estimate)) + 
-  geom_line() + 
-  geom_ribbon(aes(ymin = conf.low, ymax = conf.high), alpha = 1 / 5, fill = "#D85434FF") + 
-  facet_wrap(~ Predictor, ncol = 3) + 
-  labs(x = "Percentile", y = "Rate of Forestation") 
+percentiles |>
+  ggplot(aes(pctl, estimate)) +
+  geom_line() +
+  geom_ribbon(
+    aes(ymin = conf.low, ymax = conf.high),
+    alpha = 1 / 5,
+    fill = "#D85434FF"
+  ) +
+  facet_wrap(~Predictor, ncol = 3) +
+  labs(x = "Percentile", y = "Rate of Forestation")
 ```
 
 Quite a few predictors show considerable nonlinear trends, and a few are not monotonic (i.e., the sign of the slope changes over the range of values). The Eastness and Northness features, which capture the landscape orientation at the location, show flat trends. This means that these predictors are less likely to be important. However, once in a model with other predictors, the model may be able to extract some utility from them, perhaps via interaction terms. The primary takeaway from this visualization is that models that are able to express nonlinear trends will probably do better than those restricted to linear classification boundaries. 
@@ -180,18 +205,18 @@ In addition to longitude and latitude, the data contains a qualitative location-
 #| out-width: 40%
 #| fig-width: 4
 #| fig-height: 6
-#| fig-cap: Outcome rates for different counties in Washington State. 
+#| fig-cap: Outcome rates for different counties in Washington State.
 
 obs_rates |>
   ggplot(aes(y = county, col = `# Locations`)) +
   geom_point(aes(x = rate)) +
   geom_errorbar(aes(xmin = .lower, xmax = .upper)) +
-  labs(x = "Rate of Forestation", y = NULL) + 
-  theme(legend.position = "top") + 
+  labs(x = "Rate of Forestation", y = NULL) +
+  theme(legend.position = "top") +
   scale_color_viridis_c(option = "mako", begin = .2, end = .8)
 ```
 
-Finally, it might be a good idea to assess potential interaction effects prior to modeling. Since almost all of our features are numeric, it can be difficult to assess interactions visually, so the H-statistics for two-way interactions were calculated using a boosted tree as the base model using the numeric features. Since there are only `r choose(15, 2)` possible interactions, the H-statistics were recomputed 25 times using different random number generators so that we can compute a mean statistic and a standard error. 
+Finally, it might be a good idea to assess potential interaction effects prior to modeling. Since almost all of our features are numeric, it can be difficult to assess interactions visually, so the H-statistics for two-way interactions were calculated using a boosted tree as the base model using the numeric features. Since there are only `r choose(15, 2)` possible interactions, the H-statistics were recomputed 25 times using different random number generators so that we can compute a mean H-statistic and its associated standard error. 
  
 ```{r}
 #| label: fig-forested-interactions
@@ -199,19 +224,23 @@ Finally, it might be a good idea to assess potential interaction effects prior t
 #| out-width: 90%
 #| fig-width: 8
 #| fig-height: 4.5
-#| fig-cap: Results for the top 25 H-statistic interactions. The error bars are 90% intervals based on replicate computations. 
+#| fig-cap: Results for the top 25 H-statistic interactions. The error bars are 90% intervals based on replicate computations.
 
-forested_hstats_text |> 
-  slice_max(mean_score, n = 25) |> 
-  ggplot(aes(y = term)) + 
-  geom_point(aes(x = mean_score)) + 
-  geom_errorbar(aes(xmin = .lower, xmax = .upper), alpha = 1/2, width = 1 / 2) + 
+forested_hstats_text |>
+  slice_max(mean_score, n = 25) |>
+  ggplot(aes(y = term)) +
+  geom_point(aes(x = mean_score)) +
+  geom_errorbar(
+    aes(xmin = .lower, xmax = .upper),
+    alpha = 1 / 2,
+    width = 1 / 2
+  ) +
   labs(x = "Mean H-Statistic", y = NULL)
 ```
 
 The vast majority of the `r choose(15, 2)`  H-statistics are less than `r signif(quantile(forested_hstats_text$mean_score, probs = 0.95), 3)` and there are a handful of interactions that are greater than that value; we’ll take the five interactions and use them in a logistic regression shown below.
 
-The next section will describe a mainstay of machine learning models for two classes: logistic regression. We’ll examine many different facets of this model and a few methods for estimating parameters. After this, the focus is on how to extend the logistic model to more than two classes via multinomial models. We’ll also describe a similar approach called generalized additive models (GAMs) and take a little time to describe a model called linear discriminant analysis (LDA). LDA is briefly described; it is more important when extended to nonlinear models, and these methods are described in the next chapter. 
+The next section will describe a mainstay of machine learning models for two classes: logistic regression. 
 
 ## Logistic Regression {#sec-logistic-reg}
 
@@ -241,14 +270,14 @@ This keeps the probability values within [0, 1] no matter how large or small the
 #| label: longitude-fit
 #| include: false
 
-linear_long_fit <- 
-  logistic_reg() %>% 
+linear_long_fit <-
+  logistic_reg() |>
   fit(class ~ longitude, data = forested_train)
 
-linear_long_coef <- 
-  linear_long_fit %>% 
-  extract_fit_engine() %>% 
-  coef() 
+linear_long_coef <-
+  linear_long_fit |>
+  extract_fit_engine() |>
+  coef()
 # glm models the probability of the second factor level
 linear_long_coef <- -linear_long_coef
 linear_long_coef <- format(linear_long_coef, digits = 3)
@@ -270,7 +299,7 @@ $$
 
 ::: {.figure-content}
 
-```{shinylive-r}
+```
 #| label: fig-longitude
 #| out-width: "80%"
 #| viewerHeight: 600
@@ -287,21 +316,21 @@ library(scales)
 
 light_bg <- "#fcfefe" # from aml4td.scss
 grid_theme <- bs_theme(
-  bg = light_bg, fg = "#595959"
+  bg = light_bg,
+  fg = "#595959"
 )
 
-theme_light_bl<- function(...) {
-  
+theme_light_bl <- function(...) {
   ret <- ggplot2::theme_bw(...)
-  
+
   col_rect <- ggplot2::element_rect(fill = light_bg, colour = light_bg)
-  ret$panel.background  <- col_rect
-  ret$plot.background   <- col_rect
+  ret$panel.background <- col_rect
+  ret$plot.background <- col_rect
   ret$legend.background <- col_rect
-  ret$legend.key        <- col_rect
-  
+  ret$legend.key <- col_rect
+
   ret$legend.position <- "top"
-  
+
   ret
 }
 
@@ -318,8 +347,12 @@ ui <- page_fillable(
       checkboxGroupInput(
         inputId = "include",
         label = "Include",
-        choices = list("Binned Data" = "Data", "Untransformed" = "fit_linear", 
-                       "Splines" = "fit_spline", GAM = "fit_gam"),
+        choices = list(
+          "Binned Data" = "Data",
+          "Untransformed" = "fit_linear",
+          "Splines" = "fit_spline",
+          GAM = "fit_gam"
+        ),
         selected = c("fit_linear", "Data"),
         inline = TRUE
       )
@@ -339,107 +372,119 @@ ui <- page_fillable(
 
 
 server <- function(input, output) {
-  load(url("https://raw.githubusercontent.com/aml4td/website/main/RData/forested_data.RData"))
-  
-  lng_bin <- 
-    forested_train %>% 
-    dplyr::select(class, longitude) %>% 
-    mutate(lng_bin = ntile(longitude, 21)) %>% 
+  load(url(
+    "https://raw.githubusercontent.com/aml4td/website/main/RData/forested_data.RData"
+  ))
+
+  lng_bin <-
+    forested_train |>
+    dplyr::select(class, longitude) |>
+    mutate(lng_bin = ntile(longitude, 21)) |>
     dplyr::summarize(
       rate = mean(class == "Yes"),
       lng = median(longitude),
       n = length(longitude),
       .by = c(lng_bin)
-    ) %>% 
+    ) |>
     mutate(logit = binomial()$linkfun(rate))
-  
+
   lng_rng <- extendrange(lng_bin$lng)
   # lng_rng[1] <- 0.0
-  
+
   lng_grid <- tibble(longitude = seq(lng_rng[1], lng_rng[2], length.out = 100))
-  
-  linear_fit <- 
-    logistic_reg() %>% 
+
+  linear_fit <-
+    logistic_reg() |>
     fit(class ~ longitude, data = forested_train)
-  
-  linear_pred <- 
-    augment(linear_fit, new_data = lng_grid) %>% 
+
+  linear_pred <-
+    augment(linear_fit, new_data = lng_grid) |>
     mutate(Model = "Linear Term", group = "fit_linear")
-  
+
   num_spline <- 10
-  spline_fit <- 
-    logistic_reg() %>% 
-    fit(class ~ naturalSpline(longitude, df = num_spline), data = forested_train)
-  
+  spline_fit <-
+    logistic_reg() |>
+    fit(
+      class ~ naturalSpline(longitude, df = num_spline),
+      data = forested_train
+    )
+
   spline_lab <- paste0("Natural Splines (", num_spline, " df)")
-  
-  spline_pred <- 
-    augment(spline_fit, new_data = lng_grid) %>% 
+
+  spline_pred <-
+    augment(spline_fit, new_data = lng_grid) |>
     mutate(Model = spline_lab, group = "fit_spline")
-  
-  gam_fit <- 
-    gen_additive_mod() %>% 
-    set_mode("classification") %>% 
+
+  gam_fit <-
+    gen_additive_mod() |>
+    set_mode("classification") |>
     fit(class ~ s(longitude), data = forested_train)
   gam_lab <- paste0("GAM (", round(sum(gam_fit$fit$edf[-1]), 1), " df)")
-  
-  gam_pred <- 
-    augment(gam_fit, new_data = lng_grid) %>% 
+
+  gam_pred <-
+    augment(gam_fit, new_data = lng_grid) |>
     mutate(Model = gam_lab, group = "fit_gam")
-  
-  predictions <- 
-    bind_rows(linear_pred, spline_pred, gam_pred) %>% 
-    mutate(Model = factor(Model, levels = c("Linear Term", spline_lab, gam_lab))) %>% 
+
+  predictions <-
+    bind_rows(linear_pred, spline_pred, gam_pred) |>
+    mutate(
+      Model = factor(Model, levels = c("Linear Term", spline_lab, gam_lab))
+    ) |>
     mutate(logit = binomial()$linkfun(.pred_Yes))
-  
+
   output$plot <-
-    renderPlot({
-      
-      if (input$yaxis == "rate") {
-        p <- 
-          lng_bin %>% 
-          ggplot(aes(lng)) + 
-          labs(x = "Longitude", y = "Probability of Forestation") + 
-          lims(y = 0:1)
-      } else {
-        p <- 
-          lng_bin %>% 
-          ggplot(aes(lng)) + 
-          labs(x = "Longitude", y = "Logit")
-      }
-      
-      
-      if (any(input$include == "Data")) {
+    renderPlot(
+      {
         if (input$yaxis == "rate") {
-          p <- p +  geom_point(aes(y = rate), alpha = 1 / 3, cex = 3) 
+          p <-
+            lng_bin |>
+            ggplot(aes(lng)) +
+            labs(x = "Longitude", y = "Probability of Forestation") +
+            lims(y = 0:1)
         } else {
-          p <- p +  geom_point(aes(y = logit), alpha = 1 / 3, cex = 3) 
+          p <-
+            lng_bin |>
+            ggplot(aes(lng)) +
+            labs(x = "Longitude", y = "Logit")
         }
-      }
-      
-      if (any(grepl("fit_", input$include))) {
-        curve_data <- dplyr::filter(predictions, group %in% input$include)
-        
-        if (input$yaxis == "rate") {
-          p <- p +
-            geom_line(data = curve_data, 
-                      aes(x = longitude, y = .pred_Yes, color = Model),
-                      linewidth = 1)
-        } else {
-          p <- p +
-            geom_line(data = curve_data, 
-                      aes(x = longitude, y = logit, color = Model),
-                      linewidth = 1) 
+
+        if (any(input$include == "Data")) {
+          if (input$yaxis == "rate") {
+            p <- p + geom_point(aes(y = rate), alpha = 1 / 3, cex = 3)
+          } else {
+            p <- p + geom_point(aes(y = logit), alpha = 1 / 3, cex = 3)
+          }
         }
-        
-        p <- p + 
-          theme(legend.position = "top") + 
-          scale_color_brewer(drop = FALSE, palette = "Dark2")
-      }
-      
-      p <- p + theme_light_bl()
-      print(p)
-    }, res = 100)
+
+        if (any(grepl("fit_", input$include))) {
+          curve_data <- dplyr::filter(predictions, group %in% input$include)
+
+          if (input$yaxis == "rate") {
+            p <- p +
+              geom_line(
+                data = curve_data,
+                aes(x = longitude, y = .pred_Yes, color = Model),
+                linewidth = 1
+              )
+          } else {
+            p <- p +
+              geom_line(
+                data = curve_data,
+                aes(x = longitude, y = logit, color = Model),
+                linewidth = 1
+              )
+          }
+
+          p <- p +
+            theme(legend.position = "top") +
+            scale_color_brewer(drop = FALSE, palette = "Dark2")
+        }
+
+        p <- p + theme_light_bl()
+        print(p)
+      },
+      res = 100
+    )
 }
 
 app <- shinyApp(ui = ui, server = server)
@@ -480,38 +525,48 @@ Logistic regression models can be drastically improved by including better repre
 #| label: forest-logistic-elements
 #| include: false
 
-bare_rec <- 
-  recipe(class ~ ., data = forested_train) %>% 
-  step_dummy(county) %>% 
+bare_rec <-
+  recipe(class ~ ., data = forested_train) |>
+  step_dummy(county) |>
   step_zv(all_predictors())
 
-transformed_rec <- 
-  recipe(class ~ ., data = forested_train) %>% 
-  step_orderNorm(all_numeric_predictors()) %>% 
-  step_dummy(county) %>% 
+transformed_rec <-
+  recipe(class ~ ., data = forested_train) |>
+  step_orderNorm(all_numeric_predictors()) |>
+  step_dummy(county) |>
   step_zv(all_predictors())
 
-forest_rec <- 
-  recipe(class ~ ., data = forested_train) %>% 
-  step_orderNorm(all_numeric_predictors()) %>% 
+forest_rec <-
+  recipe(class ~ ., data = forested_train) |>
+  step_orderNorm(all_numeric_predictors()) |>
   step_lencode_mixed(county, outcome = "class")
 
-forest_int_rec <- 
-  forest_rec %>% 
+forest_int_rec <-
+  forest_rec |>
   step_interact(!!forested_int_form)
 
-forest_spline_rec <- 
-  forest_int_rec %>% 
+forest_spline_rec <-
+  forest_int_rec |>
   step_spline_natural(
-    all_numeric_predictors(), -county, -eastness, -northness, -year, -contains("_x_"),
-    deg_free = 10) %>% 
+    all_numeric_predictors(),
+    -county,
+    -eastness,
+    -northness,
+    -year,
+    -contains("_x_"),
+    deg_free = 10
+  ) |>
   step_lincomb(all_predictors())
 
-forest_set <- 
+forest_set <-
   workflow_set(
-    preproc = list(simple = bare_rec, "encoded + transformations" = transformed_rec, 
-                   encoded = forest_rec, "encoded + interactions" = forest_int_rec, 
-                   "encoded + transformations + splines" = forest_spline_rec),
+    preproc = list(
+      simple = bare_rec,
+      "encoded + transformations" = transformed_rec,
+      encoded = forest_rec,
+      "encoded + interactions" = forest_int_rec,
+      "encoded + transformations + splines" = forest_spline_rec
+    ),
     model = list(logistic_mle = logistic_reg())
   )
 
@@ -524,46 +579,46 @@ cls_mtr <- metric_set(brier_class, roc_auc, pr_auc, mn_log_loss)
 #| include: false
 #| cache: true
 forest_res <-
-  forest_set %>% 
+  forest_set |>
   workflow_map(
     fn = "fit_resamples",
     resamples = forested_rs,
     control = control_resamples(save_pred = TRUE),
-    metrics = cls_mtr, 
+    metrics = cls_mtr,
     seed = 693,
     verbose = FALSE
   )
 
 set.seed(365)
-brier_perm <- 
-  forest_res %>% 
-  extract_workflow_set_result("simple_logistic_mle") %>% 
-  collect_predictions(summarize = TRUE) %>% 
-  permutations(permute = "class", times = 50) %>% 
+brier_perm <-
+  forest_res |>
+  extract_workflow_set_result("simple_logistic_mle") |>
+  collect_predictions(summarize = TRUE) |>
+  permutations(permute = "class", times = 50) |>
   mutate(
     data = map(splits, analysis),
     brier = map_dbl(data, ~ brier_class(.x, class, .pred_Yes)$.estimate)
-  ) %>% 
+  ) |>
   summarize(
     permutation = mean(brier),
     n = length(brier),
     std_err = sd(brier) / sqrt(n)
-  ) %>% 
+  ) |>
   mutate(
     lower = permutation - qnorm(.95) * std_err,
     upper = permutation + qnorm(.95) * std_err
   )
 
-glm_best <- 
-    forest_res |> 
-    rank_results(rank_metric = "brier_class") %>% 
-    filter(.metric == "brier_class") %>% 
-    slice_min(mean, n = 1)
+glm_best <-
+  forest_res |>
+  rank_results(rank_metric = "brier_class") |>
+  filter(.metric == "brier_class") |>
+  slice_min(mean, n = 1)
 
 set.seed(799)
-glm_best_int <- 
-  forest_res |> 
-  extract_workflow_set_result(glm_best$wflow_id) |> 
+glm_best_int <-
+  forest_res |>
+  extract_workflow_set_result(glm_best$wflow_id) |>
   int_pctl(times = 2000, metrics = cls_mtr)
 ```
 
@@ -589,18 +644,18 @@ Note about linear dependencies and widly large coefficients
 #| out-width: 70%
 #| fig-width: 6
 #| fig-height: 3.25
-#| fig-cap: Cross-validated Brier scores for several stages of feature engineering of the forestation data using basic logistic regression. The red dashed line represents the permutation estimate of the no-information rate. The error bars are 90% confidence intervals based on the naive standard error estimates produced during resampling. 
+#| fig-cap: Cross-validated Brier scores for several stages of feature engineering of the forestation data using basic logistic regression. The red dashed line represents the permutation estimate of the no-information rate. The error bars are 90% confidence intervals based on the naive standard error estimates produced during resampling.
 
-forest_res %>% 
-  rank_results(rank_metric = "brier_class") %>% 
-  filter(.metric == "brier_class") %>% 
+forest_res |>
+  rank_results(rank_metric = "brier_class") |>
+  filter(.metric == "brier_class") |>
   mutate(
-    pipeline = gsub("_logistic_mle", "", wflow_id), 
+    pipeline = gsub("_logistic_mle", "", wflow_id),
     pipeline = factor(pipeline),
     pipeline = reorder(pipeline, -mean),
     ci_pm = qnorm(0.95) * std_err
-  ) %>% 
-  ggplot(aes(mean, pipeline)) + 
+  ) |>
+  ggplot(aes(mean, pipeline)) +
   geom_vline(xintercept = brier_perm$permutation, col = "red", lty = 2) +
   geom_vline(xintercept = 0, col = "green", lty = 2) +
   geom_point() +
@@ -611,9 +666,11 @@ forest_res %>%
 ```{r}
 #| label: logistic-spline-mtr
 #| include: false
-logistic_mtr <- 
-  forest_res %>% 
-  extract_workflow_set_result("encoded + transformations + splines_logistic_mle") %>% 
+logistic_mtr <-
+  forest_res |>
+  extract_workflow_set_result(
+    "encoded + transformations + splines_logistic_mle"
+  ) |>
   collect_metrics(summarize = TRUE)
 ```
 
@@ -625,20 +682,27 @@ Along with the Brier score values of `r signif(logistic_mtr$mean[logistic_mtr$.m
 #| out-width: 80%
 #| fig-width: 8
 #| fig-height: 4
-#| fig-cap: Calibration and ROC curves for the pooled assessment sets for the logistic regression model and the full preprocessing pipeline (e.g. up to spline terms). 
+#| fig-cap: Calibration and ROC curves for the pooled assessment sets for the logistic regression model and the full preprocessing pipeline (e.g. up to spline terms).
 
-logistic_pred <- 
-  forest_res %>% 
-  extract_workflow_set_result("encoded + transformations + splines_logistic_mle") %>% 
+logistic_pred <-
+  forest_res |>
+  extract_workflow_set_result(
+    "encoded + transformations + splines_logistic_mle"
+  ) |>
   augment()
 
-logitic_cal <- cal_plot_windowed(logistic_pred, class, .pred_Yes, step_size = 0.02)
-logitic_roc <- 
-  logistic_pred %>% 
-  roc_curve(class, .pred_Yes) %>% 
-  ggplot(aes(1 - specificity, sensitivity)) + 
+logitic_cal <- cal_plot_windowed(
+  logistic_pred,
+  class,
+  .pred_Yes,
+  step_size = 0.02
+)
+logitic_roc <-
+  logistic_pred |>
+  roc_curve(class, .pred_Yes) |>
+  ggplot(aes(1 - specificity, sensitivity)) +
   geom_abline(col = "red", lty = 2) +
-  geom_step(direction = "vh") + 
+  geom_step(direction = "vh") +
   coord_obs_pred()
 
 logitic_cal + logitic_roc
@@ -659,47 +723,47 @@ other_level <- "skamania"
 other_term <- paste0("county", other_level)
 other_cnty <- tools::toTitleCase(gsub("_", " ", other_level))
 
-releveled <- forested_train |> 
+releveled <- forested_train |>
   mutate(county = relevel(county, ref = ref_level))
 
-county_coef <- 
-  logistic_reg() |> 
-  fit(class ~ county, data = releveled) |> 
+county_coef <-
+  logistic_reg() |>
+  fit(class ~ county, data = releveled) |>
   tidy(conf.int = TRUE, conf.level = 0.90)
 
-ref_coef <- 
-  county_coef |> 
-  filter(term %in% c("(Intercept)")) |> 
+ref_coef <-
+  county_coef |>
+  filter(term %in% c("(Intercept)")) |>
   mutate(
     coef = format(-estimate, digits = 3, scientific = FALSE),
     odds = format(exp(-estimate), digits = 3, scientific = FALSE),
     prob = binomial()$linkinv(-estimate),
-    xin = format(1/prob, digits = 2, scientific = FALSE),
-    prob = format(prob * 100, digits = 3)
-    )
-
-other_coef <- 
-  county_coef |> 
-  filter(term %in% c(other_term)) |> 
-  mutate(
-    coef = format(-estimate, digits = 3, scientific = FALSE),
-    .upper = format(exp(-conf.low), digits = 3, scientific = FALSE),
-    .lower= format(exp(-conf.high), digits = 3, scientific = FALSE),
-    odds = format(exp(-estimate), digits = 3, scientific = FALSE),
-    prob = binomial()$linkinv(-estimate),
-    xin = format(1/prob, digits = 2, scientific = FALSE),
+    xin = format(1 / prob, digits = 2, scientific = FALSE),
     prob = format(prob * 100, digits = 3)
   )
 
-other_change_coef <- 
-  county_coef |> 
-  filter(term %in% c("(Intercept)", other_term)) |> 
-  summarize(estimate = sum(estimate)) |> 
+other_coef <-
+  county_coef |>
+  filter(term %in% c(other_term)) |>
+  mutate(
+    coef = format(-estimate, digits = 3, scientific = FALSE),
+    .upper = format(exp(-conf.low), digits = 3, scientific = FALSE),
+    .lower = format(exp(-conf.high), digits = 3, scientific = FALSE),
+    odds = format(exp(-estimate), digits = 3, scientific = FALSE),
+    prob = binomial()$linkinv(-estimate),
+    xin = format(1 / prob, digits = 2, scientific = FALSE),
+    prob = format(prob * 100, digits = 3)
+  )
+
+other_change_coef <-
+  county_coef |>
+  filter(term %in% c("(Intercept)", other_term)) |>
+  summarize(estimate = sum(estimate)) |>
   mutate(
     coef = format(-estimate, digits = 3, scientific = FALSE),
     odds = format(exp(-estimate), digits = 3, scientific = FALSE),
     prob = binomial()$linkinv(-estimate),
-    xin = format(1/prob, digits = 2, scientific = FALSE),
+    xin = format(1 / prob, digits = 2, scientific = FALSE),
     prob = format(prob * 100, digits = 3)
   )
 ```
@@ -750,16 +814,16 @@ In either case, the logistic regression model does have a structure that lends i
 #| label: best-glm-fit
 #| include: false
 
-best_mle_wflow <- 
-  forest_set |> 
+best_mle_wflow <-
+  forest_set |>
   extract_workflow(id = "encoded + transformations + splines_logistic_mle")
 
-best_mle_fit <- 
-  best_mle_wflow |> 
+best_mle_fit <-
+  best_mle_wflow |>
   fit(forested_train)
 
-best_mle_coef <- 
-  tidy(best_mle_fit) |> 
+best_mle_coef <-
+  tidy(best_mle_fit) |>
   mutate(
     Type = case_when(
       grepl("(_10)|(_0[1-9])", term) ~ "Spline",
@@ -770,11 +834,11 @@ best_mle_coef <-
   )
 
 # best_mle_coef |>
-#   mutate(`|Estimate|` = abs(estimate)) |> 
+#   mutate(`|Estimate|` = abs(estimate)) |>
 #   select(term, Type, `|Estimate|` , `Standard Error` = std.error) |>
 #   pivot_longer(cols = c(-term, -Type), values_to = "value", names_to = "statistic") |>
 #   ggplot(aes(Type, value)) +
-#   geom_boxplot() + 
+#   geom_boxplot() +
 #   facet_wrap(~ statistic) +
 #   scale_y_log10() +
 #   labs(y = NULL, x = "Feature Type")
@@ -791,36 +855,35 @@ It can be problematic when multiple predictors have a high degree of correlation
 #| label: two-param-colin-calc
 #| include: false
 
-elevation_fit <- 
-  logistic_reg() %>% 
-  fit(class ~ elevation, data = forested_train) |> 
-  tidy() |> 
+elevation_fit <-
+  logistic_reg() |>
+  fit(class ~ elevation, data = forested_train) |>
+  tidy() |>
   mutate(Model = "elevation only")
 
-annual_mean_fit <- 
-  logistic_reg() %>% 
-  fit(class ~ temp_annual_mean, data = forested_train) |> 
-  tidy() |> 
+annual_mean_fit <-
+  logistic_reg() |>
+  fit(class ~ temp_annual_mean, data = forested_train) |>
+  tidy() |>
   mutate(Model = "mean temperature only")
 
-both_fit <- 
-  logistic_reg() %>% 
-  fit(class ~ elevation + temp_annual_mean, 
-      data = forested_train) |> 
-  tidy() |> 
+both_fit <-
+  logistic_reg() |>
+  fit(class ~ elevation + temp_annual_mean, data = forested_train) |>
+  tidy() |>
   mutate(Model = "both")
-  
-all_terms <- 
-  bind_rows(elevation_fit, annual_mean_fit, both_fit) |> 
-  left_join(name_key |> rename(term = variable), by = "term") |> 
+
+all_terms <-
+  bind_rows(elevation_fit, annual_mean_fit, both_fit) |>
+  left_join(name_key |> rename(term = variable), by = "term") |>
   mutate(
     text = case_when(
       term == "(Intercept)" ~ "Intercept",
       term == "elevation" ~ "Elevation",
       TRUE ~ tools::toTitleCase(text)
     )
-  ) |> 
-  select(Model, text, estimate, std_err = std.error) 
+  ) |>
+  select(Model, text, estimate, std_err = std.error)
 ```
 
 
@@ -837,21 +900,30 @@ all_terms <-
 #| label: logistic-colin
 #| echo: false
 
-all_terms |> 
-  pivot_wider(id_cols = c(Model), names_from = c(text), values_from = c(estimate, std_err)) |> 
-  relocate(Model, contains("Intercept"), contains("Elevation"), contains("Mean")) |> 
-  gt() |> 
-  tab_spanner(label = "Intercept", columns = contains("Intercept")) |> 
-  tab_spanner(label = "Elevation", columns = contains("Elevation")) |> 
-  tab_spanner(label = "Annual Mean Temperature", columns = contains("Mean")) |> 
-  sub_missing(columns = c(everything()), missing_text = "---") |> 
-  fmt_number(columns = c(contains("Intercept")), n_sigfig = 3) |> 
-  fmt_number(columns = c(contains("Elevation")), n_sigfig = 3) |> 
-  fmt_number(columns = c(contains("Mean")), n_sigfig = 3) |> 
+all_terms |>
+  pivot_wider(
+    id_cols = c(Model),
+    names_from = c(text),
+    values_from = c(estimate, std_err)
+  ) |>
+  relocate(
+    Model,
+    contains("Intercept"),
+    contains("Elevation"),
+    contains("Mean")
+  ) |>
+  gt() |>
+  tab_spanner(label = "Intercept", columns = contains("Intercept")) |>
+  tab_spanner(label = "Elevation", columns = contains("Elevation")) |>
+  tab_spanner(label = "Annual Mean Temperature", columns = contains("Mean")) |>
+  sub_missing(columns = c(everything()), missing_text = "---") |>
+  fmt_number(columns = c(contains("Intercept")), n_sigfig = 3) |>
+  fmt_number(columns = c(contains("Elevation")), n_sigfig = 3) |>
+  fmt_number(columns = c(contains("Mean")), n_sigfig = 3) |>
   cols_label(
     contains("estimate_") ~ "Estimate",
     contains("std_er") ~ "Std. Error"
-  ) |> 
+  ) |>
   cols_width(Model ~ pct(25))
 ```
 
@@ -932,12 +1004,16 @@ The amount of regularization is a tuning parameter, and effective values are bet
 
 load("../RData/all_penalties.RData")
 
-all_penalties |> 
-  filter(method == "Ridge") |> 
-  ggplot(aes(penalty, estimate, col = Term, pch = Term))  +
-  geom_hline(yintercept = 0 , col = "red", linewidth = 1.1, alpha = 1 / 5) +
-  geom_hline(data = mle_est, aes(yintercept = estimate, col = Term), 
-             lty = 2, alpha = 3 / 4) +
+all_penalties |>
+  filter(method == "Ridge") |>
+  ggplot(aes(penalty, estimate, col = Term, pch = Term)) +
+  geom_hline(yintercept = 0, col = "red", linewidth = 1.1, alpha = 1 / 5) +
+  geom_hline(
+    data = mle_est,
+    aes(yintercept = estimate, col = Term),
+    lty = 2,
+    alpha = 3 / 4
+  ) +
   geom_line(alpha = 1 / 2) +
   geom_point(alpha = 1 / 2) +
   scale_x_log10(labels = label_log()) +
@@ -1034,16 +1110,16 @@ Most of these penalization methods have the disadvantage that they disable tradi
 glmn_pen <- 10^seq(-6, -1, length.out = 50)
 glmn_grid <- crossing(penalty = glmn_pen, mixture = c(0:4) / 4)
 
-glmn_spec <- 
-  logistic_reg(penalty = tune(), mixture = tune()) |> 
+glmn_spec <-
+  logistic_reg(penalty = tune(), mixture = tune()) |>
   set_engine("glmnet", path_values = !!glmn_pen)
 
-glmn_wflow <- 
-  best_mle_wflow |> 
+glmn_wflow <-
+  best_mle_wflow |>
   update_model(glmn_spec)
 
-glmn_res <- 
-  glmn_wflow |> 
+glmn_res <-
+  glmn_wflow |>
   tune_grid(
     resamples = forested_rs,
     grid = glmn_grid,
@@ -1060,29 +1136,34 @@ glmn_best_metric <- show_best(glmn_res, metric = "brier_class", n = 1)
 #| include: false
 
 pen_target <- -3
-glmn_sel_param <- 
-  glmn_res |> 
-  collect_metrics() |> 
-  mutate(diff = abs(log10(penalty) - pen_target)) |> 
-  slice_min(diff, n = 1) |> 
-  filter(mixture == glmn_best_param$mixture) |> 
-  slice_head(n = 1) |> 
+glmn_sel_param <-
+  glmn_res |>
+  collect_metrics() |>
+  mutate(diff = abs(log10(penalty) - pen_target)) |>
+  slice_min(diff, n = 1) |>
+  filter(mixture == glmn_best_param$mixture) |>
+  slice_head(n = 1) |>
   select(penalty, mixture, .config)
 
-glmn_best_fit <- fit_best(glmn_res,  parameters = glmn_sel_param)
+glmn_best_fit <- fit_best(glmn_res, parameters = glmn_sel_param)
 
 set.seed(799)
-glmn_sel_int <- 
-  glmn_res |> 
-  int_pctl(times = 2000, metrics = cls_mtr, allow_par = FALSE, parameters = glmn_sel_param) 
+glmn_sel_int <-
+  glmn_res |>
+  int_pctl(
+    times = 2000,
+    metrics = cls_mtr,
+    allow_par = FALSE,
+    parameters = glmn_sel_param
+  )
 
-lr_coefs <- 
+lr_coefs <-
   inner_join(
     tidy(best_mle_fit) |> select(term, MLE = estimate),
     tidy(glmn_best_fit) |> select(term, glmnet = estimate),
     by = "term"
-  ) |> 
-  filter(term != "(Intercept)") |> 
+  ) |>
+  filter(term != "(Intercept)") |>
   mutate(
     Type = case_when(
       grepl("(_10)|(_0[1-9])", term) ~ "Spline",
@@ -1094,22 +1175,27 @@ lr_coefs <-
 
 num_rm <- sum(lr_coefs$glmnet == 0)
 
-p_glmnet_tune <- 
-  autoplot(glmn_res, metric = "brier_class") + 
-  theme(legend.position = "top") + 
+p_glmnet_tune <-
+  autoplot(glmn_res, metric = "brier_class") +
+  theme(legend.position = "top") +
   labs(y = "Brier (Resampled)")
 
 # ------------------------------------------------------------------------------
 
-glmn_best_coef <- 
-  glmn_best_fit |> 
-  extract_fit_engine() |> 
-  tidy() |> 
+glmn_best_coef <-
+  glmn_best_fit |>
+  extract_fit_engine() |>
+  tidy() |>
   filter(term != "(Intercept)")
 
 feature_nms <- unname(name_list)
 for (i in seq_along(name_list)) {
-  glmn_best_coef$term <- gsub(name_list[[i]], names(name_list)[i], glmn_best_coef$term, fixed = TRUE)
+  glmn_best_coef$term <- gsub(
+    name_list[[i]],
+    names(name_list)[i],
+    glmn_best_coef$term,
+    fixed = TRUE
+  )
 }
 
 glmn_best_coef$term <- gsub("_x_", " X ", glmn_best_coef$term)
@@ -1117,17 +1203,17 @@ glmn_best_coef$term <- gsub("_", " ", glmn_best_coef$term)
 
 top_best <- 5
 show_pen <- glmn_pen[which.min(abs(glmn_pen - 10^(-4)))]
-at_best <- 
-  glmn_best_coef |> 
-  filter(lambda == glmn_best_param$penalty) |> 
-  slice_max(abs(estimate), n = top_best) 
+at_best <-
+  glmn_best_coef |>
+  filter(lambda == glmn_best_param$penalty) |>
+  slice_max(abs(estimate), n = top_best)
 
-best_path <- 
+best_path <-
   inner_join(glmn_best_coef, at_best |> select(term), by = "term")
 
-at_show <- 
-  best_path |> 
-  filter(lambda == show_pen) |> 
+at_show <-
+  best_path |>
+  filter(lambda == show_pen) |>
   mutate(label = term)
 ```
 
@@ -1147,29 +1233,33 @@ The bottom of @fig-logistic-glmnet shows that, despite the Brier scores being re
 #| warning: false
 
 set.seed(836)
-p_glmnet_param <- 
-  glmn_best_coef |> 
-  ggplot(aes(lambda, estimate, group = term)) + 
+p_glmnet_param <-
+  glmn_best_coef |>
+  ggplot(aes(lambda, estimate, group = term)) +
   geom_vline(xintercept = glmn_sel_param$penalty, lty = 2) +
   geom_vline(xintercept = glmn_best_param$penalty, lty = 3) +
-  geom_line(show.legend = FALSE, alpha = 1 / 3, col = "grey") + 
-  geom_line(data = best_path, aes(col = term), show.legend = TRUE, alpha = 1, linewidth = 1.1) + 
+  geom_line(show.legend = FALSE, alpha = 1 / 3, col = "grey") +
+  geom_line(
+    data = best_path,
+    aes(col = term),
+    show.legend = TRUE,
+    alpha = 1,
+    linewidth = 1.1
+  ) +
   # geom_label_repel(data = at_show, aes(col = term, label = label), show.legend = FALSE, alpha = 0.9) +
   scale_x_log10() +
-  labs(x = penalty()$label, y = "Estimate") + 
-  scale_color_brewer(palette = "Dark2") + 
-  theme(legend.position = "bottom") + 
+  labs(x = penalty()$label, y = "Estimate") +
+  scale_color_brewer(palette = "Dark2") +
+  theme(legend.position = "bottom") +
   guides(colour = guide_legend(ncol = 3, title = ""))
 
 mix_colors <- scales::brewer_pal(palette = "Blues")(9)[-(1:2)]
 
-(
-  p_glmnet_tune  + 
-    geom_vline(xintercept = glmn_sel_param$penalty, lty = 2)  + 
-    geom_vline(xintercept = glmn_best_param$penalty, lty = 3) + 
-    scale_color_manual(values = mix_colors)
-  ) / 
-  p_glmnet_param + 
+(p_glmnet_tune +
+  geom_vline(xintercept = glmn_sel_param$penalty, lty = 2) +
+  geom_vline(xintercept = glmn_best_param$penalty, lty = 3) +
+  scale_color_manual(values = mix_colors)) /
+  p_glmnet_param +
   plot_layout(heights = c(2, 3))
 ```
 
@@ -1177,7 +1267,7 @@ However, when we use the numerically optimal settings, a strong case can be made
 
 ### Bayesian Estimation {#sec-logistic-bayes} 
 
-Now that we've seen how to find parameter estimates for logistic regression via maximum likelihood (penalized or unpenalized), let's discuss how Bayesian estimation works for logistic regression. This explanation will be very reductive; the mechanisms for serious Bayesian analysis are highly optimized and sophisticated Our example will demonstrate the main points but is insufficient for solving real problems. 
+Now that we've seen how to find parameter estimates for logistic regression via maximum likelihood (penalized or unpenalized), let's discuss how Bayesian estimation works for logistic regression. This explanation will be very reductive; the mechanisms for serious Bayesian analysis are highly optimized and sophisticated. Our example will demonstrate the main points but is insufficient for solving real problems. 
 
 Recall that the Bayesian posterior distribution is the endpoint of a Bayesian analysis. It combines our prior belief with the observed data to make a complete probabilistic description of the parameters, given the data. For small-scale illustration, we'll use a single predictor model: 
 
@@ -1219,37 +1309,46 @@ If $\boldsymbol{\beta}^{(1)}$ is close (in posterior probability) to $\boldsymbo
 
 dec_lvls <- c("initial", "improvement", "acceptable", "rejected")
 
-param <- param %>% 
+param <- param |>
   mutate(
-    Decision =
-      case_when(
-        better ~ "improvement",
-        !better & accept ~ "acceptable",
-        TRUE ~ "rejected"
-      ),
+    Decision = case_when(
+      better ~ "improvement",
+      !better & accept ~ "acceptable",
+      TRUE ~ "rejected"
+    ),
     Decision = ifelse(row_number() == 1, "initial", Decision),
     Decision = factor(Decision, levels = dec_lvls)
   )
 
 slice_size <- 8
-param %>% 
-  slice_head(n = slice_size + 1) |> 
-  mutate(Phase = "Beginning") |> 
+param |>
+  slice_head(n = slice_size + 1) |>
+  mutate(Phase = "Beginning") |>
   bind_rows(
-    param %>% 
-      slice_tail(n = slice_size + 1) |> 
+    param |>
+      slice_tail(n = slice_size + 1) |>
       mutate(Phase = "Ending")
-  ) %>% 
-  mutate(random = ifelse(is.na(accept_prob), NA, random)) %>% 
-  select(Iteration = iteration, Parent = parent, Intercept = beta_0, 
-         Slope = beta_1, `(Log) Posterior` = log_post, `Pr[Accept]` = accept_prob,
-         Random = random, Decision) %>% 
-  gt() |> 
-  fmt_number(columns = c(Intercept, Slope, `(Log) Posterior`), n_sigfig = 3) %>%
-  fmt_number(columns = c(`(Log) Posterior`), n_sigfig = 4) %>%
+  ) |>
+  mutate(random = ifelse(is.na(accept_prob), NA, random)) |>
+  select(
+    Iteration = iteration,
+    Parent = parent,
+    Intercept = beta_0,
+    Slope = beta_1,
+    `(Log) Posterior` = log_post,
+    `Pr[Accept]` = accept_prob,
+    Random = random,
+    Decision
+  ) |>
+  gt() |>
+  fmt_number(columns = c(Intercept, Slope, `(Log) Posterior`), n_sigfig = 3) |>
+  fmt_number(columns = c(`(Log) Posterior`), n_sigfig = 4) |>
   fmt_number(columns = c(`Pr[Accept]`, Random), decimals = 3) |>
   fmt_number(columns = c(Iteration, Parent), decimals = 0) |>
-  sub_missing(columns = c(`Pr[Accept]`, Parent, Random), missing_text = "---") |> 
+  sub_missing(
+    columns = c(`Pr[Accept]`, Parent, Random),
+    missing_text = "---"
+  ) |>
   tab_row_group(label = " ", rows = Iteration <= slice_size + 1)
 ```
 
@@ -1262,19 +1361,19 @@ This process proceeds a large number of times. We can monitor the proposed param
 #| fig-width: 4.2
 #| fig-height: 4.5
 #| fig-align: center
-#| fig-cap: The coefficient path during the warmup period for Metropolis-Hastings optimization. 
+#| fig-cap: The coefficient path during the warmup period for Metropolis-Hastings optimization.
 true_means <- c(1.0, -1.5)
 
-warmup_data %>%
-	ggplot(aes(beta_0, beta_1, col = Decision, pch = Decision)) +
-	geom_point() +
-	geom_vline(xintercept = true_means[1], lty = 3) +
-	geom_hline(yintercept = true_means[2], lty = 3) +
-	labs(x = expression(beta[0]), y = expression(beta[1])) +
-	scale_color_manual(
-		values = c(rgb(0, 0, 0, 3 / 4), rgb(0, 0, 1, 3 / 4), rgb(0, 0, 0, 1 / 4))
-	) +
-	scale_shape_manual(values = c(16, 17, 4)) +
+warmup_data |>
+  ggplot(aes(beta_0, beta_1, col = Decision, pch = Decision)) +
+  geom_point() +
+  geom_vline(xintercept = true_means[1], lty = 3) +
+  geom_hline(yintercept = true_means[2], lty = 3) +
+  labs(x = expression(beta[0]), y = expression(beta[1])) +
+  scale_color_manual(
+    values = c(rgb(0, 0, 0, 3 / 4), rgb(0, 0, 1, 3 / 4), rgb(0, 0, 0, 1 / 4))
+  ) +
+  scale_shape_manual(values = c(16, 17, 4)) +
   theme(legend.position = "top")
 ```
 
@@ -1284,30 +1383,32 @@ Around 55 iterations, the MH process has settled near the true values. For itera
 #| label: post-summary
 #| echo: false
 
-term_rate <- 
-  param |> 
-  slice_tail(n = 500) |> 
-  summarize(rate = round(mean(better | accept) * 100, 1)) |> 
+term_rate <-
+  param |>
+  slice_tail(n = 500) |>
+  summarize(rate = round(mean(better | accept) * 100, 1)) |>
   pluck("rate")
 
-post_point <- 
-  posterior %>% 
-  dplyr::select(-iteration) %>% 
-  colMeans() %>% 
-  signif(digits = 3)
-post_lower <- 
-  posterior %>% 
-  dplyr::select(-iteration) %>% 
-  map_dbl(~ quantile(.x, prob = 0.05)) %>% 
-  signif(digits = 3)
-post_upper <- 
-  posterior %>% 
-  dplyr::select(-iteration) %>% 
-  map_dbl(~ quantile(.x, prob = 0.95)) %>% 
+post_point <-
+  posterior |>
+  dplyr::select(-iteration) |>
+  colMeans() |>
   signif(digits = 3)
 
-mle_coef <- 
-  glm(class ~ x, data = tr_data, family = binomial) %>% 
+post_lower <-
+  posterior |>
+  dplyr::select(-iteration) |>
+  map_dbl(~ quantile(.x, prob = 0.05)) |>
+  signif(digits = 3)
+
+post_upper <-
+  posterior |>
+  dplyr::select(-iteration) |>
+  map_dbl(~ quantile(.x, prob = 0.95)) |>
+  signif(digits = 3)
+
+mle_coef <-
+  glm(class ~ x, data = tr_data, family = binomial) |>
   tidy()
 ```
 
@@ -1322,15 +1423,19 @@ At this point, it is reasonable to believe the MH has converged to the location 
 #| fig-width: 6
 #| fig-height: 3.1
 #| fig-align: center
-#| fig-cap: Samples of the posterior distribution (post-warm) for the two logistic regression parameters. 
+#| fig-cap: Samples of the posterior distribution (post-warm) for the two logistic regression parameters.
 
 true_means <- c(1.0, -1.5)
 
-posterior %>%
-  pivot_longer(cols = c(intercept, slope), names_to = "parameter", values_to = "value") %>%
+posterior |>
+  pivot_longer(
+    cols = c(intercept, slope),
+    names_to = "parameter",
+    values_to = "value"
+  ) |>
   ggplot(aes(value)) +
   geom_histogram(bins = 20, col = "white") +
-  facet_wrap(~ parameter, scales = "free_x") +
+  facet_wrap(~parameter, scales = "free_x") +
   labs(x = "Parameter Values")
 ```
 
@@ -1345,23 +1450,31 @@ We mentioned that there are more specialized priors that can be used. For exampl
 #| fig-width: 6
 #| fig-height: 3.1
 #| fig-align: center
-#| fig-cap: Examples of priors that can be used to encourage sparsity in the parameter values. The spike distribution has been scaled to be smaller for illustration. 
+#| fig-cap: Examples of priors that can be used to encourage sparsity in the parameter values. The spike distribution has been scaled to be smaller for illustration.
 x_seq <- seq(-25, 25, by = 0.005)
 
 dbl_expo <- function(x, mu = 0, scale = 1) {
   1 / (2 * scale) * exp(-abs(x - mu) / scale)
 }
 
-gau_lap <- 
+gau_lap <-
   bind_rows(
-    tibble(Parameter = x_seq, density = dbl_expo(x_seq, scale = 10), Distribution = "Laplacian"),
-    tibble(Parameter = x_seq, density = dnorm(x_seq, sd = 10), Distribution = "Gaussian")
+    tibble(
+      Parameter = x_seq,
+      density = dbl_expo(x_seq, scale = 10),
+      Distribution = "Laplacian"
+    ),
+    tibble(
+      Parameter = x_seq,
+      density = dnorm(x_seq, sd = 10),
+      Distribution = "Gaussian"
+    )
   )
 
 p_gau_lap <-
   ggplot(gau_lap, aes(x = Parameter, y = density, col = Distribution)) +
   geom_line(linewidth = 3 / 4, alpha = 3 / 4) +
-  theme(legend.position = "top") + 
+  theme(legend.position = "top") +
   scale_color_manual(values = c("#A8BE74FF", "#BF7417FF"))
 
 slab <- dnorm(x_seq, mean = 0, sd = 10)
@@ -1381,11 +1494,11 @@ spike_slab <- bind_rows(
   )
 )
 
-p_spike_slab <- 
+p_spike_slab <-
   ggplot(spike_slab, aes(x = Parameter, y = density, col = Distribution)) +
   labs(y = NULL) +
   geom_line(linewidth = 3 / 4) +
-  theme(legend.position = "top") + 
+  theme(legend.position = "top") +
   scale_color_manual(values = c("#D64358FF", "#4F5791FF"))
 
 p_gau_lap + p_spike_slab
@@ -1403,13 +1516,15 @@ While these approaches do regularize the parameters to be closer to zero, rememb
 
 The _posterior predictive distribution_ is used when predicting new data. If we are predicting a value of $x_0$, the posterior predictive distribution takes into account our existing posterior but also accounts for the variability that we sampled the new value, i.e., $Pr[X = x_0]$ where $X$ is the random variable for our predictor. The draws from this distribution are used to estimate the class probability. We often produce a single value for a new prediction, which could be the mean (or mode) of the posterior draws. We can also produce credible intervals for our probability. This alone may be a good reason to use Bayesian estimation for these models.  
 
+## Generalized Additive Models {#sec-cls-gam}
+
+
+
 ## Multinomial Regression {#sec-multinomial-reg}
 
 $$
 \ell(\pi_i; y_{ij}) = \prod_{i=1}^{n_{tr}} \binom{n}{x}  \pi_1^{y_{i1}}\pi_2^{y_{i2}}\cdots \pi_C^{y_{iC}}
 $$ {#eq-multinomial}
-
-## Generalized Additive Models {#sec-cls-gam}
 
 ## Discriminants {#sec-lda}
 
