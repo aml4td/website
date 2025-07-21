@@ -11,40 +11,258 @@ knitr:
 #| include: false
 
 source("../R/_common.R")
+source("../R/_themes_ggplot.R")
 
 # ------------------------------------------------------------------------------
 
 library(tidymodels)
+library(embed)
+library(bestNormalize)
+library(probably)
+library(patchwork)
+library(future.mirai)
+library(gt)
+library(gtExtras)
+library(ggrepel)
 library(future)
 
 # ------------------------------------------------------------------------------
 # set options
 
 tidymodels_prefer()
+theme_set(theme_bw())
 set_options()
-plan("multisession")
+plan(multisession)
 
 # ------------------------------------------------------------------------------
-# load data 
+# load data
 
 load("../RData/forested_data.RData")
+load("../RData/logistic_bayes.RData")
+load("../RData/forested_interactions.RData")
 ```
+
+We often conceptualize classification models by the type of class boundary they produce. For example, in @fig-two-class-overfit, two predictors were visualized, and the colors and shapes of the data indicated their class memberships. For one model, the results for three different settings of a tuning parameter were shown. Additionally, the class boundary was visualized as a black line, dividing the data into two (or more) regions where the model predicted a specific class. When there are more than two predictors, visualizing this boundary becomes impossible, but we still use the idea of a line that demarcates different regions that have the same (hard) class prediction. 
+
+That figure also demonstrated that some models can produce simple boundaries while others produce very convoluted partitions. The simplest models produce **linear boundaries**, which are naturally constrained from over-adapting to localized trends in the data and overfitting. Unfortunately, the lack of complexity also increases the model bias so that, for cases where the true boundary is nonlinear, the model may dramatically underperform. 
+
+This chapter focuses on models that, at first appearance, produce linear class boundaries. Apart from feature engineering, they tend to be relatively easy and fast to train and are more likely to be interpretable due to their simplicity. We’ll start by discussing the most used classification model: logistic regression. This model has many important aspects to discuss, as well as numerous ways to estimate model parameters. An extension of this model for more than two classes, a.k.a. multinomial regression, is also discussed. Finally, we review a fairly antiquated classification model (discriminant analysis) that will lead to some effective generalizations in the next chapter. 
+
+However, before diving into modeling techniques, let’s take a deep look at the Washington State forestation data originally introduced in @sec-spatial-splitting. These data will be used to demonstrate the nuances of different classifications in this and the next two chapters. 
 
 ## Exploring Forestation Data  {#sec-forestation-eda}
 
-### Feature engineering 
+These data have been discussed in Sections [-@sec-spatial-splitting], [-@sec-spatial-resampling], and [-@sec-unsupervised-selection]. As a refresher, locations in Washington state were surveyed, and specific criteria were applied to determine whether they were sufficiently forested. Using predictors on the climate,  terrain, and location, we want to accurately predict the probability of forestation at other sites within the state. 
+
+As previously mentioned, this type of data exhibits spatial autocorrelation, where objects close to each other tend to have similar attributes. This is not a book specific to spatial analysis; ordinary machine learning tools will be used to analyze these data. Our analyses might be, to some degree, suboptimal for the task. However, for our data, @FIA2015 describes the sampling methodology, in which the on-site inspection locations are sampled from within a collection of 6,000-acre hexagonal regions. While spatial autocorrelation is very relevant, the large space between these points may reduce the risk of using spatially ignorant modeling methodologies. Despite this, our data spending methodologies _are_ spatially aware, and these might further mitigate any issues caused by ordinary ML models. For example, when initially splitting (and resampling them), recall that we used a buffer to add some space between the data used to fit the model and those used for assessment (e.g., Figures [-@fig-forested-split] and [-@fig-forested-blockcv]). This can reduce the risk of ignoring the autocorrelation when estimating model parameters. 
+
+To learn more about spatial machine learning and data analysis, @kopczewska2022spatial is a nice overview. We also recommend @nikparvar2021machine, @kanevski2009machine, and @cressie2015statistics.
+
+```{r}
+#| label: vert-forest
+#| include: false
+#| cache: true
+
+vert_forest <-
+  forested_train |>
+  pivot_longer(
+    cols = c(-class, -county),
+    names_to = "Predictor",
+    values_to = "value"
+  ) |>
+  full_join(name_key |> rename(Predictor = variable), by = "Predictor") |>
+  mutate(
+    text = ifelse(is.na(text), Predictor, text),
+    Predictor = tools::toTitleCase(text)
+  ) |>
+  select(-text)
+
+num_unique <-
+  vert_forest |>
+  select(-class, -county) |>
+  summarize(
+    num_vals = min(21, vctrs::vec_unique_count(value)),
+    .by = c(Predictor)
+  )
+
+percentiles <-
+  vert_forest |>
+  full_join(num_unique, by = "Predictor") |>
+  group_nest(Predictor, num_vals) |>
+  mutate(
+    pctl = map2(
+      data,
+      num_vals,
+      ~ tibble(group = ntile(.x$value, n = .y), class = .x$class)
+    ),
+    mid = map_dbl(data, ~ median(.x$value)),
+  ) |>
+  select(-data) |>
+  unnest(c(pctl)) |>
+  mutate(pctl = (group - 1) / num_vals * 100) |>
+  summarize(
+    events = sum(class == "Yes"),
+    total = length(class),
+    .by = c(Predictor, pctl)
+  ) |>
+  mutate(
+    prop_obj = map2(events, total, ~ tidy(binom.test(.x, .y, conf.level = 0.9)))
+  ) |>
+  select(-events) |>
+  unnest(c(prop_obj))
+
+obs_rates <-
+  forested_train |>
+  summarize(
+    rate = mean(class == "Yes"),
+    events = sum(class == "Yes"),
+    total = length(class),
+    .by = c(county)
+  ) |>
+  mutate(
+    hstat = map2(events, total, binom.test, conf.level = 0.9),
+    pct = rate * 100,
+    .lower = map_dbl(hstat, ~ .x$conf.int[1]),
+    .upper = map_dbl(hstat, ~ .x$conf.int[2]),
+    county = tools::toTitleCase(gsub("_", " ", county)),
+    county = factor(county),
+    county = reorder(county, rate),
+    `# Locations` = total
+  )
+```
+
+As with any ML project, we conduct preliminary exploratory data analysis to determine whether any data characteristics might affect how we model them. @tbl-forested-numeric has statistical and visual summaries of the `r ncol(forested_train) - 2` numeric predictors using the training data. Several of the predictors exhibit pronounced skew (right or left leaning). By coercing the distributions of some predictors to be more symmetric, we might gain robustness and perhaps an incremental improvement in performance (for some models). 
+
+Also, the annual minimum temperature, dew temperature, January minimum temperature, and maximum vapor show bimodality in the distributions. The year of inspection is also interesting; the data collection was sparse before 2011, and subsequent years contain a few hundred data points per year before beginning to drop off in 2021. These characteristics are not indicative of problems with data quality, but it can be important to know that they exist when debugging why a model is underperforming or showing odd results.
+
+::: {#tbl-forested-numeric}
+
+```{r}
+#| label: forested-numeric
+#| echo: false
+
+vert_forest |>
+  summarize(
+    Minimum = min(value),
+    Mean = mean(value),
+    Max = max(value),
+    `Std. Dev` = sd(value),
+    Skewness = e1071::skewness(value),
+    Distribution = list(value),
+    .by = c(Predictor)
+  ) |>
+  arrange(Predictor) |>
+  gt() |>
+  fmt_number(columns = c(-Distribution), n_sigfig = 3) |>
+  gt_plt_dist(
+    Distribution,
+    type = "histogram",
+    same_limit = FALSE,
+    line_color = "#222",
+    fill_color = "white"
+  ) |>
+  cols_width(Predictor ~ pct(25))
+
+```
+
+Histograms and statistical summaries of the numeric predictors in the Washington State training set. 
+
+:::
+
+
+Also, recall that @fig-corr-plot previously described the correlation structure of these predictors. There were several clusters of predictors with strong magnitudes of correlation. This implies that there is some redundancy of information in these features. However, machine learning is often “a game of inches,” where even redundant predictors can contribute incremental improvements in performance. In any case, the analyses in this chapter will be profoundly affected by this characteristic; it will be discussed in more detail below. 
+
+Individually, how does each of these features appear to relate to the outcome? To assess this, we binned each predictor into roughly 20 groups based on percentiles and used these groups (each containing about `r floor(mean(percentiles$total))` locations) to compute the rate of forestation and 90% confidence intervals^[Binning is used here as a visualization tool; we re-emphasize that converting numeric predictors into categorical features is problematic.]. As an exploratory tool, we can use these binned versions of the data to see potential relationships with the outcome. @fig-forest-percentiles shows the profiles. Note that there is enough data in each bin to make the confidence intervals very close to the estimated rates. 
+
+
+```{r}
+#| label: fig-forest-percentiles
+#| echo: false
+#| out-width: 80%
+#| fig-width: 8
+#| fig-height: 6
+#| fig-cap: Binned rates of forestation over percentiles of the numeric predictors. The shaded regions are 90% confidence intervals.
+
+percentiles |>
+  ggplot(aes(pctl, estimate)) +
+  geom_line() +
+  geom_ribbon(
+    aes(ymin = conf.low, ymax = conf.high),
+    alpha = 1 / 5,
+    fill = "#D85434FF"
+  ) +
+  facet_wrap(~Predictor, ncol = 3) +
+  labs(x = "Percentile", y = "Rate of Forestation")
+```
+
+Quite a few predictors show considerable nonlinear trends, and a few are not monotonic (i.e., the sign of the slope changes over the range of values). The Eastness and Northness features, which capture the landscape orientation at the location, show flat trends. This means that these predictors are less likely to be important. However, once in a model with other predictors, the model may be able to extract some utility from them, perhaps via interaction terms. The primary takeaway from this visualization is that models that are able to express nonlinear trends will probably do better than those restricted to linear classification boundaries. 
+
+In addition to longitude and latitude, the data contains a qualitative location-based predictor: the county in Washington. There are data on `r nrow(obs_rates)` counties. The number of locations within each county can vary with `r obs_rates$county[which.min(obs_rates$total)]` county having the least training set samples (`r min(obs_rates$total)`) and `r obs_rates$county[which.max(obs_rates$total)]` having the most (`r max(obs_rates$total)`). @fig-counties shows how the rate of forestation changes and the uncertainty in these estimates. Several counties in the training set have no forested locations. Given the number of counties and their varying frequencies of data, an effect encoding strategy might be appropriate for this predictor. 
+
+```{r}
+#| label: fig-counties
+#| echo: false
+#| out-width: 40%
+#| fig-width: 4
+#| fig-height: 6
+#| fig-cap: Outcome rates for different counties in Washington State.
+
+obs_rates |>
+  ggplot(aes(y = county, col = `# Locations`)) +
+  geom_point(aes(x = rate)) +
+  geom_errorbar(aes(xmin = .lower, xmax = .upper)) +
+  labs(x = "Rate of Forestation", y = NULL) +
+  theme(legend.position = "top") +
+  scale_color_viridis_c(option = "mako", begin = .2, end = .8)
+```
+
+Finally, it might be a good idea to assess potential interaction effects prior to modeling. Since almost all of our features are numeric, it can be difficult to assess interactions visually, so the H-statistics for two-way interactions were calculated using a boosted tree as the base model using the numeric features. Since there are only `r choose(15, 2)` possible interactions, the H-statistics were recomputed 25 times using different random number generators so that we can compute a mean H-statistic and its associated standard error. 
+ 
+```{r}
+#| label: fig-forested-interactions
+#| echo: false
+#| out-width: 90%
+#| fig-width: 8
+#| fig-height: 4.5
+#| fig-cap: Results for the top 25 H-statistic interactions. The error bars are 90% intervals based on replicate computations.
+
+forested_hstats_text |>
+  slice_max(mean_score, n = 25) |>
+  ggplot(aes(y = term)) +
+  geom_point(aes(x = mean_score)) +
+  geom_errorbar(
+    aes(xmin = .lower, xmax = .upper),
+    alpha = 1 / 2,
+    width = 1 / 2
+  ) +
+  labs(x = "Mean H-Statistic", y = NULL)
+```
+
+The vast majority of the `r choose(15, 2)`  H-statistics are less than `r signif(quantile(forested_hstats_text$mean_score, probs = 0.95), 3)` and there are a handful of interactions that are greater than that value; we’ll take the five interactions and use them in a logistic regression shown below.
+
+The next section will describe a mainstay of machine learning models for two classes: logistic regression. 
 
 ## Logistic Regression {#sec-logistic-reg}
 
-### Maximum Likelihood Estimation  {#sec-logistic-mle}
+#### Generalized Linear Models {.unnumbered}
+
+#### Forestation Model Development {.unnumbered}
+
+#### Interpretation {.unnumbered}
+
+#### Examining Our Model  {.unnumbered}
+
+#### A Lurking Problem: Multicollinearity  {.unnumbered}
 
 ### Regularized {#sec-logistic-penalized}
 
-### Bayesian Estimation {#sec-logistic-bayes}
+#### Refitting the Forestation Model  {.unnumbered}
 
-## Multinomial Regression {#sec-multinomial-reg}
+### Bayesian Estimation {#sec-logistic-bayes} 
 
 ## Generalized Additive Models {#sec-cls-gam}
+
+## Multinomial Regression {#sec-multinomial-reg}
 
 ## Discriminants {#sec-lda}
 
