@@ -17,7 +17,7 @@ options(
 )
 
 # Read in api key; in .gitignore
-key <- readLines("census_api_key.txt")
+key <- readLines("R/census_api_key.txt")
 census_api_key(key)
 
 # ------------------------------------------------------------------------------
@@ -134,25 +134,22 @@ all.equal(forested_test, testing(forested_split))
 # ------------------------------------------------------------------------------
 # Make a data frame to use for plotting
 
-split_groups <- tibble(.row = 1:nrow(forested_sf), group = "buffer")
-split_groups$group[forested_sf_split$in_id] <- "training"
-split_groups$group[forested_sf_split$out_id] <- "testing"
+plot_initial_split <- 
+  forested_sf_split$data |> re_geocode() |> 
+  mutate(group = "buffer", group_col = "#000000")
 
-forested_split_info <-
-  for_analysis |>
-  add_rowindex() |>
-  full_join(split_groups, by = ".row") |>
-  mutate(
-    group_col = if_else(group == "training", "#E7298A", "#7570B3"),
-    group_col = if_else(group == "buffer", "#000000", group_col)
-  )
+plot_initial_split$group[forested_sf_split$in_id] <- "training"
+plot_initial_split$group_col[forested_sf_split$in_id] <- "#E7298A"
+
+plot_initial_split$group[forested_sf_split$out_id] <- "testing"
+plot_initial_split$group_col[forested_sf_split$out_id] <- "#7570B3"
 
 if (rlang::is_installed("leaflet") & interactive()) {
   library(leaflet)
   leaflet() %>%
     addProviderTiles(providers$CartoDB.PositronNoLabels) %>%
     addCircles(
-      data = forested_split_info,
+      data = plot_initial_split,
       lng = ~longitude,
       lat = ~latitude,
       color = ~group_col,
@@ -161,35 +158,9 @@ if (rlang::is_installed("leaflet") & interactive()) {
       opacity = .01,
       fillOpacity = 1 / 2,
       radius = 1500,
-      popup = htmltools::htmlEscape(forested_split_info$group)
-    )
-  
-  # training set only
-  leaflet() %>%
-    addProviderTiles(providers$CartoDB.PositronNoLabels) %>%
-    addCircles(
-      data = forested_train,
-      lng = ~longitude,
-      lat = ~latitude,
-      fill = TRUE,
-      opacity = .01,
-      fillOpacity = 1 / 2,
-      radius = 1500,
-      popup = htmltools::htmlEscape(forested_split_info$group)
-    )
-  # test set only
-  leaflet() %>%
-    addProviderTiles(providers$CartoDB.PositronNoLabels) %>%
-    addCircles(
-      data = forested_test,
-      lng = ~longitude,
-      lat = ~latitude,
-      fill = TRUE,
-      opacity = .01,
-      fillOpacity = 1 / 2,
-      radius = 1500,
-      popup = htmltools::htmlEscape(forested_split_info$group)
-    )
+      popup = htmltools::htmlEscape(plot_initial_split$group)
+    ) |> 
+    addScaleBar()
 }
 
 # ------------------------------------------------------------------------------
@@ -217,24 +188,23 @@ map_int(forested_rs$splits, ~ nrow(assessment(.x)))
 # ------------------------------------------------------------------------------
 # Make map for a single cv iteration
 
-cv_split_groups <- tibble(.row = 1:nrow(forested_sf_train), group = "buffer")
-cv_split_groups$group[forested_rs$splits[[1]]$in_id] <- "analysis"
-cv_split_groups$group[forested_rs$splits[[1]]$out_id] <- "assessment"
+split_1 <- forested_rs$splits[[1]]
 
-forested_cv_split_info <-
-  forested_train |>
-  add_rowindex() |>
-  full_join(cv_split_groups, by = ".row") |>
-  mutate(
-    group_col = if_else(group == "analysis", "#E7298A", "#7570B3"),
-    group_col = if_else(group == "buffer", "#000000", group_col)
-  )
+plot_first_fold <- 
+  split_1$data |> 
+  mutate(group = "buffer", group_col = "#000000")
+
+plot_first_fold$group[split_1$in_id] <- "analysis"
+plot_first_fold$group_col[split_1$in_id] <- "#E7298A"
+
+plot_first_fold$group[split_1$out_id] <- "assessment"
+plot_first_fold$group_col[split_1$out_id] <- "#7570B3"
 
 if (rlang::is_installed("leaflet") & interactive()) {
   leaflet() %>%
     addProviderTiles(providers$CartoDB.PositronNoLabels) %>%
     addCircles(
-      data = forested_cv_split_info,
+      data = plot_first_fold,
       lng = ~longitude,
       lat = ~latitude,
       color = ~group_col,
@@ -243,8 +213,9 @@ if (rlang::is_installed("leaflet") & interactive()) {
       opacity = .01,
       fillOpacity = 3 / 4,
       radius = 1500,
-      popup = htmltools::htmlEscape(forested_cv_split_info$group)
-    )
+      popup = htmltools::htmlEscape(plot_first_fold$group)
+    ) |> 
+    addScaleBar()
 }
 
 # ------------------------------------------------------------------------------
@@ -288,8 +259,8 @@ save(
   file = "forested_data.RData"
 )
 save(
-  forested_split_info,
-  forested_cv_split_info,
+  plot_initial_split,
+  plot_first_fold,
   file = "forested_split_info.RData"
 )
 save(forested_sf, forested_sf_split, forested_sf_rs, 
