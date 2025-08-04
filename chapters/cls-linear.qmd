@@ -25,6 +25,8 @@ library(gt)
 library(gtExtras)
 library(ggrepel)
 library(future)
+library(car)
+library(DALEXtra)
 
 # ------------------------------------------------------------------------------
 # set options
@@ -281,19 +283,31 @@ linear_long_coef <-
 # glm models the probability of the second factor level
 linear_long_coef <- -linear_long_coef
 linear_long_coef <- format(linear_long_coef, digits = 3)
+
+iter_text <- cli::format_inline("{linear_long_fit$fit$iter} iteration{?s}")
 ```
 
 For a single predictor, $x$, the logistic model results in a symmetric, sigmoidal function across values of $x$. To demonstrate, a simple logistic regression model was fit to the binary outcome data with a single predictor: the location's longitude. 
 
-There are various ways to find parameter estimates, which will be discussed in subsequent subsections. The most basic method is maximum likelihood estimation, where we use a numerical optimization method to minimize the loss function, which is the negative log-likelihood. The log-likelihood is more numerically stable to work with, and it is generally not challenging to find maximum likelihood estimates (MLEs) of our $\boldsymbol{\beta}$ parameters. Statistically, the MLEs are estimates that best explain the data. They are also unbiased estimates of the true parameters^[Recall from @sec-variance-bias that unbiased estimates might have high variance. For the forestation data, we'll see that some of our logistic regression parameter estimates have irrationally large variances. Later in this chapter, biased methods (via regularization) are also discussed.].
+There are various ways to find parameter estimates, which will be discussed in subsequent subsections. The most basic method is maximum likelihood estimation, where we use a numerical optimization method to minimize the loss function, which is the negative log-likelihood:
 
-We solved the log-likelihood equations (based on @eq-bernoulli) to estimate the parameters, producing the linear predictor function:  
+$$
+-\log \ell(\pi_i; y_{ij}) = \sum_{i=1}^{n_{tr}} \left[ y_{i1}\log(\pi_i) + (1- y_{i1}) \log(1-\pi_i)\right]
+$$ {#eq-bernoulli-log-lik}
+
+The log-likelihood is more numerically stable to work with, and it is generally not challenging to find maximum likelihood estimates (MLEs) of our $\boldsymbol{\beta}$ parameters. @glm describes an effective gradient-based method for estimating parameters. Their method, called iteratively reweighted least squares (IRLS), minimizes the sum of weighted residuals, where the weights are defined by a function of the data’s variance. This method tends to converge very quickly for logistic regression^[In fact, as we;ll see shortly, their theory is not limited to logistic regression; it encompasses linear regression, Poisson regression, and other models.] and has theoretical guarantees. 
+
+Statistically, the MLEs are estimates that best explain the data. They are also unbiased estimates of the true parameters^[Recall from @sec-variance-bias that unbiased estimates might have high variance. For the forestation data, we'll see that some of our logistic regression parameter estimates have irrationally large variances. Later in this chapter, biased methods (via regularization) are also discussed.].
+
+To illustrate the model, let’s use the training data to model the probability of forestation as a function of the location’s longitude; the logit function has just simple slope and intercept parameters. We solved the log-likelihood equations (based on @eq-bernoulli-log-lik) to estimate the parameters. The optimization converges after `r iter_text`, producing the linear predictor function:  
 
 $$
 \boldsymbol{x}_i'\boldsymbol{\beta} = `r linear_long_coef[1]` + `r linear_long_coef[2]`\: longitude_i
 $$
 
-@fig-longitude shows this pattern using the longitude predictor in the forestation data in green. The data points shown are the binned data from @fig-forest-percentiles; the model is actually fit on the individual locations in the training set. The model fit initially underestimates the rate of forestation for the most Eastern locations, and the predicted probability slowly decreases in a fairly flat sigmoid. Given the ups and downs of the observed event rates over longitude, this model fit misses almost all of the nuance in the data. 
+@fig-longitude shows this pattern using the longitude predictor in the forestation data in green. The data points shown are the binned data from @fig-forest-percentiles; the model is actually fit on the individual locations in the training set. 
+
+Why does the rate swing up and down? Looking back at @fig-forested, we see that most of the initial western portion of the state is forested. However, Seattle is adjacent to the water of Puget Sound; this accounts for the area of nonforested locations around longitudes of about -122.3°. Further east of Seattle is mostly forested.  East of this lies a large swath of unforested land (especially in the mid to south east). This is reflected in the drop in the rates from about -120° to -118.5°. In the easternmost section of the state, there is a region of forested land to the north, accounting for the rate increase at the right-hand side of @fig-longitude.  
 
 ::: {#fig-longitude}
 
@@ -480,7 +494,7 @@ server <- function(input, output) {
             scale_color_brewer(drop = FALSE, palette = "Dark2")
         }
 
-        p <- p + theme_light_bl()
+        p <- p + lims(y = 0:1) + theme_light_bl()
         print(p)
       },
       res = 100
@@ -497,7 +511,7 @@ An example of a logistic regression model with a single predictor (longitude). T
 
 :::
 
-Overlaying the estimated event rates shows that the model does a poor job of representing the relationship between the probability of forestation and longitude. The data trend is not monotonically decreasing. Our simple linear predictor is doing its best but is not flexible enough to emulate this motif.
+The model fit initially underestimates the rate of forestation for the most western locations, and the predicted probability slowly decreases in a fairly flat sigmoid. Given the ups and downs of the observed event rates over longitude, this model fit misses almost all of the nuance in the data.  The data trend is not monotonically decreasing, so our simple linear predictor is doing its best but is not flexible enough to emulate what is actually occurring. 
 
 #### Generalized Linear Models {.unnumbered}
 
@@ -515,7 +529,7 @@ There are significant benefits to framing logistic regression inside the class o
 
 It's easy to take these benefits for granted. Suppose we were to find parameter estimates using some other log function, such as the Brier score or the area under the ROC curve. In that case, it might be difficult to solve the required equations, let alone derive the methods to make inferences regarding parameters. 
 
-Before proceeding further, let's talk about the linear predictor. The "linear" in "linear predictor" and "generalized linear model" means that the model is _linear in the parameters_ $\boldsymbol{\beta}$. This does not mean that the model can only produce linear class boundaries. Our model terms $x_{ij}$ can represent any function of one or more parameters. We can use the feature engineering tools shown in Chapters [-@sec-numeric-predictors] through [-@sec-interactions-nonlinear] to create a better model. 
+Before proceeding further, let's talk about the linear predictor. The "linear" in "linear predictor" and "generalized linear model" means that the model is _linear in the parameters_ $\boldsymbol{\beta}$. This does **not** mean that the model can only produce linear class boundaries. Our model terms $x_{ij}$ can represent any function of one or more parameters. We can use the feature engineering tools shown in Chapters [-@sec-numeric-predictors] through [-@sec-interactions-nonlinear] to create a better model. 
 
 For example, in @fig-longitude, we saw that using the longitude values as our single predictor $x$ didn't work well. When plotted on the logit scale, there is a clear nonlinear function in the binned rates. We know how to estimate a general nonlinear function of a parameter: spline functions. @fig-longitude can also show the results when ten natural spline features are used in the model. Visually, we can see that this expansion is far more effective at predicting the outcome. We can also quantify this using several metrics mentioned in the previous chapter (e.g., Brier score, cross-entropy, etc).  
 
@@ -643,7 +657,7 @@ Note about linear dependencies and widly large coefficients
 #| echo: false
 #| out-width: 70%
 #| fig-width: 6
-#| fig-height: 3.25
+#| fig-height: 3
 #| fig-cap: Cross-validated Brier scores for several stages of feature engineering of the forestation data using basic logistic regression. The red dashed line represents the permutation estimate of the no-information rate. The error bars are 90% confidence intervals based on the naive standard error estimates produced during resampling.
 
 forest_res |>
@@ -682,7 +696,7 @@ Along with the Brier score values of `r signif(logistic_mtr$mean[logistic_mtr$.m
 #| out-width: 80%
 #| fig-width: 8
 #| fig-height: 4
-#| fig-cap: Calibration and ROC curves for the pooled assessment sets for the logistic regression model and the full preprocessing pipeline (e.g. up to spline terms).
+#| fig-cap: Calibration and ROC curves for the pooled assessment sets for the logistic regression model and the full preprocessing pipeline (e.g. up to spline terms). The calibration plot used a moving window, where windows that span 10% of the data are computed with moving increments of 2%.
 
 logistic_pred <-
   forest_res |>
@@ -708,9 +722,75 @@ logitic_roc <-
 logitic_cal + logitic_roc
 ```
 
-From here, we could investigate which terms had the greatest influence on the model. Were the 10 interactions that we identified important or statistically significant? Should we have added more or less? We might plot the predicted values to see if there are specific geographic locations that corresponded to the poorly calibrated values. Perhaps we could also refine the model by using a supervised feature filter, and so on. 
+From here, we should investigate which terms had the greatest influence on the model. Were the 10 interactions that we identified important or statistically significant? Should we have added more or less? We might plot the predicted values to see if there are specific geographic locations that corresponded to the poorly calibrated values. Perhaps we could also refine the model by using a supervised feature filter, and so on. 
 
-Instead, we’ll move on to a different way to estimate the logistic model’s unknown parameters using different objective functions that use the likelihood but in different ways. 
+#### Examining Our Model  {.unnumbered}
+
+There are many ways to appraise the model. One (unfortunate) focus is often on the statistical significance of the model terms. If the model’s purpose is solely for interpretation, this is understandable. For ML applications, p-values are not particularly insightful since they don’t necessarily correlate with predictive performance. This is especially true for our logistic model, which contains numerous spline terms; knowing whether the fourth spline term has a small p-value probably isn’t insightful. However, we’ll return to the model inferential capacity shortly as a diagnostic tool. 
+
+Our suggestion is to assess the model’s quality by using the held-out predictions to conduct residual analysis by finding systematic patterns in those values. The most basic residual is the simple difference in the “observed” and predicted probabilities: $e_{ic} = y_{ic} - \widehat{p}_{ic}$. The issue with these values is that the variance of the probability estimates changes over their [0,1] range. A residual of 0.1 has a different context when $\widehat{p}_i = 0.01$ compared to $\widehat{p}_i = 0.5$.  To normalize these values, we can use Pearson residuals, which are divided by the standard deviation: 
+
+ $$
+ e^p_{ic} = \frac{y_{ic} - \widehat{p}_{ic}}{\widehat{p}_{ic} (1 - \widehat{p}_{ic})}.
+ $$
+
+Alternatively, we can look at _deviance_ residuals. The deviance is a likelihood-based comparison between two models: our current model and one that is _saturated_^[Often thought of as the “perfect model.”] where the model perfectly fits the training data. For logistic regression, these take the form: 
+
+$$
+e^d_{ic} = \text{sign}(e_{ic}) \left[-2(y _{ic}\, \text{log}(\widehat{p} _{ic}) + (1 - y _{ic})\, \text{log}(1 - \widehat{p}_{ic}))\right]^{1/2}
+$$
+
+See @pregibon1981logistic and  @agresti2015foundations for discussions.  
+
+In our application, it would be relevant to plot residuals versus values of individual predictors. If we see systematic, non-random patterns, it might indicate that how we represent that predictor in the model is inadequate. For example, in @fig-longitude-resdiauls the deviance residuals are plotted against longitude. These residuals are computed with the holdout predictions for each resampling fold. 
+
+The left-hand panel shows residuals for the model with simple linear terms for the predictors. For each class, we can see large spikes in residuals for longitude values corresponding to the previous ups and downs shown in @fig-longitude. It is interesting that this visualization shows different patterns for each class. For example, for the region between longitudes of approximately -120.5° and -118°, the unforested locations have very small residuals, and the forested locations have a spike.
+
+```{r}
+#| label: fig-longitude-resdiauls
+#| fig-cap: "Deviance residuals plotted against longitude for models with and without spline terms for predictors (including longitude)."
+#| out-width: "70%"
+#| fig-width: 6
+#| fig-height: 4
+#| fig-align: center
+#| warning: false
+
+logistic_resdiduals <-
+  forest_res |>
+  extract_workflow_set_result("encoded_logistic_mle") |>
+  collect_predictions() |>
+  mutate(Model = "No Splines") |>
+  bind_rows(
+    forest_res |>
+      extract_workflow_set_result(
+        "encoded + transformations + splines_logistic_mle"
+      ) |>
+      collect_predictions() |>
+      mutate(Model = "Spline Terms")
+  ) |>
+  mutate(
+    indicator = ifelse(class == "Yes", 1, 0),
+    error = indicator - .pred_Yes,
+    dev_1 = indicator * log(.pred_Yes),
+    dev_2 = (1 - indicator) * log(1 - .pred_Yes),
+    deviance = sign(error) * sqrt((-2 * (dev_1 + dev_2)))
+  ) |>
+  inner_join(forested_train |> add_rowindex() |> select(-class), by = ".row")
+
+logistic_resdiduals |>
+  ggplot(aes(longitude, deviance, col = class)) +
+  geom_point(alpha = 1 / 2, cex = 1) +
+  facet_wrap(~Model) +
+  scale_color_manual(values = c("#218239", "#d4ad42")) +
+  labs(x = "Longitude", y = "Deviance Residiual") +
+  theme(legend.position = "top")
+```
+
+In contrast, the right-hand panel has many more residuals near zero and significantly attenuated spikes/patterns. However, some points have absolute residuals _larger_ than the simpler model. Overall, though, the model with spline terms has fewer systematic patterns. 
+
+Given the spatial nature of these data, mapping the residuals can be instructive. It could show us locations that tend to be poorly predicted. We can also determine the largest (absolute) residuals and investigate what might be different about these particular data points. 
+
+Let's move on to consider how the logistic model can facilitate interpretaion. 
 
 #### Interpretation {.unnumbered}
 
@@ -808,8 +888,6 @@ For numeric predictors, such as eastness or elevation, exponentiating the coeffi
 
 In either case, the logistic regression model does have a structure that lends itself to natural probabilistic interpretation. See @hosmer2013applied for a broader discussion. 
 
-#### Examining Our Model  {.unnumbered}
-
 ```{r}
 #| label: best-glm-fit
 #| include: false
@@ -833,21 +911,149 @@ best_mle_coef <-
     Type = factor(Type, levels = c("Spline", "Interaction", "Main Effect"))
   )
 
-# best_mle_coef |>
-#   mutate(`|Estimate|` = abs(estimate)) |>
-#   select(term, Type, `|Estimate|` , `Standard Error` = std.error) |>
-#   pivot_longer(cols = c(-term, -Type), values_to = "value", names_to = "statistic") |>
-#   ggplot(aes(Type, value)) +
-#   geom_boxplot() +
-#   facet_wrap(~ statistic) +
-#   scale_y_log10() +
-#   labs(y = NULL, x = "Feature Type")
+best_mle_vifs <-
+  best_mle_fit |>
+  extract_fit_engine() |>
+  vif() |>
+  enframe() |>
+  set_names(c("term", "vif"))
+
+best_mle_coef <- full_join(best_mle_coef, best_mle_vifs, by = "term")
+
+best_mle_sig <-
+  best_mle_coef |>
+  mutate(signif = p.value <= 0.1) |>
+  filter(term != "(Intercept)") |>
+  summarize(
+    sig_rate = round(mean(signif) * 100, 1),
+    num = length(signif),
+    .by = c(Type)
+  )
 ```
 
-overall trends
+```{r}
+#| label: logistic-pdp
+#| include: false
+#| cache: true
 
+explainer_logistic <-
+  explain_tidymodels(
+    best_mle_fit,
+    data = forested_train |> select(-class),
+    y = forested_train$class,
+    label = "",
+    type = "prob",
+    verbose = FALSE
+  )
+
+set.seed(1805)
+pdp_longitude <- model_profile(
+  explainer_logistic,
+  N = 1000,
+  variables = "longitude"
+)
+```
+
+Methods are also available to help explain a model or a specific prediction, independent of the type of model used. The field of **explainable machine learning** uses tools related to the H-statistic previously described in @sec-interactions-detection. These will be discussed in detail in @sec-explanations, but we’ll preview the technique here. 
+
+We’ve used the longitude predictor to demonstrate potential nonlinear patterns with the outcome values. There definitely appears to be a complex pattern between longitude and the probability of forestation. However, when placed in a model with other predictors, how does that affect how the model estimates the effect of a specific feature?
+
+Partial dependence plots (PDP) are visualization tools to answer this question. Suppose we were to sample a single location from the training set (or any other set of data). We could keep all other predictors constant for that sampled data point and create a grid of possible values for the feature of interest. Using our model, we can create a _profile_ showing how the predictions change over these values. However, if we had sampled a different data point, the pattern probably would not be the same (unless the model was very simple). We can sample a large number of samples and use their profiles to compute the average effect of the predictor across its range of values. 
+
+@fig-longitude-pdp shows a PDP for longitude from our most complex model (including interactions and splines). The 1,000 grey lines show the individual profiles, and the red curve shows the average effect of this predictor, in the presence of the other model terms.
+
+```{r}
+#| label: fig-longitude-pdp
+#| fig-cap: "A partial dependency plot visualizing how longitude affects the probability when averaged over 1,000 random draws of the data. The red line shows the average trend while the grey lines show the trends for the 1,000 location samples. This is an interesting contrast to @fig-longitude."
+#| out-width: "70%"
+#| fig-width: 6
+#| fig-height: 4
+#| fig-align: center
+#| warning: false
+
+ggplot_pdp <- function(obj, x) {
+  p <-
+    as_tibble(obj$agr_profiles) %>%
+    mutate(`_label_` = stringr::str_remove(`_label_`, "^[^_]*_")) %>%
+    ggplot(aes(`_x_`, 1 - `_yhat_`)) +
+    geom_line(
+      data = as_tibble(obj$cp_profiles),
+      aes(x = {{ x }}, group = `_ids_`),
+      linewidth = 0.5,
+      alpha = 0.05,
+      color = "gray50"
+    )
+
+  num_colors <- n_distinct(obj$agr_profiles$`_label_`)
+
+  if (num_colors > 1) {
+    p <- p + geom_line(aes(color = `_label_`), linewidth = 1.2, alpha = 0.8)
+  } else {
+    p <- p + geom_line(color = "darkred", linewidth = 1.2, alpha = 0.8)
+  }
+
+  p
+}
+
+ggplot_pdp(pdp_longitude, longitude) +
+  labs(y = "Probability of Forestation", y = "Longitude")
+```
+
+The pattern is different from @fig-longitude. For example, there is no decreasing trend in the eastern part of the state; probabilities for locations greater than longitudes of -121° are fairly constant. The difference is due to some other predictor having more influence on locations in that area of the state (perhaps the county). 
+
+This model appears to be adequate, but _it is not_. There is a major issue related to our parameter estimates that, while not obviously affecting the predictive ability, reflects a flaw that could make the fit unreliable. 
 
 #### A Lurking Problem: Multicollinearity  {.unnumbered}
+
+
+```{r}
+#| label: tbl-logistic-reg
+#| tbl-cap: "The top five most signficant model terms (top) and the five terms with the highest standard errors (bottom)."
+#| echo: false
+
+logistic_fit_tbl <-
+  bind_rows(
+    best_mle_coef |>
+      filter(term != "(Intercept)") |>
+      slice_min(p.value, n = 5) |>
+      mutate(listing = "Smallest p-values"),
+    best_mle_coef |>
+      filter(term != "(Intercept)") |>
+      slice_max(std.error, n = 5) |>
+      mutate(listing = "Largest Standard Errors") |>
+      arrange(desc(std.error))
+  ) |>
+  mutate(
+    term = gsub("_0", " (spline #", term),
+    term = gsub(")", " ", term),
+    term = ifelse(grepl("spline", term), paste0(term, ")"), term),
+    term = gsub("_10", " (spline #10)", term),
+    term = gsub("precip_annual", "annual preciptation", term),
+    p.value = format.pval(p.value)
+  ) |>
+  select(-Type, -vif)
+
+logistic_fit_tbl |>
+  group_by(listing) |>
+  gt() |>
+  fmt_number(
+    columns = c(estimate, std.error, statistic),
+    n_sigfig = 3,
+    drop_trailing_zeros = FALSE
+  ) |>
+  cols_label(
+    term = "Model Term",
+    estimate = "Estimate",
+    statistic = "t-statistic",
+    std.error = "Std. Err.",
+    p.value = "p-value"
+  ) |>
+  tab_style(
+    style = cell_text(style = "italic"),
+    locations = cells_row_groups()
+  )
+```
+
 
 It can be problematic when multiple predictors have a high degree of correlation with one another, commonly called _multicollinearity_^[Meaning that multiple predictors are “co-linear” or have a strong linear relationship with one another] and is a fairly frequent occurrence in many data sets. For example, recall the visualization of the correlation matrix in @fig-corr-plot. The heatmap shows that there are a number of climate-related predictors that have high degrees of correlation with one another.
 
@@ -978,7 +1184,7 @@ The summation index starts at one and assumes the convention that the intercept 
 For a generalized linear model and a fixed value of the $\lambda$ penalty, we estimate parameters that maximize the penalized log-likelihood: 
 
 $$
-\underset{\boldsymbol{\beta}}{\text{minimize}}  \log \ell(x| \boldsymbol{\beta}) + \mathcal{P}(\boldsymbol{\beta};\lambda)
+\underset{\boldsymbol{\beta}}{\text{minimize}}  -\log \ell(x| \boldsymbol{\beta}) + \mathcal{P}(\boldsymbol{\beta};\lambda)
 $$ 
 
 Ridge regression is effective when the matrix of features is _ill-conditioned_, meaning that we cannot compute its inverse. This primarily occurs when there are either more features than training set points or severe multicollinearity. The penalty has the effect of **shrinking** the model coefficients towards zero (but at different rates for each predictor). This prevents the parameters from becoming too large due to multicollinearity and stabilizes the standard errors of the estimates. Ridge regression is the only one of the penalization methods discussed here where we can compute the covariance matrix and standard errors of predictors. It can also help mitigate the issue of incorrect signs of coefficients; the signs can often change as penalties increase. 
