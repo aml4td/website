@@ -83,7 +83,7 @@ server <- function(input, output) {
       
       print(p)
     }, 
-    res = 120)
+    res = 100)
 }
 
 app <- shinyApp(ui = ui, server = server)
