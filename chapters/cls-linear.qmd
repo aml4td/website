@@ -27,6 +27,7 @@ library(ggrepel)
 library(future)
 library(car)
 library(DALEXtra)
+library(discrim)
 
 # ------------------------------------------------------------------------------
 # set options
@@ -44,13 +45,105 @@ load("../RData/logistic_bayes.RData")
 load("../RData/forested_interactions.RData")
 ```
 
-We often conceptualize classification models by the type of class boundary they produce. For example, in @fig-two-class-overfit, two predictors were visualized, and the colors and shapes of the data indicated their class memberships. For one model, the results for three different settings of a tuning parameter were shown. Additionally, the class boundary was visualized as a black line, dividing the data into two (or more) regions where the model predicted a specific class. When there are more than two predictors, visualizing this boundary becomes impossible, but we still use the idea of a line that demarcates different regions that have the same (hard) class prediction. 
+```{r}
+#| label: cls-boundaries
+#| include: false
+data(ad_data, package = "modeldata")
 
-That figure also demonstrated that some models can produce simple boundaries while others produce very convoluted partitions. The simplest models produce **linear boundaries**, which are naturally constrained by over-adapting to localized trends in the data and overfitting. Unfortunately, this also increases the model bias so that, for cases where the true boundary is nonlinear, the model may dramatically underperform. 
+ad_sub <-
+  ad_data |>
+  select(truth = Class, x_1 = Ab_42, x_2 = p_tau) |>
+  mutate(
+    x_1 = scale(x_1)[,1], x_2 = scale(x_2)[,1],
+    truth = factor(ifelse(truth == "Impaired", "A", "B"))
+  )
 
-This chapter focuses on models that, at first appearance, produce linear class boundaries. Apart from feature engineering, they tend to be relatively easy and fast to train and are more likely to be interpretable due to their simplicity. We’ll start by discussing the most used classification model: logistic regression. This model has many important aspects to discuss, as well as numerous ways to estimate model parameters. An extension of this model for more than two classes, a.k.a. multinomial regression, is also discussed. Finally, we review a fairly antiquated classification model (discriminant analysis) that will lead to some effective generalizations in the next chapter. 
+rngs <- map(ad_sub |> select(-truth), extendrange)
 
-However, before diving into modeling techniques, let’s take a deep look at the Washington State forestation data originally introduced in @sec-spatial-splitting. These data will be used to demonstrate the nuances of different classifications in this and the next two chapters. 
+ad_grid <- crossing(x_1 = seq(rngs[[1]][1], rngs[[1]][2], length.out = 200),
+                    x_2 = seq(rngs[[2]][1], rngs[[2]][2], length.out = 200))
+
+# ------------------------------------------------------------------------------
+
+high_fit <-
+  discrim_flexible(num_terms = 30, prod_degree = 2, prune_method = "none") |>
+  set_engine("earth", nk = 100) |>
+  fit(truth ~ ., data = ad_sub)
+
+high_pred <- augment(high_fit, ad_grid) |> mutate(group = "High Complexity")
+
+low_fit <-
+  logistic_reg() |>
+  fit(truth ~ ., data = ad_sub)
+
+low_pred <- augment(low_fit, ad_grid) |> mutate(group = "Low Complexity")
+
+set.seed(12)
+mid_fit <-
+  discrim_flexible(num_terms = 4, prod_degree = 2, prune_method = "none") |>
+  set_engine("earth") |>
+  fit(truth ~ ., data = ad_sub)
+
+mid_pred <- augment(mid_fit, ad_grid) |> mutate(group = "Medium Complexity")
+
+all_pred <-
+  bind_rows(low_pred, mid_pred, high_pred) |>
+  rename(probability = .pred_B) |>
+  mutate(group = factor(group, levels = c("Low Complexity", "Medium Complexity",  "High Complexity")))
+```
+
+We often conceptualize classification models by the type of class boundary they produce. For example, in @fig-cls-boundaries, two predictors are visualized, and the colors and shapes of the data indicated their class memberships. The class boundaries are visualized as black lines, dividing the data into two (or more) regions where the model predicted a specific class. When there are more than two predictors, visualizing this boundary becomes impossible, but we still use the idea of a line that demarcates different regions that have the same (hard) class prediction. 
+
+The low-complexity model attempts to bisect the two classes using a simple straight line. Points to the northwestern side of the line are classified as rose-colored triangles, and those on the opposite side are green circles. The background colors in the plot represent the estimated probabilities. This model underperforms since there are a high number of triangles on the wrong side of the line. The medium complexity model divides the data using a boundary that has three straight line segments. These linear segments result in a nonlinear boundary function. It also does not do a very good job of predicting the data, but it has adapted to the data more than the simple linear boundary. The high complexity boundary uses the same underlying model as the medium complexity fit, but a tuning parameter was increased to allow the model to adapt more to the training data (perhaps a little too much). There are four distinct regions that are produced by these boundaries. Unfortunately, the model is moderately overfitting the training set to these data. The tuning parameter in question should be better tuned to balance complexity and overfitting. 
+
+
+```{r}
+#| label: fig-cls-boundaries
+#| echo: false
+#| out-width: 100%
+#| fig-width: 11
+#| fig-height: 4
+#| dev: "ragg_png"
+#| fig-cap: Three different levels of complexity for class boundaries where the data has two predictors and two classes. 
+
+all_pred |>
+  ggplot(aes(x_1, x_2)) +
+  scale_fill_gradient2(
+    low = "#A3AD62FF",
+    mid = "white",
+    high = "#DF91A3FF",
+    midpoint = 1 / 2,
+    limits = 0:1,
+    breaks = (1:3) / 4
+  ) +
+  geom_point(
+    data = ad_sub |> filter(truth == "B"),
+    aes(col = truth, pch = truth),
+    cex = 2,
+    alpha = 2 / 4
+  ) +
+  geom_point(
+    data = ad_sub |> filter(truth == "A"),
+    aes(col = truth, pch = truth),
+    cex = 2,
+    alpha = 3 / 4
+  ) +
+  scale_color_manual(values = c("#798234FF", "#D46780FF")) +
+  scale_shape_manual(values = c(16, 17)) +
+  coord_fixed(ratio = 1) +
+  geom_contour(aes(z = probability),
+               breaks = 1 / 2,
+               col = "black",
+               linewidth = 1) +
+  geom_tile(aes(fill = probability), alpha = 1 / 6) +
+  facet_wrap(~ group) +
+  theme(legend.position = "top") +
+  labs(x = "Predictor 1", y = "Predictor 2")
+```
+
+This chapter focuses on models that, at first appearance, produce strictly linear class boundaries. Apart from feature engineering, they tend to be relatively easy, fast to train, and are more likely to be interpretable due to their simplicity. We’ll start by discussing the most used classification model: logistic regression. This model has many important aspects to explore, as well as numerous ways to estimate model parameters. An extension of this model for more than two classes, a.k.a. multinomial regression, is also described. Finally, we review a fairly antiquated classification model (discriminant analysis) that will lead to some effective generalizations in the next chapter. 
+
+However, before diving into modeling techniques, let’s take a deep look at the Washington State forestation data originally introduced in @sec-spatial-splitting. These data will be used to demonstrate the nuances of different classifications from this chapther to  
 
 ## Exploring Forestation Data  {#sec-forestation-eda}
 
@@ -1075,9 +1168,20 @@ annual_mean_fit <-
 
 both_fit <-
   logistic_reg() |>
-  fit(class ~ elevation + temp_annual_mean, data = forested_train) |>
+  fit(class ~ elevation + temp_annual_mean, data = forested_train)
+
+both_vif <-
+  both_fit |>
+  extract_fit_engine() |>
+  vif() |>
+  enframe() |>
+  set_names(c("term", "VIF"))
+
+both_fit <-
+  both_fit |>
   tidy() |>
-  mutate(Model = "both")
+  mutate(Model = "both") |>
+  full_join(both_vif, by = "term")
 
 all_terms <-
   bind_rows(elevation_fit, annual_mean_fit, both_fit) |>
@@ -1089,7 +1193,7 @@ all_terms <-
       TRUE ~ tools::toTitleCase(text)
     )
   ) |>
-  select(Model, text, estimate, std_err = std.error)
+  select(Model, text, estimate, std_err = std.error, VIF)
 ```
 
 
@@ -1110,7 +1214,7 @@ all_terms |>
   pivot_wider(
     id_cols = c(Model),
     names_from = c(text),
-    values_from = c(estimate, std_err)
+    values_from = c(estimate, std_err, VIF)
   ) |>
   relocate(
     Model,
@@ -1128,7 +1232,8 @@ all_terms |>
   fmt_number(columns = c(contains("Mean")), n_sigfig = 3) |>
   cols_label(
     contains("estimate_") ~ "Estimate",
-    contains("std_er") ~ "Std. Error"
+    contains("std_er") ~ "Std. Error",
+    contains("VIF") ~ "VIF"
   ) |>
   cols_width(Model ~ pct(25))
 ```
@@ -1338,8 +1443,9 @@ glmn_best_metric <- show_best(glmn_res, metric = "brier_class", n = 1)
 ```
 
 ```{r}
-#| label: aly-glmn-penalty
+#| label: tuned-glmn-penalties
 #| include: false
+#| cache: true
 
 pen_target <- -3
 glmn_sel_param <-
