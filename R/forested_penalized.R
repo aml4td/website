@@ -38,7 +38,7 @@ mle_est <-
 
 # ------------------------------------------------------------------------------
 
-ridge_pens <- 10^seq(-5, 2, length.out = 50)
+ridge_pens <- 10^seq(-4, 2, length.out = 50)
 
 lr_ridge_spec <-
   logistic_reg(penalty = tune(), mixture = 0) |>
@@ -76,7 +76,7 @@ lr_ridge_coef <-
 
 # ------------------------------------------------------------------------------
 
-lasso_pens <- 10^seq(-4.5, 0, length.out = 50)
+lasso_pens <- 10^seq(-4, 0, length.out = 50)
 
 lr_lasso_spec <-
   logistic_reg(penalty = tune(), mixture = 1) |>
@@ -114,8 +114,8 @@ lr_lasso_coef <-
 
 # ------------------------------------------------------------------------------
 
-glmn_pens <- 10^seq(-5, 0, length.out = 50)
-mix <- (1:9) / 10
+glmn_pens <- 10^seq(-4, 0, length.out = 50)
+mix <- (1:10) / 10
 
 lr_glmn_coef <- NULL
 for (j in seq_along(mix)) {
@@ -156,8 +156,8 @@ lr_glmn_coef <-
 
 # ------------------------------------------------------------------------------
 
-scad_pens <- 10^seq(-2, -1/2, length.out = 50)
-gam <- seq(4, 15, by = 1)
+scad_pens <- 10^seq(-1.75, -1/2, length.out = 50)
+gam <- seq(4, 16, by = 1)
 
 norm_train_x <- as.matrix(norm_train |> select(-class))
 
@@ -189,7 +189,7 @@ for (j in seq_along(gam)) {
       gamma = gam[j]
     ) |>
     tidy() |>
-    mutate(gamma = gam[j])
+    mutate(gamma = as.integer(gam[j]))
   
   lr_scad_coef <- bind_rows(lr_scad_coef, tmp)
 }
@@ -216,8 +216,8 @@ lr_scad_coef <-
 
 # ------------------------------------------------------------------------------
 
-mcp_pens <- 10^seq(-2, -1/2, length.out = 50)
-gam <- seq(4, 15, by = 1)
+mcp_pens <- 10^seq(-1.75, -1/2, length.out = 50)
+gam <- seq(4, 16, by = 1)
 
 norm_train_x <- as.matrix(norm_train |> select(-class))
 
@@ -246,7 +246,7 @@ for (j in seq_along(gam)) {
       gamma = gam[j]
     ) |>
     tidy() |>
-    mutate(gamma = gam[j])
+    mutate(gamma = as.integer(gam[j]))
   
   lr_mcp_coef <- bind_rows(lr_mcp_coef, tmp)
 }

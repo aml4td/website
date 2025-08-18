@@ -35,7 +35,7 @@ ui <- fluidPage(
         inputId = "mixture",
         label = "Lasso Proportion (glmnet only)",
         min = 0.1,
-        max = 0.9,
+        max = 1.0,
         value = 0.6,
         width = "100%",
         step = 0.1
@@ -47,7 +47,7 @@ ui <- fluidPage(
         inputId = "gamma",
         label = "Clipping Threshold (SCAD and MCP only)",
         min = 4,
-        max = 15,
+        max = 16,
         value = 5,
         width = "100%",
         step = 1
@@ -90,7 +90,7 @@ server <- function(input, output) {
       if (input$method == "glmnet") {
         dat <- dat |> dplyr::filter(mixture == input$mixture)
       } else if (input$method %in% c("SCAD", "MCP")) {
-        dat <- dat |> dplyr::filter(as.integer(gamma) == input$gamma)
+        dat <- dat |> dplyr::filter(gamma == input$gamma)
       }
         
       p <-
