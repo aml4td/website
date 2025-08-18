@@ -156,7 +156,7 @@ lr_glmn_coef <-
 
 # ------------------------------------------------------------------------------
 
-scad_pens <- 10^seq(-2, 0, length.out = 50)
+scad_pens <- 10^seq(-2, -1/2, length.out = 50)
 gam <- seq(4, 15, by = 1)
 
 norm_train_x <- as.matrix(norm_train |> select(-class))
@@ -216,8 +216,8 @@ lr_scad_coef <-
 
 # ------------------------------------------------------------------------------
 
-mcp_pens <- 10^seq(-2, 0, length.out = 50)
-gam <- seq(4, 40, by = 4)
+mcp_pens <- 10^seq(-2, -1/2, length.out = 50)
+gam <- seq(4, 15, by = 1)
 
 norm_train_x <- as.matrix(norm_train |> select(-class))
 

@@ -81,7 +81,7 @@ ui <- fluidPage(
 
 server <- function(input, output) {
   load(url(
-    "https://raw.githubusercontent.com/aml4td/website/main/RData/all_penalties.RData"
+    "https://raw.githubusercontent.com/aml4td/website/logistic-reg/RData/all_penalties.RData"
   ))
 
   output$plot <-
@@ -90,7 +90,7 @@ server <- function(input, output) {
       if (input$method == "glmnet") {
         dat <- dat |> dplyr::filter(mixture == input$mixture)
       } else if (input$method %in% c("SCAD", "MCP")) {
-        dat <- dat |> dplyr::filter(gamma == input$gamma)
+        dat <- dat |> dplyr::filter(as.integer(gamma) == input$gamma)
       }
         
       p <-
