@@ -28,8 +28,9 @@ theme_light_bl <- function(...) {
 ui <- fluidPage(
   theme = grid_theme,
   fluidRow(
+    column(width = 2),
     column(
-      width = 6,
+      width = 5,
       sliderInput(
         inputId = "mixture",
         label = "Lasso Proportion (glmnet only)",
@@ -39,17 +40,17 @@ ui <- fluidPage(
         width = "100%",
         step = 0.1
       )
-    ), # min distance
+    ), 
     column(
-      width = 6,
+      width = 5,
       sliderInput(
         inputId = "gamma",
         label = "Clipping Threshold (SCAD and MCP only)",
         min = 4,
-        max = 40,
-        value = 20,
+        max = 15,
+        value = 5,
         width = "100%",
-        step = 4
+        step = 1
       )
     ), 
     
@@ -65,8 +66,7 @@ ui <- fluidPage(
             "Lasso" = "Lasso",
             "glmnet" = "glmnet",
             "SCAD" = "SCAD",
-            "MCP" = "MCP",
-            "UniLasso" = "UniLasso"
+            "MCP" = "MCP"
           )
         )
       ),
@@ -80,11 +80,12 @@ ui <- fluidPage(
 )
 
 server <- function(input, output) {
-  load("RData/all_penalties.RData")
-  
+  load(url(
+    "https://raw.githubusercontent.com/aml4td/website/main/RData/all_penalties.RData"
+  ))
+
   output$plot <-
     renderPlot({
-      # browser()
       dat <- all_penalties |> dplyr::filter(method == input$method)
       if (input$method == "glmnet") {
         dat <- dat |> dplyr::filter(mixture == input$mixture)
