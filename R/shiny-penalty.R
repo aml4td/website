@@ -1,4 +1,3 @@
-
 ui <- fluidPage(
   theme = grid_theme,
   fluidRow(
@@ -75,7 +74,7 @@ server <- function(input, output) {
                    lty = 2, alpha = 3 / 4) +
         geom_line(alpha = 1 / 2) +
         geom_point(alpha = 1 / 2) +
-        scale_x_log10(labels = label_log()) +
+        scale_x_log10(labels = label_log(), breaks = scales:: trans_breaks("log10", function(x) 10^x)) +
         scale_color_manual(values = c("#3381A8FF", "#5E9546FF")) +
         labs(x = "Penalty", y = "Parameter Estimate") +
         theme_bw() +

@@ -1084,7 +1084,7 @@ ggplot_pdp <- function(obj, x) {
 }
 
 ggplot_pdp(pdp_longitude, longitude) +
-  labs(y = "Probability of Forestation", y = "Longitude")
+  labs(y = "Probability of Forestation", x = "Longitude")
 ```
 
 The pattern is different from @fig-longitude. For example, there is no decreasing trend in the eastern part of the state; probabilities for locations greater than longitudes of -121° are fairly constant. The difference is due to some other predictor having more influence on locations in that area of the state (perhaps the county). 
@@ -1093,6 +1093,7 @@ This model appears to be adequate, but _it is not_. There is a major issue relat
 
 #### A Lurking Problem: Multicollinearity  {.unnumbered}
 
+It might be interesting to explore which model terms show statistical significance as a proxy for importance. Basic logistic regression via MLE enables standard hypothesis tests. The top of @tbl-logistic-reg shows the five terms, apart from the intercept, with the smallest p-values. This includes the effect encoding for the county, which should be unsurprising since it captures the mean logit for each county. The remaining terms all correspond to spline basis expansion terms. Using an $\alpha$ value that corresponds to a 10% false positive rate, `r sum(best_mle_coef$p.value <= 0.1)` terms out of `r nrow(best_mle_coef)` are "significant" from the statistical perspective. When considering these terms, recall that the predictors were normalized to look like they follow a standard normal distribution, meaning that most of their values should be between $\pm 3$, prior to making  spline terms. 
 
 ```{r}
 #| label: tbl-logistic-reg
@@ -1142,8 +1143,36 @@ logistic_fit_tbl |>
   )
 ```
 
+```{r}
+#| label: max-spline
+#| include: false
+features <- 
+  forest_spline_rec |> 
+  prep() |> 
+  bake(new_data = NULL, -class)
 
-It can be problematic when multiple predictors have a high degree of correlation with one another, commonly called _multicollinearity_^[Meaning that multiple predictors are “co-linear” or have a strong linear relationship with one another] and is a fairly frequent occurrence in many data sets. For example, recall the visualization of the correlation matrix in @fig-corr-plot. The heatmap shows that there are a number of climate-related predictors that have high degrees of correlation with one another.
+abs_cor <- 
+  features |> 
+  cor() |> 
+  abs()
+abs_cor <- abs_cor[upper.tri(abs_cor)]
+
+upper_vals <- 
+  features |> 
+  select(contains("precip_annual")) |> 
+  map_dbl(~ max(.x)) |> 
+  mean() |> 
+  round(3)
+
+cor_data <- forested_train |>
+  select(-class, -county)
+
+cor_mat <- cor_data %>%
+  cor(use = "pairwise.complete.obs")
+```
+
+For the curious, we might also examine which predictors showed no evidence of being different from zero. The bottom of the table shows five terms with large p-values. These are also spline terms, all for annual precipitation. However, notice that the estimated coefficients and their standard error terms are in the _hundreds_. For these spline terms, the model terms range between zero and `r upper_vals` (on average). Given this, it is difficult to imagine that the coefficients and their values are reasonable. 
+
 
 ```{r}
 #| label: two-param-colin-calc
@@ -1191,6 +1220,14 @@ all_terms <-
   select(Model, text, estimate, std_err = std.error, VIF)
 ```
 
+
+The reason for these excessively large values goes back to @fig-corr-plot, where we saw that several predictors had large (absolute) correlations with one another. It can be problematic when multiple predictors have a high degree of correlation with one another, commonly called _multicollinearity_^[Meaning that multiple predictors are “co-linear” or have a strong linear relationship with one another] and is a fairly frequent occurrence in many data sets. For example, recall the visualization of the correlation matrix in @fig-corr-plot. The heatmap shows that there are a number of climate-related predictors that have high degrees of correlation with one another. Once we create spline and interaction terms, there are `r sum(abs_cor > 3/4)` pairwise correlations between model terms that have correlations greater than 0.75 and `r sum(abs_cor > 9/10)` term pairs with correlations greater than 0.90.  
+
+While this model's predictive performance is good, the model coefficients are extremely unstable. Multicollinearity not only inflates the variance of the parameter estimates but can also reverse the coefficient's sign, leading to an incorrect interpretation. 
+
+A statistical diagnostic called the variable inflation factor (VIF) measures how much larger the variance is for a set of potentially correlated predictors compared to a set of completely uncorrelated predictors [@belsley2005regression]. Originally developed for linear regression, @weissfeld1991multicollinearity extended the diagnostic to generalized linear models. A general rule of thumb is that VIF statistics greater than 5.0 or 10.0 should be considered larger. For our model, the median VIF across the parameters was `r signif(median(best_mle_vifs$vif), 3)` with the largest being `r format(max(best_mle_vifs$vif), big.mark = ",", scientific = FALSE)`, which corresponds to an annual precipitation spline term. 
+
+To illustrate the issue on a smaller scale, @tbl-logistic-colin shows models with two simple (untransformed) predictors: elevation and mean temperature. The correlation between these two predictors is `r signif(cor(forested_train$elevation, forested_train$temp_annual_mean), 2)`. The first two rows of the table correspond to models with a single predictor, and the last row shows how the model changes when both are included in the model. The parameter estimates radically change when both predictors are included: the sign of elevation changes, and the coefficient for mean temperature increases several orders of magnitude. The variable inflation factor is fairly high and should alert us to the problem. 
 
 :::: {.columns}
 
@@ -1245,13 +1282,9 @@ An example of how highly colinear predictors can affect parameter estimates and 
 :::: 
 
 
-correlation of features
+What can we do about this? There are a few solutions. First, we could transform the original predictors using PCA or PLS so that they enter the model with significantly reduced correlations. However, it may be more difficult to incorporate interactions and nonlinear terms when each derived predictor is a composite of all of the original predictors. Second, we can use a correlation filter to remove the smallest set of predictors that reduces the overall effect of multicollinearity. This is a pretty reasonable approach, but as was said earlier, ML is a game of inches. There could be a reduction in performance by removing near-redundant predictors. 
 
-harms interpretation and rankings
-
-PCA/PLS/filters
-
-what about interactions; hierarchy principle
+For logistic regression, the best solution is to keep the predictor set the same but use regularization, a different technique to estimate parameters
 
 ### Regularization Through Penalization {#sec-logistic-penalized}
 
@@ -1283,7 +1316,7 @@ The summation index starts at one and assumes the convention that the intercept 
 For a generalized linear model and a fixed value of the $\lambda$ penalty, we estimate parameters that maximize the penalized log-likelihood: 
 
 $$
-\underset{\boldsymbol{\beta}}{\text{minimize}}  -\log \ell(x| \boldsymbol{\beta}) + \mathcal{P}(\boldsymbol{\beta};\lambda)
+\underset{\boldsymbol{\beta}}{\text{minimize}}:  -\log \ell(x| \boldsymbol{\beta}) + \mathcal{P}(\boldsymbol{\beta};\lambda)
 $$ 
 
 Ridge regression is effective when the matrix of features is _ill-conditioned_, meaning that we cannot compute its inverse. This primarily occurs when there are either more features than training set points or severe multicollinearity. The penalty has the effect of **shrinking** the model coefficients towards zero (but at different rates for each predictor). This prevents the parameters from becoming too large due to multicollinearity and stabilizes the standard errors of the estimates. Ridge regression is the only type of the penalization methods discussed here where we can directly compute the covariance matrix and standard errors of predictors. It can also help mitigate the issue of incorrect signs of coefficients; the signs can often change as penalties change. 
@@ -1816,15 +1849,13 @@ While these approaches do regularize the parameters to be closer to zero, rememb
 
 The _posterior predictive distribution_ is used when predicting new data. If we are predicting a value of $x_0$, the posterior predictive distribution takes into account our existing posterior but also accounts for the variability that we sampled the new value, i.e., $Pr[X = x_0]$ where $X$ is the random variable for our predictor. The draws from this distribution are used to estimate the class probability. We often produce a single value for a new prediction, which could be the mean (or mode) of the posterior draws. We can also produce credible intervals for our probability. This alone may be a good reason to use Bayesian estimation for these models.  
 
-## Generalized Additive Models {#sec-cls-gam}
-
-### Bayesian Estimation {#sec-logistic-bayes} 
+## Multinomial Regression {#sec-multinomial-reg}
 
 $$
 \ell(\pi_i; y_{ij}) = \prod_{i=1}^{n_{tr}} \binom{n}{x}  \pi_1^{y_{i1}}\pi_2^{y_{i2}}\cdots \pi_C^{y_{iC}}
 $$ {#eq-multinomial}
 
-## Multinomial Regression {#sec-multinomial-reg}
+## Generalized Additive Models {#sec-cls-gam}
 
 ## Discriminants {#sec-lda}
 
