@@ -1858,12 +1858,129 @@ The _posterior predictive distribution_ is used when predicting new data. If we 
 
 ## Multinomial Regression {#sec-multinomial-reg}
 
+Analogous models exist for outcomes with three or more classes. Notationally, we can again denote the binary indicators as $y_{ik}$ with $k = 1\ldots C \ge 3$. Generally, this type of target value is assumed to come from a multinomial distribution, with likelihood: 
+
 $$
-\ell(\pi_i; y_{ij}) = \prod_{i=1}^{n_{tr}} \binom{n}{x}  \pi_1^{y_{i1}}\pi_2^{y_{i2}}\cdots \pi_C^{y_{iC}}
+\ell(\pi_i; y_{ij}) = \prod_{i=1}^{n_{tr}} \pi_1^{y_{i1}}\pi_2^{y_{i2}}\cdots \pi_C^{y_{iC}}
 $$ {#eq-multinomial}
+
+where $\pi_{k}$ is the probability that the outcome is class $k = 1, \ldots, C$. 
+
+One complication is the implicit constraint that $\pi_1 + \cdots + \pi_C = 1$. Directly maximizing the log-likelihood is feasible but would not lead to unique parameter estimates^[In fact, we’ll see this approach in @sec-cls-mlp.]. 
+
+The primary method for estimating parameters is the **multinomial logit model**, a subset of a class of techniques called _discrete choice models_. One estimation method uses a collection of $C-1$ logistic regression models that contrast specific outcome classes versus a reference class. The linear predictor is related to a logit function with a different denominator: 
+
+$$
+log\left(\frac{\pi_{ik}}{1 - \pi_{iC}}\right) = \eta_{ik} = \boldsymbol{x}_i'\boldsymbol{\beta}_k
+$$ {#eq-multinomial-logit}
+
+Note that, in this formulation, the linear predictor has the same structure across classes. While the parameter estimates are different for different classes, the same predictor set is used for all models. 
+
+When making predictions, we normalize the probabilities from one logit model using the total: 
+
+$$
+\hat{\pi}_{ik} = \frac{\exp(\hat{\eta}_{ik})}{\sum_\limits{k=1}^{C-1} \exp(\hat{\eta}_{ik})}
+$$
+
+
+note Dirichlet as prior, penalization, etc
+
 
 ## Generalized Additive Models {#sec-cls-gam}
 
 ## Discriminants {#sec-lda}
+
+Linear discriminant analysis (LDA) is a classical method for classification models that can be used when all predictors are quantitative. There is more than one way to motivate the model, and we’ll frame it in terms of Bayes’ Rule, which, in this context, is
+
+$$
+Pr\left[y| \boldsymbol{x}\right] = \frac{Pr\left[Y\right]\: Pr\left[\boldsymbol{x}|y\right]}{Pr\left[\boldsymbol{x}\right]}
+$$  {#eq-lda-bayes}
+
+where $y$ represents the outcome classes. The prior $Pr\left[y| \boldsymbol{x}\right]$ is represented by a vector of probabilities that represents our beliefs for how often each class occurs in the wild. Often, though, the prior in LDA is estimated from the training set. 
+
+Traditional LDA makes the assumption that the training set predictors follow a multivariate Gaussian distribution. It assumes that the overall distribution has a single mean vector $\boldsymbol{\mu}$ ($p\times 1$) and covariance matrix $\boldsymbol{\Sigma}$ ($p\times p$) so that:
+
+$$
+Pr\left[\boldsymbol{x}\right]= (2\pi )^{-p/2}\det({\boldsymbol{\Sigma}})^{-1/2}\exp \left[-\frac{1}{2}\left(\boldsymbol{x}-\boldsymbol{\mu}\right)'\boldsymbol{\Sigma}\left(\boldsymbol{x}-\boldsymbol{\mu}\right)\right] 
+$$ {#eq-multivariate-norm}
+
+The conditional probabilities $Pr\left[\boldsymbol{x}|y\right]$ are also assumed to be multivariate normal with different mean vectors  $\boldsymbol{\mu}_k$ but a common covariance matrix $\boldsymbol{\Sigma}$. This latter assumption leads to classification boundaries that are strictly linear. 
+
+In practice, the model is trained by estimating the the mean and covariance parameters. The standard equations for the sample means, variances, and covariances are commonly used. In this scenario, we compute the probabilities and the corresponding hard class estimates based on the class with the largest posterior probability. 
+
+Fisher's LDA
+
+A special case of this model is the naive Bayes model. This assumes that the predictor data are _independent_, meaning that the covariance matrix $\boldsymbol{\Sigma}$ is diagonal. This is an incredibly unlikely assumption, but it offers a significant reduction in complexity. It means that both $Pr\left[\boldsymbol{x}\right]$ and $Pr\left[\boldsymbol{x}|y\right]$ can be computed as a product of univariate densities. We could still assume Gaussian distributions for each of the predictors. However, we might also use more complex methods of estimating the probabilities. For example, nonparametric density estimates make minimal assumptions regarding the predictor data. As an example, ...
+
+```{r}
+#| label: fig-cls-densities
+#| echo: false
+#| out-width: 50%
+#| message: false
+#| warning: false
+#| fig-width: 5
+#| fig-height: 5
+#| fig-cap: "Conditional probability distributions $Pr\\left[\\boldsymbol{x}|y\\right]$ that assume that the predictors are independent but use two different methods for estimating the density functions."
+
+varpor_data <- 
+  forested_train |> 
+  mutate(group = as.character(class)) |> 
+  select(group, vapor_max)
+
+
+norm_dens <- function(x) {
+  mn <- mean(x)
+  stdev <- sd(x)
+  rngs <- extendrange(x)
+  grid <- seq(rngs[1], rngs[2], length.out = 2^10)
+  tibble(vapor_max = grid, dens = dnorm(grid, mn, stdev), Estimate = "Gaussian")
+}
+
+flex_dens <- function(x) {
+  x |> 
+    density(n = 2^10) |>
+    tidy() |> 
+    set_names(c("vapor_max", "dens")) |> 
+    mutate(Estimate = "nonparametric")
+}
+
+both_estimates <- 
+  forested_train |> 
+  nest(vapor_max, .by = class) |> 
+  mutate(
+    gaussian = map(data, ~ norm_dens(.x$vapor_max)),
+    flexible = map(data, ~ flex_dens(.x$vapor_max))
+  ) |> 
+  select(-data)
+
+
+two_densities <- 
+  both_estimates |> 
+  select(class, gaussian) |> 
+  unnest(gaussian) |> 
+  bind_rows(
+    both_estimates |> 
+      select(class, flexible) |> 
+      unnest(flexible)
+  )
+
+ggplot(two_densities, aes(x = vapor_max)) +
+  geom_histogram(
+    data = forested_train,
+    aes(y = after_stat(density)),
+    col = "white",
+    alpha = .5,
+    bins = 30
+  ) +
+  geom_line(aes(vapor_max, y = dens, col = Estimate), linewidth = 1.5) +
+  facet_wrap( ~ class, ncol = 1, labeller = label_both) +
+  theme(legend.position = "top") +
+  scale_color_brewer(palette = "Dark2") +
+  labs(x = "Maximum Vapor")
+```
+
+The naive Bayes model’s reduced complexity also enables us to include qualitative predictors since we can compute the rate of each predictor’s probabilities from the training set. 
+
+
 
 ## Chapter References {.unnumbered}
