@@ -17,17 +17,18 @@ source("../R/_themes_gt.R")
 # ------------------------------------------------------------------------------
 
 library(heatmaply)
-library(future.mirai)
+library(mirai)
 library(tidymodels)
-library(colino)
 library(patchwork)
+library(spatialsample)
+library(important)
 
 # ------------------------------------------------------------------------------
 # Set options
 
 tidymodels_prefer()
 theme_set(thm_lt)
-plan(mirai_multisession)
+daemons(parallel::detectCores())
 set_options()
 
 # ------------------------------------------------------------------------------
@@ -397,12 +398,10 @@ sim_rs <- vfold_cv(sim_tr)
 # ------------------------------------------------------------------------------
 
 sim_rec <- recipe(outcome ~ ., data = sim_tr) %>%
-  step_select_forests(
+  step_predictor_best(
     all_predictors(),
-    outcome = "outcome",
-    top_p = tune(),
-    mtry = num_pred,
-    trees = 1000,
+    score = "imp_rf",
+    prop_terms = tune(),
     id = "filter"
   ) %>%
   step_normalize(all_predictors())
@@ -423,7 +422,6 @@ mlp_param <- mlp_wflow %>%
   extract_parameter_set_dials() %>%
   update(
     learn_rate = learn_rate(c(-3, -1 / 2)),
-    top_p = top_p(c(1, num_pred)),
     hidden_units = hidden_units(c(2, 20)),
     activation = activation(c("relu", "tanh", "log_sigmoid")),
   )
@@ -435,6 +433,7 @@ get_rm <- function(x) {
   x %>%
     extract_recipe() %>%
     tidy(id = "filter") %>%
+    dplyr::filter(removed) |> 
     dplyr::select(terms)
 }
 
@@ -464,7 +463,7 @@ retained_variables <- map(
     .x,
     mlp_rf_best,
     by = join_by(
-      top_p,
+      prop_terms,
       hidden_units,
       penalty,
       activation,
@@ -492,7 +491,7 @@ non_noise <- paste0("$x_{", non_noise, "}$")
 
 We measured the predictors using the standard random forest importance score using the same data as the previous simulated annealing search. The number of features to retain was treated as an additional tuning parameter. Cross-validation was used to select the best candidate from the space-filling design with 50 candidate points. @fig-mlp-rf(a) shows the tuning results. The number of selected predictors appears to have the largest effect on the results; performance worsens as we remove too many features (which probably includes informative ones). It also appears that too much penalization has a negative effect on reducing the RMSE.
 
-The model with the smallest RMSE selected the top `r mlp_rf_best$top_p` most important predictors, `r mlp_rf_best$hidden_units` hidden units, a penalty value of 10<sup>`r signif(log10(mlp_rf_best$penalty), 3)`</sup>, a learning rate of 10<sup>`r signif(log10(mlp_rf_best$learn_rate), 3)`</sup>, and `r gsub("_", "-", mlp_rf_best$activation)` activation. The resampled RMSE associated with the numerically best results was `r round(show_best(mlp_rf_sfd_res, metric = "rmse", n = 1)$mean, 3)`. When that model was fit on the entire training set, the holdout RMSE estimate was `r round(mlp_rf_mtr$.estimate, 3)`.  One reason that these two estimates of performance are so close is the relatively high $n_{tr}/p$ ratio (1,000 / 29 $\approx$ 34.5).
+The model with the smallest RMSE selected the top `r round(100 * mlp_rf_best$prop_terms, 1)`% most important predictors, `r mlp_rf_best$hidden_units` hidden units, a penalty value of 10<sup>`r signif(log10(mlp_rf_best$penalty), 3)`</sup>, a learning rate of 10<sup>`r signif(log10(mlp_rf_best$learn_rate), 3)`</sup>, and `r gsub("_", "-", mlp_rf_best$activation)` activation. The resampled RMSE associated with the numerically best results was `r round(show_best(mlp_rf_sfd_res, metric = "rmse", n = 1)$mean, 3)`. When that model was fit on the entire training set, the holdout RMSE estimate was `r round(mlp_rf_mtr$.estimate, 3)`.  One reason that these two estimates of performance are so close is the relatively high $n_{tr}/p$ ratio (1,000 / 29 $\approx$ 34.5).
 
 ```{r}
 #| label: fig-mlp-rf
@@ -539,7 +538,7 @@ if (num_noise == 0) {
 }
 
 if (num_noise > 0) {
-  by_chance <- "(by random change)"
+  by_chance <- "(by random chance)"
 } else {
   by_chance <- ""
 }
