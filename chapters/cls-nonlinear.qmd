@@ -15,14 +15,19 @@ source("../R/_common.R")
 # ------------------------------------------------------------------------------
 
 library(tidymodels)
+library(torch)
 library(mirai)
 library(spatialsample)
+library(brulee)
+library(bestNormalize)
+library(patchwork)
 
 # ------------------------------------------------------------------------------
 # set options
 
 tidymodels_prefer()
 set_options()
+theme_set(theme_bw())
 daemons(parallel::detectCores())
 
 # ------------------------------------------------------------------------------
@@ -43,9 +48,357 @@ load("../RData/forested_data.RData")
 
 ## Neural networks {#sec-nnet}
 
-### Single layer, Feedforward Networks {#sec-mlp}
+### Multilayer Perceptrons {#sec-mlp}
 
-### Tabular Network Models  {#sec-tab-net}
+For most of this section, we’ll be concerned with multilayer perceptrons (MLPs), a subset of the broader class of models. MLPs are feed-forward models, meaning each layer only connects to the subsequent layer. 
+
+As a counterexample, residual networks are connected to previous layers (a.k.a. skip layers); therefore, they are not multilayer perceptrons. 
+
+For classification models, the first layer is the inputs (plus an intercept, commonly called a bias term in the neural network literature). The features in this layer connect to the first layer of hidden units. These are intermediary latent variables that, if the model is well-trained, can represent important features for the model.  When the features in one layer connect to the next, they are amalgamated using a linear combination. The connection between these first two layers embeds the linear combination inside an _activation function_, which is usually nonlinear. These will be discussed shortly.
+
+From here, additional layers of hidden units of various sizes can be added. The final layer implements the softmax transformation, which converts the final hidden units to a linear combination. 
+
+Here’s a trivial example of a network with three features, two outcome classes, and a single layer with four hidden units. If $\sigma_1()$ is our activation function for this layer, the first hidden unit is 
+
+$$
+H_{i1} = \sigma(\beta_0 + \beta_1x_{i1} + \ldots + \beta_4x_{i4})
+$$
+
+The last layer’s unit that corresponds to the first class is computed via
+
+$$
+Y_{i1} = \gamma_0 + \gamma_1H_{i1} + \ldots + \gamma_4H_{i4}
+$$
+
+The result is output units $Y$ that are not in proper units to use for classification. To remedy this, the raw outputs are normalized to be probability-like via 
+
+$$
+\pi_{ik} = \frac{\exp(Y_{ik})}{\sum\limits_{k=1}^C \exp(Y_{ik})}
+$$
+
+TODO lack of constraints; normalization of inputs
+
+The number of layers, the number of hidden units within a layer, and the type of activation function(s) to use are primary tuning parameters for the MLP structure.  
+
+TODO asis, no preprocessing, imputation, etc is done by the network
+
+## Activation Functions
+
+```{r}
+#| label: act-grid
+#| include: false
+lp_grid <- seq(-3, 3, length.out = 100)
+
+act_functions <- 
+  bind_rows(
+    tibble(input = lp_grid,
+           output = binomial()$linkinv(lp_grid),
+           activation = "logistic"),
+    tibble(input = lp_grid,
+           output = tanh(lp_grid),
+           activation = "tanh"),
+    tibble(input = lp_grid,
+           output = as.numeric(nnf_relu(lp_grid)),
+           activation = "relu"),
+    tibble(input = lp_grid,
+           output = as.numeric(nnf_elu(lp_grid)),
+           activation = "elu"),
+    tibble(input = lp_grid,
+           output = lp_grid - tanh(lp_grid),
+           activation = "tanhshrink"),
+    tibble(input = lp_grid,
+           output = as.numeric(nnf_softshrink(lp_grid)),
+           activation = "softshrink"),
+    tibble(input = lp_grid,
+           output = as.numeric(nnf_gelu(lp_grid)),
+           activation = "gelu"),
+    tibble(input = lp_grid,
+           output = as.numeric(nnf_silu(lp_grid)),
+           activation = "silu"),
+    tibble(input = lp_grid,
+           output = as.numeric(nn_log_sigmoid()(lp_grid)),
+           activation = "log(sigmoid)"),
+    tibble(input = lp_grid,
+           output = as.numeric(nn_softplus()(lp_grid)),
+           activation = "softplus")
+  )
+```  
+
+Historically, the most commonly used nonlinear activation functions were sigmoidal in nature. This means that the linear combination of the elements of the previous layer was converted into a “squashed” format, usually between zero and one. @fig-sigmoid-activations shows several such functions. The logistic (eq TODO) function and hyperbolic tangent are fairly similar, and were typical defaults. The tanshrink function diminishes the impact of inputs that are in a neighborhood around zero. For large input values, the output is linear in the output (with an offset of $\pm 1$). 
+
+```{r}
+#| label: fig-sigmoid-activations
+#| echo: false
+#| out-width: 85%
+#| fig-width: 8.25
+#| fig-height: 2
+#| fig-cap: "Different sigmoidal activation functions."
+
+sig_lvl <- c("logistic", "tanh", "tanhshrink", "log(sigmoid)")
+
+act_functions |>  
+  filter(grepl("(tan)|(sig)|(logistic)", activation)) |> 
+  mutate(activation = factor(activation, levels = sig_lvl)) |> 
+  ggplot(aes(input, output)) + 
+  geom_line() +
+  facet_wrap(~ activation, scale = "free_y", nrow = 1) + 
+  theme_bw()
+```
+
+In modern neural networks, the rectified linear unit (ReLU) is the default activation function. As shown in @fig-relu-activations, the function resembles the hinge functions used by MARS; to the left-hand side of zero, the output is zero, and then it is linear otherwise. Much like MARS, this has the effect of isolating the effect of some region of the predictor space. However, there are a few key differences. MARS hinge functions affect a single predictor at a time, while neural networks’ activation functions act on the linear combination of parameters. Also, neural networks with multiple layers recursively nest actions of linear combinations inside the prior layers (and so on). The mathematical function is very similar, but the application of this function has a more comprehensive impact on the model. 
+
+There are various activation functions that are modified versions of ReLU that emulate the same form but have continuous derivatives. These are also shown in @fig-relu-activations, including softplus, gelu, silu, and elu. 
+
+```{r}
+#| label: fig-relu-activations
+#| echo: false
+#| out-width: 90%
+#| fig-width: 8
+#| fig-height: 2
+#| fig-cap: "Different ReLU-based activation functions."
+
+relu_lvl <- c("relu", "softplus", "gelu", "silu", "elu")
+
+act_functions |>  
+  filter(grepl("(l[uU]$)|(softplus)", activation)) |> 
+  mutate(activation = factor(activation, levels = relu_lvl)) |> 
+  ggplot(aes(input, output)) + 
+  geom_hline(yintercept = 0, lty = 3) + 
+  geom_line() +
+  facet_wrap(~ activation, nrow = 1) + 
+  theme_bw()
+```
+
+```{r}
+#| label: nnet-ex-comps
+#| include: false
+#| cache: true
+two_class_ex <- 
+  parabolic |> 
+  set_names(c("A", "B", "Class")) 
+
+two_class_ex <-   
+  recipe(Class ~ ., data = two_class_ex) |> 
+  step_orderNorm(A, B) |> 
+  prep() |> 
+  bake(new_data = NULL)
+
+x <- seq(-4, 4, length.out = 100)
+grid <- crossing(A = x, B = x)
+
+set.seed(123)
+fit_1 <- brulee_mlp(
+  Class ~ A + B,
+  data = two_class_ex,
+  hidden_units = 3,
+  penalty = 0,
+  activation = "relu",
+  verbose = TRUE
+)
+
+coefs <- coef(fit_1)
+
+grid_pred <- 
+  fit_1 |> 
+  predict(grid, type = "prob") |> 
+  bind_cols(grid)
+
+get_elements <- function(x, model) {
+  xtbl <- x
+  x <- as.matrix(x)
+  lp_01 <- x %*% t(coefs$model.0.weight) + coefs$model.0.bias
+  colnames(lp_01) <- paste0("lp_", 1:ncol(lp_01))
+  layer_01 <- as.matrix(torch::nnf_relu(lp_01))
+  colnames(layer_01) <- paste0("relu_", 1:ncol(layer_01))
+  lp_12 <- layer_01 %*% t(coefs$model.2.weight) + coefs$model.2.bias
+  colnames(lp_12) <- paste0("output_", 1:ncol(lp_12))
+  prob <- exp(lp_12) / sum(exp(lp_12))
+  bind_cols(xtbl, as_tibble(lp_01), as_tibble(layer_01), as_tibble(lp_12))
+}
+
+components <- NULL
+for (i in 1:nrow(grid)) {
+  components <- bind_rows(components, get_elements(grid[i,], fit_1))
+}
+```
+
+Let’s use an example data set with a simple MLP to demonstrate how ReLU activation works. @fig-nnet-ex shows the end results of a model with a single layer containing three hidden units with ReLU activation. The model converged in `r fit_1$best_epoch` iterations and does a good job discriminating between the two classes. 
+
+```{r}
+#| label: fig-nnet-ex
+#| echo: false
+#| out-width: 50%
+#| fig-width: 4.4
+#| fig-height: 4.4
+#| warning: false
+#| fig-cap: "An example data set with two predictors and two classes. The black line is the class boundary from an MLP model using three hidden units that use ReLU activation."
+
+  grid_pred |> 
+  ggplot(aes(A, B)) +
+  geom_point(data = two_class_ex, aes(col = Class), alpha = 1/3) +
+  geom_contour(aes(z = .pred_Class1), breaks = 0.5, col = "black") +
+  coord_fixed() +
+  scale_color_manual(values = c("#007FFFFF", "#FF7F00FF"))
+```
+
+With two predictors and three hidden units, the first set of coefficients for the model creates three sets of linear predictors (i.e., an intercept and two slopes) for each of the three hidden units. The predictors were normalized to have the same mean and variance (zero and one, respectively). The three equations produced by training were: 
+
+```{r}
+#| label: nnet-ex-first
+#| echo: false
+#| results: "asis"
+wt_1 <- format(coefs$model.0.weight, digits = 1)
+wt_1 <- gsub("^ ", "+", wt_1)
+wt_1[,1] <- paste0(wt_1[,1], "\\:A_i")
+wt_1[,2] <- paste0(wt_1[,2], "\\:B_i")
+lp_1 <- 
+  cbind(
+    format(coefs$model.0.bias, digits = 2),
+    wt_1
+  )
+lp_1 <- apply(lp_1, 1, function(x) paste0(x, collapse = ""))
+lp_1 <- paste0("H_{i", 1:3, "}&=", lp_1, " \\notag")
+
+cat("$$")
+cat("\\begin{align}")
+cat(paste0(lp_1, collapse = " \\\\ \n"))
+cat("\\end{align}")
+cat("$$")
+```
+
+The intercept estimate for the first hidden unit is much larger than the other two. That unit also has a large positive slope for predictor A. The second hidden unit emphasizes predictor B, while $H_{i3}$ has strong positive effects for both predictors. 
+
+The top of @fig-nnet-ex-layer-1 shows a heatmap of how these three artificial features change over the two-dimensional predictor space. The black line segments show the contour corresponding to zero values. The first hidden unit has larger values on the right-hand side of the predictor space, with a slightly diagonal contour for zero. The pattern shown for the second hidden unit is nearly the opposite of the first, although the zero contour cuts more through the center of the space. Finally, the third unit is mostly driven by predictor B with larger values in the upper right region. 
+
+```{r}
+#| label: fig-nnet-ex-layer-1
+#| echo: false
+#| out-width: 80%
+#| fig-width: 7
+#| fig-height: 5
+#| warning: false
+#| fig-cap: "Heatmaps of the three linear predictors and their ReLU values across the predictor space. The black line emphasizes the location where the linear predictor is zero."
+
+lp_layer <- 
+  components |> 
+  select(-starts_with("relu_"), -starts_with("output")) |> 
+  pivot_longer(cols = c(starts_with("lp_"))) |> 
+  mutate(name = gsub("lp_", "hidden unit ", name)) |> 
+  ggplot(aes(A, B)) + 
+  geom_tile(aes(fill = value), show.legend = TRUE) + 
+  geom_contour(aes(z = value), breaks = 0, col = "black") +
+  facet_wrap(~ name, nrow = 1) + 
+  scale_fill_gradient2(high = "#5D74A5FF") + 
+  # coord_fixed() + 
+  theme(
+    legend.position = "right",
+    plot.title = element_text(hjust = 0.5),
+    legend.title = element_blank()
+  ) + 
+  labs(title = "Linear Predictor")
+
+
+relu_layer <- 
+  components |> 
+  select(-starts_with("lp"), -starts_with("output")) |> 
+  pivot_longer(cols = c(starts_with("relu_"))) |> 
+  mutate(name = gsub("relu_", "hidden unit ", name)) |> 
+  ggplot(aes(A, B)) + 
+  geom_tile(aes(fill = value), show.legend = TRUE) + 
+  geom_contour(aes(z = value), breaks = 0, col = "5AAE61FF") +
+  facet_wrap(~ name, nrow = 1) + 
+  scale_fill_gradient2(high = "#5D74A5FF") + 
+  # coord_fixed() + 
+  theme(
+    legend.position = "right",
+    plot.title = element_text(hjust = 0.5),
+    legend.title = element_blank()
+  ) + 
+  labs(title = "ReLU", y = NULL) 
+
+lp_layer / relu_layer
+```
+
+The bottom side of the figure shows the effect of the ReLU function; the values less than zero are set to zero. At this point, $H_{i1}$ and $H_{i3}$ have the strongest effect on the model, but in somewhat overlapping regions. $H_{i1}$ is mostly active for smaller values of predictor A. 
+
+However, the model estimates additional parameters that will merge these regions with weights that are most helpful for predicting the data. Those equations were estimated to be: 
+
+```{r}
+#| label: nnet-ex-last
+#| echo: false
+#| results: "asis"
+wt_2 <- format(coefs$model.2.weight, digits = 1)
+wt_2 <- gsub("^ ", "+", wt_2)
+wt_2[,1] <- paste0(wt_2[,1], "H_{i1}")
+wt_2[,2] <- paste0(wt_2[,2], "H_{i2}")
+wt_2[,3] <- paste0(wt_2[,3], "H_{i3}")
+lp_2 <- 
+  cbind(
+    format(coefs$model.2.bias, digits = 2),
+    wt_2
+  )
+lp_2 <- apply(lp_2, 1, function(x) paste0(x, collapse = ""))
+lp_2 <- paste0("Y_{i", 1:2, "}&=", lp_2, " \\notag")
+
+cat("\\begin{align}")
+cat(paste0(lp_2, collapse = " \\\\ \n"))
+cat("\\end{align}")
+```
+
+Note that the coefficients’ signs are opposite for each of the outcome units. @fig-nnet-ex-layer-2 illustrates the transition from the hidden layer to the outcome layer. The weighted sum of the three variables at the top produces the regions of strong positive (or negative) activation for the two classes. Once again, the black curve shows where the zero contour is located. 
+
+```{r}
+#| label: fig-nnet-ex-layer-2
+#| echo: false
+#| out-width: 80%
+#| fig-width: 7
+#| fig-height: 5
+#| warning: false
+#| fig-cap: "Heatmaps of the three ReLU units and their output units across the predictor space."
+
+output_layer <- 
+  components |>
+  select(-starts_with("lp"), -starts_with("relu_")) |>
+  pivot_longer(cols = c(starts_with("output"))) |>
+  ggplot(aes(A, B)) +
+  geom_tile(aes(fill = value)) +
+  geom_contour(
+    # data = grid_pred,
+    aes(z = value),
+    breaks = 0,
+    col = "black"
+  ) +
+  facet_wrap(~ name, nrow = 1) + 
+  scale_fill_gradient2(high = "#420F75FF", low = "#EAC541FF") + 
+  coord_fixed() + 
+  theme(
+    legend.position = "right",
+    plot.title = element_text(hjust = 0.5),
+    legend.title = element_blank()
+  )  + 
+  labs(title = "Output", y = NULL) 
+
+relu_layer / output_layer
+```
+
+The two panels show nearly opposite patterns, which is not coincidental. The model converges to this structure so that the output units would favor one class or the other. The legend on the bottom right is clearly in the wrong units; we’d like them to resemble probabilities. As previously mentioned, the softmax function coerces these values to be on [0, 1] and to also sum to one. This produces the class boundary seen in @fig-nnet-ex. 
+
+As previously stated, ReLU is not a smooth function, so this demonstration will be somewhat different from the other activation functions; they generally don’t completely isolate regions of the predictor space. However, the general flow of the network is still the same. 
+
+## Training and Optimization
+
+
+### Gradient Descent
+
+### Newton’s Method
+
+### Batch Learning
+
+## Transformers
+
+## Attention
+
+### Special Tabular Network Models  {#sec-tab-net}
 
 ## K-Nearest Neighbors  {#sec-cls-knn}
 
