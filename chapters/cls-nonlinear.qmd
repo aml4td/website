@@ -34,6 +34,7 @@ daemons(parallel::detectCores())
 # load data 
 
 load("../RData/forested_data.RData")
+load("../RData/three_optimizers.RData")
 ```
 
 ## Nonlinear Discriminants  {#sec-nonlinear-da}
@@ -61,13 +62,13 @@ From here, additional layers of hidden units of various sizes can be added. The 
 Here’s a trivial example of a network with three features, two outcome classes, and a single layer with four hidden units. If $\sigma_1()$ is our activation function for this layer, the first hidden unit is 
 
 $$
-H_{i1} = \sigma(\beta_0 + \beta_1x_{i1} + \ldots + \beta_4x_{i4})
+H_{i1} = \sigma(\beta_{01} + \beta_{11}x_{i1} + \ldots + \beta_{41}x_{i4})
 $$
 
 The last layer’s unit that corresponds to the first class is computed via
 
 $$
-Y_{i1} = \gamma_0 + \gamma_1H_{i1} + \ldots + \gamma_4H_{i4}
+Y_{i1} = \gamma_0 + \gamma_{11}H_{i1} + \ldots + \gamma_{41}H_{i4}
 $$
 
 The result is output units $Y$ that are not in proper units to use for classification. To remedy this, the raw outputs are normalized to be probability-like via 
@@ -75,6 +76,8 @@ The result is output units $Y$ that are not in proper units to use for classific
 $$
 \pi_{ik} = \frac{\exp(Y_{ik})}{\sum\limits_{k=1}^C \exp(Y_{ik})}
 $$
+
+look out for exponentiating large numbers
 
 TODO lack of constraints; normalization of inputs
 
@@ -387,10 +390,67 @@ As previously stated, ReLU is not a smooth function, so this demonstration will 
 
 ## Training and Optimization
 
+It can be challenging to train neural network classifiers. Their model structure is composed of multiple nested nonlinear functions that are not smooth, continuous functions for activations such as ReLU. The loss function, commonly cross-entropy, is unlikely to be convex, especially as model complexity increases. As a consequence, we have no guarantees that a gradient-based optimizer will converge. There is also the possibility of local minima that might trap the training process, saddle points that could lead the search in the wrong direction, and regions of vanishing gradients. These issues will be discussed below. 
 
-### Gradient Descent
+Another possible factor is that many deep learning models are trained on vast amounts of data. This in itself prevents constraints on how much data can be held in memory at once, and other logistical issues. This may not be an issue for the average application that uses tabular data, but the problem still exists. 
 
-### Newton’s Method
+Before proceeding, recall @sec-gradient-opt where gradient descent was introduced. There are two commonly used classes of gradient-based optimization methods:  _first-order techniques_, where the updating equation is: 
+
+$$
+\boldsymbol{\theta}_{i+1} = \boldsymbol{\theta}_i - \alpha\:g(\boldsymbol{\theta}_i)
+$$, 
+
+and _second-order methods_: 
+
+$$\boldsymbol{\theta}_{i+1} = \boldsymbol{\theta}_i - \alpha\:g(\boldsymbol{\theta}_i) H(\boldsymbol{\theta_i})^{-1}
+$$,
+
+where $\boldsymbol{\theta}$ are the unknown parameters, $\alpha$ is the learning rate, $g(\boldsymbol{\theta}_i)$ is the gradient vector of first derivatives, and $H(\boldsymbol{\theta_i})$ is the Hessian matrix of second derivatives. The Hessian measures the curvature of the loss function at the current iteration. Post-multiplying by its inverse rescales the gradient vector, generally making it more effective. We'll discuss them both in @sec-gradient-descent and @sec-newtons-method below. In most cases, second-order methods are preferred since they are more accurate. However, first-order search is more commonly used because it is faster to compute and can be much more memory efficient^[Making it infeasible to compute efficiently when the training set is very large.]
+
+To demonstrate, an MLP model was used to model the forestation data that contained one layer of 30 ReLU units and an additional layer of 5 ReLU units. An L<sub>2</sub> penalty of 0.15 was used to regularize the cross-entropy loss function. A maximum of 100 epochs was specified, but training would stop after five bad epochs of validation loss. An initial learning rate of $\alpha = 0.1$ was used, but a variable, step-wise rate schedule was used to modulate the rate across epochs (described below). 
+
+The model was first trained using gradient descent. For illustration, training was executed five times using different initial parameter values. The leftmost panel in @fig-three-optimizers shows the results. In each case, the loss function had an initial middling reduction. In each case, the model used all 100 epochs. This approach was not very successful. There was not much of a reduction in the loss function, and the terminal phase had a minuscule decrease with no real improvement. 
+
+```{r}
+#| label: fig-three-optimizers
+#| echo: false
+#| out-width: 90%
+#| fig-width: 6
+#| fig-height: 2.8
+#| warning: false
+#| fig-cap: "The validation loss function for the same MLP model for three optimzation strategies. The lines on each panel represents runs initialized with different random numbers."
+
+three_optimizers |> 
+  ggplot(aes(epoch, loss_norm, col = seed, group = seed)) +
+  geom_line(show.legend = FALSE,
+            linewidth = 1,
+            alpha = 1 / 2) +
+  facet_wrap(~ method, scale = "free_x") +
+  scale_x_continuous(breaks = pretty_breaks()) + 
+  labs(x = "Epochs", y = "Cross-Entropy (Validation)")
+```
+
+As a second approach, an approximation to Newton’s Method called the Limited-memory Broyden–Fletcher–Goldfarb–Shanno algorithm (L-BFGS) method. This uses an approximation to the Hessian matrix. In this case, there was an immediate and enormous reduction in loss in the first epoch. In most cases, the next few epochs resulted in further reductions. Some of the training runs quickly converged but one required 14 eopchs. Compared to basic gradient descent, L-BFGS produced a much more effective model (based on the loss). The median time for optimization was `r round(three_optimizer_times$median[three_optimizer_times$method == "L-BFGS"], 1)`s, which was somewhat faster than the median time for gradient descent (`r round(three_optimizer_times$median[three_optimizer_times$method == "GD"], 1)`s). _However_, we should consider the time per epoch since GD used all allowed epochs. L-BFGS required `r round(three_optimizer_times$per_epoch[three_optimizer_times$method == "L-BFGS"], 3)`s per epoch while gradient descent required `r round(three_optimizer_times$per_epoch[three_optimizer_times$method == "GD"], 3)`s
+
+As-is, gradient descent might be deemed ineffectual, and a second-order approach like L-BFGS might be the best approach. However, the plain version of gradient descent is almost never used. Instead, different variations of _stochastic_ gradient descent (SGD) are the norm. The rightmost panel in @fig-three-optimizers shows the results when the _Nesterov momentum_ term was used. This initially computes a standard update to the parameters, but then approximates the gradient at this position to compute a second prospective step. The actual update that is used is the lookahead position. 
+
+The stochastic aspect of the search used randomly allocated _batches_ of 64 training set samples. The gradient search is updated by processing each of these batches until the entire trained set has been used, which signifies the end of that epoch. As a result, for this training set size, about 76  gradient updates are executed before the end of each epoch. 
+
+Despite making many potentially low-quality gradient steps, SGD almost always produces better results than one gradient step using all of the training set. This is the case for our model with two layers; the results are just as good as the L-BFGS search. SGD was much slower overall, using `r  round(three_optimizer_times$median[three_optimizer_times$method == "SGD with momentum"], 1)`s but its per epoch time was between the other two methods (`r round(three_optimizer_times$per_epoch[three_optimizer_times$method == "SGD with momentum"], 3)`s).
+
+Saddle points occur when the gradient is zero, but there are regions surrounding this location that are increasing and others that are decreasing. 
+
+This situation can result in epochs where the search stagnates and shows barely incremental progress. As the search approaches the saddle point, the gradient becomes very close to zero, and first-order gradient searches have very small updates.
+
+
+
+### Initialization
+
+
+
+### Gradient Descent {#sec-gradient-descent}
+
+### Newton’s Method {#sec-newtons-method}
 
 ### Batch Learning
 
