@@ -47,23 +47,44 @@ load("../RData/three_optimizers.RData")
 
 ### Naive Bayes {#sec-naive-bayes}
 
-## Neural networks {#sec-nnet}
+## Neural networks via Multilayer Perceptrons {#sec-nnet}
 
-### Multilayer Perceptrons {#sec-mlp}
+Neural networks are complex models that are comprised of multiple hierarchies of _latent variables_ that represent different motifs in the data. The model’s architecture consists of a series of _layers_, each containing a set of units. Neural networks begin with the input layer that consists of units representing our predictors. After this are one or more _hidden layers_, each containing a preset number of hidden units. These are artificial features that are influenced by the layer before.  For example, if there were four predictors and the first hidden layer had two hidden units, each hidden unit is defined by an equation that uses each of the predictors. In the broadest sense, it is similar to how, in PCA, each principal component is a linear combination of the predictors. However, the similarities between neural networks and PCA end there. These connections between units on different layers continue as layers are added. Eventually, the last layer is the _output layer_. For classification, this usually has as many units as there are class levels in the outcome. @fig-nnet-cls shows a general architectural diagram for a basic model with a single hidden layer. 
 
-For most of this section, we’ll be concerned with multilayer perceptrons (MLPs), a subset of the broader class of models. MLPs are feed-forward models, meaning each layer only connects to the subsequent layer. 
+```{r}
+#| label: fig-nnet-cls
+#| echo: false
+#| out-width: 40%
+#| fig-width: 4
+#| fig-height: 5
+#| fig-cap: Architecture of a simple one layer neural network.
+knitr::include_graphics("../premade/mlp.svg")
+```
+
+Traditionally, the connections that come into a hidden unit are combined using a linear predictor: each incoming unit has a corresponding slope, called a "weight" in the neural network literature. The linear combinations commonly have an intercept term (called a "bias"). These linear predictors are embedded into a nonlinear "activation" function ($\sigma_1()$) to enable complex patterns. An example of an activation function would be a sigmoidal function much like the logit relationship used in @eqn-x. 
+
+::: {.note-box}
+For most of this section, we’ll be concerned with multilayer perceptrons (MLPs), a subset of the broader class of neural networks. MLPs are feed-forward models, meaning each layer only connects to the subsequent layer. 
 
 As a counterexample, residual networks are connected to previous layers (a.k.a. skip layers); therefore, they are not multilayer perceptrons. 
+:::
 
-For classification models, the first layer is the inputs (plus an intercept, commonly called a bias term in the neural network literature). The features in this layer connect to the first layer of hidden units. These are intermediary latent variables that, if the model is well-trained, can represent important features for the model.  When the features in one layer connect to the next, they are amalgamated using a linear combination. The connection between these first two layers embeds the linear combination inside an _activation function_, which is usually nonlinear. These will be discussed shortly.
-
-From here, additional layers of hidden units of various sizes can be added. The final layer implements the softmax transformation, which converts the final hidden units to a linear combination. 
-
-Here’s a trivial example of a network with three features, two outcome classes, and a single layer with four hidden units. If $\sigma_1()$ is our activation function for this layer, the first hidden unit is 
+Here’s a trivial example of an MLP with three features, two outcome classes, and a single layer with four hidden units. If $\sigma_1()$ is our activation function for this layer, the first hidden unit is 
 
 $$
 H_{i1} = \sigma(\beta_{01} + \beta_{11}x_{i1} + \ldots + \beta_{41}x_{i4})
 $$
+
+```{r}
+#| label: nnet-start
+#| echo: false
+#| out-width: 80%
+#| fig-width: 4
+#| fig-height: 5
+knitr::include_graphics("../premade/nnet_start.svg")
+```
+
+
 
 The last layer’s unit that corresponds to the first class is computed via
 
@@ -77,6 +98,18 @@ $$
 \pi_{ik} = \frac{\exp(Y_{ik})}{\sum\limits_{k=1}^C \exp(Y_{ik})}
 $$
 
+
+```{r}
+#| label: nnet-end
+#| echo: false
+#| out-width: 80%
+#| fig-width: 4
+#| fig-height: 5
+knitr::include_graphics("../premade/nnet_end.svg")
+```
+
+
+
 look out for exponentiating large numbers
 
 TODO lack of constraints; normalization of inputs
@@ -85,7 +118,12 @@ The number of layers, the number of hidden units within a layer, and the type of
 
 TODO asis, no preprocessing, imputation, etc is done by the network
 
-## Activation Functions
+
+TODO advice here is about smaller data sets for tabular mlps; not universally applicable (and most of what is written is erroneously thought to be universally applicable)
+
+In this section, we’ll describe the important elements of multilayer perceptrons, such as the different types of activation functions. We’ll also spend a good deal of time discussing the different ways to train MLPs. There are also discussions on modern deep learning models that are specifically designed for tabular data. 
+
+### Activation Functions
 
 ```{r}
 #| label: act-grid
@@ -127,7 +165,7 @@ act_functions <-
   )
 ```  
 
-Historically, the most commonly used nonlinear activation functions were sigmoidal in nature. This means that the linear combination of the elements of the previous layer was converted into a “squashed” format, usually between zero and one. @fig-sigmoid-activations shows several such functions. The logistic (eq TODO) function and hyperbolic tangent are fairly similar, and were typical defaults. The tanshrink function diminishes the impact of inputs that are in a neighborhood around zero. For large input values, the output is linear in the output (with an offset of $\pm 1$). 
+Historically, the most commonly used nonlinear activation functions were sigmoidal in nature. This means that the linear combination of the elements of the previous layer was converted into a "squashed" format, usually between zero and one. @fig-sigmoid-activations shows several such functions. The logistic (eq TODO) function and hyperbolic tangent are fairly similar, and were typical defaults. The tanshrink function diminishes the impact of inputs that are in a neighborhood around zero. For large input values, the output is linear in the output (with an offset of $\pm 1$). 
 
 ```{r}
 #| label: fig-sigmoid-activations
@@ -150,7 +188,7 @@ act_functions |>
 
 In modern neural networks, the rectified linear unit (ReLU) is the default activation function. As shown in @fig-relu-activations, the function resembles the hinge functions used by MARS; to the left-hand side of zero, the output is zero, and then it is linear otherwise. Much like MARS, this has the effect of isolating the effect of some region of the predictor space. However, there are a few key differences. MARS hinge functions affect a single predictor at a time, while neural networks’ activation functions act on the linear combination of parameters. Also, neural networks with multiple layers recursively nest actions of linear combinations inside the prior layers (and so on). The mathematical function is very similar, but the application of this function has a more comprehensive impact on the model. 
 
-There are various activation functions that are modified versions of ReLU that emulate the same form but have continuous derivatives. These are also shown in @fig-relu-activations, including softplus, gelu, silu, and elu. 
+There are various activation functions that are modified versions of ReLU that emulate the same form but have continuous derivatives. These are also shown in @fig-relu-activations, including softplus [@dugas2000incorporating;@glorot2011deep], gelu [@hendrycks2016gaussian], silu [@elfwing2018sigmoid], and elu [@clevert2015fast]. 
 
 ```{r}
 #| label: fig-relu-activations
@@ -388,7 +426,7 @@ The two panels show nearly opposite patterns, which is not coincidental. The mod
 
 As previously stated, ReLU is not a smooth function, so this demonstration will be somewhat different from the other activation functions; they generally don’t completely isolate regions of the predictor space. However, the general flow of the network is still the same. 
 
-## Training and Optimization
+### Training and Optimization
 
 It can be challenging to train neural network classifiers. Their model structure is composed of multiple nested nonlinear functions that are not smooth, continuous functions for activations such as ReLU. The loss function, commonly cross-entropy, is unlikely to be convex, especially as model complexity increases. As a consequence, we have no guarantees that a gradient-based optimizer will converge. There is also the possibility of local minima that might trap the training process, saddle points that could lead the search in the wrong direction, and regions of vanishing gradients. These issues will be discussed below. 
 
@@ -402,10 +440,10 @@ $$,
 
 and _second-order methods_: 
 
-$$\boldsymbol{\theta}_{i+1} = \boldsymbol{\theta}_i - \alpha\:g(\boldsymbol{\theta}_i) H(\boldsymbol{\theta_i})^{-1}
+$$\boldsymbol{\theta}_{i+1} = \boldsymbol{\theta}_i - \alpha H(\boldsymbol{\theta_i})^{-1}\:g(\boldsymbol{\theta}_i) 
 $$,
 
-where $\boldsymbol{\theta}$ are the unknown parameters, $\alpha$ is the learning rate, $g(\boldsymbol{\theta}_i)$ is the gradient vector of first derivatives, and $H(\boldsymbol{\theta_i})$ is the Hessian matrix of second derivatives. The Hessian measures the curvature of the loss function at the current iteration. Post-multiplying by its inverse rescales the gradient vector, generally making it more effective. We'll discuss them both in @sec-gradient-descent and @sec-newtons-method below. In most cases, second-order methods are preferred since they are more accurate. However, first-order search is more commonly used because it is faster to compute and can be much more memory efficient^[Making it infeasible to compute efficiently when the training set is very large.]
+where $\boldsymbol{\theta}$ are the unknown parameters, $\alpha$ is the learning rate, $g(\boldsymbol{\theta}_i)$ is the gradient vector of first derivatives, and $H(\boldsymbol{\theta_i})$ is the Hessian matrix of second derivatives. The Hessian measures the curvature of the loss function at the current iteration. Pre-multiplying by its inverse rescales the gradient vector, generally making it more effective. We'll discuss them both in @sec-gradient-descent and @sec-newtons-method below. In most cases, second-order methods are preferred since they are more accurate. However, first-order search is more commonly used because it is faster to compute and can be much more memory efficient^[Making it infeasible to compute efficiently when the training set is very large.]
 
 To demonstrate, an MLP model was used to model the forestation data that contained one layer of 30 ReLU units and an additional layer of 5 ReLU units. An L<sub>2</sub> penalty of 0.15 was used to regularize the cross-entropy loss function. A maximum of 100 epochs was specified, but training would stop after five bad epochs of validation loss. An initial learning rate of $\alpha = 0.1$ was used, but a variable, step-wise rate schedule was used to modulate the rate across epochs (described below). 
 
@@ -414,7 +452,7 @@ The model was first trained using gradient descent. For illustration, training w
 ```{r}
 #| label: fig-three-optimizers
 #| echo: false
-#| out-width: 90%
+#| out-width: 80%
 #| fig-width: 6
 #| fig-height: 2.8
 #| warning: false
@@ -423,7 +461,7 @@ The model was first trained using gradient descent. For illustration, training w
 three_optimizers |> 
   ggplot(aes(epoch, loss_norm, col = seed, group = seed)) +
   geom_line(show.legend = FALSE,
-            linewidth = 1,
+            linewidth = 3 / 4,
             alpha = 1 / 2) +
   facet_wrap(~ method, scale = "free_x") +
   scale_x_continuous(breaks = pretty_breaks()) + 
@@ -446,23 +484,54 @@ Saddle points occur when the gradient is zero, but there are regions surrounding
 
 This situation can result in epochs where the search stagnates and shows barely incremental progress. As the search approaches the saddle point, the gradient becomes very close to zero, and first-order gradient searches have very small updates.
 
+#### Initialization
 
+Network parameter initialization can significantly impact training success. Given the size and complexity of these models, optimal methodologies for setting initial values are nearly impossible to derive. As such, parameters are initialized using random numbers. There are a few approaches to do this. @lecun2002efficient initialization uses a uniform distribution centered around zero with limits defined by the number of connections feeding into the current node (known as the "fan in" and is denoted as $p_{in}$). They used $U(\pm \sqrt{2/p_{in}})$ as the distribution. There have been a few variations of this: 
 
-### Initialization
+ - Glorot/Xavier initialization [@glorot2010understanding]: $U(\pm \sqrt{6/(p_{in}+p_{out})})$ 
+ - He/Kaiming initialization [@he2015delving]: $N(0, \sqrt{2 / p_{in}})$.
 
+One reason that initialization is important is to help mitigate numerical overflow errors. For example, the softmax transformation shown above exponentiates the raw output units (and sums them). If the output units have relatively large values, exponentiating and summing them can exceed allowable ranges. For example, the output units shown in @fig-nnet-ex-layer-2 have a wide enough range that can be as large as `r max(round(abs(components$output_1)), 0)`. 
 
+#### Learning Rates
 
-### Gradient Descent {#sec-gradient-descent}
+The learning rate ($\alpha$) can have a profound effect on model quality, perhaps more than the structural tuning parameters that define complexity (e.g., number of hidden units). A large learning range will help converge towards effective parameter estimates, but once there, it can cause the model to consistently overshoot the best. One approach to modulating the rate is to use a scheduler [@lu2022gradient,chapt 4]. These are functions/algorithms that will change the rate (often to decrease it) over epochs. For example, to monotonically decrease the rate, two options are:
 
-### Newton’s Method {#sec-newtons-method}
+- inverse decay: $f(\alpha, \delta, i) = \alpha_0/(1 + \delta i)$ 
+- exponential decay: $f(\alpha, \delta, i) = \alpha_0\exp(-\delta i)$
 
-### Batch Learning
+where $i$ is the epoch number and $\delta$ is a decay value. These two functions gradually determine the rate so that, when near an optimum, it is slow enough not to exceed the optimal settings. Another approach is a step function that decreases the rate but holds it constant for a range of epochs. Those ranges can be predefined or can be set dynamically so that the rate decreases once the loss function is reduced. The function for the former is: 
 
-## Transformers
+- step decay: $f(\alpha, \zeta, i) = \alpha_0 \zeta^{\lfloor i/r\rfloor}$ 
 
-## Attention
+where $\zeta$ is the reduction value, $r$ is the step length, and $\lfloor x\rfloor$ is the floor function. 
 
-### Special Tabular Network Models  {#sec-tab-net}
+Finally, there are schedulers that modulate the rate up and down. A cyclic schedule [@smith2017cyclical] initially starts at a maximum value, decreases to a minimum value, and then cyclically increases again. For some range $r$ and minimum rate $\alpha_0$, an epoch's location within the series is $cycle = \lfloor 1 + (i / (2r) )\rfloor$ and the rate is
+
+- cyclic: $f(\alpha_0, \alpha, r) = \alpha_0 + ( \alpha - \alpha_0 ) \max(0, 1 - x)$
+
+where $x = |(i/r) - (2\:cycle) + 1|$. This is a good option when we are not sure how fast or slow the convergence will be. If the rate is too high near an optimum value, it will soon decrease to an appropriate value. Also, if the search is stuck in a local optimum (or a saddle-point), moving back to a larger learning rate might help it escape. 
+
+The type of schedule, and its additional parameter(s), are added to the list of possible values that could be optimized during tuning.
+
+#### Early Stopping {#sec-early-stopping}
+
+#### Batch Learning {#sec-batch-learning}
+
+#### Gradient Descent {#sec-gradient-descent}
+
+#### Newton’s Method {#sec-newtons-method}
+
+### Data Characteristics
+
+### Forestation Modeling
+
+## Special Tabular Network Models  {#sec-tab-net}
+
+### Transformers
+
+### Attention
+
 
 ## K-Nearest Neighbors  {#sec-cls-knn}
 
