@@ -90,12 +90,12 @@ base_sgd_plot <- function(dat, title = "SGD") {
 			data = loss_grid,
 			aes(z = res),
 			bins = 10,
-			alpha = 1 / 2,
+			alpha = 1 / 4,
 			col = "grey50"
 		) +
 		geom_path(
 			aes(col = start),
-			linewidth = 1,
+			linewidth = 3 /4,
 			alpha = 3 / 4,
 			show.legend = FALSE
 		) +
@@ -285,4 +285,102 @@ nesterov <- function(
 	colnames(prm_df) <- c("x", "y")
 	prm_df |> as_tibble() |> drop_na() %>% mutate(schedule = sched)
 }
+
+# ------------------------------------------------------------------------------
+
+point_saddle <- c(2,  0.25)
+point_corner <- c( 10, 1)
+
+# ------------------------------------------------------------------------------
+# Learning rate scheduler examples
+
+rates_saddle_constant <-
+	basic(
+		point_saddle,
+		sched = "constant",
+		initial = 0.1,
+		reduction = 0.5,
+		steps = 20
+	) |>
+	mutate(start = "mid", rate = 0.1)
+
+rates_corner_constant <-
+	basic(
+		point_corner,
+		sched = "constant",
+		initial = 0.1,
+		reduction = 0.5,
+		steps = 20
+	) |>
+	mutate(start = "corner", rate = 0.1)
+
+rates_saddle_step <-
+	basic(
+		point_saddle,
+		sched = "step",
+		initial = 0.1,
+		reduction = 0.5,
+		steps = 20
+	) |>
+	mutate(start = "mid", rate = 0.1)
+
+rates_corner_step <-
+	basic(
+		point_corner,
+		sched = "step",
+		initial = 0.1,
+		reduction = 0.5,
+		steps = 20
+	) |>
+	mutate(start = "corner", rate = 0.1)
+
+
+rates_saddle_cyclic <-
+	basic(
+		point_saddle,
+		sched = "cyclic",
+		initial = 0.001,
+		largest = 0.1,
+		step_size = 10
+	) |>
+	mutate(start = "mid", rate = 0.001)
+
+rates_corner_cyclic <-
+	basic(
+		point_corner,
+		sched = "cyclic",
+		initial = 0.001,
+		largest = 0.1,
+		step_size = 10
+	) |>
+	mutate(start = "corner")
+
+
+rates_saddle_decay <-
+	basic(
+		point_saddle,
+		sched = "decay",
+		decay = 0.025
+	) |>
+	mutate(start = "mid")
+
+rates_corner_decay <-
+	basic(
+		point_corner,
+		sched = "decay",
+		decay = 0.025
+	) |>
+	mutate(start = "corner")
+
+rates <-
+	bind_rows(
+		rates_corner_constant,
+		rates_corner_cyclic,
+		rates_corner_step,
+		rates_corner_decay,
+		rates_saddle_constant,
+		rates_saddle_cyclic,
+		rates_saddle_step,
+		rates_saddle_decay
+	)
 
