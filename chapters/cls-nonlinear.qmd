@@ -66,19 +66,18 @@ Neural networks are complex models that are comprised of multiple hierarchies of
 knitr::include_graphics("../premade/mlp.svg")
 ```
 
-Traditionally, the connections that come into a hidden unit are combined using a linear predictor: each incoming unit has a corresponding slope, called a "weight" in the neural network literature. The linear combinations commonly have an intercept term (called a "bias"). These linear predictors are embedded into a nonlinear "activation" function ($\sigma$) to enable complex patterns. An example of an activation function would be a sigmoidal function much like the logit relationship used in @eqn-x. 
+Traditionally, the connections that come into a hidden unit are combined using a linear predictor: each incoming unit has a corresponding slope, called a "weight" in the neural network literature^[For consistency, we’ll use "slopes" and "intercepts" here.]. The linear combinations commonly have an intercept term (called a "bias"). These linear predictors are embedded into a nonlinear "activation" function ($\sigma$) to enable complex patterns. An example of an activation function would be a sigmoidal function, much like the logistic function used in @eq-logistic. 
 
 ::: {.note-box}
-For most of this section, we’ll be concerned with multilayer perceptrons (MLPs), a subset of the broader class of neural networks. MLPs are feed-forward models, meaning each layer only connects to the subsequent layer. 
+For most of this section, we’ll be concerned with multilayer perceptrons (MLPs), a subset of the broader class of neural networks. MLPs are feed-forward models, meaning each layer only connects to the subsequent layer; there are no feedback loops where future units connect to units in previous layers.
 
-As a counterexample, residual networks are connected to previous layers (a.k.a. skip layers); therefore, they are not multilayer perceptrons. 
+As a counterexample, residual networks [@he2016deep] are connected to previous layers (a.k.a. skip layers); therefore, they are not multilayer perceptrons. Another popular example is the long-term short memory model for sequential data such as time series [@hochreiter1997long]. 
 :::
 
-Here’s a trivial example of an MLP with three features, two outcome classes, and a single layer with four hidden units. If $\sigma_1()$ is our activation function for this layer, the first hidden unit is 
+<br> 
 
-$$
-H_{i1} = \sigma(\beta_{01} + \beta_{11}x_{i1} + \ldots + \beta_{41}x_{i4})
-$$
+Let’s walk through the network structure, starting at the input layer. We have predictors $x_1, \ldots x_p$. These will be mathematically connected to the next layer with $m$ hidden units $H_\ell$ ($\ell=1, \ldots m$). First, we create a separate linear predictor for hidden unit $H_l$ denoted as $\beta_{\ell 0} + \beta_{\ell 1} x_{1} + \ldots + \beta_{\ell p} x_{p}$. We then wrap this inside the activation function $\sigma()$ used for this layer so that there is a nonlinear relationship between the predictors and their new representation. Visually^[
+This representation and the one below were adapted from Izaak Neutelings’s excellent work, which can be found at [`https://tikz.net/neural_networks/`](https://tikz.net/neural_networks/) and is licensed under a CC BY-SA 4.0.]:
 
 ```{r}
 #| label: nnet-start
@@ -89,16 +88,11 @@ $$
 knitr::include_graphics("../premade/nnet_start.svg")
 ```
 
-The last layer’s unit that corresponds to the first class is computed via
-$$
-Y_{i1} = \gamma_0 + \gamma_{11}H_{i1} + \ldots + \gamma_{41}H_{i4}
-$$
+As we add more layers, the first set of hidden units is similarly connected to the hidden units in the next layer and so on. The layers do not have to use the same activation function from layer to layer. Also, the layers can be specialized, such as the image processing layers shown in @fig-vgg16. The number of layers, the number of units within each layer, and the activation functions for a specific layer are tuning parameters. 
 
-The result is output units $Y$ that are not in proper units to use for classification. To remedy this, the raw outputs are normalized to be probability-like via 
+Note that the units in the subsequent hidden layer are nested inside linear combinations of the previous hidden layers (plus the input units). These models have sets of nested nonlinear functions and can be very complex. 
 
-$$
-\pi_{ik} = \frac{\exp(Y_{ik})}{\sum\limits_{k=1}^C \exp(Y_{ik})}
-$$
+For the final layer, the previous set of hidden units is often connected to the _output units_ using a linear activation. For classification, there are often $C$ output units (i.e., one for each class):
 
 ```{r}
 #| label: nnet-end
@@ -109,17 +103,15 @@ $$
 knitr::include_graphics("../premade/nnet_end.svg")
 ```
 
-look out for exponentiating large numbers
+The result is output units $Y$ that are unlikely to be in proper units to use for classification. To remedy this, the raw outputs are normalized to be probability-like via the softmax function: 
 
-TODO lack of constraints; normalization of inputs
+$$
+\pi_{k} = \frac{\exp(Y_{k})}{\sum\limits_{k=1}^C \exp(Y_{k})}
+$$
 
-The number of layers, the number of hidden units within a layer, and the type of activation function(s) to use are primary tuning parameters for the MLP structure.  
+In this section, we’ll describe the important elements of multilayer perceptrons, such as the different types of activation functions. It will walk through a small but specific model. 
 
-TODO asis, no preprocessing, imputation, etc is done by the network
-
-TODO advice here is about smaller data sets for tabular mlps; not universally applicable (and most of what is written is erroneously thought to be universally applicable)
-
-In this section, we’ll describe the important elements of multilayer perceptrons, such as the different types of activation functions. We’ll also spend a good deal of time discussing the different ways to train MLPs. There are also discussions on modern deep learning models that are specifically designed for tabular data. 
+In later sections, we’ll also spend a good deal of time discussing the different ways to train MLPs. There are also discussions on modern deep learning models that are specifically designed for tabular data. 
 
 ### Activation Functions {#sec-nnet-activation}
 
@@ -155,25 +147,23 @@ act_functions <-
            output = as.numeric(nnf_silu(lp_grid)),
            activation = "silu"),
     tibble(input = lp_grid,
-           output = as.numeric(nn_log_sigmoid()(lp_grid)),
-           activation = "log(sigmoid)"),
-    tibble(input = lp_grid,
            output = as.numeric(nn_softplus()(lp_grid)),
            activation = "softplus")
   )
 ```  
 
-Historically, the most commonly used nonlinear activation functions were sigmoidal in nature. This means that the linear combination of the elements of the previous layer was converted into a "squashed" format, usually between zero and one. @fig-sigmoid-activations shows several such functions. The logistic (eq TODO) function and hyperbolic tangent are fairly similar, and were typical defaults. The tanshrink function diminishes the impact of inputs that are in a neighborhood around zero. For large input values, the output is linear in the output (with an offset of $\pm 1$). 
+Historically, the most commonly used nonlinear activation functions were sigmoidal in nature. This means that the linear combination of the elements of the previous layer was converted into a "squashed" format, usually between zero and one. @fig-sigmoid-activations shows several such functions. The logistic (@eq-logistic) function and hyperbolic tangent are fairly similar in shape, and were typical defaults. 
+
 
 ```{r}
 #| label: fig-sigmoid-activations
 #| echo: false
-#| out-width: 85%
-#| fig-width: 8.25
+#| out-width: 65%
+#| fig-width: 6
 #| fig-height: 2
 #| fig-cap: "Different sigmoidal activation functions."
 
-sig_lvl <- c("logistic", "tanh", "tanhshrink", "log(sigmoid)")
+sig_lvl <- c("logistic", "tanh", "tanhshrink")
 
 act_functions |>  
   filter(grepl("(tan)|(sig)|(logistic)", activation)) |> 
@@ -184,9 +174,11 @@ act_functions |>
   theme_bw()
 ```
 
-In modern neural networks, the rectified linear unit (ReLU) is the default activation function. As shown in @fig-relu-activations, the function resembles the hinge functions used by MARS; to the left-hand side of zero, the output is zero, and then it is linear otherwise. Much like MARS, this has the effect of isolating the effect of some region of the predictor space. However, there are a few key differences. MARS hinge functions affect a single predictor at a time, while neural networks’ activation functions act on the linear combination of parameters. Also, neural networks with multiple layers recursively nest actions of linear combinations inside the prior layers (and so on). The mathematical function is very similar, but the application of this function has a more comprehensive impact on the model. 
+One issue with bounded sigmoidal shapes, especially the logistic function, is that they can become problematic when used with many hidden layers. Since the logistic function is on [0, 1], repeated multiplication of such values can cause their values to converge to very close to zero (as seen in @sec-naive-bayes). This is also true of their gradient, leading to the _vanishing gradient problem_. This is probably not an issue with shallow networks with a handful of hidden layers.  
 
-There are various activation functions that are modified versions of ReLU that emulate the same form but have continuous derivatives. These are also shown in @fig-relu-activations, including softplus [@dugas2000incorporating;@glorot2011deep], gelu [@hendrycks2016gaussian], silu [@elfwing2018sigmoid], and elu [@clevert2015fast]. 
+The tanshrink function diminishes the impact of inputs that are in a neighborhood around zero, where it is sigmoidal. For large input values, the output is linear in the output (with an offset of $\pm 1$). 
+
+In modern neural networks, the rectified linear unit (ReLU) is the default activation function. As shown in @fig-relu-activations, the function resembles the hinge functions used by MARS; to the left-hand side of zero, the output is zero, and then it is linear otherwise. Much like MARS, this has the effect of isolating the effect of some region of the predictor space. However, there are a few key differences. MARS hinge functions affect a single predictor at a time, while neural networks’ activation functions act on the linear combination of parameters. Also, neural networks with multiple layers recursively nest actions of linear combinations inside the prior layers (and so on). The mathematical function is very similar, but the application of this function has a more comprehensive impact on the model. 
 
 ```{r}
 #| label: fig-relu-activations
@@ -207,6 +199,8 @@ act_functions |>
   facet_wrap(~ activation, nrow = 1) + 
   theme_bw()
 ```
+
+There are various activation functions that are modified versions of ReLU that emulate the same form but have continuous derivatives. These are also shown in @fig-relu-activations, including softplus [@dugas2000incorporating;@glorot2011deep], gelu [@hendrycks2016gaussian], silu [@elfwing2018sigmoid], and elu [@clevert2015fast]. 
 
 ```{r}
 #| label: nnet-ex-comps
@@ -267,7 +261,7 @@ Let’s use an example data set with a simple MLP to demonstrate how ReLU activa
 #| label: fig-nnet-ex
 #| echo: false
 #| out-width: 60%
-#| fig-width: 4.4
+#| fig-width: 5
 #| fig-height: 4.4
 #| warning: false
 #| fig-cap: "An example data set with two predictors and two classes. The black line is the class boundary from an MLP model using three hidden units that use ReLU activation."
@@ -307,7 +301,7 @@ cat("$$")
 
 The intercept estimate for the first hidden unit is much larger than the other two. That unit also has a large positive slope for predictor A. The second hidden unit emphasizes predictor B, while $H_{i3}$ has strong positive effects for both predictors. 
 
-The top of @fig-nnet-ex-layer-1 shows a heatmap of how these three artificial features change over the two-dimensional predictor space. The black line segments show the contour corresponding to zero values. The first hidden unit has larger values on the right-hand side of the predictor space, with a slightly diagonal contour for zero. The pattern shown for the second hidden unit is nearly the opposite of the first, although the zero contour cuts more through the center of the space. Finally, the third unit is mostly driven by predictor B with larger values in the upper right region. 
+The top of @fig-nnet-ex-layer-1 shows a heatmap of how these three artificial features change over the two-dimensional predictor space (before activation). The black line segments show the contour corresponding to zero values. The first hidden unit has larger values on the right-hand side of the predictor space, with a slightly diagonal contour for zero. The pattern shown for the second hidden unit is nearly the opposite of the first, although the zero contour cuts more through the center of the space. Finally, the third unit is mostly driven by predictor B with larger values in the upper right region. 
 
 ```{r}
 #| label: fig-nnet-ex-layer-1
@@ -357,9 +351,9 @@ relu_layer <-
 lp_layer / relu_layer
 ```
 
-The bottom side of the figure shows the effect of the ReLU function; the values less than zero are set to zero. At this point, $H_{i1}$ and $H_{i3}$ have the strongest effect on the model, but in somewhat overlapping regions. $H_{i1}$ is mostly active for smaller values of predictor A. 
+The figure’s bottom side shows the ReLU function’s effect; the values less than zero are set to zero. At this point, $H_{i1}$ and $H_{i3}$ have the most substantial effect on the model, but in somewhat overlapping regions. $H_{i1}$ is mostly active for smaller values of predictor A. 
 
-However, the model estimates additional parameters that will merge these regions with weights that are most helpful for predicting the data. Those equations were estimated to be: 
+However, the model estimates additional parameters that will merge these regions with weights most helpful for predicting the data. Those equations were estimated to be: 
 
 ```{r}
 #| label: nnet-ex-last
@@ -383,7 +377,7 @@ cat(paste0(lp_2, collapse = " \\\\ \n"))
 cat("\\end{align}")
 ```
 
-Note that the coefficients’ signs are opposite for each of the outcome units. @fig-nnet-ex-layer-2 illustrates the transition from the hidden layer to the outcome layer. The weighted sum of the three variables at the top produces the regions of strong positive (or negative) activation for the two classes. Once again, the black curve shows where the zero contour is located. 
+Note that the coefficients’ signs are opposite for each outcome unit. @fig-nnet-ex-layer-2 illustrates the transition from the hidden layer to the outcome layer. The weighted sum of the three variables at the top produces the regions of strong positive (or negative) activation for the two classes. Once again, the black curve shows where the zero contour is located. 
 
 ```{r}
 #| label: fig-nnet-ex-layer-2
@@ -419,19 +413,21 @@ output_layer <-
 relu_layer / output_layer
 ```
 
-The two panels show nearly opposite patterns, which is not coincidental. The model converges to this structure so that the output units would favor one class or the other. The legend on the bottom right is clearly in the wrong units; we’d like them to resemble probabilities. As previously mentioned, the softmax function coerces these values to be on [0, 1] and to also sum to one. This produces the class boundary seen in @fig-nnet-ex. 
+The two output panels at the bottom of the figure show nearly opposite patterns, which is not coincidental. The model converges to this structure so that the output units favor one class or the other. The legend on the bottom right clearly shows inappropriate units; we’d like them to resemble probabilities. As previously mentioned, the softmax function coerces these values to be on [0, 1] and sum to one. This produces the class boundary seen in @fig-nnet-ex. 
 
-As previously stated, ReLU is not a smooth function, so this demonstration will be somewhat different from the other activation functions; they generally don’t completely isolate regions of the predictor space. However, the general flow of the network is still the same. 
+As previously stated, ReLU is not a smooth function, so this demonstration will somewhat differ from the other activation functions; they generally don’t completely isolate regions of the predictor space. However, the general flow of the network is still the same. 
+
+Now that we’ve discussed the architecture of these models and how the layers relate to one another, let’s examine how to estimate model parameters effectively.  
 
 ### Training and Optimization {#sec-nnet-training}
 
-It can be challenging to train neural network classifiers. Their model structure is composed of multiple nested nonlinear functions that are not smooth, continuous functions for activations such as ReLU. The loss function, commonly cross-entropy, is unlikely to be convex, especially as model complexity increases. As a consequence, we have no guarantees that a gradient-based optimizer will converge. There is also the possibility of local minima that might trap the training process, saddle points that could lead the search in the wrong direction, and regions of vanishing gradients. These issues will be discussed below. 
+It can be challenging to train neural network classifiers. Their model structure is composed of multiple nested nonlinear functions that are not smooth, continuous functions for activations such as ReLU. The loss function, commonly cross-entropy, is unlikely to be convex, especially as model complexity increases. Consequently, we have no guarantees that a gradient-based optimizer will converge. There is also the possibility of local minima that might trap the training process, saddle points that could lead the search in the wrong direction, and regions of vanishing gradients. These issues will be discussed below. 
 
-The complexity of these highly nested nonlinear regression models can create significant numerical issues. First is the challenge of local minima. In some cases, ML models can provide some guarantees regarding the existence of a global minimum loss value, generalized linear models being a good example. This may not be the case for neural networks. Their loss surface may contain multiple valleys where the derivatives of some of the parameters are zero, but a better solution exists in the parameter space. In other words, the model can appear to converge but has suboptimal performance. @baldi1989neural shows, under some conditions, that single-layer feedforward networks can have a unique global minimum. It should be expected that as more layers and units are added, the probability of a unique best solution decreases. Our optimization algorithm, when "caught" in a local valley, should be able to escape. 
+The complexity of these highly nested nonlinear regression models can create significant numerical issues. First is the challenge of local minima. In some cases, ML models can provide some guarantees regarding the existence of a global minimum loss value, generalized linear models being a good example. This may not be the case for neural networks. Their loss surface may contain multiple valleys where the derivatives of some of the parameters are zero, but a better solution exists in the parameter space. In other words, the model can appear to converge but has suboptimal performance. @baldi1989neural shows, under some conditions, that single-layer feedforward networks can have a unique global minimum. It should be expected that as more layers and units are added, the probability of a unique best solution decreases. When "caught" in a local valley, we need out optimization algorithm to be able to escape. 
 
-A second related issue is saddle points. These are locations where all of the gradients are zero (i.e., a stationary point), but some directions have increasing loss, and others will produce a decrease. @dauphin2014identifying postulate that these will exist, and their propensity to occur increases with the number of model parameters. The worry here is that, depending on the type of multidimensional curvature that we face, the optimization algorithm might move in the direction of _increasing_ loss. 
+A second related issue is saddle points. These are locations where all of the gradients are zero (i.e., a stationary point), but some directions have increasing loss, and others will produce a decrease. @dauphin2014identifying postulate that these will exist, and their propensity to occur increases with the number of model parameters. The worry here is that, depending on the type of multidimensional curvature we face, the optimization algorithm might move in the direction of _increasing_ loss. 
 
-@fig-stationary has an example with two parameters and a highly nonlinear loss surface. There are four stationary points, the best of which minimizes the loss function at $\boldsymbol{\theta} = [`r round(stationary$x[stationary$type == "minimum"], 1)`, `r round(stationary$y[stationary$type == "minimum"], 1)`]$. The lower right region has a point associated with maximum loss. The other two locations are saddle points. The point at $\boldsymbol{\theta} = [`r round(stationary$x[stationary$type == "saddle point" & stationary$x > 6], 1)`, `r round(stationary$y[stationary$type == "saddle point" & stationary$x > 6], 1)`]$ is a good example; moving to the left or right of the point will increase the loss. Moving up or down will generate a decrease in the loss (with the upper value being the correct choice in this parameter range). Our optimizer should be able to move in the correct direction or, like simulated annealing, be able to recover and move back to progressively better results. 
+@fig-stationary has an example with two parameters and a highly nonlinear loss surface. There are four stationary points, the best of which minimizes the loss function at $\boldsymbol{\theta} = [`r round(stationary$x[stationary$type == "minimum"], 1)`, `r round(stationary$y[stationary$type == "minimum"], 1)`]$. The lower right region has a point associated with maximum loss. The other two locations are saddle points. The point at $\boldsymbol{\theta} = [`r round(stationary$x[stationary$type == "saddle point" & stationary$x > 6], 1)`, `r round(stationary$y[stationary$type == "saddle point" & stationary$x > 6], 1)`]$ is a good example; moving to the left or right of the point will increase the loss. Moving up or down will decrease the loss (with the upper value being the correct choice in this parameter range). Our optimizer should be able to move in the proper direction or, like simulated annealing, recover and move back to progressively better results. 
 
 
 
@@ -469,7 +465,7 @@ The loss surface for $\psi(\boldsymbol{\theta}) = \theta_1 cos(0.5\:\theta_1) - 
 
 :::
 
-Another possible factor is that many deep learning models are trained on vast amounts of data. This in itself prevents constraints on how much data can be held in memory at once, and other logistical issues. This may not be an issue for the average application that uses tabular data, but the problem still exists. 
+Another possible factor is that many deep learning models are trained on vast amounts of data. This in itself presents constraints on how much data can be held in memory at once, as well as other logistical issues. This may not be an issue for the average application that uses tabular data, but the problem still exists. 
 
 Before proceeding, recall @sec-gradient-opt where gradient descent was introduced. There are two commonly used classes of gradient-based optimization methods: 
 
@@ -477,11 +473,11 @@ Before proceeding, recall @sec-gradient-opt where gradient descent was introduce
 
 - _Second-order methods_: $\quad\boldsymbol{\theta}_{i+1} = \boldsymbol{\theta}_i - \alpha H(\boldsymbol{\theta_i})^{-1}\:g(\boldsymbol{\theta}_i)$,
 
-where $\boldsymbol{\theta}$ are the unknown parameters, $\alpha$ is the learning rate, $g(\boldsymbol{\theta}_i)$ is the gradient vector of first derivatives, and $H(\boldsymbol{\theta_i})$ is the Hessian matrix of second derivatives. The Hessian measures the curvature of the loss function at the current iteration. Pre-multiplying by its inverse rescales the gradient vector, generally making it more effective. We'll discuss them both in @sec-gradient-descent and @sec-newtons-method below. In most cases, second-order methods are preferred since they are more accurate. However, first-order search is more commonly used because it is faster to compute and can be much more memory efficient^[Making it infeasible to compute efficiently when the training set is very large.]
+where $\boldsymbol{\theta}$ are the unknown parameters, $\alpha$ is the learning rate, $g(\boldsymbol{\theta}_i)$ is the gradient vector of first derivatives, and $H(\boldsymbol{\theta_i})$ is the Hessian matrix of second derivatives. The Hessian measures the curvature of the loss function at the current iteration. Pre-multiplying by its inverse rescales the gradient vector, generally making it more effective. We'll discuss them both in @sec-gradient-descent and @sec-newtons-method below. In most cases, second-order methods are preferred since they are more accurate. However, first-order search is more commonly used because it is faster to compute and can be much more memory efficient^[Making it infeasible to compute efficiently when the training set is huge.]
 
-To demonstrate, an MLP model was used to model the forestation data that contained one layer of 30 ReLU units and an additional layer of 5 ReLU units, yeilding `r num_optimizer_param` model parameters. An L<sub>2</sub> penalty of 0.15 was used to regularize the cross-entropy loss function. A maximum of 100 epochs was specified, but training would stop after five bad epochs of validation loss. An initial learning rate of $\alpha = 0.1$ was used, but a variable, step-wise rate schedule was used to modulate the rate across epochs (described below). 
+To demonstrate, an MLP model was used to model the forestation data that contained one layer of 30 ReLU units and an additional layer of 5 ReLU units, yielding `r num_optimizer_param` model parameters. An L<sub>2</sub> penalty of 0.15 was used to regularize the cross-entropy loss function. A maximum of 100 epochs was specified, but training would stop after five bad epochs of loss measured using held-out data. An initial learning rate of $\alpha = 0.1$ was used, but a variable, step-wise rate schedule was used to modulate the rate across epochs (described below). 
 
-The model was first trained using gradient descent. For illustration, training was executed five times using different initial parameter values. The leftmost panel in @fig-optimizers shows the results. In each case, the loss function had an initial middling reduction. In each case, the model used all 100 epochs. This approach was not very successful. There was not much of a reduction in the loss function, and the terminal phase had a minuscule decrease with no real improvement. This _could_ be due to the search approaching the saddle point. In this case, the gradient becomes very close to zero, and first-order gradient searches have very small updates.
+The model was first trained using gradient descent. For illustration, training was executed five times using different initial parameter values. The leftmost panel in @fig-optimizers shows the results. In each case, the loss function had an initial middling reduction. In each case, the model used all 100 epochs. This approach was not very successful. There was little reduction in the loss function, and the terminal phase had a minuscule decrease with no real improvement. This _could_ be due to the search approaching the saddle point. In this case, the gradient becomes very close to zero, and first-order gradient searches have tiny updates.
 
 ```{r}
 #| label: fig-optimizers
@@ -490,7 +486,7 @@ The model was first trained using gradient descent. For illustration, training w
 #| fig-width: 8
 #| fig-height: 2.8
 #| warning: false
-#| fig-cap: "The validation loss function for the same MLP model for four optimzation strategies. The lines on each panel represents runs initialized with different random numbers. The profiles are normalized so that they start from the same initial loss value."
+#| fig-cap: "The loss function, using held out data, for the same MLP model for four optimization strategies. The lines on each panel represent runs initialized with different random numbers. The profiles are normalized to start from the same initial loss value."
 
 optimizers |> 
   ggplot(aes(epoch, loss_norm, col = seed, group = seed)) +
@@ -499,16 +495,16 @@ optimizers |>
             alpha = 1 / 2) +
   facet_wrap(~ method, scale = "free_x", nrow = 1) +
   scale_x_continuous(breaks = pretty_breaks()) + 
-  labs(x = "Epochs", y = "Cross-Entropy (Validation)")
+  labs(x = "Epochs", y = "Cross-Entropy (Holdout)")
 ```
 
-As a second approach, an approximation to Newton’s Method called the Limited-memory Broyden–Fletcher–Goldfarb–Shanno algorithm (L-BFGS) method. This uses an approximation to the Hessian matrix. In this case, there was an immediate and enormous reduction in loss in the first epoch. In most cases, the next few epochs resulted in further reductions. Some of the training runs quickly converged but one required 14 epochs. Compared to basic gradient descent, L-BFGS produced a much more effective model (based on the loss). The median time for optimization (per epoch) was `r round(optimizer_times$per_epoch[optimizer_times$method == "L-BFGS"], 3)`s, which was far slower than the median time for gradient descent (`r round(optimizer_times$per_epoch[optimizer_times$method == "GD"], 3)`s). However, the extra time is offset since L-BFGS is likely to use far fewer epochs in this scenario. 
+As a second approach, an approximation to Newton’s Method called the Limited-memory Broyden–Fletcher–Goldfarb–Shanno algorithm (L-BFGS) method. This uses an approximation to the Hessian matrix. In this case, there was an immediate and enormous reduction in loss in the first epoch. In most cases, the next few epochs resulted in further reductions. Some of the training runs quickly converged, but one required 14 epochs. Compared to basic gradient descent, L-BFGS produced a much more effective model (based on the loss). The median time for optimization (per epoch) was `r round(optimizer_times$per_epoch[optimizer_times$method == "L-BFGS"], 3)`s, which was far slower than the median time for gradient descent (`r round(optimizer_times$per_epoch[optimizer_times$method == "GD"], 3)`s). However, the extra time is offset since L-BFGS will likely use far fewer epochs in this scenario. 
 
-As-is, gradient descent might be deemed ineffectual, and a second-order approach like L-BFGS might be the best approach. However, the plain version of gradient descent is almost never used. Instead, different variations of _stochastic_ gradient descent (SGD) are the norm. SGD uses randomly allocated _batches_ training set samples. The gradient search is updated by processing each of these batches until the entire trained set has been used, which signifies the end of that epoch. In other words, a potentially large number of parameter updates based on a small number of training point samples are used. The batch size used here was 64 data points. As a result, for this training set size, about 76 gradient updates are executed before the end of each epoch. 
+As-is, gradient descent might be deemed ineffectual, and a second-order approach like L-BFGS might be the best approach. However, the plain version of gradient descent is rarely used. Instead, different variations of _stochastic_ gradient descent (SGD) are the norm. SGD uses randomly allocated _batches_ training set samples. The gradient search is updated by processing each of these batches until the entire trained set has been used, which signifies the end of that epoch. In other words, a potentially large number of parameter updates based on a small number of training point samples are used. The batch size used here was 64 data points. As a result, for this training set size, about 76 gradient updates are executed before the end of each epoch. 
 
-As shown in @fig-optimizers, SGD does almost as well as L-BFGS, but most do not stop early; there is a relatively flat trend after about 20 epochs, where the search does not make substantial reductions of the loss. In terms of time per epoch, SGD was slightly better than L-BFGS at `r  round(optimizer_times$per_epoch[optimizer_times$method == "SGD"], 3)`s but will probably require more training. 
+As shown in @fig-optimizers, SGD does almost as well as L-BFGS, but most do not stop early; there is a relatively flat trend after about 20 epochs, where the search does not substantially reduce the loss. In terms of time per epoch, SGD was slightly better than L-BFGS at `r  round(optimizer_times$per_epoch[optimizer_times$method == "SGD"], 3)`s but will probably require more training. 
 
-As we’ll see in the section below, many extensions to SGD have made it more effective. One improvement is to use _Nesterov momentum_ [@sutskever2013importance]. This initially computes a standard update to the parameters, but then approximates the gradient at this position to compute a second prospective step. The actual update that is used is the lookahead position. This technique shows results on par with L-BFGS with several repeats stopping early. However, the training time was longest, using `r round(optimizer_times$per_epoch[optimizer_times$method == "SGD with momentum"], 3)`s per epoch.  
+As we’ll see in the section below, many extensions to SGD have made it more effective. One improvement is to use _Nesterov momentum_ [@sutskever2013importance]. This initially computes a standard update to the parameters, then approximates the gradient at this position to compute a second prospective step. The actual update that is used is the lookahead position. This technique shows results on par with L-BFGS, with several repeats stopping early. However, the training time was longest, using `r round(optimizer_times$per_epoch[optimizer_times$method == "SGD with momentum"], 3)`s per epoch.  
 
 ::: {.note-box}
 The main takeaways of this exercise are that training these models can be difficult and that the type of parameter optimization can substantially impact model quality. 
@@ -518,45 +514,47 @@ Let’s discuss a few operational aspects of gradient-based methods before discu
 
 #### Initialization {#sec-nnet-initialization}
 
-Network parameter initialization can significantly impact training success. Given the size and complexity of these models, optimal methodologies for setting initial values are nearly impossible to derive. As such, parameters are initialized using random numbers. There are a few approaches to do this. @lecun2002efficient initialization uses a uniform distribution centered around zero with limits defined by the number of connections feeding into the current node (known as the "fan in" and is denoted as $p_{in}$). They used $U(\pm \sqrt{2/p_{in}})$ as the distribution. There have been a few variations of this: 
+Network parameter initialization can significantly impact training success. Given the size and complexity of these models, optimal methodologies for setting initial values are nearly impossible to derive. As such, parameters are initialized using random numbers. There are a few approaches to do this. @lecun2002efficient initialization uses a uniform distribution centered around zero with limits defined by the number of connections feeding into the current node (known as the "fan in" and is denoted as $m_{in}$). They used $U(\pm \sqrt{2/m_{in}})$ as the distribution. There have been a few variations of this: 
 
- - Glorot/Xavier initialization [@glorot2010understanding]: $U(\pm \sqrt{6/(p_{in}+p_{out})})$ 
- - He/Kaiming initialization [@he2015delving]: $N(0, \sqrt{2 / p_{in}})$.
+ - Glorot/Xavier initialization [@glorot2010understanding]: $U(\pm \sqrt{6/(m_{in}+m_{out})})$ 
+ - He/Kaiming initialization [@he2015delving]: $N(0, \sqrt{2 / m_{in}})$.
 
 One reason that initialization is important is to help mitigate numerical overflow errors. For example, the softmax transformation shown above exponentiates the raw output units (and sums them). If the output units have relatively large values, exponentiating and summing them can exceed allowable ranges. For example, the output units shown in @fig-nnet-ex-layer-2 have a wide enough range that can be as large as `r max(round(abs(components$output_1)), 0)`. 
 
 
 #### Preprocessing {#sec-nnet-preprocessing}
 
-Neural networks require complete, numeric features for computations. For non-numeric data, the tools described in @sec-categorical-predictors can be very effective. Additionally, there are pretrained neural network models that can translate the string to a word embedding [@Boykis_What_are_embeddings_2023], such as  BERT [@devlin2019bert] or GPT-4 [@achiam2023gpt]. The potential upside to doing this is that the resulting numeric features may measure some relative context between categorical values. For example, suppose we have a predictor with levels `red`, `darkred`, `green`, `chartreuse`, and `white`. Basic encoders, such as binary indicators for hashing features, would not recognize that there are three clusters in these values and that sets such as {`red`, `darkred`} and {`green`, `chartreuse`} should have values that are “near” one another. LLMs can measure this semantic similarity and potentially generate more meaningful features. 
+Neural networks require complete, numeric features for computations. 
 
-If the non-numeric predictors are not complex, a layer could be added early in the network that enables the model to derive encodings based on the data. @guo2016entity describes a relatively simple architecture for doing this. While LLMs are overall better at creating embeddings, they are unaware of the _context_ in your data. Estimating the parameters associated with a simple embedding layer might be more effective since it is optimized for your data set. 
+For non-numeric data, the tools described in @sec-categorical-predictors can be very effective. Additionally, there are pretrained neural network models that can translate the string to a word embedding [@Boykis_What_are_embeddings_2023], such as  BERT [@devlin2019bert] or GPT-4 [@achiam2023gpt]. The potential upside to doing this is that the resulting numeric features may measure some relative context between categorical values. For example, suppose we have a predictor with levels `red`, `darkred`, `green`, `chartreuse`, and `white`. Basic encoders, such as binary indicators for hashing features, would not recognize that there are three clusters in these values and that sets such as {`red`, `darkred`} and {`green`, `chartreuse`} should have values that are "near" one another. LLMs can measure this semantic similarity and potentially generate more meaningful features. 
 
-For numeric predictors, we suggest avoiding irrelevant predictors and highly collinear feature sets. @fig-irrelevant-predictors in @sec-feature-selection demonstrated the harm from including predictors with no relationship to the outcome into a neural network. Multicollinearity can also affect these models, even if we do not invert the feature matrix or use the Hessian during optimization. Highly redundant predictors can result in the loss function having difficult characteristics. Using an L<sub>2</sub> penalty or a feature extraction method can be very helpful. 
+If the non-numeric predictors are not complex, a layer could be added early in the network, enabling the model to derive encodings based on the data. @guo2016entity describes a relatively simple architecture for doing this. While LLMs are better at creating embeddings overall, they are unaware of the _context_ in your data. Estimating the parameters associated with a simple embedding layer might be more effective since it is optimized for your data set. 
 
-Also, predictors with highly skewed distributions might benefit from a transformation to make their distribution more symmetric. If not, outlying values can exhibit significant leverage in computations, which can prevent high-quality parameter estimates. 
+For numeric predictors, we suggest avoiding irrelevant predictors and highly collinear feature sets. @fig-irrelevant-predictors in @sec-feature-selection demonstrated the harm of including predictors unrelated to the outcome in a neural network. Multicollinearity can also affect these models, even if we do not invert the feature matrix or use the Hessian during optimization. Highly redundant predictors can result in the loss function having difficult characteristics. Using an L<sub>2</sub> penalty or a feature extraction method can be very helpful. 
 
-Finally, since the networks use random initialization, we should ensure that our predictors are standardized to have the same units. If there are only numeric predictors, centering/scaling or orderNorm operations can be very effective^[orderNorm is perhaps more attractive since it standardizes the predictors and coerces them to a symmetric distribution.]. If we use this approach, we must also apply these same standardizations to binary indicators that are created from categorical predictors.  Alternatively, we could leave 0/1 indicators as-is but _range_ scale our predictors to also be between zero and one. This may have a disadvantage; the range will be common acorss predictors but the mean and variance can be quite different. 
+Also, predictors with highly skewed distributions might benefit from a transformation to make their distribution more symmetric. If not, outlying values can exhibit significant leverage in computations, preventing high-quality parameter estimates. 
+
+Finally, since the networks use random initialization, we should ensure that our predictors are standardized to have the same units. If there are only numeric predictors, centering/scaling or orderNorm operations can be very effective^[orderNorm is perhaps more attractive since it standardizes the predictors and coerces them to a symmetric distribution.]. Using this approach, we must also apply the same standardization to binary indicators created from categorical predictors.  Alternatively, we could leave 0/1 indicators as-is, but _range_ scale our predictors to also be between zero and one. This may have a disadvantage; the range will be common across predictors, but the mean and variance can be quite different. 
 
 
 #### Learning Rates {#sec-nnet-learning-rates}
 
-The learning rate ($\alpha$) can have a profound effect on model quality, perhaps more than the structural tuning parameters that define complexity (e.g., number of hidden units). A large learning range will help converge towards effective parameter estimates, but once there, it can cause the model to consistently overshoot the best. One approach to modulating the rate is to use a scheduler [@lu2022gradient,chapt 4]. These are functions/algorithms that will change the rate (often to decrease it) over epochs. For example, to monotonically decrease the rate, two options are:
+The learning rate ($\alpha$) can profoundly affect model quality, perhaps more than the structural tuning parameters that define complexity (e.g., number of hidden units). A large learning range will help converge towards effective parameter estimates, but once there, it can cause the model to consistently overshoot the best. One approach to modulating the rate is to use a scheduler [@lu2022gradient,chapt 4]. These are functions/algorithms that will change the rate (often to decrease it) over epochs. For example, to monotonically decrease the rate, two options are:
 
-- inverse decay: $f(\alpha, \delta, i) = \alpha_0/(1 + \delta i)$ 
-- exponential decay: $f(\alpha, \delta, i) = \alpha_0\exp(-\delta i)$
+- inverse decay: $f(\alpha_0, \delta, i) = \alpha_0/(1 + \delta i)$ 
+- exponential decay: $f(\alpha_0, \delta, i) = \alpha_0\exp(-\delta i)$
 
-where $i$ is the epoch number and $\delta$ is a decay value. These two functions gradually determine the rate so that, when near an optimum, it is slow enough not to exceed the optimal settings. Another approach is a step function that decreases the rate but holds it constant for a range of epochs. Those ranges can be predefined or can be set dynamically so that the rate decreases once the loss function is reduced. The function for the former is: 
+where $i$ is the epoch number and $\delta$ is a decay value. These two functions gradually determine the rate so that, when near an optimum, it is slow enough not to exceed the optimal settings. Another approach is a step function that decreases the rate but holds it constant for a range of epochs. Those ranges can be predefined or set dynamically to decrease the rate once the loss function is reduced. The function for the former is: 
 
-- step decay: $f(\alpha, \zeta, i) = \alpha_0 \zeta^{\lfloor i/r\rfloor}$ 
+- step decay: $f(\alpha_0, \zeta, r, i) = \alpha_0 \zeta^{\lfloor i/r\rfloor}$ 
 
 where $\zeta$ is the reduction value, $r$ is the step length, and $\lfloor x\rfloor$ is the floor function. 
 
-Finally, there are schedulers that modulate the rate up and down. A cyclic schedule [@smith2017cyclical] initially starts at a maximum value, decreases to a minimum value, and then cyclically increases again. For some range $r$ and minimum rate $\alpha_0$, an epoch's location within the series is $cycle = \lfloor 1 + (i / (2r) )\rfloor$ and the rate is
+Finally, some schedulers modulate the rate up and down. A cyclic schedule [@smith2017cyclical] starts at a maximum value, decreases to a minimum value, and then increases cyclically. For some range $r$ and minimum rate $\alpha_0$, an epoch's location within the series is $cycle = \lfloor 1 + (i / (2r) )\rfloor$ and the rate is
 
-- cyclic: $f(\alpha_0, \alpha, r) = \alpha_0 + ( \alpha - \alpha_0 ) \max(0, 1 - x)$
+- cyclic: $f(\alpha_0, \alpha, r, i) = \alpha_0 + ( \alpha - \alpha_0 ) \max(0, 1 - x)$
 
-where $x = |(i/r) - (2\:cycle) + 1|$. This is a good option when we are not sure how fast or slow the convergence will be. If the rate is too high near an optimum value, it will soon decrease to an appropriate value. Also, if the search is stuck in a local optimum (or a saddle-point), moving back to a larger learning rate might help it escape. 
+where $x = |(i/r) - (2\:cycle) + 1|$. This is a good option when we are unsure how fast or slow the convergence will be. If the rate is too high near an optimum value, it will soon decrease to an appropriate value. Also, if the search is stuck in a local optimum (or a saddle-point), moving back to a larger learning rate might help it escape. 
 
 @fig-schedulers uses the loss function example from @fig-stationary to demonstrate the effect of rate schedulers. Two starting points are used. One (in orange) is very close to a saddle point, while the other starts from the upper right corner of the parameter space (in green). 
 
@@ -570,12 +568,15 @@ where $x = |(i/r) - (2\:cycle) + 1|$. This is a good option when we are not sure
 base_sgd_plot(rates, NULL) + facet_wrap(~schedule)
 ```
 
-Using a constant learning rate of $\alpha = 0.1$, the search marches to the optimum value, but oscillates wildly on approach. In the end, it does not come close to the best estimates since it is constrained to make large jumps on each iteration. The decay panel represents inverse decay with $\delta = 0.025$. For the corner starting point, this is a very effective strategy. From the saddle point, we can see that the decrease in the learning rate results in fewer oscillations as the search proceeds and eventually finds its way to the optimum. The step panel used an initial learning rate of $\alpha_0 = 0.1$, $\eta = 0.5$, and a step length of 20 epochs. This worked well when the search began from the saddle location, but it did poorly when starting at the corner. The success depended on when the search was near the optimum; if not timed right, the oscillations were too wide to converge on the best point. A reduction in the step length might help. Finally, the cyclic schedule allowed rates to move between $\alpha_0 = 0.001$ to $\alpha = 0.1$ with a cycle range of $r = 10$ epochs. This appears to work well or, at least, had good timing. 
+Using a constant learning rate of $\alpha = 0.1$, the search marches to the optimum value, but oscillates wildly on approach. Ultimately, it does not come close to the best estimates since it is constrained to make large jumps on each iteration. The decay panel represents inverse decay with $\delta = 0.025$. For the corner starting point, this is a very effective strategy. From the saddle point, we can see that the decrease in the learning rate results in fewer oscillations as the search proceeds and eventually finds its way to the optimum. The step panel used an initial learning rate of $\alpha_0 = 0.1$, $\eta = 0.5$, and a step length of 20 epochs. This worked well when the search began from the saddle location, but it did poorly when starting at the corner. The success depended on when the search was near the optimum; if not timed right, the oscillations were too wide to converge on the best point. A reduction in the step length might help. Finally, the cyclic schedule allowed rates to move between $\alpha_0 = 0.001$ to $\alpha = 0.1$ with a cycle range of $r = 10$ epochs. This appears to work well or, at least, had good timing. 
 
-The type of schedule, and its additional parameter(s), are added to the list of possible values that could be optimized during tuning.
-
+The schedule type and its additional parameter(s) are added to the list of possible values that could be optimized during tuning.
 
 #### Early Stopping {#sec-early-stopping}
+
+When should training stop? We can guess how many epochs might be needed, but if we guess poorly, we risk under- or overfitting the model. It makes sense to include the number of epochs as a tuning parameter, but this could be costly^[Although the submodel trick described in @sec-submodels could greatly improve the effectiveness of this approach.]. 
+
+If we have some data to spare, an efficient and effective approach is to use early stopping. If we set aside a small proportion of the training set to measure the search’s progress, we can set the _maximum_ number of epochs and stop training when the loss worsens (based on our holdout set). Often, we can tune the number of "stopping epochs.". If this value were five, we would stop training after five consecutive epochs where the loss function worsens (and use the parameter estimates from our last best epoch). Values greater than one protect against overreacting when the loss profile is noisy. 
 
 #### Batch Learning {#sec-batch-learning}
 
