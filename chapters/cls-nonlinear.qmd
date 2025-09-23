@@ -469,16 +469,11 @@ The loss surface for $\psi(\boldsymbol{\theta}) = \theta_1 cos(0.5\:\theta_1) - 
 
 Another possible factor is that many deep learning models are trained on vast amounts of data. This in itself prevents constraints on how much data can be held in memory at once, and other logistical issues. This may not be an issue for the average application that uses tabular data, but the problem still exists. 
 
-Before proceeding, recall @sec-gradient-opt where gradient descent was introduced. There are two commonly used classes of gradient-based optimization methods:  _first-order techniques_, where the updating equation is: 
+Before proceeding, recall @sec-gradient-opt where gradient descent was introduced. There are two commonly used classes of gradient-based optimization methods: 
 
-$$
-\boldsymbol{\theta}_{i+1} = \boldsymbol{\theta}_i - \alpha\:g(\boldsymbol{\theta}_i)
-$$, 
+ - _First-order techniques_: $\quad\boldsymbol{\theta}_{i+1} = \boldsymbol{\theta}_i - \alpha\:g(\boldsymbol{\theta}_i)$,
 
-and _second-order methods_: 
-
-$$\boldsymbol{\theta}_{i+1} = \boldsymbol{\theta}_i - \alpha H(\boldsymbol{\theta_i})^{-1}\:g(\boldsymbol{\theta}_i) 
-$$,
+- _Second-order methods_: $\quad\boldsymbol{\theta}_{i+1} = \boldsymbol{\theta}_i - \alpha H(\boldsymbol{\theta_i})^{-1}\:g(\boldsymbol{\theta}_i)$,
 
 where $\boldsymbol{\theta}$ are the unknown parameters, $\alpha$ is the learning rate, $g(\boldsymbol{\theta}_i)$ is the gradient vector of first derivatives, and $H(\boldsymbol{\theta_i})$ is the Hessian matrix of second derivatives. The Hessian measures the curvature of the loss function at the current iteration. Pre-multiplying by its inverse rescales the gradient vector, generally making it more effective. We'll discuss them both in @sec-gradient-descent and @sec-newtons-method below. In most cases, second-order methods are preferred since they are more accurate. However, first-order search is more commonly used because it is faster to compute and can be much more memory efficient^[Making it infeasible to compute efficiently when the training set is very large.]
 
@@ -493,7 +488,7 @@ The model was first trained using gradient descent. For illustration, training w
 #| fig-width: 8
 #| fig-height: 2.8
 #| warning: false
-#| fig-cap: "The validation loss function for the same MLP model for four optimzation strategies. The lines on each panel represents runs initialized with different random numbers."
+#| fig-cap: "The validation loss function for the same MLP model for four optimzation strategies. The lines on each panel represents runs initialized with different random numbers. The profiles are normalized so that they start from the same initial loss value."
 
 optimizers |> 
   ggplot(aes(epoch, loss_norm, col = seed, group = seed)) +
@@ -511,15 +506,13 @@ As-is, gradient descent might be deemed ineffectual, and a second-order approach
 
 As shown in @fig-optimizers, SGD does almost as well as L-BFGS, but most do not stop early; there is a relatively flat trend after about 20 epochs, where the search does not make substantial reductions of the loss. In terms of time per epoch, SGD was slightly better than L-BFGS at `r  round(optimizer_times$per_epoch[optimizer_times$method == "SGD"], 3)`s but will probably require more training. 
 
-As we’ll see in the section below, many extensions to SGD have made it more effective. One improvement is to use _Nesterov momentum_. This initially computes a standard update to the parameters, but then approximates the gradient at this position to compute a second prospective step. The actual update that is used is the lookahead position. This technique shows results on par with L-BFGS with several repeats stopping early. However, the training time was longest, using `r round(optimizer_times$per_epoch[optimizer_times$method == "SGD with momentum"], 3)`s per epoch.  
+As we’ll see in the section below, many extensions to SGD have made it more effective. One improvement is to use _Nesterov momentum_ [@sutskever2013importance]. This initially computes a standard update to the parameters, but then approximates the gradient at this position to compute a second prospective step. The actual update that is used is the lookahead position. This technique shows results on par with L-BFGS with several repeats stopping early. However, the training time was longest, using `r round(optimizer_times$per_epoch[optimizer_times$method == "SGD with momentum"], 3)`s per epoch.  
 
 ::: {.note-box}
 The main takeaways of this exercise are that training these models can be difficult and that the type of parameter optimization can substantially impact model quality. 
 :::
 
 Let’s discuss a few operational aspects of gradient-based methods before discussing the first- and second-order search techniques. 
-
-#### Preprocessing {#sec-nnet-preprocessing}
 
 #### Initialization {#sec-nnet-initialization}
 
@@ -529,6 +522,20 @@ Network parameter initialization can significantly impact training success. Give
  - He/Kaiming initialization [@he2015delving]: $N(0, \sqrt{2 / p_{in}})$.
 
 One reason that initialization is important is to help mitigate numerical overflow errors. For example, the softmax transformation shown above exponentiates the raw output units (and sums them). If the output units have relatively large values, exponentiating and summing them can exceed allowable ranges. For example, the output units shown in @fig-nnet-ex-layer-2 have a wide enough range that can be as large as `r max(round(abs(components$output_1)), 0)`. 
+
+
+#### Preprocessing {#sec-nnet-preprocessing}
+
+Neural networks require complete, numeric features for computations. For non-numeric data, the tools described in @sec-categorical-predictors can be very effective. Additionally, there are pretrained neural network models that can translate the string to a word embedding [@Boykis_What_are_embeddings_2023], such as  BERT [@devlin2019bert] or GPT-4 [@achiam2023gpt]. The potential upside to doing this is that the resulting numeric features may measure some relative context between categorical values. For example, suppose we have a predictor with levels `red`, `darkred`, `green`, `chartreuse`, and `white`. Basic encoders, such as binary indicators for hashing features, would not recognize that there are three clusters in these values and that sets such as {`red`, `darkred`} and {`green`, `chartreuse`} should have values that are “near” one another. LLMs can measure this semantic similarity and potentially generate more meaningful features. 
+
+If the non-numeric predictors are not complex, a layer could be added early in the network that enables the model to derive encodings based on the data. @guo2016entity describes a relatively simple architecture for doing this. While LLMs are overall better at creating embeddings, they are unaware of the _context_ in your data. Estimating the parameters associated with a simple embedding layer might be more effective since it is optimized for your data set. 
+
+For numeric predictors, we suggest avoiding irrelevant predictors and highly collinear feature sets. @fig-irrelevant-predictors in @sec-feature-selection demonstrated the harm from including predictors with no relationship to the outcome into a neural network. Multicollinearity can also affect these models, even if we do not invert the feature matrix or use the Hessian during optimization. Highly redundant predictors can result in the loss function having difficult characteristics. Using an L<sub>2</sub> penalty or a feature extraction method can be very helpful. 
+
+Also, predictors with highly skewed distributions might benefit from a transformation to make their distribution more symmetric. If not, outlying values can exhibit significant leverage in computations, which can prevent high-quality parameter estimates. 
+
+Finally, since the networks use random initialization, we should ensure that our predictors are standardized to have the same units. If there are only numeric predictors, centering/scaling or orderNorm operations can be very effective^[orderNorm is perhaps more attractive since it standardizes the predictors and coerces them to a symmetric distribution.]. If we use this approach, we must also apply these same standardizations to binary indicators that are created from categorical predictors.  Alternatively, we could leave 0/1 indicators as-is but _range_ scale our predictors to also be between zero and one. This may have a disadvantage; the range will be common acorss predictors but the mean and variance can be quite different. 
+
 
 #### Learning Rates {#sec-nnet-learning-rates}
 
