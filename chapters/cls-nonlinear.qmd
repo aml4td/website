@@ -34,7 +34,12 @@ daemons(parallel::detectCores())
 # load data 
 
 load("../RData/forested_data.RData")
-load("../RData/three_optimizers.RData")
+load("../RData/optimizers.RData")
+
+# ------------------------------------------------------------------------------
+# Gradient descent helpers
+
+source("../R/setup_2D_GD.R")
 ```
 
 ## Nonlinear Discriminants  {#sec-nonlinear-da}
@@ -47,7 +52,7 @@ load("../RData/three_optimizers.RData")
 
 ### Naive Bayes {#sec-naive-bayes}
 
-## Neural networks via Multilayer Perceptrons {#sec-nnet}
+## Neural Networks via Multilayer Perceptrons {#sec-nnet}
 
 Neural networks are complex models that are comprised of multiple hierarchies of _latent variables_ that represent different motifs in the data. The model’s architecture consists of a series of _layers_, each containing a set of units. Neural networks begin with the input layer that consists of units representing our predictors. After this are one or more _hidden layers_, each containing a preset number of hidden units. These are artificial features that are influenced by the layer before.  For example, if there were four predictors and the first hidden layer had two hidden units, each hidden unit is defined by an equation that uses each of the predictors. In the broadest sense, it is similar to how, in PCA, each principal component is a linear combination of the predictors. However, the similarities between neural networks and PCA end there. These connections between units on different layers continue as layers are added. Eventually, the last layer is the _output layer_. For classification, this usually has as many units as there are class levels in the outcome. @fig-nnet-cls shows a general architectural diagram for a basic model with a single hidden layer. 
 
@@ -57,11 +62,11 @@ Neural networks are complex models that are comprised of multiple hierarchies of
 #| out-width: 40%
 #| fig-width: 4
 #| fig-height: 5
-#| fig-cap: Architecture of a simple one layer neural network.
+#| fig-cap: Architecture of a simple neural network with a single layer of hidden units.
 knitr::include_graphics("../premade/mlp.svg")
 ```
 
-Traditionally, the connections that come into a hidden unit are combined using a linear predictor: each incoming unit has a corresponding slope, called a "weight" in the neural network literature. The linear combinations commonly have an intercept term (called a "bias"). These linear predictors are embedded into a nonlinear "activation" function ($\sigma_1()$) to enable complex patterns. An example of an activation function would be a sigmoidal function much like the logit relationship used in @eqn-x. 
+Traditionally, the connections that come into a hidden unit are combined using a linear predictor: each incoming unit has a corresponding slope, called a "weight" in the neural network literature. The linear combinations commonly have an intercept term (called a "bias"). These linear predictors are embedded into a nonlinear "activation" function ($\sigma$) to enable complex patterns. An example of an activation function would be a sigmoidal function much like the logit relationship used in @eqn-x. 
 
 ::: {.note-box}
 For most of this section, we’ll be concerned with multilayer perceptrons (MLPs), a subset of the broader class of neural networks. MLPs are feed-forward models, meaning each layer only connects to the subsequent layer. 
@@ -84,10 +89,7 @@ $$
 knitr::include_graphics("../premade/nnet_start.svg")
 ```
 
-
-
 The last layer’s unit that corresponds to the first class is computed via
-
 $$
 Y_{i1} = \gamma_0 + \gamma_{11}H_{i1} + \ldots + \gamma_{41}H_{i4}
 $$
@@ -98,7 +100,6 @@ $$
 \pi_{ik} = \frac{\exp(Y_{ik})}{\sum\limits_{k=1}^C \exp(Y_{ik})}
 $$
 
-
 ```{r}
 #| label: nnet-end
 #| echo: false
@@ -108,8 +109,6 @@ $$
 knitr::include_graphics("../premade/nnet_end.svg")
 ```
 
-
-
 look out for exponentiating large numbers
 
 TODO lack of constraints; normalization of inputs
@@ -118,12 +117,11 @@ The number of layers, the number of hidden units within a layer, and the type of
 
 TODO asis, no preprocessing, imputation, etc is done by the network
 
-
 TODO advice here is about smaller data sets for tabular mlps; not universally applicable (and most of what is written is erroneously thought to be universally applicable)
 
 In this section, we’ll describe the important elements of multilayer perceptrons, such as the different types of activation functions. We’ll also spend a good deal of time discussing the different ways to train MLPs. There are also discussions on modern deep learning models that are specifically designed for tabular data. 
 
-### Activation Functions
+### Activation Functions {#sec-nnet-activation}
 
 ```{r}
 #| label: act-grid
@@ -338,7 +336,6 @@ lp_layer <-
   ) + 
   labs(title = "Linear Predictor")
 
-
 relu_layer <- 
   components |> 
   select(-starts_with("lp"), -starts_with("output")) |> 
@@ -426,9 +423,49 @@ The two panels show nearly opposite patterns, which is not coincidental. The mod
 
 As previously stated, ReLU is not a smooth function, so this demonstration will be somewhat different from the other activation functions; they generally don’t completely isolate regions of the predictor space. However, the general flow of the network is still the same. 
 
-### Training and Optimization
+### Training and Optimization {#sec-nnet-training}
 
 It can be challenging to train neural network classifiers. Their model structure is composed of multiple nested nonlinear functions that are not smooth, continuous functions for activations such as ReLU. The loss function, commonly cross-entropy, is unlikely to be convex, especially as model complexity increases. As a consequence, we have no guarantees that a gradient-based optimizer will converge. There is also the possibility of local minima that might trap the training process, saddle points that could lead the search in the wrong direction, and regions of vanishing gradients. These issues will be discussed below. 
+
+The complexity of these highly nested nonlinear regression models can create significant numerical issues. First is the challenge of local minima. In some cases, ML models can provide some guarantees regarding the existence of a global minimum loss value, generalized linear models being a good example. This may not be the case for neural networks. Their loss surface may contain multiple valleys where the derivatives of some of the parameters are zero, but a better solution exists in the parameter space. In other words, the model can appear to converge but has suboptimal performance. @baldi1989neural shows, under some conditions, that single-layer feedforward networks can have a unique global minimum. It should be expected that as more layers and units are added, the probability of a unique best solution decreases. Our optimization algorithm, when "caught" in a local valley, should be able to escape. 
+
+A second related issue is saddle points. These are locations where all of the gradients are zero (i.e., a stationary point), but some directions have increasing loss, and others will produce a decrease. @dauphin2014identifying postulate that these will exist, and their propensity to occur increases with the number of model parameters. The worry here is that, depending on the type of multidimensional curvature that we face, the optimization algorithm might move in the direction of _increasing_ loss. 
+
+@fig-stationary has an example with two parameters and a highly nonlinear loss surface. There are four stationary points, the best of which minimizes the loss function at $\boldsymbol{\theta} = [`r round(stationary$x[stationary$type == "minimum"], 1)`, `r round(stationary$y[stationary$type == "minimum"], 1)`]$. The lower right region has a point associated with maximum loss. The other two locations are saddle points. The point at $\boldsymbol{\theta} = [`r round(stationary$x[stationary$type == "saddle point" & stationary$x > 6], 1)`, `r round(stationary$y[stationary$type == "saddle point" & stationary$x > 6], 1)`]$ is a good example; moving to the left or right of the point will increase the loss. Moving up or down will generate a decrease in the loss (with the upper value being the correct choice in this parameter range). Our optimizer should be able to move in the correct direction or, like simulated annealing, be able to recover and move back to progressively better results. 
+
+::: {#fig-stationary}
+
+::: {.figure-content}
+
+```{r}
+#| label: stationary
+#| echo: false
+#| out-width: 70%
+#| fig-width: 6
+#| fig-height: 5
+
+loss_grid |>
+	rename(loss = res) |> 
+	ggplot(aes(x, y)) +
+	geom_tile(aes(fill = loss)) +
+	geom_contour(aes(z = loss), col = "darkred", bins = 7, alpha = 3 / 4) +
+	scale_fill_gradient(low = "white", high = "red") +
+	scale_shape_manual(values = c(2, 6, 1)) +
+	geom_point(
+		data = stationary,
+		aes(pch = type),
+		cex = 2.5,
+		col = "black"
+	) + 
+	coord_fixed(ratio = 5) + 
+	labs(x = expression(theta[1]), y = expression(theta[2]))
+```
+
+:::
+
+The loss surface for $\psi(\boldsymbol{\theta}) = \theta_1 cos(0.5\:\theta_1) - 2 \exp(-6(\theta_2 - 0.3)^2) + 0.2\: \theta_1 \theta_2$. Four stationary points are shown.
+
+:::
 
 Another possible factor is that many deep learning models are trained on vast amounts of data. This in itself prevents constraints on how much data can be held in memory at once, and other logistical issues. This may not be an issue for the average application that uses tabular data, but the problem still exists. 
 
@@ -445,46 +482,46 @@ $$,
 
 where $\boldsymbol{\theta}$ are the unknown parameters, $\alpha$ is the learning rate, $g(\boldsymbol{\theta}_i)$ is the gradient vector of first derivatives, and $H(\boldsymbol{\theta_i})$ is the Hessian matrix of second derivatives. The Hessian measures the curvature of the loss function at the current iteration. Pre-multiplying by its inverse rescales the gradient vector, generally making it more effective. We'll discuss them both in @sec-gradient-descent and @sec-newtons-method below. In most cases, second-order methods are preferred since they are more accurate. However, first-order search is more commonly used because it is faster to compute and can be much more memory efficient^[Making it infeasible to compute efficiently when the training set is very large.]
 
-To demonstrate, an MLP model was used to model the forestation data that contained one layer of 30 ReLU units and an additional layer of 5 ReLU units. An L<sub>2</sub> penalty of 0.15 was used to regularize the cross-entropy loss function. A maximum of 100 epochs was specified, but training would stop after five bad epochs of validation loss. An initial learning rate of $\alpha = 0.1$ was used, but a variable, step-wise rate schedule was used to modulate the rate across epochs (described below). 
+To demonstrate, an MLP model was used to model the forestation data that contained one layer of 30 ReLU units and an additional layer of 5 ReLU units, yeilding `r num_optimizer_param` model parameters. An L<sub>2</sub> penalty of 0.15 was used to regularize the cross-entropy loss function. A maximum of 100 epochs was specified, but training would stop after five bad epochs of validation loss. An initial learning rate of $\alpha = 0.1$ was used, but a variable, step-wise rate schedule was used to modulate the rate across epochs (described below). 
 
-The model was first trained using gradient descent. For illustration, training was executed five times using different initial parameter values. The leftmost panel in @fig-three-optimizers shows the results. In each case, the loss function had an initial middling reduction. In each case, the model used all 100 epochs. This approach was not very successful. There was not much of a reduction in the loss function, and the terminal phase had a minuscule decrease with no real improvement. 
+The model was first trained using gradient descent. For illustration, training was executed five times using different initial parameter values. The leftmost panel in @fig-optimizers shows the results. In each case, the loss function had an initial middling reduction. In each case, the model used all 100 epochs. This approach was not very successful. There was not much of a reduction in the loss function, and the terminal phase had a minuscule decrease with no real improvement. This _could_ be due to the search approaching the saddle point. In this case, the gradient becomes very close to zero, and first-order gradient searches have very small updates.
 
 ```{r}
-#| label: fig-three-optimizers
+#| label: fig-optimizers
 #| echo: false
-#| out-width: 80%
-#| fig-width: 6
+#| out-width: 90%
+#| fig-width: 8
 #| fig-height: 2.8
 #| warning: false
-#| fig-cap: "The validation loss function for the same MLP model for three optimzation strategies. The lines on each panel represents runs initialized with different random numbers."
+#| fig-cap: "The validation loss function for the same MLP model for four optimzation strategies. The lines on each panel represents runs initialized with different random numbers."
 
-three_optimizers |> 
+optimizers |> 
   ggplot(aes(epoch, loss_norm, col = seed, group = seed)) +
   geom_line(show.legend = FALSE,
             linewidth = 3 / 4,
             alpha = 1 / 2) +
-  facet_wrap(~ method, scale = "free_x") +
+  facet_wrap(~ method, scale = "free_x", nrow = 1) +
   scale_x_continuous(breaks = pretty_breaks()) + 
   labs(x = "Epochs", y = "Cross-Entropy (Validation)")
 ```
 
-As a second approach, an approximation to Newton’s Method called the Limited-memory Broyden–Fletcher–Goldfarb–Shanno algorithm (L-BFGS) method. This uses an approximation to the Hessian matrix. In this case, there was an immediate and enormous reduction in loss in the first epoch. In most cases, the next few epochs resulted in further reductions. Some of the training runs quickly converged but one required 14 eopchs. Compared to basic gradient descent, L-BFGS produced a much more effective model (based on the loss). The median time for optimization was `r round(three_optimizer_times$median[three_optimizer_times$method == "L-BFGS"], 1)`s, which was somewhat faster than the median time for gradient descent (`r round(three_optimizer_times$median[three_optimizer_times$method == "GD"], 1)`s). _However_, we should consider the time per epoch since GD used all allowed epochs. L-BFGS required `r round(three_optimizer_times$per_epoch[three_optimizer_times$method == "L-BFGS"], 3)`s per epoch while gradient descent required `r round(three_optimizer_times$per_epoch[three_optimizer_times$method == "GD"], 3)`s
+As a second approach, an approximation to Newton’s Method called the Limited-memory Broyden–Fletcher–Goldfarb–Shanno algorithm (L-BFGS) method. This uses an approximation to the Hessian matrix. In this case, there was an immediate and enormous reduction in loss in the first epoch. In most cases, the next few epochs resulted in further reductions. Some of the training runs quickly converged but one required 14 epochs. Compared to basic gradient descent, L-BFGS produced a much more effective model (based on the loss). The median time for optimization (per epoch) was `r round(optimizer_times$per_epoch[optimizer_times$method == "L-BFGS"], 3)`s, which was far slower than the median time for gradient descent (`r round(optimizer_times$per_epoch[optimizer_times$method == "GD"], 3)`s). However, the extra time is offset since L-BFGS is likely to use far fewer epochs in this scenario. 
 
-As-is, gradient descent might be deemed ineffectual, and a second-order approach like L-BFGS might be the best approach. However, the plain version of gradient descent is almost never used. Instead, different variations of _stochastic_ gradient descent (SGD) are the norm. The rightmost panel in @fig-three-optimizers shows the results when the _Nesterov momentum_ term was used. This initially computes a standard update to the parameters, but then approximates the gradient at this position to compute a second prospective step. The actual update that is used is the lookahead position. 
+As-is, gradient descent might be deemed ineffectual, and a second-order approach like L-BFGS might be the best approach. However, the plain version of gradient descent is almost never used. Instead, different variations of _stochastic_ gradient descent (SGD) are the norm. SGD uses randomly allocated _batches_ training set samples. The gradient search is updated by processing each of these batches until the entire trained set has been used, which signifies the end of that epoch. In other words, a potentially large number of parameter updates based on a small number of training point samples are used. The batch size used here was 64 data points. As a result, for this training set size, about 76 gradient updates are executed before the end of each epoch. 
 
-The stochastic aspect of the search used randomly allocated _batches_ of 64 training set samples. The gradient search is updated by processing each of these batches until the entire trained set has been used, which signifies the end of that epoch. As a result, for this training set size, about 76  gradient updates are executed before the end of each epoch. 
+As shown in @fig-optimizers, SGD does almost as well as L-BFGS, but most do not stop early; there is a relatively flat trend after about 20 epochs, where the search does not make substantial reductions of the loss. In terms of time per epoch, SGD was slightly better than L-BFGS at `r  round(optimizer_times$per_epoch[optimizer_times$method == "SGD"], 3)`s but will probably require more training. 
 
-Despite making many potentially low-quality gradient steps, SGD almost always produces better results than one gradient step using all of the training set. This is the case for our model with two layers; the results are just as good as the L-BFGS search. SGD was much slower overall, using `r  round(three_optimizer_times$median[three_optimizer_times$method == "SGD with momentum"], 1)`s but its per epoch time was between the other two methods (`r round(three_optimizer_times$per_epoch[three_optimizer_times$method == "SGD with momentum"], 3)`s).
+As we’ll see in the section below, many extensions to SGD have made it more effective. One improvement is to use _Nesterov momentum_. This initially computes a standard update to the parameters, but then approximates the gradient at this position to compute a second prospective step. The actual update that is used is the lookahead position. This technique shows results on par with L-BFGS with several repeats stopping early. However, the training time was longest, using `r round(optimizer_times$per_epoch[optimizer_times$method == "SGD with momentum"], 3)`s per epoch.  
 
+::: {.note-box}
 The main takeaways of this exercise are that training these models can be difficult and that the type of parameter optimization can substantially impact model quality. 
+:::
 
-<hr>
+Let’s discuss a few operational aspects of gradient-based methods before discussing the first- and second-order search techniques. 
 
-Saddle points occur when the gradient is zero, but there are regions surrounding this location that are increasing and others that are decreasing. 
+#### Preprocessing {#sec-nnet-preprocessing}
 
-This situation can result in epochs where the search stagnates and shows barely incremental progress. As the search approaches the saddle point, the gradient becomes very close to zero, and first-order gradient searches have very small updates.
-
-#### Initialization
+#### Initialization {#sec-nnet-initialization}
 
 Network parameter initialization can significantly impact training success. Given the size and complexity of these models, optimal methodologies for setting initial values are nearly impossible to derive. As such, parameters are initialized using random numbers. There are a few approaches to do this. @lecun2002efficient initialization uses a uniform distribution centered around zero with limits defined by the number of connections feeding into the current node (known as the "fan in" and is denoted as $p_{in}$). They used $U(\pm \sqrt{2/p_{in}})$ as the distribution. There have been a few variations of this: 
 
@@ -493,7 +530,7 @@ Network parameter initialization can significantly impact training success. Give
 
 One reason that initialization is important is to help mitigate numerical overflow errors. For example, the softmax transformation shown above exponentiates the raw output units (and sums them). If the output units have relatively large values, exponentiating and summing them can exceed allowable ranges. For example, the output units shown in @fig-nnet-ex-layer-2 have a wide enough range that can be as large as `r max(round(abs(components$output_1)), 0)`. 
 
-#### Learning Rates
+#### Learning Rates {#sec-nnet-learning-rates}
 
 The learning rate ($\alpha$) can have a profound effect on model quality, perhaps more than the structural tuning parameters that define complexity (e.g., number of hidden units). A large learning range will help converge towards effective parameter estimates, but once there, it can cause the model to consistently overshoot the best. One approach to modulating the rate is to use a scheduler [@lu2022gradient,chapt 4]. These are functions/algorithms that will change the rate (often to decrease it) over epochs. For example, to monotonically decrease the rate, two options are:
 
@@ -522,16 +559,13 @@ The type of schedule, and its additional parameter(s), are added to the list of 
 
 #### Newton’s Method {#sec-newtons-method}
 
-### Data Characteristics
-
-### Forestation Modeling
+### Forestation Modeling  {#sec-nnet-forestation}
 
 ## Special Tabular Network Models  {#sec-tab-net}
 
-### Transformers
+### Transformers {#sec-nnet-transformers}
 
-### Attention
-
+### Attention {#sec-nnet-attention}
 
 ## K-Nearest Neighbors  {#sec-cls-knn}
 
