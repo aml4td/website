@@ -114,6 +114,11 @@ base_sgd_plot <- function(dat, title = "SGD") {
 
 # ------------------------------------------------------------------------------
 
+is_conv <- function(loss, i, tol = 0.001) {
+  dif <- (abs(loss[i + 1] - loss[i]) / abs(loss[i]))
+  dif <= tol
+}
+
 basic <- function(prm, iter = 500, rate = 0.1, sched = "constant", ...) {
 	.prm <- matrix(NA_real_, ncol = 2, nrow = iter + 1)
 	.prm[1, ] <- prm
@@ -140,6 +145,9 @@ basic <- function(prm, iter = 500, rate = 0.1, sched = "constant", ...) {
 		.prm[i + 1, ] <- prm
 		.loss[i + 1] <- fn_p(prm)
 		grd <- deriv_1(prm)
+		if (is_conv(.loss, i, 1e-6)) {
+		  break()
+		}
 	}
 	
 	prm_df <- cbind(.prm, .loss)
@@ -180,7 +188,9 @@ adagrad <- function(prm, iter = 500, rate = 0.1, sched = "constant", ...) {
 		prm <- prm - .rate * .update
 		.prm[i + 1, ] <- prm
 		.loss[i + 1] <- fn_p(prm)
-		grd <- deriv_1(prm)
+		if (is_conv(.loss, i, 1e-6)) {
+		  break()
+		}
 	}
 	
 	prm_df <- .prm
@@ -227,15 +237,15 @@ adadelta <- function(
 		.prm[i + 1, ] <- prm
 		.loss[i + 1] <- fn_p(prm)
 		
-		delt <- (.loss[i + 1] - .loss[i]) / .loss[i]
-		if (abs(delt) < .Machine$double.eps^0.5) {
-			cli::cli_inform("Stopped at epoch {i+1}")
-			break()
+		if (is_conv(.loss, i, 1e-6)) {
+		  break()
 		}
 		
 		accum_run = grd_decay * accum_run + (1 - grd_decay) * (.update^2)
 		
 		grd <- deriv_1(prm)
+		
+		
 	}
 	
 	prm_df <- .prm
@@ -284,6 +294,204 @@ nesterov <- function(
 	prm_df <- .prm
 	colnames(prm_df) <- c("x", "y")
 	prm_df |> as_tibble() |> drop_na() %>% mutate(schedule = sched)
+}
+
+
+adam <- function(
+    prm,
+    iter = 1000,
+    momentum_decay = 0.9,
+    velocity_decay = 0.9,
+    rate = 0.1,
+    sched = "constant",
+    ...
+) {
+  
+  eps <-1e-08
+  .prm <- matrix(NA_real_, ncol = 2, nrow = iter + 1)
+  .prm[1, ] <- prm
+  
+  .loss <- rep(NA_real_, iter + 1)
+  .loss[1] <- fn_p(prm)
+  grd <- deriv_1(prm)
+  
+  vel <- mo <- grd * 0
+  
+  .rate <- rate
+  for (i in 1:iter) {
+    if (prm[1] < 0 | prm[1] > 10 | prm[2] > 1 | prm[2] < -1) {
+      break()
+    }
+    
+    if (sched == "step") {
+      .rate <- brulee::schedule_step(i, ...)
+    } else if (sched == "cyclic") {
+      .rate <- brulee::schedule_cyclic(i, ...)
+    } else if (sched == "decay") {
+      .rate <- brulee::schedule_decay_time(i, ...)
+    }
+    
+    grad <- deriv_1(prm)
+    
+    mo <- momentum_decay * mo + (1 - momentum_decay) * grad
+    vel <- velocity_decay * vel + (1 - velocity_decay) * grad^2
+    
+    mo_est <- mo / (1 - momentum_decay^(i + 1))
+    vel_est <- vel / (1 - velocity_decay^(i + 1))
+    
+    prm <- prm - .rate / (sqrt(vel_est) + eps) * mo_est
+    .prm[i + 1, ] <- prm
+    .loss[i + 1] <- fn_p(prm)
+  }
+  
+  prm_df <- .prm
+  colnames(prm_df) <- c("x", "y")
+  prm_df |> as_tibble() |> drop_na() %>% mutate(schedule = sched)
+}
+
+momentum <- function(
+    prm,
+    iter = 50,
+    momentum = 0.9,
+    rate = 0.1,
+    sched = "constant",
+    ...
+) {
+  
+  eps <-1e-08
+  .prm <- matrix(NA_real_, ncol = 2, nrow = iter + 1)
+  .prm[1, ] <- prm
+  
+  .loss <- rep(NA_real_, iter + 1)
+  .loss[1] <- fn_p(prm)
+  grd <- deriv_1(prm)
+  
+  vel <- grd * 0
+  
+  .rate <- rate
+  for (i in 1:iter) {
+    if (prm[1] < 0 | prm[1] > 10 | prm[2] > 1 | prm[2] < -1) {
+      break()
+    }
+    
+    if (sched == "step") {
+      .rate <- brulee::schedule_step(i, ...)
+    } else if (sched == "cyclic") {
+      .rate <- brulee::schedule_cyclic(i, ...)
+    } else if (sched == "decay") {
+      .rate <- brulee::schedule_decay_time(i, ...)
+    }
+    
+    grad <- deriv_1(prm)
+    vel <- momentum * vel - .rate * grad
+    
+    prm <- prm + vel
+    .prm[i + 1, ] <- prm
+    .loss[i + 1] <- fn_p(prm)
+  }
+  
+  prm_df <- .prm
+  colnames(prm_df) <- c("x", "y")
+  prm_df |> as_tibble() |> drop_na() %>% mutate(schedule = sched)
+}
+
+adagrad <- function(
+    prm,
+    iter = 1000,
+    rate = 0.1,
+    sched = "constant",
+    ...
+) {
+  
+  eps <-1e-08
+  .prm <- matrix(NA_real_, ncol = 2, nrow = iter + 1)
+  .prm[1, ] <- prm
+  
+  .loss <- rep(NA_real_, iter + 1)
+  .loss[1] <- fn_p(prm)
+  grd <- deriv_1(prm)
+  
+  running <- grd * 0
+  
+  .rate <- rate
+  for (i in 1:iter) {
+    if (prm[1] < 0 | prm[1] > 10 | prm[2] > 1 | prm[2] < -1) {
+      break()
+    }
+    
+    if (sched == "step") {
+      .rate <- brulee::schedule_step(i, ...)
+    } else if (sched == "constant") {
+      .rate <- brulee::schedule_cyclic(i, ...)
+    } else if (sched == "decay") {
+      .rate <- brulee::schedule_decay_time(i, ...)
+    }
+    
+    grad <- deriv_1(prm)
+    running <- running + grad^2
+    
+    # print(signif(running, 3))
+    
+    prm <- prm - .rate / (sqrt(running + eps)) * grad
+    .prm[i + 1, ] <- prm
+    .loss[i + 1] <- fn_p(prm)
+    if (is_conv(.loss, i, 1e-6)) {
+      break()
+    }
+  }
+  
+  prm_df <- .prm
+  colnames(prm_df) <- c("x", "y")
+  prm_df |> as_tibble() |> drop_na() %>% mutate(schedule = sched)
+}
+
+rms_prop_nesterov <- function(
+    prm,
+    iter = 100,
+    momentum = 0.9,
+    decay = 0.9,
+    rate = 0.1,
+    sched = "constant",
+    ...
+) {
+  
+  eps <-1e-0
+  .prm <- matrix(NA_real_, ncol = 2, nrow = iter + 1)
+  .prm[1, ] <- prm
+  
+  .loss <- rep(NA_real_, iter + 1)
+  .loss[1] <- fn_p(prm)
+  
+  running <- delta <- prm * 0
+  
+  .rate <- rate
+  for (i in 1:iter) {
+    if (prm[1] < 0 | prm[1] > 10 | prm[2] > 1 | prm[2] < -1) {
+      break()
+    }
+    
+    if (sched == "step") {
+      .rate <- brulee::schedule_step(i, ...)
+    } else if (sched == "constant") {
+      .rate <- brulee::schedule_cyclic(i, ...)
+    } else if (sched == "decay") {
+      .rate <- brulee::schedule_decay_time(i, ...)
+    }
+    
+    prm_step <- prm - momentum * delta
+    grad <- deriv_1(prm_step)
+    running <- decay * running + (1 - decay) * grad^2
+    prm <- prm + (momentum * delta) - (rate / sqrt(running + eps) * grad)
+    .prm[i + 1, ] <- prm
+    .loss[i + 1] <- fn_p(prm)
+    if (is_conv(.loss, i, 1e-6)) {
+      break()
+    }
+  }
+  
+  prm_df <- .prm
+  colnames(prm_df) <- c("x", "y")
+  prm_df |> as_tibble() |> drop_na() %>% mutate(schedule = sched)
 }
 
 # ------------------------------------------------------------------------------
@@ -383,4 +591,99 @@ rates <-
 		rates_saddle_step,
 		rates_saddle_decay
 	)
+
+# ------------------------------------------------------------------------------
+
+adam_saddle_cyclic <-
+  adam(
+    point_saddle,
+    sched = "cyclic",
+    initial = 0.001,
+    largest = 0.1,
+    step_size = 10
+  ) |>
+  mutate(start = "mid")
+
+adam_corner_cyclic <-
+  adam(
+    point_corner,
+    sched = "cyclic",
+    initial = 0.001,
+    largest = 0.1,
+    step_size = 10
+  ) |>
+  mutate(start = "corner")
+
+adam_res <-
+  bind_rows(
+    adam_saddle_cyclic,
+    adam_corner_cyclic
+  ) |> 
+  mutate(technique = "ADAM")
+
+momentum_saddle_cyclic <-
+  momentum(
+    point_saddle,
+    sched = "cyclic",
+    initial = 0.001,
+    largest = 0.1,
+    step_size = 10,
+    momentum = 2/3
+  ) |>
+  mutate(start = "mid")
+
+momentum_corner_cyclic <-
+  momentum(
+    point_corner,
+    sched = "cyclic",
+    initial = 0.001,
+    largest = 0.1,
+    step_size = 10,
+    momentum = 2/3
+  ) |>
+  mutate(start = "corner")
+
+momentum_res <-
+  bind_rows(
+    momentum_saddle_cyclic,
+    momentum_corner_cyclic
+  ) |> 
+  mutate(technique = "Momentum")
+
+
+adagrad_saddle_constant <-
+  adagrad(point_saddle) |>
+  mutate(start = "mid")
+
+adagrad_corner_constant <-
+  adagrad(point_corner) |>
+  mutate(start = "corner")
+
+adagrad_res <-
+  bind_rows(
+    adagrad_saddle_constant,
+    adagrad_corner_constant
+  ) |> 
+  mutate(technique = "AdaGrad")
+
+rms_prop_saddle_constant <-
+  rms_prop_nesterov(
+    point_saddle,
+    sched = "constant"
+  ) |>
+  mutate(start = "mid", rate = 0.001)
+
+rms_prop_corner_constant <-
+  rms_prop_nesterov(
+    point_corner,
+    sched = "constant"
+  ) |>
+  mutate(start = "corner")
+
+rms_prop_res <-
+  bind_rows(
+    rms_prop_saddle_constant,
+    rms_prop_corner_constant
+  ) |> 
+  mutate(technique = "RMSprop + Nesterov")
 
