@@ -21,6 +21,7 @@ library(spatialsample)
 library(brulee)
 library(bestNormalize)
 library(patchwork)
+library(gt)
 
 # ------------------------------------------------------------------------------
 # set options
@@ -615,7 +616,7 @@ $$
 v_i = \phi v_{i-1} + \alpha_i g(\boldsymbol{\theta}_i)
 $$
 
-and this is used to make the update $\boldsymbol{\theta}_{i+1} = \boldsymbol{\theta}_i - v_i$. This weighting system accentuates recent gradients but factors in previous gradients. This can accelerate the search and diminish occilations.   
+and this is used to make the update $\boldsymbol{\theta}_{i+1} = \boldsymbol{\theta}_i - v_i$. This weighting system accentuates recent gradients but factors in previous gradients. This can accelerate the search and diminish oscillations.   
 
 Values of $\phi$ are usually between 0.8 and 0.99 and represent a weighted average of previous gradient directions, with larger emphasis on the recent iterations as $\phi$ increases. If the directions have been fairly stable, there is not much change, but if they are oscillating, the direction takes a more consistent central route with fewer directional jumps. It also helps if the search is in a region where gradients are close to zero; historical gradients will have some non-zero values that are not likely to get stuck with updates near zero. 
 
@@ -736,9 +737,20 @@ As previously mentioned, there are numerous other variations of SGD that will no
 
 ### Forestation Modeling  {#sec-nnet-forestation}
 
+```{r}
+#| label: load-forested-mlp
+#| incude: false
+load("../RData/forested_mlp.RData")
+
+brier_param_cor <- 
+  cor(brier_and_params$mean, brier_and_params$num_param, 
+      method = "spearman") |> 
+  round(2)
+```
+
 For the forested data, there are a few options for preprocessing: 
 
- - Use binary indicators to represent the XXX counties or a supervised effect encoding strategy. 
+ - Use binary indicators to represent the `r length(levels(forested_train$county))` counties or a supervised effect encoding strategy. 
  - Several predictors are highly skewed. We can leave them as-is before centering/scaling, or use an orderNorm transformation to coerce each predictor to a standard normal distribution. 
  - Deal with the high correlation for some predictors via PCA extraction or leave as-is in the data. 
 
@@ -754,20 +766,138 @@ For the model, there are a fair number of tuning parameters to combine:
  - One or two layers.
  - The number of hidden units. For each layer, these ranged from two to fifty units. 
  - The activation type: ReLU, elu, tanh, and tanhshrink.
- - L<sub>2</sub> regulazation values between 10<sup>-10</sup> and 10<sup>-1</sup>.
+ - L<sub>2</sub> regularization values between 10<sup>-10</sup> and 10<sup>-1</sup>.
  - Batch sizes between 2<sup>3</sup> and 2<sup>8</sup>.
  - Learning rates between 10<sup>-4</sup> and 10<sup>-1</sup>.
  - Learning rate schedules: constant, cyclic, and time decay.
  - Momentum values between [0.8, 0.99].
- - Early stopping triggers between three and twenty bad epochs. 
 
-AdamW was used to train the models, and a maximum of 1,000 epochs (with early stopping) was allowed. 
+AdamW was used to train the models, and a maximum of 25 epochs (with early stopping at five bad epochs) was allowed. 
 
-A space-filling design with XXX candidates was evaluated. The XXX preprocessing schemes listed above were each run with the same model grid. 
+A space-filling design with 25 candidates was evaluated. The six preprocessing schemes listed above were each run with the same model grid, resulting in 300 candidates to be evaluated. 
 
+@fig-forest-mlp-ranks shows the results. The candidates were ranked by their resampling estimate of the Brier scores, and the figure presents these ranked from best to worst while breaking out the combinations of preprocessing scenarios. While each panel contains models with sufficiently low Brier scores, there are a few trends. The "Plain" panel represents models using dummy variable indicators with no symmetry transformation, and this did not do well (with or without PCA feature extraction). 
 
+```{r}
+#| label: fig-forest-mlp-ranks
+#| echo: false
+#| out-width: 75%
+#| fig-width: 7
+#| fig-height: 4
+#| fig-cap: Rankings of multilayer perceptron models for the forestation models using the Brier score. The panels represent different types of preprocessing and the vertical lines are 90% confidence intervals.
 
+mlp_ranks|> 
+  mutate(
+    encoding = map_chr(wflow_id, ~ strsplit(.x, split = "_")[[1]][1]),
+    encoding = factor(encoding, levels = c("orderNorm", "plain", "encoded")),
+    extraction = map_chr(wflow_id, ~ strsplit(.x, split = "_")[[1]][2]),
+    extraction = ifelse(extraction == "pca", "PCA", "No PCA"),
+    extraction = factor(extraction, levels = c("No PCA", "PCA")),
+    layers = ifelse(grepl("2L", wflow_id), "2 layers", "1 layer"),
+    layers = factor(layers, levels = c("1 layer", "2 layers")),
+    lower = mean - qnorm(0.025) * std_err,
+    upper = mean + qnorm(0.025) * std_err
+  ) |> 
+  filter(.metric == "brier_class") |> 
+  ggplot(aes(x= rank, col = layers)) + 
+  geom_errorbar(aes(ymin = lower, ymax = upper), 
+                alpha = 1 / 3) +
+  geom_point(aes(y = mean), cex = 1/2) +
+  facet_grid(extraction ~ encoding) + 
+  scale_color_manual( values = c("#0076BBFF", "#E9A17CFF")) +
+  labs(x = "Overall Rank", y = "Brier Score")
+```
 
+In fact, PCA has suboptimal results in each of the three bottom panels. This could be due to the components being unsupervised; they are not optimized for prediction. Alternatively, the last few components might be measuring noise and have less relevance to the model. Adding irrelevant predictors to neural networks can diminish their effectiveness. 
+
+The two cases that did the best were the "orderNorm" and "encoded" panels. While both used the orderNorm transformation, the former panel used indicators, while the latter used the supervised effect encoding, where a single column was used to represent the county effect. This suggests that eliminating distributional skew in the predictors may buy us a small amount of predictive performance. 
+
+```{r}
+#| label: tbl-mlp-top-five
+#| tbl-cap: "The best models as ranked by the Brier score."
+top_five <- 
+  mlp_ranks |> 
+  filter(.metric == "brier_class") |> 
+  slice_min(mean, n = 5)
+
+top_five |> 
+  inner_join(
+    brier_and_params |> distinct(wflow_id, .config, num_param),
+    by = join_by(wflow_id, .config)
+  ) |> 
+  select(wflow_id, .config, rank, num_param) |> 
+  inner_join(mlp_best_mtr, by = join_by(wflow_id, .config)) |> 
+  mutate(
+    tmp1 = map2_chr(hidden_units, activation, ~ paste0(.x, " ", .y)),
+    tmp2 = map2_chr(hidden_units_2, activation_2, ~ paste0(", ", .x, " ", .y)),
+    tmp2 = ifelse(is.na(hidden_units_2), "", tmp2),
+    Architecture = map2_chr(tmp1, tmp2, ~ paste0(.x, " ", .y)),
+    Penalty = format(log10(penalty), digits = 3),
+    Penalty = paste0("10<sup>", Penalty, "</sup>"),
+    rate_schedule = ifelse(rate_schedule == "decay_time", "inverse decay", rate_schedule),
+    learn_rate = format(log10(learn_rate), digits = 3),
+    learn_rate = paste0("10<sup>", learn_rate, "</sup>"),
+    learn_rate = map2_chr(learn_rate, rate_schedule, ~ paste0(.x, " (", .y, ")")),
+    encoding = map_chr(wflow_id, ~ strsplit(.x, split = "_")[[1]][1]),
+    encoding = factor(encoding, levels = c("orderNorm", "plain", "encoded")),
+    extraction = map_chr(wflow_id, ~ strsplit(.x, split = "_")[[1]][2]),
+    extraction = ifelse(extraction == "pca", "PCA", "No PCA"),
+    extraction = factor(extraction, levels = c("No PCA", "PCA")),
+    Preprocessing = map2_chr(encoding, extraction, ~ paste0(.x, ", ", .y)),
+    across(where(is.numeric), ~ format(.x, digits = 3))
+  ) |> 
+  select(-wflow_id, -.config, -hidden_units, -hidden_units_2, -tmp1, -tmp2,
+         -activation, -activation_2, -.estimator, -n, -std_err, -rate_schedule, 
+         -encoding, -extraction, -penalty, -rank) |> 
+  rename(`Learning Rate` = learn_rate, 
+         `Batch Size` = batch_size, 
+         Momentum = momentum, 
+         `# Parameters` = num_param,
+  ) |> 
+  pivot_wider(
+    id_cols = c(
+      `Learning Rate`,
+      `Batch Size`,
+      Momentum,
+      Architecture,
+      Penalty,
+      Preprocessing,
+      `# Parameters`
+    ),
+    names_from = c(.metric),
+    values_from = c(mean)
+  ) |> 
+  select(
+    Preprocessing,
+    Architecture,
+    `# Parameters`,
+    Penalty,
+    `Batch Size`,
+    `Learning Rate`,
+    Momentum,
+    Brier = brier_class,
+    ROC = roc_auc
+  ) |> 
+  gt() |> 
+  fmt_markdown(columns = c(Penalty, `Learning Rate`)) |> 
+  tab_spanner("Performance", columns = c(Brier, ROC)) |> 
+  fmt_number(decimals = 3, columns = c(Brier, ROC)) |> 
+  cols_width(
+    Preprocessing ~ pct(20),
+    Architecture ~ pct(11),
+    `# Parameters` ~ pct(9),
+    Penalty ~ pct(9),
+    `Batch Size` ~ pct(9),
+    `Learning Rate` ~ pct(15),
+    Momentum ~ pct(10),
+    Brier ~ pct(8),
+    ROC ~ pct(8)
+)
+```
+
+Diving in further, @tbl-mlp-top-five shows the top five candidates from the pool of 300. They are a mixture of one- and two-layer networks, but note that we have to go to the third decimal place to distinguish their Brier scores. Constant learning rates did well as long as their rates were fairly low and batch sizes were fairly small. The number of parameters varied too; increasing the model’s complexity did not appear to help for this data set. In fact, the rank correlation between the Brier score and the number of parameters was `r brier_param_cor`, implying that there is little evidence that adding more layers and/or units to the MLP improves the model.
+
+While the Brier scores are low, the areas under the ROC curves are all at least 0.94, indicating that the predictions do a good job separating the classes and that the probability estimates are accurate. 
 
 ## Special Tabular Network Models  {#sec-tab-net}
 
