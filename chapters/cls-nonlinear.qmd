@@ -176,7 +176,7 @@ act_functions |>
   theme_bw()
 ```
 
-One issue with bounded sigmoidal shapes, especially the logistic function, is that they can become problematic when used with many hidden layers. Since the logistic function is on [0, 1], repeated multiplication of such values can cause their values to converge to be very close to zero (as seen in @sec-naive-bayes). This is also true of their gradients, leading to the _vanishing gradient problem_. This is probably not an issue with shallow networks with a handful of hidden layers.  
+One issue with bounded sigmoidal shapes, especially the logistic function, is that they can become problematic when used with many hidden layers. Since the logistic function is on [0, 1], repeated multiplication of such values can cause their values to converge to be very close to zero (as seen in @sec-naive-bayes). This is also true of their gradients, leading to the _vanishing gradient problem_. This is probably not an issue with shallow networks with a handful of hidden layers.
 
 The tanshrink function diminishes the impact of inputs that are in a neighborhood around zero, where it is sigmoidal. For larger input values, the output is linear in the output (with an offset of $\pm 1$). 
 
@@ -202,7 +202,7 @@ act_functions |>
   theme_bw()
 ```
 
-There are various modified versions of ReLU that emulate the same form but have continuous derivatives. These are also shown in @fig-relu-activations, including softplus [@dugas2000incorporating;@glorot2011deep], gelu [@hendrycks2016gaussian], silu [@elfwing2018sigmoid],  elu [@clevert2015fast], and others. 
+There are various modified versions of ReLU that emulate the same form but have continuous derivatives. These are also shown in @fig-relu-activations, including softplus [@dugas2000incorporating;@glorot2011deep], gelu [@hendrycks2016gaussian], silu [@elfwing2018sigmoid],  elu [@clevert2015fast], and others. ReLU, and its offspring activation functions, appear to solve the issue of vanishing gradients. 
 
 ```{r}
 #| label: nnet-ex-comps
@@ -262,7 +262,7 @@ Let's use an example data set with a simple MLP to demonstrate how ReLU activati
 ```{r}
 #| label: fig-nnet-ex
 #| echo: false
-#| out-width: 60%
+#| out-width: 50%
 #| fig-width: 5
 #| fig-height: 4.4
 #| warning: false
@@ -423,7 +423,7 @@ Now that we've discussed the architecture of these models and how the layers rel
 
 ### Training and Optimization {#sec-nnet-training}
 
-It can be challenging to train neural networks. Their model structure is composed of multiple nested nonlinear functions that may not be not smooth, continuous functions. The loss function for classification, commonly cross-entropy, is unlikely to be convex as model complexity increases with more and more layers. Consequently, we have no guarantees that a gradient-based optimizer will converge. There is also the possibility of local minima that might trap the training process, saddle points that could lead the search in the wrong direction, and regions of vanishing gradients. These issues will be discussed below. 
+It can be challenging to train neural networks. Their model structure is composed of multiple nested nonlinear functions that may not be not smooth, continuous functions. The loss function for classification, commonly cross-entropy, is unlikely to be convex as model complexity increases with more and more layers. Consequently, we have no guarantees that a gradient-based optimizer will converge. There is also the possibility of local minima that might trap the training process, saddle points that could lead the search in the wrong direction, and regions of vanishing gradients [@hochreiter1998vanishing]. 
 
 First is the challenge of local minima. In some cases, ML models can provide some guarantees regarding the existence of a global minimum loss value^[Generalized linear models are a good example of this]. This may not be the case for neural networks. Their loss surface may contain multiple valleys where the derivatives of some of the parameters are zero, but a better solution exists in another region of the parameter space. In other words, the model can appear to converge but has suboptimal performance. @baldi1989neural show that, under some conditions, single-layer feedforward networks can have a unique global minimum. It should be expected that as more layers and units are added, the probability of a unique best solution decreases. When "caught" in a local valley, we need out optimization algorithm to be able to escape. 
 
@@ -438,9 +438,9 @@ A second related issue is saddle points. These are locations where all of the gr
 ```{r}
 #| label: stationary
 #| echo: false
-#| out-width: 70%
-#| fig-width: 6
-#| fig-height: 5
+#| out-width: 60%
+#| fig-width: 5.5
+#| fig-height: 4.7
 
 loss_grid |>
 	rename(loss = res) |> 
@@ -477,18 +477,19 @@ where $\boldsymbol{\theta}$ are the unknown parameters, $\alpha$ is the learning
 
 To demonstrate, we can use an MLP model for the forestation data that contains one layer of 30 ReLU units and an additional layer of 5 ReLU units, yielding `r num_optimizer_param` model parameters. An L<sub>2</sub> penalty of 0.15 was set to regularize the cross-entropy loss function. A maximum of 100 epochs was specified, but training was instructed to stop after five bad epochs of loss (measured using held-out data). An initial learning rate of $\alpha = 0.1$ was used, but a variable, step-wise rate schedule was enacted to modulate the rate across epochs, as will be described below. 
 
-The model was first trained using basic gradient descent. For illustration, training was executed five times using different initial parameter values. The leftmost panel in @fig-optimizers shows the results. In each case, the loss function had an initial reduction in the first set of epochs. However, in each case the model used all 100 epochs. This approach was not very successful. There was little reduction in the loss function, and the terminal phase had a minuscule decrease with no real improvement. This _could_ be due to the search approaching the saddle point. In this case, the gradient becomes very close to zero, and first-order gradient searches have tiny, ineffective updates.
+The model was first trained using basic gradient descent. For illustration, training was executed five times using different initial parameter values. The leftmost panel in @fig-optimizers shows the results. In each case, the loss function had an initial reduction in the first set of epochs. However, in each case the model used all 100 epochs. This approach was not very successful. There was little reduction in the loss function, and the terminal phase had a minuscule decrease with no real improvement. This _could_ be due to the search approaching the saddle point. In this case, the gradient becomes very close to zero, and first-order gradient searches have tiny, ineffective updates. We can measure the efficiency of optimizers by computing the time it takes to train a complete iteration. For gradient descent, the time was `r round(optimizer_times$per_epoch[optimizer_times$method == "GD"], 3)`s per iteration. 
 
 ```{r}
 #| label: fig-optimizers
 #| echo: false
-#| out-width: 90%
-#| fig-width: 8
+#| out-width: 70%
+#| fig-width: 6
 #| fig-height: 2.8
 #| warning: false
 #| fig-cap: "The loss function, using held out data, for the same MLP model for four optimization strategies. The lines on each panel represent runs initialized with different random numbers. The profiles are normalized to start from the same initial loss value."
 
 optimizers |> 
+  filter(method != "L-BFGS") |> 
   ggplot(aes(epoch, loss_norm, col = seed, group = seed)) +
   geom_line(show.legend = FALSE,
             linewidth = 3 / 4,
@@ -498,13 +499,13 @@ optimizers |>
   labs(x = "Epochs", y = "Cross-Entropy (Holdout)")
 ```
 
-As a different approach, an approximation to Newton's Method called the Limited-memory Broyden–Fletcher–Goldfarb–Shanno algorithm (L-BFGS) method (REFERENCE). This uses a memory efficient approximation to the Hessian matrix. In this case, there was an immediate and enormous reduction in loss in the first epoch. In most cases, the next few epochs resulted in further reductions. Some of the training runs quickly converged, but one required 14 epochs. Compared to basic gradient descent, L-BFGS produced a much more effective model (based on the loss). The median time for optimization (per epoch) was `r round(optimizer_times$per_epoch[optimizer_times$method == "L-BFGS"], 3)`s, which was far slower than the median time for gradient descent (`r round(optimizer_times$per_epoch[optimizer_times$method == "GD"], 3)`s). However, the extra time is offset since L-BFGS will likely use far fewer epochs in this scenario. This approach works here because the number of model parameters is small for a nerual network and the data set is not huge.
+When training neural networks, _stochastic_ gradient descent (SGD) is the norm. SGD uses randomly allocated _batches_ training set samples. The gradient search is updated by processing each of these batches until the entire trained set has been used, which signifies the end of that epoch. In other words, a potentially large number of parameter updates based on a small number of training point samples are used. The batch size used here was 64 data points. As a result, for this training set size, about 76 gradient updates are executed before the end of each epoch. 
 
-For illustration, different variations of _stochastic_ gradient descent (SGD) are the norm. SGD uses randomly allocated _batches_ training set samples. The gradient search is updated by processing each of these batches until the entire trained set has been used, which signifies the end of that epoch. In other words, a potentially large number of parameter updates based on a small number of training point samples are used. The batch size used here was 64 data points. As a result, for this training set size, about 76 gradient updates are executed before the end of each epoch. 
+For stochastic gradient descent, we track the process by _epochs_. An epoch is finished when the model has been updated using every data point in the training set. For this analysis, this means that there are about 76 parameter updates within an epoch. For regular gradient descent and second-order search methods, we’ll count their progress as _iterations_ since there are no batches. 
 
-As shown in @fig-optimizers, SGD does almost as well as L-BFGS, but most do not stop early; there is a relatively flat trend after about 20 epochs, where the search does not substantially reduce the loss. In terms of time per epoch, SGD was slightly better than L-BFGS at `r  round(optimizer_times$per_epoch[optimizer_times$method == "SGD"], 3)`s but will probably require more training. 
+As shown in @fig-optimizers, SGD does far better than plain GD and although none stop early; there is a relatively flat trend after about 20 epochs, where the search does not substantially reduce the loss. In terms of time per epoch, SGD takes much longer than GD at`r  round(optimizer_times$per_epoch[optimizer_times$method == "SGD"], 3)`s. 
 
-As we'll see in the section below, many extensions to SGD have made it more effective. One improvement is to use _Nesterov momentum_ [@sutskever2013importance]. This initially computes a standard update to the parameters, then approximates the gradient at this position to compute a second prospective step. The actual update that is used is the lookahead position. This technique shows results on par with L-BFGS, with several repeats stopping early. However, the training time was longest, using `r round(optimizer_times$per_epoch[optimizer_times$method == "SGD with momentum"], 3)`s per epoch.  
+As we'll see in the section below, many extensions to SGD have made it more effective. One improvement is to use _Nesterov momentum_ [@sutskever2013importance]. This initially computes a standard update to the parameters, then approximates the gradient at this position to compute a second prospective step. The actual update that is used is the lookahead position. This technique shows results better than SGD, with several repeats stopping early. However, the training time was longest, using `r round(optimizer_times$per_epoch[optimizer_times$method == "SGD with momentum"], 3)`s per epoch.  
 
 ::: {.note-box}
 The main takeaways of this exercise are that training these models can be difficult and that the type of parameter optimization can substantially impact model quality. 
@@ -559,7 +560,7 @@ where $x = |(i/r) - (2\,cycle) + 1|$. This is a good option when we are unsure h
 ```{r}
 #| label: fig-schedulers
 #| echo: false
-#| out-width: 100%
+#| out-width: 85%
 #| fig-width: 8
 #| fig-height: 2.8
 #| fig-cap: "The effect of different schedulers on the rate and success of convergence."
@@ -735,6 +736,14 @@ As previously mentioned, there are numerous other variations of SGD that will no
 
 ### Newton's Method {#sec-newtons-method}
 
+As previously shown, Newton’s method (a.k.a., the Newton–Raphson method) uses both gradients and the Hessian matrix to update parameters. This approach can be very effective when the local loss surface can be approximated by a second-degree polynomial. When the local search includes a stationary point, the signs of the eigenvalues of the Hessian can characterize it: all non-negative imply a maximum, all non-positive imply a minimum, and mixed signs indicate a saddle point. 
+
+One issue with the method is related to the Hessian. If there are $p$ parameters, the matrix needs to save $p(p+1)2$ parameters. For neural networks, $p$ can be in the millions, so the basic application of Newton’s method can be slow and might require infeasible amounts of memory (depending on the model size). We also need to invert the Hessian, making it even more costly.
+
+We can approximate Newton's method using the Limited-memory Broyden–Fletcher–Goldfarb–Shanno algorithm (L-BFGS) search [@lu2022gradient,chapt 6]. It uses past gradients to approximate the Hessian as the search proceeds. L-BFGS computes gradients at different values of $\boldsymbol{\theta}$ for more than just updating the parameters (i.e., Hessian approximation and the line search), so it is not a good solution when loss function or gradient evaluations are expensive. 
+
+However, if we have a small dataset, a low-to-medium complexity architecture, or both, L-BFGS can be a very effective tool for estimating parameters. 
+
 ### Forestation Modeling  {#sec-nnet-forestation}
 
 ```{r}
@@ -746,6 +755,20 @@ brier_param_cor <-
   cor(brier_and_params$mean, brier_and_params$num_param, 
       method = "spearman") |> 
   round(2)
+
+num_metrics <- vctrs::vec_unique_count(mlp_ranks$.metric)
+num_configs <- nrow(mlp_ranks) / num_metrics
+num_grid <- vctrs::vec_unique_count(mlp_ranks$.config)
+
+wide_mtr <- 
+  mlp_ranks |>
+  select(wflow_id, .config, .metric, mean) |>
+  pivot_wider(
+    id_cols = c(wflow_id, .config),
+    names_from = .metric,
+    values_from = mean
+  )
+mtr_cor <- cor(wide_mtr$brier_class, wide_mtr$roc_auc) |> round(2)
 ```
 
 For the forested data, there are a few options for preprocessing: 
@@ -772,11 +795,11 @@ For the model, there are a fair number of tuning parameters to combine:
  - Learning rate schedules: constant, cyclic, and time decay.
  - Momentum values between [0.8, 0.99].
 
-AdamW was used to train the models, and a maximum of 25 epochs (with early stopping at five bad epochs) was allowed. 
+AdamW was used to train the models, and a maximum of 25 epochs was allowed (with early stopping at five bad epochs). 
 
-A space-filling design with 25 candidates was evaluated. The six preprocessing schemes listed above were each run with the same model grid, resulting in 300 candidates to be evaluated. 
+A space-filling design with num_grid candidates was evaluated. The six preprocessing schemes listed above were each run with the same model grid, resulting in `r num_configs` candidates to be evaluated. 
 
-@fig-forest-mlp-ranks shows the results. The candidates were ranked by their resampling estimate of the Brier scores, and the figure presents these ranked from best to worst while breaking out the combinations of preprocessing scenarios. While each panel contains models with sufficiently low Brier scores, there are a few trends. The "Plain" panel represents models using dummy variable indicators with no symmetry transformation, and this did not do well (with or without PCA feature extraction). 
+@fig-forest-mlp-ranks shows the results for the `r num_configs` candidates. They are ranked by their resampling estimate of the Brier scores, and the figure presents these ranked from best to worst while breaking out the combinations of preprocessing scenarios. While each panel contains models with sufficiently low Brier scores, there are a few trends. The "Indicators" panel represents models using dummy variable indicators with no symmetry transformation, and this did not do well (with or without PCA feature extraction). 
 
 ```{r}
 #| label: fig-forest-mlp-ranks
@@ -789,14 +812,19 @@ A space-filling design with 25 candidates was evaluated. The six preprocessing s
 mlp_ranks|> 
   mutate(
     encoding = map_chr(wflow_id, ~ strsplit(.x, split = "_")[[1]][1]),
-    encoding = factor(encoding, levels = c("orderNorm", "plain", "encoded")),
+    encoding = case_when(
+      encoding == "orderNorm" ~ "Indicators + Symmetry",
+      encoding == "plain" ~ "Indicators",
+      .default = "Effect Encoding + Symmetry"
+    ),
+    encoding = factor(encoding, levels = c("Indicators", "Indicators + Symmetry", "Effect Encoding + Symmetry")),
     extraction = map_chr(wflow_id, ~ strsplit(.x, split = "_")[[1]][2]),
     extraction = ifelse(extraction == "pca", "PCA", "No PCA"),
     extraction = factor(extraction, levels = c("No PCA", "PCA")),
     layers = ifelse(grepl("2L", wflow_id), "2 layers", "1 layer"),
     layers = factor(layers, levels = c("1 layer", "2 layers")),
-    lower = mean - qnorm(0.025) * std_err,
-    upper = mean + qnorm(0.025) * std_err
+    lower = mean - qnorm(0.05) * std_err,
+    upper = mean + qnorm(0.05) * std_err
   ) |> 
   filter(.metric == "brier_class") |> 
   ggplot(aes(x= rank, col = layers)) + 
@@ -810,7 +838,7 @@ mlp_ranks|>
 
 In fact, PCA has suboptimal results in each of the three bottom panels. This could be due to the components being unsupervised; they are not optimized for prediction. Alternatively, the last few components might be measuring noise and have less relevance to the model. Adding irrelevant predictors to neural networks can diminish their effectiveness. 
 
-The two cases that did the best were the "orderNorm" and "encoded" panels. While both used the orderNorm transformation, the former panel used indicators, while the latter used the supervised effect encoding, where a single column was used to represent the county effect. This suggests that eliminating distributional skew in the predictors may buy us a small amount of predictive performance. 
+The two cases that did the best were the "Indicators + Symmetry" and "Effect Encoding + Symmetry" panels. While both used the orderNorm transformation, the former panel used indicators, while the latter used the supervised effect encoding, where a single column was used to represent the county effect. This suggests that eliminating distributional skew in the predictors may buy us a small amount of predictive performance. 
 
 ```{r}
 #| label: tbl-mlp-top-five
@@ -839,7 +867,11 @@ top_five |>
     learn_rate = paste0("10<sup>", learn_rate, "</sup>"),
     learn_rate = map2_chr(learn_rate, rate_schedule, ~ paste0(.x, " (", .y, ")")),
     encoding = map_chr(wflow_id, ~ strsplit(.x, split = "_")[[1]][1]),
-    encoding = factor(encoding, levels = c("orderNorm", "plain", "encoded")),
+    encoding = case_when(
+      encoding == "orderNorm" ~ "Indicators, Symmetry",
+      encoding == "plain" ~ "Indicators",
+      .default = "Effect Encoding, Symmetry"
+    ),
     extraction = map_chr(wflow_id, ~ strsplit(.x, split = "_")[[1]][2]),
     extraction = ifelse(extraction == "pca", "PCA", "No PCA"),
     extraction = factor(extraction, levels = c("No PCA", "PCA")),
@@ -897,7 +929,7 @@ top_five |>
 
 Diving in further, @tbl-mlp-top-five shows the top five candidates from the pool of 300. They are a mixture of one- and two-layer networks, but note that we have to go to the third decimal place to distinguish their Brier scores. Constant learning rates did well as long as their rates were fairly low and batch sizes were fairly small. The number of parameters varied too; increasing the model’s complexity did not appear to help for this data set. In fact, the rank correlation between the Brier score and the number of parameters was `r brier_param_cor`, implying that there is little evidence that adding more layers and/or units to the MLP improves the model.
 
-While the Brier scores are low, the areas under the ROC curves are all at least 0.94, indicating that the predictions do a good job separating the classes and that the probability estimates are accurate. 
+While the Brier scores are low, the areas under the ROC curves are all at least 0.94, indicating that the predictions effectively separate the classes and that the probability estimates are accurate. Across the candidates, the rank correlation between the Brier score and the ROC AUC was `r mtr_cor`; in this case, their optimization results are well-aligned. 
 
 ## Special Tabular Network Models  {#sec-tab-net}
 
