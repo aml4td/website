@@ -5,7 +5,7 @@ library(mirai)
 library(spatialsample)
 library(finetune)
 
-load("RData/forested_data.RData")
+load("../RData/forested_data.RData")
 
 # ------------------------------------------------------------------------------
 
@@ -222,10 +222,30 @@ mlp_best_config <- select_best(mlp_best_res, metric = "brier_class")
 
 # ------------------------------------------------------------------------------
 
+forest_mlp_res <-
+  mlp_grid_res |>
+  mutate(
+    metrics = map(result, ~ collect_metrics(.x, summarize = FALSE)),
+    best = map(result, ~ select_best(.x, metric = "brier_class")),
+    pred = map2(result, best, ~ collect_predictions(.x, parameters = .y))
+  )
+
+forest_mlp_mtr <-
+  forest_mlp_res |>
+  dplyr::select(wflow_id, metrics) |>
+  unnest(cols = metrics)
+
+forest_mlp_pred <-
+  forest_mlp_res |>
+  dplyr::select(wflow_id, pred) |>
+  unnest(cols = pred)
+
+# ------------------------------------------------------------------------------
+
 save(
   mlp_ranks, best_id, mlp_best_res, mlp_best_config, brier_and_params, 
-  mlp_best_mtr, epoch_actual,
-  file = "RData/forested_mlp.Rdata"
+  mlp_best_mtr, epoch_actual, forest_mlp_mtr, forest_mlp_pred,
+  file = "../RData/forested_mlp.Rdata"
 )
 
 # ------------------------------------------------------------------------------
