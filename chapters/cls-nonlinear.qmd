@@ -17,11 +17,14 @@ source("../R/_common.R")
 library(tidymodels)
 library(mirai)
 library(spatialsample)
+library(bestNormalize)
+library(embed)
 
 # ------------------------------------------------------------------------------
 # set options
 
 tidymodels_prefer()
+theme_set(theme_bw())
 set_options()
 daemons(parallel::detectCores())
 
@@ -41,15 +44,188 @@ load("../RData/forested_data.RData")
 
 ### Naive Bayes {#sec-naive-bayes}
 
+## K-Nearest Neighbors  {#sec-cls-knn}
+
+K-nearest neighbors is predicated on the idea that data points that are similar to one another in the predictor space should have outcomes that are also similar. If we are predicting a new sample, we find the _K_ training set points that are "closest" to the new data point and use their outcome values to estimate the prediction. There is essentially no training set here; everything happens when the sample is being predicted. 
+
+What does "similar" and/or "close" mean? For this, we have to define a distance metric. A common choice is the Euclidean distance, but a more generalized tool is the Minkowski distance. For a new data point $\boldsymbol{u}$ with $p$ predictors, the Minkowski distance is: 
+
+$$
+d(\boldsymbol{u}, \boldsymbol{x}) ={\biggl (}\sum _{j=1}^{p}|u_j-x_{j}|^{degree}{\biggr )}^{\frac {1}{degree}},
+$$ 
+
+which is Euclidean when $degree = 2$,  Manhattan distance (a.k.a., street-block distance) with $degree = 1$, and others are in between. Previously, in @sec-isomap, we also described geodesic distance based on a general distance matrix that results in a graph between points. Also, in @sec-centroids, Haversine distance is an appropriate choice when comparing geographic distances (on Earth). 
+
+For these distances, numeric values are required for all predictors. For Minkowski distances, we should also ensure that the predictors are in the same units, which can be achieved by centering and scaling, or by using comparable methods. Correcting for skewness is also a good idea. For qualitative data, indicators are an option and these should be preprocessed in the same way as more dense numeric columns. 
+
+Alternatively, when there are mixed predictor types, Gower distance [@gower] can also be used. This metric is computed separately for each predictor, and then the overall distance is a weighted sum of the terms: 
+
+$$
+d(\boldsymbol{u}, \boldsymbol{x}) =\frac {1}{p}\sum _{j=1}^{p}d_(u_j, x_{j}),
+$$
+
+where the $d_j$ values depend on the data type. For dense numeric data, this is
+
+$$
+d_(u_j, x_{j})=1-{\frac {|u_{j}-x_{j}|}{R_{j}}}
+$$
+
+and $R_j$ is the range of predictor $j$'s values in the training set. For categorical predictors, $d_(u_j, x_{j}) = I(u_j = x_j)$ which is a 0/1 indicator of agreement of the levels. 
+
+See @cunningham2021k for more discussion of distances.
+
+For classification data, we find the _K_ neighbors, then estimate class probabilities via:
+
+$$
+\widehat{\pi}_{c} = \frac{1}{K}\sum_{k=1}^K y_{kc}
+$$
+
+where $y_{kc}$ denotes the 0/1 class indicator that neighbor $k$ has class value $c$. For small values of _K_, this isn’t a very good estimate. The Laplace correction previously mentioned in @sec-naive-bayes can again be used to regularize the estimate: 
+
+$$
+\widehat{\pi}_{c} = \frac{1}{K}\sum_{k=1}^K \frac{y_{kc} +\alpha}{K + \alpha C}
+$$
+
+for $\alpha \in [0, 2]$. Also, it is common to fix _K_ and collect all neighbors, no matter the value of their distances. Alternatively, one can put a cap on the maximum distance or use a more informative approach of using weighted distances:
+
+$$
+\widehat{p}_{c} = \frac{1}{W}\sum_{k=1}^K g(d_k)\;y_{kc}
+$$
+
+where $g()$ is a kernel function that weights the distances and $W$ is the sum of the $g(d_k)$. @fig-weight-kernels shows some commonly used functions. 
+
+
+```{r}
+#| label: fig-weight-kernels
+#| echo: false
+#| warning: false
+#| message: false
+#| out-width: 80%
+#| fig-width: 8
+#| fig-height: 2.75
+#| fig-cap: Different kernel functions to downweight far-away neighbors. Values have been rescaled to have the same upper value.  
+dists <- 
+  crossing(
+  distance = seq(0.1, 1, length.out = 100),
+  kernel = c(
+    "Rectangular",
+    "Triangular",
+    "Cosine",
+    "Gaussian",
+    "Inverse"
+  )
+) |> 
+  mutate(
+    weight = 
+      case_when(
+        kernel == "Rectangular" ~ 1 /2,
+        kernel == "Inverse"~ 1 / distance,
+        kernel == "Triangular"~ 1 - distance,
+        kernel == "Epanechnikov" ~ 3 / 4 * (1 - distance^2),
+        kernel == "Cosine" ~ pi / 4 * cos(pi * distance / 2),
+        TRUE ~ dnorm(distance)
+      )
+  )
+
+max_weight <- 
+  dists |> 
+  summarize(max_wt = max(weight), .by = c(kernel))
+
+dists |> 
+  right_join(max_weight, by = "kernel") |> 
+  mutate(
+    weight = weight / max_wt
+  ) |> 
+  ggplot(aes(distance, weight)) + 
+  geom_line() + 
+  facet_wrap(~ kernel, nrow = 1) + 
+  lims(y = extendrange(0:1)) +
+  labs(x = "Distance to Neighbor", y = "Weight")
+```  
+
+Outside of preprocessing methods, the primary tuning parameters are the number of neighbors, the weighting function, and the distance degree (if using a Minkowski distance). 
+
+```{r}
+#| label: forested-knn
+#| include: false
+#| cache: true
+
+knn_spec <- 
+  nearest_neighbor(neighbors = tune(), dist_power = tune(), weight_func = tune()) |> 
+  set_mode("classification")
+
+encode_rec <-
+  recipe(class ~ ., data = forested_train) |>
+  step_lencode_mixed(county, outcome = "class") |>
+  step_orderNorm(all_numeric_predictors())
+
+knn_wflow <- workflow(encode_rec, knn_spec)
+
+kern_vals <- c("rectangular", "triangular", "cos", "gaussian", "inv")
+
+knn_param <- 
+  knn_wflow |> 
+  extract_parameter_set_dials() |> 
+  update(
+    neighbors = neighbors(c(2, 50)),
+    weight_func = weight_func(kern_vals)
+  )
+
+cls_mtr <- metric_set(brier_class, roc_auc, pr_auc, mn_log_loss)
+
+set.seed(872)
+forest_knn_res <- 
+  knn_wflow |> 
+  tune_grid(
+    resamples = forested_rs,
+    grid = 50, 
+    param_info = knn_param,
+    metrics = cls_mtr,
+    control = control_grid(save_pred = TRUE)
+  )
+
+knn_best_res <- show_best(forest_knn_res, metric = "brier_class")
+
+forest_knn_mtr <-
+  forest_knn_res |> 
+  collect_metrics(summarize = FALSE) |> 
+  mutate(wflow_id = "knn") |> 
+  relocate(wflow_id)
+
+forest_knn_best <- select_best(forest_knn_res, metric = "brier_class")
+  
+forest_knn_pred <-
+  forest_knn_res |> 
+  collect_predictions(parameters = forest_knn_best) |> 
+  mutate(wflow_id = "knn") |> 
+  relocate(wflow_id)
+```
+
+How well does this technique work for the forestation data? To start, we used preprocessing that included an effect encoding for the county column, and then applied an orderNorm transformation to all predictors to standardize them to the same units and potentially remove skewness. The model was tuned over the number of neighbors (two through fifty), the Minkowski degree parameter (between 0.1 and 2.0), and the kernel functions listed in @fig-weight-kernels. A total of fifty configurations were evaluated using resampling, and the Brier scores are shown in @fig-knn-cls-tune. 
+
+```{r}
+#| label: fig-knn-cls-tune
+#| echo: false
+#| warning: false
+#| message: false
+#| out-width: 80%
+#| fig-width: 8
+#| fig-height: 3
+#| fig-cap: K-nearest neighbors tuning results for the forestation data.  
+
+knn_best_res <- show_best(forest_knn_res, metric = "brier_class")
+autoplot(forest_knn_res, metric = "brier_class")
+```
+
+Poor results occurred when there were fewer than twenty neighbors, and subsequently, the Brier scores remained consistently low. The distance parameter appeared to favor small values (around 0.5). There are no strong trends in terms of which kernel functions; Gaussian kernels appear to do well overall, but there are configurations that do well using any kernel. Numerically, the best results used `r knn_best_res$neighbors[1]` neighbors, a Minkowski degree of `r signif(knn_best_res$dist_power[1], digits = 3)`, and a `r knn_best_res$weight_func[1] ` kernel function. The corresponding Brier score was `r signif(knn_best_res$mean[1], digits = 3)`, which is fairly competitive. 
+
+### Discriminant Adaptive Nearest Neighbors  {#sec-dann}
+
 ## Neural networks {#sec-nnet}
 
 ### Single layer, Feedforward Networks {#sec-mlp}
 
 ### Tabular Network Models  {#sec-tab-net}
-
-## K-Nearest Neighbors  {#sec-cls-knn}
-
-### Discriminant Adaptive Nearest Neighbors  {#sec-dann}
 
 ## Support Vector Machines {#sec-cls-svm}
 
