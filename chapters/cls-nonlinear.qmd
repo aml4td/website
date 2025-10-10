@@ -18,6 +18,7 @@ library(tidymodels)
 library(mirai)
 library(spatialsample)
 library(bestNormalize)
+library(important)
 library(embed)
 
 # ------------------------------------------------------------------------------
@@ -46,7 +47,7 @@ load("../RData/forested_data.RData")
 
 ## K-Nearest Neighbors  {#sec-cls-knn}
 
-K-nearest neighbors is predicated on the idea that data points that are similar to one another in the predictor space should have outcomes that are also similar. If we are predicting a new sample, we find the _K_ training set points that are "closest" to the new data point and use their outcome values to estimate the prediction. There is essentially no training set here; everything happens when the sample is being predicted. 
+K-nearest neighbors (KNN) is predicated on the idea that data points that are similar to one another in the predictor space should have outcomes that are also similar. If we are predicting a new sample, we find the _K_ training set points that are "closest" to the new data point and use their outcome values to estimate the prediction. There is essentially no training set here; everything happens when the sample is being predicted. 
 
 What does "similar" and/or "close" mean? For this, we have to define a distance metric. A common choice is the Euclidean distance, but a more generalized tool is the Minkowski distance. For a new data point $\boldsymbol{u}$ with $p$ predictors, the Minkowski distance is: 
 
@@ -143,7 +144,7 @@ dists |>
   labs(x = "Distance to Neighbor", y = "Weight")
 ```  
 
-Outside of preprocessing methods, the primary tuning parameters are the number of neighbors, the weighting function, and the distance degree (if using a Minkowski distance). 
+Outside of preprocessing methods, the primary tuning parameters are the number of neighbors, the weighting function, and the distance degree (if using a Minkowski distance). Recall from @fig-irrelevant-predictors that KNN models can be harmed when used with irrelevant predictors. As will be seen with these data, tuning an initial feature selection filter can improve model quality. 
 
 ```{r}
 #| label: forested-knn
@@ -156,6 +157,7 @@ knn_spec <-
 
 encode_rec <-
   recipe(class ~ ., data = forested_train) |>
+  step_predictor_best(all_numeric_predictors(), score = "imp_rf", prop_terms = tune()) |> 
   step_lencode_mixed(county, outcome = "class") |>
   step_orderNorm(all_numeric_predictors())
 
@@ -174,14 +176,18 @@ knn_param <-
 cls_mtr <- metric_set(brier_class, roc_auc, pr_auc, mn_log_loss)
 
 set.seed(872)
-forest_knn_res <- 
-  knn_wflow |> 
+forest_knn_res <-
+  knn_wflow |>
   tune_grid(
     resamples = forested_rs,
-    grid = 50, 
+    grid = 50,
     param_info = knn_param,
     metrics = cls_mtr,
-    control = control_grid(save_pred = TRUE)
+    control = control_grid(
+      save_pred = TRUE,
+      save_workflow = TRUE,
+      parallel_over = "everything"
+    )
   )
 
 knn_best_res <- show_best(forest_knn_res, metric = "brier_class")
@@ -201,7 +207,7 @@ forest_knn_pred <-
   relocate(wflow_id)
 ```
 
-How well does this technique work for the forestation data? To start, we used preprocessing that included an effect encoding for the county column, and then applied an orderNorm transformation to all predictors to standardize them to the same units and potentially remove skewness. The model was tuned over the number of neighbors (two through fifty), the Minkowski degree parameter (between 0.1 and 2.0), and the kernel functions listed in @fig-weight-kernels. A total of fifty configurations were evaluated using resampling, and the Brier scores are shown in @fig-knn-cls-tune. 
+How well does this technique work for the forestation data? To start, we used preprocessing that included an feature filter using random forest importance scores (and tune the proportion fo predictors retained). After that, an effect encoding was used for the county column, and then applied an orderNorm transformation to all predictors to standardize them to the same units and potentially remove skewness. The model was tuned over the proportion of features retained (5% to 100%), the number of neighbors (two through fifty), the Minkowski degree parameter (between 0.1 and 2.0), and the kernel functions listed in @fig-weight-kernels. A total of fifty configurations were evaluated using resampling, and the Brier scores are shown in @fig-knn-cls-tune. 
 
 ```{r}
 #| label: fig-knn-cls-tune
@@ -214,10 +220,11 @@ How well does this technique work for the forestation data? To start, we used pr
 #| fig-cap: K-nearest neighbors tuning results for the forestation data.  
 
 knn_best_res <- show_best(forest_knn_res, metric = "brier_class")
-autoplot(forest_knn_res, metric = "brier_class")
+autoplot(forest_knn_res, metric = "brier_class") + 
+   labs(y = "Brier Score")
 ```
 
-Poor results occurred when there were fewer than twenty neighbors, and subsequently, the Brier scores remained consistently low. The distance parameter appeared to favor small values (around 0.5). There are no strong trends in terms of which kernel functions; Gaussian kernels appear to do well overall, but there are configurations that do well using any kernel. Numerically, the best results used `r knn_best_res$neighbors[1]` neighbors, a Minkowski degree of `r signif(knn_best_res$dist_power[1], digits = 3)`, and a `r knn_best_res$weight_func[1] ` kernel function. The corresponding Brier score was `r signif(knn_best_res$mean[1], digits = 3)`, which is fairly competitive. 
+Poor results occurred when there were fewer than twenty neighbors, and subsequently, the Brier scores remained consistently low. The distance parameter appeared to favor small values (around 0.5). There are no strong trends in terms of which kernel functions; Gaussian kernels appear to do well overall, but there are configurations that do well using any kernel. Numerically, the best results retained `r round(knn_best_res$prop_terms[1] * 100, 1)`% of the  predictors, used `r knn_best_res$neighbors[1]` neighbors, a Minkowski degree of `r signif(knn_best_res$dist_power[1], digits = 3)`, and a `r knn_best_res$weight_func[1] ` kernel function. In the figure above, we can see that there is a small increase in error when the entire predictor set is used. Otherwise, smaller feature sets are underfitting the data. The corresponding Brier score was `r signif(knn_best_res$mean[1], digits = 3)`, which is very competitive. 
 
 ### Discriminant Adaptive Nearest Neighbors  {#sec-dann}
 
@@ -230,3 +237,14 @@ Poor results occurred when there were fewer than twenty neighbors, and subsequen
 ## Support Vector Machines {#sec-cls-svm}
 
 ## Chapter References {.unnumbered}
+
+```{r}
+#| label: cls-nonlinear-save
+#| include: false
+
+forest_knn_wflow_res <- as_workflow_set(knn = forest_knn_res)
+save(
+ forest_knn_res, forest_knn_best,
+  file = "../RData/forested_knn.Rdata"
+)
+```
