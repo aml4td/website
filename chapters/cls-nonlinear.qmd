@@ -79,7 +79,9 @@ $$ {#eq-ind-probs}
 
 This makes the inherent assumption that our predictors are all statistically independent of one another. For most datasets, this is unlikely to be true. 
 
-However, it does loosen the distributional assumption of each variable. We don't have to assume normality and, in fact, we don't even have to declare a full parametric probability distribution. Kernel density estimates are a type of smoother that adaptively describes the data. @fig-densities shows the difference between the approaches for the minimum vapor predictor. In the left-hand panel, the entire training set is shown. There is a slight left skew to the data. Both estimates do fairly well for the data with vapor values above 200. However, the Gaussian estimates are not flexible enough to accurately model the data in the middle of the range, and both methods perform poorly for very low values of this predictor. The middle panel shows the non-forested locations. The data in this class appear to be trimodal, and the nonparametric method faithfully represents these peaks. The Gaussian is constrained to a single mode; using this approach would likely result in underfitting. The right-hand panel displays the forested locations and exhibits a large right skew. The lower half of these data are poorly modeled using the fully parameteric approach. 
+However, it does loosen the distributional assumption of each variable. We don't have to assume normality and, in fact, we don't even have to declare a full parametric probability distribution. Kernel density estimates are a type of smoother that adaptively describes the data. Here, a _kernel_ is a function^[We'll see kernel functions two more times in this chapter.] that produces non-negative values, which serve as weights. For example, a uniform kernel assigns equal weights to values between two points, a Gaussian kernel uses a squared exponential function (i.e., $K(x) = \exp(x^2)$), and so on. The density estimate is formed by using a running kernel function across the data. At each point, the density function is computed, generating a weight that is larger for points closest to our observed data. As we move across the observed data, the weights accumulate so that their sum is larger when closer to the actual data. The type of kernel function defines how the weight is distributed near the point. For a uniform kernel, the weight is the same within a neighborhood of the point, and for a Gaussian, the weight is largest at the actual point and then decreases exponentially as we move away. 
+
+For example, @fig-densities displays the estimated density for the minimum vapor variable using a blue line for three subsets of the data. Density estimates using a fully parametric $N(\mu, \sigma)$ distribution are shown in orange. In the left-hand panel, the entire training set is shown. There is a slight left skew to the data. Both estimates do fairly well for the data with vapor values above 200. However, the Gaussian estimates are not flexible enough to accurately model the data in the middle of the range, and both methods perform poorly for very low values of this predictor. The middle panel shows the non-forested locations. The data in this class appear to be trimodal, and the nonparametric method faithfully represents these peaks. The Gaussian is constrained to a single mode; using this approach would likely result in underfitting. The right-hand panel displays the forested locations and exhibits a large right skew. The lower half of these data are poorly modeled using the fully parametric approach. 
 
 ```{r}
 #| label: fig-densities
@@ -117,15 +119,15 @@ forested_dens |>
   labs(x = "Minimum Vapor")
 ```
 
-There is a potential tuning parameter: the "wigglyness" of the density can be adjusted using a _badnwidth_ multiplier. 
+There is a potential tuning parameter: the "wigglyness" of the density can be adjusted using a _badnwidth_ multiplier. The bandwidth determines the width of the kernel's effect. A small bandwidth makes the density estimate very peaked near the observed data, whereas a large bandwidth spreads the kernel weight over a wide range and generates a very smooth density. There is no standard value for the bandwidth, but effective estimation methods exist that select a value that minimizes the mean squared error. This default method of determining the bandwidth is designed to create an accurate density, but it might not align with the best bandwidth to help us classify the data. To compensate for this, we can tune an adjustment factor that is a multiplier of the default bandwidth. A value greater than 1.0 encourages more smoothing of the data, while a smaller values make very bumpy densities. 
 
-Since we do not have to assume anything about $Pr[x_p|Y = k]$, we can also use categorical predictors with naive Bayes. Here, the frequency distribution of the data is computed and used. @fig-counties showed the raw probabilities associated with the forested class (i.e., $Pr[y = forested]$). One minus these values could be used for the nonforested class. There are some issues, though; some counties have no forested locations or have very few locations at all. Any location without a forested location produces a probability of zero, which, when multiplied in  @eq-ind-probs, causes the entire probability to be zero for that class, regardless of any other predictors. That is an issue. In this case, we can use more complex estimates, such as the Beta-Binomial estimate in @eq-beta-bin-mean. This would pull our estimates at zero or one towards the middle. Suppose a county had ten locations, none of which are forested. The Beta-Binomial method with $\alpha = 1$ and $\beta = 3$ would pull the estimate from zero to `r round((0 + 1) / (10 + 1 + 3) * 100, 1)`%. Alternatively,  Laplace smoothing can be used: 
+Since we do not have to assume anything about $Pr[x_p|Y = k]$, we can also use categorical predictors with naive Bayes. Here, the frequency distribution of the data is computed and used. @fig-counties showed the raw probabilities associated with the forested class (i.e., $Pr[y = forested]$). One minus these values could be used for the nonforested class. There are some issues, though; some counties have no forested locations or have very few locations at all. Any location without a forested location produces a probability of zero, which, when multiplied in  @eq-ind-probs, causes the entire probability to be zero for that class, regardless of any other predictors. That is an issue. In this case, we can use more complex estimates, such as the Beta-Binomial estimate in @eq-beta-bin-mean. This would pull our estimates at zero or one towards the middle. Suppose a county had ten locations, none of which are forested. The Beta-Binomial method with $\alpha = 1$ and $\beta = 3$ would pull the estimate from zero to `r round((0 + 1) / (10 + 1 + 3) * 100, 1)`%. Alternatively,  Laplace smoothing [@Manning2009, Section 11.3.2] can be used: 
 
 $$
-\hat{p}_{k} = \frac {x_k+\alpha }{n_k+\alpha C}
+\hat{p}_{k} = \frac {x_k+\alpha }{n_k+\alpha m_{x}}
 $$ {#eq-laplace-smooth}
 
-where $x_k$ and $n_k$ are the number of events and locations, respectively. Here, with $\alpha = 1$, the new estimate is `r round((0 + 1) / (10 + 1 * 2) * 100, 1)`%. 
+where $m_{x}$ is the number of levels of the qualitative predictor and $x_k$ and $n_k$ are the number of events and locations, respectively. Here, with $\alpha = 1$, the new estimate is `r round((0 + 1) / (10 + 1 * 2) * 100, 1)`%. 
 
 Despite the potentially unreasonable assumption that the predictors are independent of one another, naive Bayes models can work surprisingly well. In addition to the loosening of restrictions regarding distributional assumptions, they have the advantage of being highly efficient for training and prediction. Since the predictors are all evaluated separately, many of the calculations can be conducted in parallel. Depending on how the conditional densities are computed, they can be easily added to database tables, and the final prediction can be executed using highly SQL.
 
@@ -467,20 +469,21 @@ So far, we have described what occurs when MARS is constrained to produce an _ad
 
 After the growing phase, MARS can conduct a pruning phase where it removes from the model using an approximation to cross-validation called _generalized cross-validation_ (GCV) that is possible when ordinary linear regression is used to estimate parameters. Using GCV, it can compare the error that occurs when a specific model term is removed. One or both hinge pairs can be removed during this process. 
 
-After the pruning phase, the final model is computed and, in conjunciton with the resulting matrix $\Phi$, it can be used to estimate predictions. FDA-MARS models can produce class boundaries that appear segmented or trapezoidal in nature. When the model contains interactions, the boundary segments can exhibit some curvature. For example, panels in @fig-cls-boundaries labeled as "Medium Complexity" and "High Complexity" were created using FDA-MARS with interactions and different numbers of retained features. 
+After the pruning phase, the final MARS model is computed and, in conjunction with the resulting matrix $\Phi$, it can be used to estimate predictions. FDA-MARS models can produce class boundaries that appear segmented or trapezoidal in nature. When the model contains interactions, the boundary segments can exhibit some curvature. For example, panels in @fig-cls-boundaries labeled as "Medium Complexity" and "High Complexity" were created using FDA-MARS with interactions and different numbers of retained features. 
 
 MARS automatically selects features. If a predictor was never used within a model term or if all terms using that predictor were pruned from the model, the prediction function is independent of that column.
 
 importance score; boundary shapes; preprocessing; 
 
+For using MARS with FDA, we initially generated a total of 200 features (apart from the intercept) during the growing phase. To tune the model, we considered additive and interaction models as well as using forward and backward removal strategies for the pruning phase. The number of retained terms was optimized to be between 2 and 50 final model terms. 
 
 ```{r}
 #| label: forested-fda
 #| include: false
 #| cache: true
 fda_spec <- 
-  discrim_flexible(num_terms = tune(), prod_degree = tune(), prune_method = "none") |> 
-  set_engine("earth", nk = 50)
+  discrim_flexible(num_terms = tune(), prod_degree = tune(), prune_method = tune()) |> 
+  set_engine("earth", nk = 201)
 
 fda_wflow <- workflow(class ~ .,  fda_spec)
 
@@ -489,12 +492,15 @@ fda_param <-
   extract_parameter_set_dials() |> 
   update(num_terms = num_terms(c(2, 100)))
 
+
+shears <- c("backward", "forward")
+
 set.seed(872)
 forest_fda_res <-
   fda_wflow |>
   tune_grid(
     resamples = forested_rs,
-    grid = crossing(num_terms = 2:50, prod_degree= 1:2),
+    grid = crossing(num_terms = 2:50, prod_degree= 1:2, prune_method = shears),
     param_info = fda_param,
     metrics = cls_mtr,
     control = control_grid(
@@ -503,16 +509,28 @@ forest_fda_res <-
       parallel_over = "everything"
     )
   )
+```
 
-fda_fit <- fit_best(forest_fda_res, metric = "brier_class")
+```{r}
+#| label: fda-details
+#| include: false
+forest_fda_best <- tibble(num_terms = 40, prune_method = "forward", prod_degree = 2)
 
-fda_best_res <- show_best(forest_fda_res, metric = "brier_class")
+fda_fit <-
+  fda_wflow |>
+  finalize_workflow(forest_fda_best) |>
+  fit(forested_train)
+
 forest_fda_mtr <-
   forest_fda_res |> 
   collect_metrics(summarize = FALSE) |> 
   mutate(wflow_id = "FDA/MARS") |> 
   relocate(wflow_id)
-forest_fda_best <- select_best(forest_fda_res, metric = "brier_class")
+
+forest_fda_best_mtr <- 
+  forest_fda_res |> 
+  collect_metrics() |> 
+  inner_join(forest_fda_best, by = join_by(num_terms, prod_degree, prune_method))
 
 forest_fda_pred <-
   forest_fda_res |> 
@@ -556,17 +574,41 @@ counts <-
   arrange(num_var, desc(n), text) |> 
   dplyr::select(text, nums)
 
-mars_fit <- fda_fit$fit$fit$fit$fit
-mars_imp <- 
-  mars_fit |> 
-  earth::evimp() |> 
-  unclass() |> 
-  as_tibble(rownames = "term") |> 
-  mutate(variable = if_else(grepl("^county", term), "county", term)) |> 
-  full_join(name_key, by = "variable") |> 
-  mutate(predictor = if_else(is.na(text), variable, text)) 
+mars_fit <- 
+  fda_fit |>
+  extract_fit_engine() |>
+  pluck("fit")
 
-exluded <- cli::format_inline("{mars_imp$predictor[is.na(mars_imp$gcv)]}")
+fda_imp <-
+  mars_fit |>
+  earth::evimp() |>
+  unclass() |>
+  as_tibble(rownames = "variable") |>
+  mutate(
+    variable = ifelse(
+      grepl("county", variable),
+      gsub("county", "county: ", variable),
+      variable
+    )
+  ) |> 
+  full_join(name_key, by = "variable")
+
+# some are missing from training set
+missing_mars_cols <- 
+  as_tibble_col(names(forested_train)[-1], column_name = "variable") |> 
+  anti_join(fda_imp |> filter(!grepl("county", variable)), by = "variable") |> 
+  filter(variable != "county")
+
+fda_imp <- 
+  fda_imp |> 
+  bind_rows(missing_mars_cols) |> 
+  mutate(
+    text = if_else(is.na(text), variable, text),
+    gcv = ifelse(is.na(gcv), 0.0, gcv)
+  )
+
+excluded <- fda_imp$text[is.na(fda_imp$used)]
+exluded_text <- cli::format_inline("{excluded}")
 
 for (i in seq_along(name_list)) {
   col_nm <- name_list[[i]]
@@ -585,25 +627,33 @@ num_main <- nrow(fda_coefs) - 1 - num_int
 num_ind <- length(grep("county", fda_coefs$`Model Term`))
 ```
 
-
+We can see how this worked out in @fig-fda-tune. Performance leveled off around 25-35 terms for each pruning method, with forward selection showing a tiny advantage for these data. Models with interaction effects were uniformly more successful than additive models. An interaction model using forward selection and 30 terms appears to be a reasonable choice. This configuration had an estimated Brier score of `r round(forest_fda_best_mtr$mean[forest_fda_best_mtr$.metric == "brier_class"], 3)` and an area under the ROC curve of `r round(forest_fda_best_mtr$mean[forest_fda_best_mtr$.metric == "roc_auc"], 3)`.
 
 ```{r}
-#| label: fig-knn-cls-tune
+#| label: fig-fda-tune
 #| echo: false
 #| warning: false
 #| message: false
-#| out-width: 70%
-#| fig-width: 6
+#| out-width: 90%
+#| fig-width: 8
 #| fig-height: 4
 #| fig-cap: FDA-MDA tuning results for the forestation data.  
-autoplot(forest_fda_res, metric = "brier_class") + 
-   labs(y = "Brier Score") +
+forest_fda_res |> 
+  collect_metrics() |> 
+  filter(.metric == "brier_class") |> 
+  mutate(
+    `Model Type` = if_else(prod_degree == 1, "Additive", "Interactions"),
+    prune_method = paste("Pruning via", prune_method)
+  ) |> 
+  ggplot(aes(num_terms, mean, col = `Model Type`)) + 
+  geom_point() + 
+  geom_line() + 
+  facet_wrap(~ prune_method) + 
+  labs(x = "# Model Terms", y = "Brier Score")+
   theme(legend.position = "top")
 ```
 
 In the final model, there was a mixture of main effects and interaction terms. 
-
-The resampled Brier score associated with the best tuning parameter combination was `r round(fda_best_res$mean[1], 3)`.
 
 
 
@@ -636,8 +686,22 @@ Model terms contained used the final FDA-MARS fit from the training set. There w
 
 
 
+```{r}
+#| label: fig-forested-fda-imp
+#| echo: false
+#| out-width: 80%
+#| fig-width: 6.5
+#| fig-height: 3
+#| fig-cap: MARS feature importance for the final forested model.
 
-The underlying MARS model did not use these predictors: `r cli::format_inline("{mars_imp$predictor[is.na(mars_imp$gcv)]}")`. 
+fda_imp |> 
+  ggplot(aes(gcv, reorder(text, gcv))) + 
+  geom_point() +
+  labs(y = NULL, x = "MARS Importance (GCV)")
+```
+
+
+The underlying MARS model did not use these predictors: `r exluded_text`. 
 
 The counties used in the final model was: 
 
