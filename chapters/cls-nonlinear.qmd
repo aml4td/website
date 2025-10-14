@@ -260,7 +260,7 @@ forest_nb_res |>
 
 The results show that, according to random forest, the annual precipitation has, by far, the largest effect on the prediction function. After this, the maximum vapor and longitude predictors have nearly equal importance. A cluster of several predictors has middling importance. Several other predictors have very low scores: the county, year, eastness, and westness. 
 
-Please note that each model operates differently. These scores are not universal or absolute. We use them as a tool to help remove irrelevant predictors before training the primary supervised model. 
+Please note that each model operates differently^[A different view of predictor importance will be seem later in @fig-forested-fda-imp.]. These scores are not universal or absolute. We use them as a tool to help remove irrelevant predictors before training the primary supervised model. 
 
 Additionally, we have summarized the results over resamples for visualization. In practice, we execute the random forest within each resample and then fit the model on that resample's listing of which predictors are "important". We _do not_ compute the importance once and use the same ranking across resamples. 
 
@@ -467,15 +467,13 @@ During the training process, MARS can split on the same variable multiple times.
 
 So far, we have described what occurs when MARS is constrained to produce an _additive model_. Alternatively, we can also allow the training process to include interaction terms. Once it selects a new pair of terms to add to the model, it can conduct a secondary search to find a predictor (and split value) that pairs with the initial two sibling features. This results in four new terms being added to the model, each isolating a two-dimensional region of the predictor space to which it affects. The choice of an additive or a second degree is a tuning parameter. Higher-level interactions are possible but become computationally infeasible at some point. 
 
-After the growing phase, MARS can conduct a pruning phase where it removes from the model using an approximation to cross-validation called _generalized cross-validation_ (GCV) that is possible when ordinary linear regression is used to estimate parameters. Using GCV, it can compare the error that occurs when a specific model term is removed. One or both hinge pairs can be removed during this process. 
+After the growing phase, MARS can conduct a pruning phase where it removes from the model using an approximation to cross-validation called _generalized cross-validation_ (GCV) that is possible when ordinary linear regression is used to estimate parameters. Using GCV, it can compare the error that occurs when a specific model term is removed. One or both hinge pairs can be removed during this process. After the pruning phase, the final MARS model is computed and, in conjunction with the resulting matrix $\Phi$, it can be used to estimate predictions. 
 
-After the pruning phase, the final MARS model is computed and, in conjunction with the resulting matrix $\Phi$, it can be used to estimate predictions. FDA-MARS models can produce class boundaries that appear segmented or trapezoidal in nature. When the model contains interactions, the boundary segments can exhibit some curvature. For example, panels in @fig-cls-boundaries labeled as "Medium Complexity" and "High Complexity" were created using FDA-MARS with interactions and different numbers of retained features. 
+FDA-MARS models can produce class boundaries that appear segmented or trapezoidal in nature. When the model contains interactions, the boundary segments can exhibit some curvature. For example, panels in @fig-cls-boundaries labeled as "Medium Complexity" and "High Complexity" were created using FDA-MARS with interactions and different numbers of retained features. 
 
-MARS automatically selects features. If a predictor was never used within a model term or if all terms using that predictor were pruned from the model, the prediction function is independent of that column.
+In terms of preprocessing, the MARS algorithm will handle the translation of categorical predictors into binary indicators, and we should avoid doing this prior to the model fit. The hinge functions are estimated using ordinary least squares; we might consider some preprocessing related to this technique. For example, there may be a benefit to using a transformation to enhance the symmetry of the predictors. Missing data should be imputed prior to modeling.  Additionally, MARS automatically selects features. If a predictor was never used within a model term or if all terms using that predictor were pruned from the model, the prediction function is independent of that column. This benefit translated to FDA-MARS. As was seen in @fig-irrelevant-predictors, there should be no concern for adding possibly irrelevant predictors to the model during training; no extra feature selection step is required.  
 
-importance score; boundary shapes; preprocessing; 
-
-For using MARS with FDA, we initially generated a total of 200 features (apart from the intercept) during the growing phase. To tune the model, we considered additive and interaction models as well as using forward and backward removal strategies for the pruning phase. The number of retained terms was optimized to be between 2 and 50 final model terms. 
+For using MARS with FDA with our forestation data, we initially generated a total of 200 features (apart from the intercept) during the growing phase. To tune the model, we considered additive and interaction models as well as using forward and backward removal strategies for the pruning phase. The number of retained terms was optimized to be between 2 and 50 final model terms. 
 
 ```{r}
 #| label: forested-fda
@@ -543,6 +541,11 @@ forest_fda_pred <-
 #| label: fda-terms
 #| include: false
 
+mars_fit <- 
+  fda_fit |>
+  extract_fit_engine() |>
+  pluck("fit")
+
 name_sub <- function(x) {
   x <- ifelse(grepl("county", x), "county", x)
   mtch <- name_list %in% x
@@ -557,7 +560,7 @@ name_sub <- function(x) {
 }
 
 fda_coefs <- 
-  fda_fit$fit$fit$fit$fit |> 
+  mars_fit |> 
   coef() |> 
   as_tibble(rownames = "term") |> 
   mutate(
@@ -573,11 +576,6 @@ counts <-
   mutate(nums = ifelse(n > 1, paste0(n, " times"), "1 time")) |> 
   arrange(num_var, desc(n), text) |> 
   dplyr::select(text, nums)
-
-mars_fit <- 
-  fda_fit |>
-  extract_fit_engine() |>
-  pluck("fit")
 
 fda_imp <-
   mars_fit |>
@@ -607,7 +605,7 @@ fda_imp <-
     gcv = ifelse(is.na(gcv), 0.0, gcv)
   )
 
-excluded <- fda_imp$text[is.na(fda_imp$used)]
+excluded <- sort(fda_imp$text[is.na(fda_imp$used)])
 exluded_text <- cli::format_inline("{excluded}")
 
 for (i in seq_along(name_list)) {
@@ -643,7 +641,7 @@ forest_fda_res |>
   filter(.metric == "brier_class") |> 
   mutate(
     `Model Type` = if_else(prod_degree == 1, "Additive", "Interactions"),
-    prune_method = paste("Pruning via", prune_method)
+    prune_method = tools::toTitleCase(paste(prune_method, "Selection Pruning"))
   ) |> 
   ggplot(aes(num_terms, mean, col = `Model Type`)) + 
   geom_point() + 
@@ -653,9 +651,13 @@ forest_fda_res |>
   theme(legend.position = "top")
 ```
 
-In the final model, there was a mixture of main effects and interaction terms. 
+Once the FDA-MARS model was fit to the training set, the results was `r nrow(fda_coefs)` total coefficients. The implementation of MARS checks several stopping conditions for the growing phase based on the coefficient of determination (a.k.a. R<sup>2</sup>), including: 
 
+- Reached a R<sup>2 of 0.999 or more.
+- No new term increases R<sup>2
+- Adding a term changes R<sup>2 by less than 0.001.
 
+The last condition triggered the training procedure to stop at `r nrow(fda_coefs)` model terms instead of the `r forest_fda_best$num_terms`  that were requested. Of these terms, there were `r nrow(fda_coefs)` total coefficients, `r num_main` of which used a single predictor, and `r num_int` interaction terms. The categorical predictor (county) was used `r num_ind` times in both main effects and interactions. To give the reader a sense of what the linear regression model looks like, @tbl-fda-coefs shows the set of coefficients, the model terms, and split points.
 
 ::::::: columns
 ::: {.column width="10%"}
@@ -684,7 +686,7 @@ Model terms contained used the final FDA-MARS fit from the training set. There w
 :::
 :::::::
 
-
+To better understand what is driving the model, MARS has an _internal_ variable importance metric. As the model is created, new terms are added that improve the model's fit. MARS generally measures that using GCV. The measure of how much each predictor adds to the improvements is tabulated as the change in GCV when each predictor is added. These are normalized to be between zero and 100, with zero indicating that the predictor has no effect on the prediction function. For our model, @fig-forested-fda-imp shows the results. The annual precipitation and annual maximum temperature were used the most and tied for first place. Terrain roughness, the annual mean temperature, and longitude also had a significant impact on the classifier. There were `r length(excluded)` predictors that were not used at all: `r exluded_text`.
 
 ```{r}
 #| label: fig-forested-fda-imp
@@ -700,10 +702,84 @@ fda_imp |>
   labs(y = NULL, x = "MARS Importance (GCV)")
 ```
 
+The FDA via MARS is an interesting technique in that, on the spectrum ranging from fully interpretable models to black-box techniques, it falls somewhere in between. It might not yield the absolutely optimal performance, but it can often be well explained using visualizations, especially when the model is additive. 
 
-The underlying MARS model did not use these predictors: `r exluded_text`. 
+For example, suppose that we chose an additive model based on the patterns shown in @fig-fda-tune. In this case, the shape of the relationship between the predictor and the outcome is independent of the other predictors. The values of the other predictors do affect the range of predicted probabilities for a predictor, but the profile is the same. With an additive model, we can plot profiles of the predictor values versus the probability of the event. @fig-fda-profiles shows an example from an additive fit. With this, we can describe how the model works in more details.
 
-The counties used in the final model was: 
+```{r}
+#| label: fig-fda-profiles
+#| echo: false
+#| warning: false
+#| message: false
+#| out-width: 90%
+#| fig-width: 8
+#| fig-height: 4
+#| fig-cap: Profile plots showing how each predictor related to the probability of forestation when an additive FDA-MDA is used. The y-axis has no numbers since the probabilities are relative. 
+fda_additive_spec <- 
+  discrim_flexible(num_terms = 30, prod_degree = 1, prune_method = "forward") |> 
+  set_engine("earth", nk = 201, keepxy = TRUE)
+
+fda_additive_fit <- 
+  workflow(class ~ .,  fda_additive_spec) |> 
+  fit(forested_train)
+
+mars_additive_fit <- 
+  fda_additive_fit |> 
+  extract_fit_engine() |> 
+  pluck("fit")
+
+additive_terms <- rownames(earth::evimp(mars_additive_fit))
+additive_num_terms <- additive_terms[!grepl("county", additive_terms)]
+df_num_terms <- forested_train |> select(all_of(additive_num_terms))
+df_medians <- 
+  forested_train |> 
+  select(-class, -county) |> 
+  map_dbl(median) |> 
+  as_tibble_row() |> 
+  mutate(county = forested_train$county[1])
+
+additive_preds <- NULL
+for (i in seq_along(additive_num_terms)) {
+  nm <- additive_num_terms[i]
+  rng <- range(forested_train[[nm]])
+  grid <- 
+    tibble(x = seq(rng[1], rng[2], length.out = 500)) |> 
+    setNames(nm) |> 
+    vctrs::vec_cbind(df_medians |> select(-all_of(nm)))
+  
+  prd <- 
+    augment(fda_additive_fit, grid, type = "prob") |> 
+    select(all_of(nm), .pred_Yes) |> 
+    setNames(c("value", "probability")) |> 
+    mutate(variable = nm)
+  
+  additive_preds <- bind_rows(additive_preds, prd)
+}
+
+additive_preds <- 
+  additive_preds |> 
+  full_join(name_key, by = "variable") |> 
+  mutate(Predictor = if_else(is.na(text), variable, text)) |> 
+  filter(!is.na(probability))
+
+additive_preds |> 
+  ggplot(aes(value, probability)) + 
+  geom_line() + 
+  facet_wrap(~ Predictor, scale = "free") + 
+  theme() +
+  theme(axis.text.y = element_blank()) +
+  labs(y = "Relative Probability", x = NULL)
+```
+
+For example, we can say that: 
+
+- The probability of forestation appears to jump after 2020. 
+- When the precipitation at a location is greater than 500, the probability significantly increases and remains high (all other factors being equal). 
+- The downward spike in longitude corresponds to the unforested area east of Seattle.
+
+And so on. 
+
+
 
 ## Neural networks {#sec-nnet}
 
