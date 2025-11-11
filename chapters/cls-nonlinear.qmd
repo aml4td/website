@@ -14,6 +14,7 @@ source("../R/_common.R")
 
 # ------------------------------------------------------------------------------
 
+library(kernlab)
 library(tidymodels)
 library(torch)
 library(mirai)
@@ -23,6 +24,7 @@ library(embed)
 library(bestNormalize)
 library(patchwork)
 library(gt)
+library(paletteer)
 
 # ------------------------------------------------------------------------------
 # set options
@@ -245,7 +247,94 @@ autoplot(forest_knn_res, metric = "brier_class") +
 
 Poor results occurred when there were fewer than twenty neighbors, and subsequently, the Brier scores remained consistently low. The distance parameter appeared to favor small values (around 0.5). There are no strong trends in terms of which kernel functions; Gaussian kernels appear to do well overall, but there are configurations that do well using any kernel. Numerically, the best results retained `r round(knn_best_res$prop_terms[1] * 100, 1)`% of the  predictors, used `r knn_best_res$neighbors[1]` neighbors, a Minkowski degree of `r signif(knn_best_res$dist_power[1], digits = 3)`, and a `r knn_best_res$weight_func[1] ` kernel function. In the figure above, we can see that there is a small increase in error when the entire predictor set is used. Otherwise, smaller feature sets are underfitting the data. The corresponding Brier score was `r signif(knn_best_res$mean[1], digits = 3)`, which is very competitive. 
 
-### Discriminant Adaptive Nearest Neighbors  {#sec-dann}
+## Sidebar: Dot Products
+
+Dot products will become important in multiple sections of this chapter. They are a valuable tool for comparing two vectors. Since we just focused on distance, which is another tool for comparing vectors, now is a good time to discuss them. This will require a little bit of linear algebra and geometry. 
+
+Recall that vectors have a magnitude and direction. Magnitude is usually measured by its length, which we'll denote by $||\boldsymbol{a}||$ for some vector $\boldsymbol{a}$ with $p$ elements.
+
+Direction is concerned with the angle of the vector to something, say another vector $\boldsymbol{y}$ with the same dimension ($p$).  
+
+The "nearest" in KNN was driven by the magnitude between two vectors and was not affected by the angle between two vectors. 
+
+The dot product of two vectors with length $p$ is: 
+
+$$
+\boldsymbol{a}'\boldsymbol{b} = \sum_{i=1}^p a_ib_i
+$$  {#eq-dot-prod-sum}
+
+Note that the dot product could not be considered a distance metric since the distance between itself could never be zero unless all of its elements are zero. 
+
+Dot products measure both the magnitude of each vector as well as the angle between them (denoted as $\vartheta$). We can rewrite @eq-dot-prod-sum as
+
+$$
+\boldsymbol{a}'\boldsymbol{b} = ||\boldsymbol{a}||\,||\boldsymbol{b}|| \cos{\vartheta}
+$$  {#eq-dot-prod-vec}
+
+Let's consider a few different cases. First, when would the dot product be zero? This can occur if either vectors have zero magnitude, but, more importantly, it can also be zero when $\cos{\vartheta}$ is zero. That happens when the two vectors are _orthogonal_ (i.e., perpendicular) to one another. In $p=2$ dimensions, this means that there is a right angle ($\vartheta = 90^{\circ}$) between the two vectors and the cosine of this angle is zero.
+
+To illustrate, @fig-dot-products shows the dot products of a vector $\boldsymbol{x} = (2.0, 0.5)$ to a grid of vectors with elements ranging between $\pm 3$. We can see a diagonal region of light colored values that have dot products close to or at zero. This represents vectors that are orthogonal to $\boldsymbol{x}$. There is also a dotted line extending to the origin (0.0, 0.0) that coincides with this line.  
+
+```{r}
+#| label: dot-products
+#| include: false
+
+lin <- kernlab::vanilladot()
+
+x_seq <- seq(-3, 3, by = 0.1)
+x_n <- length(x_seq)
+grid <- crossing(x = x_seq, y = x_seq)
+grid_mat <- as.matrix(grid)
+
+ref_x <- 2.0
+ref_y <- 0.5
+ref_df <- tibble(x = ref_x, y = ref_y)
+ref_vec = c(ref_x, ref_y)
+ref_prod <- t(ref_vec) %*% ref_vec
+ref_prod <- lin(ref_vec, ref_vec)
+
+ex_point <- c(1, 0)
+ex_prod <- lin(ex_point, ref_vec)
+ex_dist <- rbind(ex_point, ref_vec) |> dist() |> as.numeric()
+
+lin_kern <- kernelMatrix(lin, grid_mat, matrix(ref_vec, nrow = 1))
+
+lin_df <- tibble(
+  `dot product` = as.vector(lin_kern),
+  x = rep(x_seq, each = x_n),
+  y = rep(x_seq, x_n)
+)
+```
+
+```{r}
+#| label: fig-dot-products
+#| echo: false
+#| out-width: 60%
+#| fig-width: 5
+#| fig-height: 5
+#| fig-cap: Dot product values of a grid of vectors relative to $\boldsymbol{x} = (2.0, 0.5)$ (the black point). The dashed black line shows the contour of constant dot products and the white dotted line is points to the origin.
+#| warning: false
+
+lin_df |>
+  ggplot(aes(x, y)) +
+  geom_raster(aes(fill = `dot product`)) +
+  geom_segment(
+    aes(y = 0, x = 0, yend = ref_y, xend = ref_x),
+    lty = 3, col = "white"
+  ) +
+  geom_point(data = ref_df, col = "black", cex = 2) +
+  geom_contour(aes(z = `dot product`), breaks = ref_prod, col = "black", lty = 2) +
+  coord_fixed() +
+  paletteer::scale_fill_paletteer_c("grDevices::Geyser") +
+  labs(x = expression(x[1]), y = expression(x[2])) +
+  theme(legend.position = "top")
+```
+
+What is the dot product of $\boldsymbol{x}$ with itself? That value is $\boldsymbol{x}'\boldsymbol{x} =$ `r ref_prod`. The dashed black diagonal line shows which vectors have the same dot product as $\boldsymbol{x}$. These are points that point in the same direction (i.e., $\vartheta = 0^{\circ}$) and magnitude as our example vector. Note that this line is parallel to the region of zero values, reemphasizing that the zero region is orthogonal to vectors like $\boldsymbol{x}$. 
+
+The vector associated with the largest dot product would move in the same direction as $\boldsymbol{x}$. This means that $||\boldsymbol{x}||$ and $\cos(\vartheta) = 0^{\circ}$, so the magnitude of the vector would be as large as possible. Conversely, the vector with the smallest dot product will move in the opposite direction and as far as possible. For our $\boldsymbol{x}$, the dot product is maximized in the upper right corner of @fig-dot-products and minimized in the lower left corner. 
+
+We'll see the dot product again in @sec-attention where it is intended to measure the similarity of two embedding vectors within a neural network, and again in @sec-cls-svm where it is the computational backbone of support vector machines. 
 
 ## Neural Networks via Multilayer Perceptrons {#sec-nnet}
 
@@ -510,7 +599,7 @@ The top of @fig-nnet-ex-layer-1 displays a heatmap illustrating how these three 
 
 lp_layer <- 
   components |> 
-  select(-starts_with("relu_"), -starts_with("output")) |> 
+  dplyr::select(-starts_with("relu_"), -starts_with("output")) |> 
   pivot_longer(cols = c(starts_with("lp_"))) |> 
   mutate(name = gsub("lp_", "hidden unit ", name)) |> 
   ggplot(aes(A, B)) + 
@@ -528,7 +617,7 @@ lp_layer <-
 
 relu_layer <- 
   components |> 
-  select(-starts_with("lp"), -starts_with("output")) |> 
+  dplyr::select(-starts_with("lp"), -starts_with("output")) |> 
   pivot_longer(cols = c(starts_with("relu_"))) |> 
   mutate(name = gsub("relu_", "hidden unit ", name)) |> 
   ggplot(aes(A, B)) + 
@@ -586,7 +675,7 @@ Note that the coefficients' signs are opposite for each outcome unit. @fig-nnet-
 
 output_layer <- 
   components |>
-  select(-starts_with("lp"), -starts_with("relu_")) |>
+  dplyr::select(-starts_with("lp"), -starts_with("relu_")) |>
   pivot_longer(cols = c(starts_with("output"))) |>
   ggplot(aes(A, B)) +
   geom_tile(aes(fill = value)) +
@@ -954,7 +1043,7 @@ num_grid <- vctrs::vec_unique_count(mlp_ranks$.config)
 
 wide_mtr <- 
   mlp_ranks |>
-  select(wflow_id, .config, .metric, mean) |>
+  dplyr::select(wflow_id, .config, .metric, mean) |>
   pivot_wider(
     id_cols = c(wflow_id, .config),
     names_from = .metric,
@@ -1046,7 +1135,7 @@ top_five |>
     brier_and_params |> distinct(wflow_id, .config, num_param),
     by = join_by(wflow_id, .config)
   ) |> 
-  select(wflow_id, .config, rank, num_param) |> 
+  dplyr::select(wflow_id, .config, rank, num_param) |> 
   inner_join(mlp_best_mtr, by = join_by(wflow_id, .config)) |> 
   mutate(
     tmp1 = map2_chr(hidden_units, activation, ~ paste0(.x, " ", .y)),
@@ -1071,7 +1160,7 @@ top_five |>
     Preprocessing = map2_chr(encoding, extraction, ~ paste0(.x, ", ", .y)),
     across(where(is.numeric), ~ format(.x, digits = 3))
   ) |> 
-  select(-wflow_id, -.config, -hidden_units, -hidden_units_2, -tmp1, -tmp2,
+  dplyr::select(-wflow_id, -.config, -hidden_units, -hidden_units_2, -tmp1, -tmp2,
          -activation, -activation_2, -.estimator, -n, -std_err, -rate_schedule, 
          -encoding, -extraction, -penalty, -rank) |> 
   rename(`Learning Rate` = learn_rate, 
@@ -1092,7 +1181,7 @@ top_five |>
     names_from = c(.metric),
     values_from = c(mean)
   ) |> 
-  select(
+  dplyr::select(
     Preprocessing,
     Architecture,
     `# Parameters`,
