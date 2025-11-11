@@ -663,9 +663,9 @@ forest_fda_res |>
 
 Once the FDA-MARS model was fit to the training set, the results was `r nrow(fda_coefs)` total coefficients. The implementation of MARS checks several stopping conditions for the growing phase based on the coefficient of determination (a.k.a. R<sup>2</sup>), including: 
 
-- Reached a R<sup>2 of 0.999 or more.
-- No new term increases R<sup>2
-- Adding a term changes R<sup>2 by less than 0.001.
+- Reached a R<sup>2</sup> of 0.999 or more.
+- No new term increases R<sup>2</sup>
+- Adding a term changes R<sup>2</sup> by less than 0.001.
 
 The last condition triggered the training procedure to stop at `r nrow(fda_coefs)` model terms instead of the `r forest_fda_best$num_terms`  that were requested. Of these terms, `r num_main` used a single predictor and `r num_int` were interaction terms. The categorical predictor (county) was used `r num_ind` times in both main effects and interactions. To give the reader a sense of what the linear regression model looks like, @tbl-fda-coefs shows the set of coefficients, the model terms, and split points.
 
@@ -723,7 +723,7 @@ For example, suppose that we chose an additive model based on the patterns shown
 #| message: false
 #| out-width: 90%
 #| fig-width: 8
-#| fig-height: 4
+#| fig-height: 5
 #| fig-cap: Profile plots showing how each predictor related to the probability of forestation when an additive FDA-MDA is used. The y-axis has no numbers since the probabilities are relative. 
 fda_additive_spec <- 
   discrim_flexible(num_terms = 30, prod_degree = 1, prune_method = "forward") |> 
@@ -784,7 +784,7 @@ additive_preds |>
 For example, we can say that: 
 
 - The probability of forestation appears to jump after 2020. 
-- When the precipitation at a location is greater than 500 mm × 100, the probability significantly increases and remains high (all other factors being equal). 
+- When the annual precipitation at a location is greater than 500, the probability significantly increases and remains high (all other factors being equal). 
 - The downward spike in longitude corresponds to the unforested area east of Seattle.
 
 and so on. 
@@ -891,7 +891,7 @@ act_functions <-
   )
 ```  
 
-Historically, the most commonly used nonlinear activation functions were sigmoidal. This means that the linear combination of the elements in the previous layer was converted into a “squashed” format, typically bounded (e.g., logistic activation values range between 0 and 1). @fig-sigmoid-activations shows several such functions. The logistic (@eq-logistic) function and hyperbolic tangent are fairly similar in shape, and were typical defaults. 
+Historically, the most commonly used nonlinear activation functions were sigmoidal. This means that the linear combination of the elements in the previous layer was converted into a "squashed" format, typically bounded (e.g., logistic activation values range between 0 and 1). @fig-sigmoid-activations shows several such functions. The logistic (@eq-logistic) function and hyperbolic tangent are fairly similar in shape, and were typical defaults. 
 
 ```{r}
 #| label: fig-sigmoid-activations
@@ -1666,6 +1666,90 @@ top_five |>
 Digging in further, @tbl-mlp-top-five displays the top five candidates from a pool of 300. They are a mixture of one- and two-layer networks, but note that we have to go to the third decimal place to distinguish their Brier scores. Constant learning rates did well as long as their rates were fairly low and batch sizes were fairly small. The number of parameters varied as well; increasing the model’s complexity did not appear to help for this dataset. In fact, the rank correlation between the Brier score and the number of parameters was `r brier_param_cor`, implying that there is little evidence that adding more layers and/or units to the MLP improves the model.
 
 The Brier scores are low and the areas under the ROC curves are all at least 0.94, indicating that the predictions effectively separate the classes and that the probability estimates are accurate. Across the candidates, the rank correlation between the Brier score and the ROC AUC was `r mtr_cor`; in this case, their optimization results are well-aligned. 
+
+```{r}
+#| label: mlp-mtr-diffs
+#| inlcude: false
+#| cache: true
+
+mtr_differences <- function(split, ref_model) {
+  mtr_vals <-
+    split |>
+    rsample::analysis() |>
+    pivot_longer(cols = c(-class), names_to = "Model", values_to = "value") |>
+    group_by(Model) |>
+    cls_mtr(class, value) |>
+    dplyr::select(-.estimator) |>
+    pivot_wider(
+      id_cols = c(.metric),
+      names_from = Model,
+      values_from = .estimate
+    ) |>
+    full_join(metrics_info(cls_mtr), by = ".metric") |>
+    dplyr::select(-type)
+  models <- colnames(mtr_vals)
+  models <- setdiff(models, c(".metric", "direction", ref_model))
+  for (i in models) {
+    diffs <- mtr_vals[[ref_model]] - mtr_vals[[i]]
+    new_nm <- paste0("loss_", i)
+    mtr_vals[[new_nm]] <-
+      if_else(mtr_vals$direction == "minimize", -diffs, diffs)
+  }
+  if (length(models) > 1) {
+    mtr_vals <-
+      mtr_vals |>
+      dplyr::select(.metric, starts_with("loss_")) |>
+      pivot_longer(
+        cols = c(starts_with("loss_")),
+        names_to = "term",
+        values_to = "estimate"
+      ) |>
+      mutate(term = gsub("loss_", "", term))
+  } else {
+    mtr_vals <-
+      mtr_vals |>
+      dplyr::select(.metric, all_of(new_nm)) |>
+      set_names(c(".metric", "estimate")) |>
+      mutate(term = i)
+  }
+  mtr_vals
+}
+
+# ------------------------------------------------------------------------------
+
+nonlin_pred <-
+  mlp_best_res |>
+  collect_predictions(parameters = mlp_best_config) |>
+  dplyr::select(.row, mlp = .pred_Yes) |>
+  full_join(
+    forest_fda_pred |> dplyr::select(.row, class, fda = .pred_Yes),
+    by = ".row"
+  ) |>
+  dplyr::select(-.row)
+
+set.seed(789)
+mlp_mtr_bt <-
+  nonlin_pred |>
+  bootstraps(times = 2000) |>
+  mutate(stats = map(splits, mtr_differences, ref_model = "mlp"))
+
+mlp_mtr_diffs <- 
+  mlp_mtr_bt |>
+  int_pctl(stats, alpha = 0.1)
+
+mlp_mtr <- 
+  mlp_best_res |> 
+  collect_metrics() |> 
+  inner_join(mlp_best_config |> dplyr::select(.config), by = ".config")
+
+mlp_brier <- mlp_mtr$mean[mlp_mtr$.metric == "brier_class"]
+fda_brier <- forest_fda_best_mtr$mean[forest_fda_best_mtr$.metric == "brier_class"]
+
+mlp_roc <- mlp_mtr$mean[mlp_mtr$.metric == "roc_auc"]
+fda_roc <- forest_fda_best_mtr$mean[forest_fda_best_mtr$.metric == "roc_auc"]
+```
+
+How do these results compare to the previous FDA model? The Brier scores are very close: `r signif(mlp_brier, 3)` for the neural network and `r signif(fda_brier, 3)` for FDA. The difference is very small, and a 90% confidence interval for the difference is (`r signif(mlp_mtr_diffs$.lower[mlp_mtr_diffs$.metric == "brier_class"], 3)`, `r signif(mlp_mtr_diffs$.upper[mlp_mtr_diffs$.metric == "brier_class"], 3)`), suggesting that performance for each model is within the experimental noise of the data. The difference in the area under the ROC curve is `r signif(mlp_roc - fda_roc, 3)` with interval (`r signif(mlp_mtr_diffs$.lower[mlp_mtr_diffs$.metric == "roc_auc"], 3)`, `r format(signif(mlp_mtr_diffs$.upper[mlp_mtr_diffs$.metric == "roc_auc"], 3), scientific = FALSE)`), leading us to a similar conclusion. Given that the FDA model uses fewer predictors and far fewer parameters, we might favor that model over our neural network. 
 
 ## Special Tabular Network Models  {#sec-tab-net}
 
