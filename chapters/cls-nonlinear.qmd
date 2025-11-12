@@ -14,19 +14,23 @@ source("../R/_common.R")
 
 # ------------------------------------------------------------------------------
 
+library(kernlab)
 library(tidymodels)
 library(torch)
 library(mirai)
 library(spatialsample)
-library(brulee)
+library(important)
+library(embed)
 library(bestNormalize)
 library(patchwork)
 library(gt)
+library(paletteer)
 
 # ------------------------------------------------------------------------------
 # set options
 
 tidymodels_prefer()
+theme_set(theme_bw())
 set_options()
 theme_set(theme_bw())
 daemons(parallel::detectCores())
@@ -60,6 +64,288 @@ To get started, the first chapter summarizes an old, traditional model for class
 ### Flexible Discriminants {#sec-fda}
 
 ### Naive Bayes {#sec-naive-bayes}
+
+
+## K-Nearest Neighbors  {#sec-cls-knn}
+
+K-nearest neighbors (KNN) is predicated on the idea that data points that are close to one another in the predictor space should have outcomes that are also similar. If we are predicting a new sample, we find the _K_ training set points that are "closest" to the new data point and use their outcome values to estimate the prediction. There is essentially no training set here; everything happens when the sample is being predicted. KNN falls into a class of techniques called instance-based learning since it stores the training set instances and directly uses these data during prediction.  
+
+What does "similar" and/or "close" mean? For this, we have to define a distance metric. A common choice is the Euclidean distance, but a more generalized tool is the Minkowski distance. For a new data point $\boldsymbol{u}$ with $p$ predictors, the Minkowski distance is: 
+
+$$
+d(\boldsymbol{u}, \boldsymbol{x}) ={\biggl (}\sum _{j=1}^{p}|u_j-x_{j}|^{degree}{\biggr )}^{\frac {1}{degree}},
+$$ 
+
+which is Euclidean when $degree = 2$,  Manhattan distance (a.k.a., street-block distance) with $degree = 1$, and others are in between. 
+
+With numeric predictors, there are other choices for distance metrics. Previously, in @sec-isomap, we also described geodesic distance based on a general distance matrix that results in a graph between points. Also, in @sec-centroids, Haversine distance is an appropriate choice when comparing geographic distances (on Earth). If we believe that the predictors are highly correlated and there is sufficient data to estimate a covariance metric, the Mahalanobis distance [@JohnsonWichern;@DeMaesschalck20001] can scale the differences in predictor values by the variances and covariances. It is also closely related to discriminant analysis. 
+
+For these distances, numeric values are required for all predictors. For Minkowski distance, we should also ensure that the predictors are in the same units, which can be achieved by centering and scaling, or by using comparable methods. Correcting for skewness is also a good idea. 
+
+For qualitative data, indicators are an option and these should be preprocessed in the same way as more dense numeric columns. Alternatively, when there are mixed predictor types, Gower distance [@gower] can also be used. This metric is computed separately for each predictor, and then the overall distance is a sum of the terms: 
+
+$$
+d(\boldsymbol{u}, \boldsymbol{x}) =\frac {1}{p}\sum _{j=1}^{p}d(u_j, x_{j}),
+$$
+
+where the $d_j$ values depend on the data type. For dense numeric data, this is
+
+$$
+d(u_j, x_{j})=1-{\frac {|u_{j}-x_{j}|}{R_{j}}}
+$$
+
+and $R_j$ is the range of predictor $j$'s values in the training set. For categorical predictors, $d(u_j, x_{j}) = I(u_j = x_j)$ which is a 0/1 indicator of agreement of the levels. 
+
+See @cunningham2021k for more discussion of distances.
+
+For classification data, we find the _K_ neighbors, then estimate class probabilities via:
+
+$$
+\widehat{\pi}_{c} = \frac{1}{K}\sum_{k=1}^K y_{kc}
+$$
+
+where $y_{kc}$ denotes the 0/1 class indicator that neighbor $k$ has class value $c$. For small values of _K_, this isn’t a very good estimate. The Laplace correction previously mentioned in @sec-naive-bayes can again be used to regularize the estimate: 
+
+$$
+\widehat{\pi}_{c} = \frac{1}{K}\sum_{k=1}^K \frac{y_{kc} +\alpha}{K + \alpha C}
+$$
+
+for $\alpha \in [0, 2]$. Also, it is common to fix _K_ and collect all neighbors, no matter the value of their distances. Alternatively, one can put a cap on the maximum distance or use a more informative approach of using weighted distances:
+
+$$
+\widehat{p}_{c} = \frac{1}{W}\sum_{k=1}^K g(d_k)\;y_{kc}
+$$
+
+where $g()$ is a kernel function that weights the distances and $W$ is the sum of the $g(d_k)$ [@dudani1976distance;@zuo2008kernel;@Samworth]. @fig-weight-kernels shows some commonly used functions [@hechenbichler2004weighted]. 
+
+
+```{r}
+#| label: fig-weight-kernels
+#| echo: false
+#| warning: false
+#| message: false
+#| out-width: 80%
+#| fig-width: 8
+#| fig-height: 2.75
+#| fig-cap: Different kernel functions to downweight far-away neighbors. Values have been rescaled to have the same upper value.  
+dists <- 
+  crossing(
+  distance = seq(0.1, 1, length.out = 100),
+  kernel = c(
+    "Rectangular",
+    "Triangular",
+    "Cosine",
+    "Gaussian",
+    "Inverse"
+  )
+) |> 
+  mutate(
+    weight = 
+      case_when(
+        kernel == "Rectangular" ~ 1 /2,
+        kernel == "Inverse"~ 1 / distance,
+        kernel == "Triangular"~ 1 - distance,
+        kernel == "Epanechnikov" ~ 3 / 4 * (1 - distance^2),
+        kernel == "Cosine" ~ pi / 4 * cos(pi * distance / 2),
+        TRUE ~ dnorm(distance)
+      )
+  )
+
+max_weight <- 
+  dists |> 
+  summarize(max_wt = max(weight), .by = c(kernel))
+
+dists |> 
+  right_join(max_weight, by = "kernel") |> 
+  mutate(
+    weight = weight / max_wt
+  ) |> 
+  ggplot(aes(distance, weight)) + 
+  geom_line() + 
+  facet_wrap(~ kernel, nrow = 1) + 
+  lims(y = extendrange(0:1)) +
+  labs(x = "Distance to Neighbor", y = "Weight")
+```  
+
+Outside of preprocessing methods, the primary tuning parameters are the number of neighbors, the weighting function, and the distance degree (if using a Minkowski distance). Recall from @fig-irrelevant-predictors that KNN models can be harmed when used with irrelevant predictors. As will be seen with these data, tuning an initial feature selection filter can improve model quality. 
+
+```{r}
+#| label: forested-knn
+#| include: false
+#| cache: true
+
+knn_spec <- 
+  nearest_neighbor(neighbors = tune(), dist_power = tune(), weight_func = tune()) |> 
+  set_mode("classification")
+
+encode_rec <-
+  recipe(class ~ ., data = forested_train) |>
+  step_predictor_best(all_numeric_predictors(), score = "imp_rf", prop_terms = tune()) |> 
+  step_lencode_mixed(county, outcome = "class") |>
+  step_orderNorm(all_numeric_predictors())
+
+knn_wflow <- workflow(encode_rec, knn_spec)
+
+kern_vals <- c("rectangular", "triangular", "cos", "gaussian", "inv")
+
+knn_param <- 
+  knn_wflow |> 
+  extract_parameter_set_dials() |> 
+  update(
+    neighbors = neighbors(c(2, 50)),
+    weight_func = weight_func(kern_vals)
+  )
+
+cls_mtr <- metric_set(brier_class, roc_auc, pr_auc, mn_log_loss)
+
+set.seed(872)
+forest_knn_res <-
+  knn_wflow |>
+  tune_grid(
+    resamples = forested_rs,
+    grid = 50,
+    param_info = knn_param,
+    metrics = cls_mtr,
+    control = control_grid(
+      save_pred = TRUE,
+      save_workflow = TRUE,
+      parallel_over = "everything"
+    )
+  )
+
+knn_best_res <- show_best(forest_knn_res, metric = "brier_class")
+
+forest_knn_mtr <-
+  forest_knn_res |> 
+  collect_metrics(summarize = FALSE) |> 
+  mutate(wflow_id = "knn") |> 
+  relocate(wflow_id)
+
+forest_knn_best <- select_best(forest_knn_res, metric = "brier_class")
+forest_knn_best_roc <- 
+  forest_knn_res |> 
+  collect_metrics() |> 
+  inner_join(forest_knn_best |> dplyr::select(.config), by = ".config") |> 
+  dplyr::filter(.metric == "roc_auc") |> 
+  pluck("mean") |> 
+  signif(digits = 3)
+
+forest_knn_pred <-
+  forest_knn_res |> 
+  collect_predictions(parameters = forest_knn_best) |> 
+  mutate(wflow_id = "knn") |> 
+  relocate(wflow_id)
+```
+
+How well does this technique work for the forestation data? To start, we used preprocessing that included the same  random forest importance filter as @sec-naive-bayes (and tune the proportion fo predictors retained). After that, an effect encoding was used for the county column, and then applied an orderNorm transformation to all predictors to standardize them to the same units and potentially remove skewness. The model was tuned over the proportion of features retained (5% to 100%), the number of neighbors (two through fifty), the Minkowski degree parameter (between 0.1 and 2.0), and the kernel functions listed in @fig-weight-kernels. A total of fifty configurations were evaluated using resampling, and the Brier scores are shown in @fig-knn-cls-tune. 
+
+```{r}
+#| label: fig-knn-cls-tune
+#| echo: false
+#| warning: false
+#| message: false
+#| out-width: 80%
+#| fig-width: 8
+#| fig-height: 3
+#| fig-cap: K-nearest neighbors tuning results for the forestation data.  
+
+knn_best_res <- show_best(forest_knn_res, metric = "brier_class")
+autoplot(forest_knn_res, metric = "brier_class") + 
+   labs(y = "Brier Score")
+```
+
+Poor results occurred when there were fewer than twenty neighbors, and subsequently, the Brier scores remained consistently low. The distance parameter appeared to favor small values (around 0.5). There are no strong trends in terms of which kernel functions; Gaussian kernels appear to do well overall, but there are configurations that do well using any kernel. Numerically, the best results retained `r round(knn_best_res$prop_terms[1] * 100, 1)`% of the  predictors, used `r knn_best_res$neighbors[1]` neighbors, a Minkowski degree of `r signif(knn_best_res$dist_power[1], digits = 3)`, and a `r knn_best_res$weight_func[1] ` kernel function. In the figure above, we can see that there is a small increase in error when the entire predictor set is used. Otherwise, smaller feature sets are underfitting the data. The corresponding Brier score was `r signif(knn_best_res$mean[1], digits = 3)`, which is very competitive. The area under the ROC curve was also good, with a resampling estimate of `r forest_knn_best_roc`.
+
+## Sidebar: Dot Products
+
+Dot products will become important in multiple sections of this chapter. They are a valuable tool for comparing two vectors. Since we just focused on distance, which is another tool for comparing vectors, now is a good time to discuss them. This will require a little bit of linear algebra and geometry. 
+
+Recall that vectors have a magnitude and direction. 
+
+- Magnitude is usually measured by its length, which we'll denote by $||\boldsymbol{a}||$ for some vector $\boldsymbol{a}$ with $p$ elements. This is usually computed as the square root of the sum of the squared elements (a.k.a., Euclidean distance). 
+
+- Direction is concerned with the angle of the vector to something, say another vector $\boldsymbol{y}$ with the same dimension ($p$). We'll denote this angle as $\vartheta$.
+
+The "nearest" in KNN was driven by the magnitude between two vectors and was not affected by the angle between two vectors. 
+
+The dot product of two vectors with length $p$ is: 
+
+$$
+\boldsymbol{a}'\boldsymbol{b} = \sum_{i=1}^p a_ib_i
+$$  {#eq-dot-prod-sum}
+
+Note that the dot product could not be considered a distance metric since the distance between itself could never be zero unless all of its elements are zero. 
+
+Dot products measure both the magnitude of each vector as well as the angle between them ($\vartheta$). We can rewrite @eq-dot-prod-sum as
+
+$$
+\boldsymbol{a}'\boldsymbol{b} = ||\boldsymbol{a}||\,||\boldsymbol{b}|| \cos{\vartheta}
+$$  {#eq-dot-prod-vec}
+
+Let's consider a few different cases. First, when would the dot product be zero? This can occur if either vectors have zero magnitude, but, more importantly, it can also be zero when $\cos{\vartheta}$ is zero. That happens when the two vectors are _orthogonal_ (i.e., perpendicular) to one another. In $p=2$ dimensions, this means that there is a right angle ($\vartheta = 90^{\circ}$) between the two vectors and the cosine of this angle is zero.
+
+To illustrate, @fig-dot-products shows the dot products of a vector $\boldsymbol{x} = (2.0, 0.5)$ to a grid of vectors with elements ranging between $\pm 3$. We can see a diagonal region of light colored values that have dot products close to or at zero. This represents vectors that are orthogonal to $\boldsymbol{x}$. There is also a dotted line extending to the origin (0.0, 0.0) that coincides with this line.  
+
+```{r}
+#| label: dot-products
+#| include: false
+
+lin <- kernlab::vanilladot()
+
+x_seq <- seq(-3, 3, by = 0.1)
+x_n <- length(x_seq)
+grid <- crossing(x = x_seq, y = x_seq)
+grid_mat <- as.matrix(grid)
+
+ref_x <- 2.0
+ref_y <- 0.5
+ref_df <- tibble(x = ref_x, y = ref_y)
+ref_vec = c(ref_x, ref_y)
+ref_prod <- t(ref_vec) %*% ref_vec
+ref_prod <- lin(ref_vec, ref_vec)
+
+ex_point <- c(1, 0)
+ex_prod <- lin(ex_point, ref_vec)
+ex_dist <- rbind(ex_point, ref_vec) |> dist() |> as.numeric()
+
+lin_kern <- kernelMatrix(lin, grid_mat, matrix(ref_vec, nrow = 1))
+
+lin_df <- tibble(
+  `dot product` = as.vector(lin_kern),
+  x = rep(x_seq, each = x_n),
+  y = rep(x_seq, x_n)
+)
+```
+
+```{r}
+#| label: fig-dot-products
+#| echo: false
+#| out-width: 50%
+#| fig-width: 5
+#| fig-height: 5
+#| fig-cap: Dot product values of a grid of vectors relative to $\boldsymbol{x} = (2.0, 0.5)$ (the black point). The dashed black line shows the contour of constant dot products and the white dotted line is points to the origin.
+#| warning: false
+
+lin_df |>
+  ggplot(aes(x, y)) +
+  geom_raster(aes(fill = `dot product`)) +
+  geom_segment(
+    aes(y = 0, x = 0, yend = ref_y, xend = ref_x),
+    lty = 3, col = "white"
+  ) +
+  geom_point(data = ref_df, col = "black", cex = 2) +
+  geom_contour(aes(z = `dot product`), breaks = ref_prod, col = "black", lty = 2) +
+  coord_fixed() +
+  paletteer::scale_fill_paletteer_c("grDevices::Geyser") +
+  labs(x = expression(x[1]), y = expression(x[2])) +
+  theme(legend.position = "top")
+```
+
+What is the dot product of $\boldsymbol{x}$ with itself? That value is $\boldsymbol{x}'\boldsymbol{x} =$ `r ref_prod`. The dashed black diagonal line shows which vectors have the same dot product as $\boldsymbol{x}$. These are points that point in the same direction (i.e., $\vartheta = 0^{\circ}$) and magnitude as our example vector. Note that this line is parallel to the region of zero values, reemphasizing that the zero region is orthogonal to vectors like $\boldsymbol{x}$. 
+
+The vector associated with the largest dot product would move in the same direction as $\boldsymbol{x}$. Since  $||\boldsymbol{x}||$ is fixed and $\cos(\vartheta) = 0^{\circ}$, the magnitude of the vector would be as large as possible. Conversely, the vector with the smallest dot product will move in the opposite direction and as far as possible. For our $\boldsymbol{x}$, the dot product is maximized in the upper right corner of @fig-dot-products and minimized in the lower left corner. 
+
+We'll see the dot product again in @sec-attention where it is intended to measure the similarity of two embedding vectors within a neural network, and again in @sec-cls-svm where it is the computational backbone of support vector machines. 
 
 ## Neural Networks via Multilayer Perceptrons {#sec-nnet}
 
@@ -324,7 +610,7 @@ The top of @fig-nnet-ex-layer-1 displays a heatmap illustrating how these three 
 
 lp_layer <- 
   components |> 
-  select(-starts_with("relu_"), -starts_with("output")) |> 
+  dplyr::select(-starts_with("relu_"), -starts_with("output")) |> 
   pivot_longer(cols = c(starts_with("lp_"))) |> 
   mutate(name = gsub("lp_", "hidden unit ", name)) |> 
   ggplot(aes(A, B)) + 
@@ -342,7 +628,7 @@ lp_layer <-
 
 relu_layer <- 
   components |> 
-  select(-starts_with("lp"), -starts_with("output")) |> 
+  dplyr::select(-starts_with("lp"), -starts_with("output")) |> 
   pivot_longer(cols = c(starts_with("relu_"))) |> 
   mutate(name = gsub("relu_", "hidden unit ", name)) |> 
   ggplot(aes(A, B)) + 
@@ -400,7 +686,7 @@ Note that the coefficients' signs are opposite for each outcome unit. @fig-nnet-
 
 output_layer <- 
   components |>
-  select(-starts_with("lp"), -starts_with("relu_")) |>
+  dplyr::select(-starts_with("lp"), -starts_with("relu_")) |>
   pivot_longer(cols = c(starts_with("output"))) |>
   ggplot(aes(A, B)) +
   geom_tile(aes(fill = value)) +
@@ -768,7 +1054,7 @@ num_grid <- vctrs::vec_unique_count(mlp_ranks$.config)
 
 wide_mtr <- 
   mlp_ranks |>
-  select(wflow_id, .config, .metric, mean) |>
+  dplyr::select(wflow_id, .config, .metric, mean) |>
   pivot_wider(
     id_cols = c(wflow_id, .config),
     names_from = .metric,
@@ -860,7 +1146,7 @@ top_five |>
     brier_and_params |> distinct(wflow_id, .config, num_param),
     by = join_by(wflow_id, .config)
   ) |> 
-  select(wflow_id, .config, rank, num_param) |> 
+  dplyr::select(wflow_id, .config, rank, num_param) |> 
   inner_join(mlp_best_mtr, by = join_by(wflow_id, .config)) |> 
   mutate(
     tmp1 = map2_chr(hidden_units, activation, ~ paste0(.x, " ", .y)),
@@ -885,7 +1171,7 @@ top_five |>
     Preprocessing = map2_chr(encoding, extraction, ~ paste0(.x, ", ", .y)),
     across(where(is.numeric), ~ format(.x, digits = 3))
   ) |> 
-  select(-wflow_id, -.config, -hidden_units, -hidden_units_2, -tmp1, -tmp2,
+  dplyr::select(-wflow_id, -.config, -hidden_units, -hidden_units_2, -tmp1, -tmp2,
          -activation, -activation_2, -.estimator, -n, -std_err, -rate_schedule, 
          -encoding, -extraction, -penalty, -rank) |> 
   rename(`Learning Rate` = learn_rate, 
@@ -906,7 +1192,7 @@ top_five |>
     names_from = c(.metric),
     values_from = c(mean)
   ) |> 
-  select(
+  dplyr::select(
     Preprocessing,
     Architecture,
     `# Parameters`,
@@ -940,10 +1226,17 @@ The Brier scores are low and the areas under the ROC curves are all at least 0.9
 
 ## Special Tabular Network Models  {#sec-tab-net}
 
-## K-Nearest Neighbors  {#sec-cls-knn}
-
-### Discriminant Adaptive Nearest Neighbors  {#sec-dann}
-
 ## Support Vector Machines {#sec-cls-svm}
 
 ## Chapter References {.unnumbered}
+
+```{r}
+#| label: cls-nonlinear-save
+#| include: false
+
+forest_knn_wflow_res <- as_workflow_set(knn = forest_knn_res)
+save(
+ forest_knn_res, forest_knn_best,
+  file = "../RData/forested_knn.Rdata"
+)
+```
