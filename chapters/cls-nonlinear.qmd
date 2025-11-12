@@ -68,7 +68,7 @@ To get started, the first chapter summarizes an old, traditional model for class
 
 ## K-Nearest Neighbors  {#sec-cls-knn}
 
-K-nearest neighbors (KNN) is predicated on the idea that data points that are similar to one another in the predictor space should have outcomes that are also similar. If we are predicting a new sample, we find the _K_ training set points that are "closest" to the new data point and use their outcome values to estimate the prediction. There is essentially no training set here; everything happens when the sample is being predicted. 
+K-nearest neighbors (KNN) is predicated on the idea that data points that are close to one another in the predictor space should have outcomes that are also similar. If we are predicting a new sample, we find the _K_ training set points that are "closest" to the new data point and use their outcome values to estimate the prediction. There is essentially no training set here; everything happens when the sample is being predicted. KNN falls into a class of techniques called instance-based learning since it stores the training set instances and directly uses these data during prediction.  
 
 What does "similar" and/or "close" mean? For this, we have to define a distance metric. A common choice is the Euclidean distance, but a more generalized tool is the Minkowski distance. For a new data point $\boldsymbol{u}$ with $p$ predictors, the Minkowski distance is: 
 
@@ -76,14 +76,16 @@ $$
 d(\boldsymbol{u}, \boldsymbol{x}) ={\biggl (}\sum _{j=1}^{p}|u_j-x_{j}|^{degree}{\biggr )}^{\frac {1}{degree}},
 $$ 
 
-which is Euclidean when $degree = 2$,  Manhattan distance (a.k.a., street-block distance) with $degree = 1$, and others are in between. Previously, in @sec-isomap, we also described geodesic distance based on a general distance matrix that results in a graph between points. Also, in @sec-centroids, Haversine distance is an appropriate choice when comparing geographic distances (on Earth). 
+which is Euclidean when $degree = 2$,  Manhattan distance (a.k.a., street-block distance) with $degree = 1$, and others are in between. 
 
-For these distances, numeric values are required for all predictors. For Minkowski distances, we should also ensure that the predictors are in the same units, which can be achieved by centering and scaling, or by using comparable methods. Correcting for skewness is also a good idea. For qualitative data, indicators are an option and these should be preprocessed in the same way as more dense numeric columns. 
+With numeric predictors, there are other choices for distance metrics. Previously, in @sec-isomap, we also described geodesic distance based on a general distance matrix that results in a graph between points. Also, in @sec-centroids, Haversine distance is an appropriate choice when comparing geographic distances (on Earth). If we believe that the predictors are highly correlated and there is sufficient data to estimate a covariance metric, the Mahalanobis distance [@JohnsonWichern;@DeMaesschalck20001] can scale the differences in predictor values by the variances and covariances. It is also closely related to discriminant analysis. 
 
-Alternatively, when there are mixed predictor types, Gower distance [@gower] can also be used. This metric is computed separately for each predictor, and then the overall distance is a weighted sum of the terms: 
+For these distances, numeric values are required for all predictors. For Minkowski distance, we should also ensure that the predictors are in the same units, which can be achieved by centering and scaling, or by using comparable methods. Correcting for skewness is also a good idea. 
+
+For qualitative data, indicators are an option and these should be preprocessed in the same way as more dense numeric columns. Alternatively, when there are mixed predictor types, Gower distance [@gower] can also be used. This metric is computed separately for each predictor, and then the overall distance is a sum of the terms: 
 
 $$
-d(\boldsymbol{u}, \boldsymbol{x}) =\frac {1}{p}\sum _{j=1}^{p}d_(u_j, x_{j}),
+d(\boldsymbol{u}, \boldsymbol{x}) =\frac {1}{p}\sum _{j=1}^{p}d(u_j, x_{j}),
 $$
 
 where the $d_j$ values depend on the data type. For dense numeric data, this is
@@ -114,7 +116,7 @@ $$
 \widehat{p}_{c} = \frac{1}{W}\sum_{k=1}^K g(d_k)\;y_{kc}
 $$
 
-where $g()$ is a kernel function that weights the distances and $W$ is the sum of the $g(d_k)$. @fig-weight-kernels shows some commonly used functions. 
+where $g()$ is a kernel function that weights the distances and $W$ is the sum of the $g(d_k)$ [@dudani1976distance;@zuo2008kernel;@Samworth]. @fig-weight-kernels shows some commonly used functions [@hechenbichler2004weighted]. 
 
 
 ```{r}
@@ -220,7 +222,14 @@ forest_knn_mtr <-
   relocate(wflow_id)
 
 forest_knn_best <- select_best(forest_knn_res, metric = "brier_class")
-  
+forest_knn_best_roc <- 
+  forest_knn_res |> 
+  collect_metrics() |> 
+  inner_join(forest_knn_best |> dplyr::select(.config), by = ".config") |> 
+  dplyr::filter(.metric == "roc_auc") |> 
+  pluck("mean") |> 
+  signif(digits = 3)
+
 forest_knn_pred <-
   forest_knn_res |> 
   collect_predictions(parameters = forest_knn_best) |> 
@@ -228,7 +237,7 @@ forest_knn_pred <-
   relocate(wflow_id)
 ```
 
-How well does this technique work for the forestation data? To start, we used preprocessing that included an feature filter using random forest importance scores (and tune the proportion fo predictors retained). After that, an effect encoding was used for the county column, and then applied an orderNorm transformation to all predictors to standardize them to the same units and potentially remove skewness. The model was tuned over the proportion of features retained (5% to 100%), the number of neighbors (two through fifty), the Minkowski degree parameter (between 0.1 and 2.0), and the kernel functions listed in @fig-weight-kernels. A total of fifty configurations were evaluated using resampling, and the Brier scores are shown in @fig-knn-cls-tune. 
+How well does this technique work for the forestation data? To start, we used preprocessing that included the same  random forest importance filter as @sec-naive-bayes (and tune the proportion fo predictors retained). After that, an effect encoding was used for the county column, and then applied an orderNorm transformation to all predictors to standardize them to the same units and potentially remove skewness. The model was tuned over the proportion of features retained (5% to 100%), the number of neighbors (two through fifty), the Minkowski degree parameter (between 0.1 and 2.0), and the kernel functions listed in @fig-weight-kernels. A total of fifty configurations were evaluated using resampling, and the Brier scores are shown in @fig-knn-cls-tune. 
 
 ```{r}
 #| label: fig-knn-cls-tune
@@ -245,15 +254,17 @@ autoplot(forest_knn_res, metric = "brier_class") +
    labs(y = "Brier Score")
 ```
 
-Poor results occurred when there were fewer than twenty neighbors, and subsequently, the Brier scores remained consistently low. The distance parameter appeared to favor small values (around 0.5). There are no strong trends in terms of which kernel functions; Gaussian kernels appear to do well overall, but there are configurations that do well using any kernel. Numerically, the best results retained `r round(knn_best_res$prop_terms[1] * 100, 1)`% of the  predictors, used `r knn_best_res$neighbors[1]` neighbors, a Minkowski degree of `r signif(knn_best_res$dist_power[1], digits = 3)`, and a `r knn_best_res$weight_func[1] ` kernel function. In the figure above, we can see that there is a small increase in error when the entire predictor set is used. Otherwise, smaller feature sets are underfitting the data. The corresponding Brier score was `r signif(knn_best_res$mean[1], digits = 3)`, which is very competitive. 
+Poor results occurred when there were fewer than twenty neighbors, and subsequently, the Brier scores remained consistently low. The distance parameter appeared to favor small values (around 0.5). There are no strong trends in terms of which kernel functions; Gaussian kernels appear to do well overall, but there are configurations that do well using any kernel. Numerically, the best results retained `r round(knn_best_res$prop_terms[1] * 100, 1)`% of the  predictors, used `r knn_best_res$neighbors[1]` neighbors, a Minkowski degree of `r signif(knn_best_res$dist_power[1], digits = 3)`, and a `r knn_best_res$weight_func[1] ` kernel function. In the figure above, we can see that there is a small increase in error when the entire predictor set is used. Otherwise, smaller feature sets are underfitting the data. The corresponding Brier score was `r signif(knn_best_res$mean[1], digits = 3)`, which is very competitive. The area under the ROC curve was also good, with a resampling estimate of `r forest_knn_best_roc`.
 
 ## Sidebar: Dot Products
 
 Dot products will become important in multiple sections of this chapter. They are a valuable tool for comparing two vectors. Since we just focused on distance, which is another tool for comparing vectors, now is a good time to discuss them. This will require a little bit of linear algebra and geometry. 
 
-Recall that vectors have a magnitude and direction. Magnitude is usually measured by its length, which we'll denote by $||\boldsymbol{a}||$ for some vector $\boldsymbol{a}$ with $p$ elements.
+Recall that vectors have a magnitude and direction. 
 
-Direction is concerned with the angle of the vector to something, say another vector $\boldsymbol{y}$ with the same dimension ($p$).  
+- Magnitude is usually measured by its length, which we'll denote by $||\boldsymbol{a}||$ for some vector $\boldsymbol{a}$ with $p$ elements. This is usually computed as the square root of the sum of the squared elements (a.k.a., Euclidean distance). 
+
+- Direction is concerned with the angle of the vector to something, say another vector $\boldsymbol{y}$ with the same dimension ($p$). We'll denote this angle as $\vartheta$.
 
 The "nearest" in KNN was driven by the magnitude between two vectors and was not affected by the angle between two vectors. 
 
@@ -265,7 +276,7 @@ $$  {#eq-dot-prod-sum}
 
 Note that the dot product could not be considered a distance metric since the distance between itself could never be zero unless all of its elements are zero. 
 
-Dot products measure both the magnitude of each vector as well as the angle between them (denoted as $\vartheta$). We can rewrite @eq-dot-prod-sum as
+Dot products measure both the magnitude of each vector as well as the angle between them ($\vartheta$). We can rewrite @eq-dot-prod-sum as
 
 $$
 \boldsymbol{a}'\boldsymbol{b} = ||\boldsymbol{a}||\,||\boldsymbol{b}|| \cos{\vartheta}
@@ -309,7 +320,7 @@ lin_df <- tibble(
 ```{r}
 #| label: fig-dot-products
 #| echo: false
-#| out-width: 60%
+#| out-width: 50%
 #| fig-width: 5
 #| fig-height: 5
 #| fig-cap: Dot product values of a grid of vectors relative to $\boldsymbol{x} = (2.0, 0.5)$ (the black point). The dashed black line shows the contour of constant dot products and the white dotted line is points to the origin.
@@ -332,7 +343,7 @@ lin_df |>
 
 What is the dot product of $\boldsymbol{x}$ with itself? That value is $\boldsymbol{x}'\boldsymbol{x} =$ `r ref_prod`. The dashed black diagonal line shows which vectors have the same dot product as $\boldsymbol{x}$. These are points that point in the same direction (i.e., $\vartheta = 0^{\circ}$) and magnitude as our example vector. Note that this line is parallel to the region of zero values, reemphasizing that the zero region is orthogonal to vectors like $\boldsymbol{x}$. 
 
-The vector associated with the largest dot product would move in the same direction as $\boldsymbol{x}$. This means that $||\boldsymbol{x}||$ and $\cos(\vartheta) = 0^{\circ}$, so the magnitude of the vector would be as large as possible. Conversely, the vector with the smallest dot product will move in the opposite direction and as far as possible. For our $\boldsymbol{x}$, the dot product is maximized in the upper right corner of @fig-dot-products and minimized in the lower left corner. 
+The vector associated with the largest dot product would move in the same direction as $\boldsymbol{x}$. Since  $||\boldsymbol{x}||$ is fixed and $\cos(\vartheta) = 0^{\circ}$, the magnitude of the vector would be as large as possible. Conversely, the vector with the smallest dot product will move in the opposite direction and as far as possible. For our $\boldsymbol{x}$, the dot product is maximized in the upper right corner of @fig-dot-products and minimized in the lower left corner. 
 
 We'll see the dot product again in @sec-attention where it is intended to measure the similarity of two embedding vectors within a neural network, and again in @sec-cls-svm where it is the computational backbone of support vector machines. 
 
