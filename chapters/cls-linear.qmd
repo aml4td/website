@@ -28,6 +28,7 @@ library(car)
 library(DALEXtra)
 library(discrim)
 library(spatialsample)
+library(leaflet)
 
 # ------------------------------------------------------------------------------
 # set options
@@ -865,6 +866,29 @@ logistic_resdiduals <-
   ) |>
   inner_join(forested_train |> add_rowindex() |> select(-class), by = ".row")
 
+
+resid_cuts <- 21
+resid_cols <- colorRampPalette(c("#218239", "#FFFFFFFF", "#d4ad42"))(resid_cuts)
+resid_abs_max <- max(abs(logistic_resdiduals$deviance))
+resid_cuts <- seq(-resid_abs_max, resid_abs_max, length.out = resid_cuts)
+
+map_resdiduals <-
+  logistic_resdiduals %>%
+  mutate(
+    resid_group = cut(deviance, breaks = resid_cuts, include.lowest = TRUE),
+    resid_col = resid_cols[as.integer(resid_group)],
+    correct = .pred_Yes >= 1 / 2 & class == "Yes",
+    resid_res = paste0(
+      "Truth: ",
+      format(class),
+      ", prob: ",
+      sprintf("%.2f", .pred_Yes)
+    ),
+    resid_label = paste0(resid_res, ", residual: ", format(round(deviance, 1))),
+    class_col = if_else(class == "Yes", "#218239", "#d4ad42")
+  ) |>
+  filter(!correct & abs(deviance) >= 1.25 & Model == "Spline Terms")
+
 logistic_resdiduals |>
   ggplot(aes(longitude, deviance, col = class)) +
   geom_point(alpha = 1 / 2, cex = 1) +
@@ -872,6 +896,21 @@ logistic_resdiduals |>
   scale_color_manual(values = c("#218239", "#d4ad42")) +
   labs(x = "Longitude", y = "Deviance Residiual") +
   theme(legend.position = "top")
+
+leaflet() %>%
+  addProviderTiles(providers$CartoDB.PositronNoLabels) %>%
+  addCircles(
+    data = map_resdiduals,
+    lng = ~longitude,
+    lat = ~latitude,
+    color = ~resid_col,
+    fillColor = ~resid_col,
+    label = ~resid_label,
+    fill = FALSE,
+    opacity = 1,
+  ) %>%
+  setView(lng = -120.3945, lat = 47.33047, zoom = 6) |>
+  addScaleBar()
 ```
 
 In contrast, the right-hand panel has many more residuals near zero and significantly attenuated spikes/patterns. This is indicative of an improvement of model fit. However, some samples in the spline model have absolute residuals _larger_ than the simpler model. Overall, though, the spline model exhibits fewer systematic deviations. 
