@@ -1,15 +1,14 @@
 library(tidymodels)
 library(hstats)
 library(bonsai)
-library(future.apply)
-library(future.mirai)
+library(mirai)
 
 # ------------------------------------------------------------------------------
 
 tidymodels_prefer()
 theme_set(theme_bw())
 options(pillar.advice = FALSE, pillar.min_title_chars = Inf)
-plan(mirai_multisession)
+daemons(parallel::detectCores())
 
 # ------------------------------------------------------------------------------
 
