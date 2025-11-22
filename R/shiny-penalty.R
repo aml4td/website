@@ -62,9 +62,9 @@ server <- function(input, output) {
       {
         dat <- all_penalties |> dplyr::filter(method == input$method)
         if (input$method == "glmnet") {
-          dat <- dat |> dplyr::filter(mixture == input$mixture)
+          dat <- dat |> dplyr::filter(mixture == as.numeric(input$mixture))
         } else if (input$method %in% c("SCAD", "MCP")) {
-          dat <- dat |> dplyr::filter(gamma == input$gamma)
+          dat <- dat |> dplyr::filter(gamma == as.numeric(input$gamma))
         }
 
         p <-
