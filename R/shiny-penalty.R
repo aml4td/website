@@ -54,7 +54,7 @@ ui <- fluidPage(
 
 server <- function(input, output) {
   load(url(
-    "https://raw.githubusercontent.com/aml4td/website/logistic-reg/RData/all_penalties.RData"
+    "https://raw.githubusercontent.com/aml4td/website/main/RData/all_penalties.RData"
   ))
 
   output$plot <-
