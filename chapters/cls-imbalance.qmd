@@ -6,7 +6,6 @@ knitr:
 
 # Class Imbalances {#sec-cls-imbalance}
 
-
 ```{r}
 #| label: cls-imbalance-setup
 #| include: false
@@ -38,40 +37,28 @@ daemons(parallel::detectCores())
 #| label: load-data
 #| include: false
 
-load("../RData/drug_interactions.RData")
-cyp3A4_fp <- cyp3A4_fp |> map_dfc(as_sparse_integer)
-cyp3A4 <- bind_cols(cyp3A4_outcome, cyp3A4_fp)
+load("../RData/complaints.RData")
 
-col_densities <- map_dbl(cyp3A4_fp, mean) * 100
+set.seed(836)
+complaint_split <- initial_validation_split(complaints, strata = class)
+complaint_train <- training(complaint_split)
+complaint_test <- testing(complaint_split)
+complaint_rs <- validation_set(complaint_split)
 
-# ------------------------------------------------------------------------------
-
-set.seed(3571)
-cyp3A4_split <- initial_validation_split(cyp3A4, prop = c(0.7, 0.15), strata = class)
-cyp3A4_train <- training(cyp3A4_split)
-cyp3A4_test <- testing(cyp3A4_split)
-cyp3A4_rs <- validation_set(cyp3A4_split)
-
-train_rate <- mean(cyp3A4_train$class == "inhibitor")
+train_rate <- mean(complaint_train$class == "no")
+rate_by_burro <- 
+  complaint_train |> 
+  summarize(
+    percent = mean(class == "no") * 100,
+    number = length(class),
+    .by = c(borough)
+  ) |> 
+  mutate(
+    Borough = gsub("_", " ", borough),
+    Borough = tools::toTitleCase(Borough)
+  ) |> 
+  arrange(percent)
 ```
-
-```{r}
-#| label: cyp-pca
-#| include: false
-#| cache: true
-
-cyp3A4_pca <- cyp3A4_train |> select(-class) |> prcomp()
-cyp3A4_sq <- cyp3A4_pca$sdev^2
-cyp3A4_pct <- cumsum(cyp3A4_sq) / sum(cyp3A4_sq)
-cyp3A4_pct <- tibble::tibble(components = c(0, seq_along(cyp3A4_pct)), percentage = c(0, cyp3A4_pct))
-
-cyp3A4_comps <- 
-  cyp3A4_pct |> 
-  filter(percentage >= 0.95) |> 
-  slice_head(n = 1) |> 
-  pluck("components")
-```
-
 
 Examples: churn, click through, diseases (trip test, Parkinson’s), blood specimen mixups
 
@@ -91,49 +78,8 @@ discussion or relative risk vs absolute risk
 
 This should drive our choice of optimization metric
 
-## Example: Drug interactions
+## Example: NYC Building Complaints
 
-The family of cytochrome P450 (a.k.a., "CYPs") enzymes is a crucial component of cellular systems [@mcdonnell2013basic]. They are essential for breaking down components that are external to the human body, such as drugs, fats, toxins, and other elements. There are various enzymes in the family that target different elements. Many of the members of the CYP family are named with different suffixes, such as CYP1A2, CYP2C9, CYP2C19, and CYP3A4. 
-
-Some pharmaceuticals can alter the activity of specific CYP enzymes by either inhibiting or enhancing their effectiveness. A familiar example is the effect that grapefruit can cause some drugs to be metabolized much faster than expected, perhaps leading to an accidental overdose, even when the correct dose is taken [@bailey2013grapefruit]. Unusual effects like these are generally classified as drug interactions. One member of the family, CYP3A4, is believed to be the primary metabolizer of drugs and is of particular importance [@guengerich2008cytochrome;@pirmohamed2013drug]. 
-
-In pharmaceutical research and development, medicinal chemists are responsible for "designing" drugs; they propose and test different "formulas" that define candidate drugs. These drugs are evaluated using a battery of laboratory tests (called "assays") to measure a wide range of qualities. For example, a cancer drug might be evaluated to quantify how well it shrinks a tumor via a laboratory assay. Other characteristics measured by assays include potential toxicity, absorption, and drug interactions, among others. It is difficult to quantify the baseline rate of drug interactions, but it is definitely not near even odds (i.e., a prevalence near 50%). Our example will focus on the CYP3A4 enzyme, and the published data set has an event rate such that about 30% of the potential drugs inhibit CYP3A4 and may cause an interaction. 
-
-When a chemist designs a potential new drug, they can input the formula into a machine learning model to get predictions for each of the characteristics of interest. Every time a laboratory assay measures something, those data are used as the outcome in an ML model. The predictors are usually structural descriptors (that will be discussed below). 
-
-This scenario is particularly relevant for several reasons. The first reason is that machine learning models in this context have a long history. While not well known, the fields of cheminformatics and computational chemistry have been at the forefront of the field in terms of operationalizing ML models, often referred to as _model operations_, also known as "MLops". While it may not be an indicator of how MLops work in other domains where ML models are used, such as credit scoring, this example will be used in future sections to discuss how users interact with models and what post-development actions are required to support an ML model. 
-
-The second reason to use this example for class imbalances is related to the discussion of the model's goal. It is very reasonable to think of this problem as a "find the events" scenario, so we might want to optimize our model for the hard class predictions. However, speaking from experience, this approach can be counterproductive when the model author has to explain bad news to the chemist whose best compound is flagged by the model as being risky. In this case, having well-calibrated models is crucial for understanding the actual risk; our estimated probabilities must be consistent with the nature of the data in the wild to make an informed decision. 
-
-For this reason, we’ll use this case study to build two sets of models. The first are designed to find events by either distorting the prevalence of the event of interest or by placing more importance on the minority class. 
-
-### CYP3A4 Data
-
-We'll use a data set from @xiao2025deep where `r format(nrow(cyp3A4_outcome), big.mark = ",")` drug candidates had assay data for CYP3A4 inhibition^[These data correspond to "Data Set 2" and only include the inactive and strongly inhibiting compounds.]. The initial screening assays are designed to be inexpensive yet effective. They measure the percentage of inhibition relative to control compounds. The results of these assays are technically quantitative; however, the distribution of the results exhibits extreme bimodality. Converting the percentage to a binary yes/no answer for inhibition is also a common and scientifically sound approach. If a drug is flagged as an inhibitor, it can be sent to a higher-value assay that is more expensive but generates a more definitive result. 
-
-The previously mentioned formula for a drug is often represented as a SMILES string, which includes elements for the atoms in the drug, as well as the type of bonds and other structures. For example, the SMILES string for [one formulation of penicillin](https://pubchem.ncbi.nlm.nih.gov/compound/6869) is 
-
-`CC1([C@@H](N2[C@H](S1)[C@@H](C2=O)NC(=O)COC3=CC=CC=C3)C(=O)O)C`
-
-where `C` is carbon, `H` is hydrogen, `S` is sulfur, and `O` is oxygen. For this formula, there is a large number of potential predictors. Some are quantitative, such as the number of carbons, the molecular weight, or surface area. Others are qualitative. _Fingerprint_ predictors are usually binary and represent the presence of a specific chemical structure. For example, one fingerprint would have a value of 1.0 if there were at least two saturated or aromatic carbon-only rings of size 3. There are databases of specific fingerprints for various applications, and, for our example, three different sets were used: `r original_cols["MACCS"]` Molecular ACCess System (MACCS) fingerprints [@durant2002reoptimization], `r format(original_cols["KR"], big.mark = ",")` Klekota-Roth fingerprints [@klekota2008chemical], and `r original_cols["PubChem"]` PubChem fingerprint columns [@pcfp]. 
-
-
-### Preprocessing the predictors
-
-In terms of preprocessing, there are two very basic unsupervised filters that we can apply to these columns: 
-
- - Removing columns that are all zero or all one (zero-variance predictors). This reduced the number of predictors from `r format(sum(original_cols), big.mark = ",")` to `r format(initial_cols, big.mark = ",")`.
- - Removing columns that are identical. Instead of searching across all `r format(choose(initial_cols, 2), big.mark = ",")` pairs of columns, the method of @estimable was used to put the predictor matrix into row echelon form. Using this format, the specific linear dependencies between the columns can be determined and resolved. This further reduced the number of predictors to `r format(final_cols, big.mark = ",")`.
-
-These are innocuous operations and are applied to the data prior to splitting. The average density (i.e., the percentage of 1's) across the columns was `r round(mean(col_densities), 2)`% while the minimum and maximum percentages were `r signif(min(col_densities), 2)`% and `r signif(max(col_densities), 4)`%, respectively. 
-
-Note that these are sparse data; the values are mostly zeros. Operationally, we can represent these data using sparse matrices or vectors, which can drastically reduce memory requirements. Treating them as dense vectors requires 209 MB of memory, whereas the sparse version requires only 25 MB. 
-
-We'll make a training/validation/testing split of the data pool using stratified sampling based on the outcome class. This results in data sets of size `r format(nrow(cyp3A4_train), big.mark = ",")`, ` format(nrow(cyp3A4_val), big.mark = ",")`, and `r format(nrow(cyp3A4_test), big.mark = ",")`, respectively. 
-
-There is bound to be some degree of redundancy between the `r format(final_cols, big.mark = ",")` columns in the training set. There are `r format(choose(final_cols, 2), big.mark = ",")` pairs of predictors, and measuring the correlation or similarity between each is computationally expensive. Instead, we can roughly gauge the between-fingerprint similarity using PCA. Recall that PCA can determine the percentage of variance explained for each component. However, for binary data, this interpretation of the components may not be entirely accurate, as the data are not quantitative. That said, PCA analysis shows that `r cyp3A4_comps` out of `r format(ncol(cyp3A4_train), big.mark = ",")` components are required to capture 95% of the variation that is in the fingerprints. This implies that there is no rampant redundancy in these data. 
-
-Given that all our predictors are binary, there are several model types that we should avoid, as they require dense numeric data or are best suited for nonlinear relationships. The models we'll focus on in this chapter are logistic regression, naive Bayes, decision trees, and tree/rule ensembles. 
 
 ## Accepting the State of Nature 
 
@@ -152,277 +98,9 @@ ctrl_grid <- control_grid(
   save_workflow = TRUE
 )
 ctrl_rs <- control_resamples(save_pred = TRUE, save_workflow = TRUE)
-
-###
-
-bare_rec <-
-  recipe(class ~ ., data = cyp3A4_train) |>
-  step_zv(all_predictors())
 ```
 
 
-```{r}
-#| label: cyp-lasso-plain
-#| cache: true
-#| include: false
-
-path <- 10^seq(-4, -1, length.out = 25)
-
-lasso_plain_spec <-
-  logistic_reg(penalty = tune(), mixture = 1) |>
-  set_engine("glmnet", path_values = !!path)
-
-lasso_plain_wflow <- workflow(bare_rec, lasso_plain_spec)
-
-lasso_plain_res <-
-  lasso_plain_wflow |>
-  tune_grid(
-    cyp3A4_rs,
-    metrics = cls_mtr,
-    control = ctrl_grid,
-    grid = tibble(penalty = path)
-  )
-
-lasso_plain_best <- select_best(lasso_plain_res, metric = "brier_class")
-lasso_plain_best_mtr <- collect_metrics(lasso_plain_res) |> inner_join(lasso_plain_best, by = ".config")
-lasso_plain_best_pred <- collect_predictions(lasso_plain_res, parameters = lasso_plain_best)
-```
-
-```{r}
-#| label: cyp-cart-plain
-#| include: false
-#| cache: true
-
-cart_plain_spec <-
-  decision_tree(cost_complexity = tune(), min_n = tune()) |>
-  set_mode("classification")
-
-cart_plain_wflow <- workflow(bare_rec, cart_plain_spec)
-
-cart_plain_res <-
-  cart_plain_wflow |>
-  tune_grid(
-    cyp3A4_rs,
-    metrics = cls_mtr,
-    control = ctrl_grid,
-    grid = 25
-  )
-
-cart_plain_best <- select_best(cart_plain_res, metric = "brier_class")
-cart_plain_best_mtr <- collect_metrics(cart_plain_res) |> inner_join(cart_plain_best, by = ".config")
-cart_plain_best_pred <- collect_predictions(cart_plain_res, parameters = cart_plain_best)
-```
-
-```{r}
-#| label: cyp-xgb-plain
-#| include: false
-#| cache: true
-
-xgb_plain_spec <-
-  boost_tree(
-    trees = 1000,
-    tree_depth = tune(),
-    min_n = tune(),
-    loss_reduction = tune(),
-    mtry = tune(),
-    learn_rate = tune(),
-    stop_iter = tune()
-  ) |>
-  set_mode("classification") |>
-  set_engine("xgboost")
-
-
-xgb_plain_wflow <- workflow(bare_rec, xgb_plain_spec)
-
-set.seed(820)
-xgb_plain_res <-
-  xgb_plain_wflow |>
-  tune_grid(
-    cyp3A4_rs,
-    metrics = cls_mtr,
-    control = ctrl_grid,
-    grid = 25
-  )
-
-xgb_plain_best <- select_best(xgb_plain_res, metric = "brier_class")
-xgb_plain_best_mtr <- collect_metrics(xgb_plain_res) |> inner_join(xgb_plain_best, by = ".config")
-xgb_plain_best_pred <- collect_predictions(xgb_plain_res, parameters = xgb_plain_best)
-```
-
-```{r}
-#| label: cyp-xrf-plain
-#| include: false
-#| cache: true
-#| eval: false
-
-xrf_plain_spec <-
-  rule_fit(
-    mtry = tune(),
-    trees = tune(),
-    min_n = tune(),
-    tree_depth = tune(),
-    learn_rate = tune(),
-    sample_size = tune(),
-    penalty = tune()
-  ) |>
-  set_engine('xrf', counts = FALSE) |>
-  set_mode('classification')
-
-
-xrf_plain_wflow <- workflow(bare_rec, xrf_plain_spec)
-
-set.seed(820)
-xrf_plain_res <-
-  xrf_plain_wflow |>
-  tune_grid(
-    cyp3A4_rs,
-    metrics = cls_mtr,
-    control = ctrl_grid,
-    grid = 25
-  )
-
-xrf_plain_best <- select_best(xrf_plain_res, metric = "brier_class")
-xrf_plain_best_mtr <- collect_metrics(xrf_plain_res) |> inner_join(xrf_plain_best, by = ".config")
-xrf_plain_best_pred <- collect_predictions(xrf_plain_res, parameters = xrf_plain_best)
-```
-
-```{r}
-#| label: collect-plain
-#| include: false
-
-cyp3A4_plain_set <-
-  as_workflow_set(
-    lasso = lasso_plain_res,
-    cart = cart_plain_res,
-    xgb = xgb_plain_res
-    # xrf = xrf_plain_res
-  )
-
-rank_brier_plain <- rank_results(cyp3A4_plain_set, rank_metric = "brier_class")
-```
-
-
-```{r}
-#| label: collect-plain-metrics
-#| include: false
-
-plain_metrics <- 
-  bind_rows(
-    lasso_plain_best_mtr |> 
-      select(mean, Metric = .metric) |> 
-      mutate(Model = "Lasso"), 
-    cart_plain_best_mtr |> 
-      select(mean, Metric = .metric) |> 
-      mutate(Model = "CART"), 
-    xgb_plain_best_mtr |> 
-      select(mean, Metric = .metric) |> 
-      mutate(Model = "Gradient Boosting")
-    # xrf_plain_best_mtr |> 
-    #   select(mean, .metric) |> 
-    #   mutate(Model = "RuleFit")
-  ) |> 
-  pivot_wider(
-    id_cols = c(Metric), 
-    names_from = c(Model), 
-    values_from = c(mean)) |> 
-  mutate(
-    Metric = recode(
-      Metric, 
-      "accuracy" = "Accuracy", 
-      "brier_class" = "Brier Score", 
-      "kap" = "Kappa", 
-      "mn_log_loss" = "Log Loss", 
-      "pr_auc" = "PR AUC", 
-      "roc_auc" = "ROC AUC", 
-      "sensitivity" = "Sensitivity", 
-      "specificity" = "Specificity"
-    ),
-    Metric = factor(Metric,
-                    levels = c("Brier Score", "Log Loss", "ROC AUC", "PR AUC", 
-                               "Accuracy", "Kappa", 
-                               "Sensitivity", "Specificity"))
-  ) |> 
-  arrange(Metric)
-
-closest_point <- function(x, what = ".threshold", target = 0.5) {
-  x$delta <- abs(x[[what]] - target)
-  dplyr::slice_min(x, delta, with_ties = FALSE)
-}
-
-xgb_roc_curve <- 
-  xgb_plain_best_pred |>
-  roc_curve(class, .pred_inhibitor)
-
-xgb_default <- closest_point(xgb_roc_curve)
-xgb_sensitive <- closest_point(xgb_roc_curve, "sensitivity", 0.95)
-```
-
-
-:::: {.columns}
-
-::: {.column width="15%"}
-:::
-
-::: {.column width="70%"}
-
-::: {#tbl-plain-metrics}
-
-```{r}
-#| label: plain-metrics
-#| echo: false
-plain_metrics |>
-  gt() |>
-  fmt_number(
-    columns = c(-Metric),
-    decimals = 3
-  ) 
-```
-
-Performance metrics for the best candidate of each model, where no additional steps are used to diminish the effect of the class imbalance. The hard class metrics are based on the default 50% probability threshold.  
- 
-:::
-
-:::
-
-::: {.column width="15%"}
-:::
-
-:::: 
-
-
-
-```{r}
-#| label: fig-cyp-xgb-plots
-#| echo: false
-#| out-width: 90%
-#| fig-width: 8
-#| fig-height: 4
-#| fig-cap: "Calibration and ROC curves for the best boosted tree model without adjustments for the class imbalance. The solid blue point on the ROC curve corresponds to the default cutoff, while the red square indicates the threshold used to achieve 95% sensitivity. The validation set predictions were used to compute these visualizations."
-
-xgb_cal <- 
-  xgb_plain_best_pred |>
-  cal_plot_windowed(class, .pred_inhibitor, step_size = 0.02, window_size = 0.2) +
-  labs(title = "Calibration Curve")
-
-xgb_roc <- 
-  autoplot(xgb_roc_curve) + 
-  geom_point(
-    data = xgb_default, 
-    aes(x = 1 - specificity, y = sensitivity),
-    cex = 4, 
-    col = "blue"
-  ) + 
-  geom_point(
-    data = xgb_sensitive, 
-    aes(x = 1 - specificity, y = sensitivity),
-    cex = 4, 
-    col = "red",
-    pch = 15
-  ) +
-  labs(title = "ROC Curve", y = "Sensitivity", x = "1 - Specificity")
-
-xgb_cal + xgb_roc
-```
 
 ## Adjustments for Balance
 
@@ -431,67 +109,6 @@ could be balancing the data, weights, metric contributions, or costs
 (Better wording)
 
 Cost-sensitive learning
-
-
-```{r}
-#| eval: false
-xgb_cls_wts_spec <-
-  boost_tree(
-    trees = 1000,
-    tree_depth = tune(),
-    min_n = tune(),
-    loss_reduction = tune(),
-    mtry = tune(),
-    learn_rate = tune(),
-    stop_iter = tune()
-  ) |>
-  set_mode("classification") |>
-  set_engine("xgboost", scale_pos_weight = tune())
-
-
-xgb_cls_wts_wflow <- workflow(bare_rec, xgb_cls_wts_spec)
-
-xgb_cls_wts_param <- 
-  xgb_cls_wts_wflow |> 
-  extract_parameter_set_dials() |> 
-  update(
-    mtry = mtry(c(1, 3770)),
-    scale_pos_weight = scale_pos_weight(c(1/2, 50))
-  )
-
-ctrl_bayes <- control_bayes(
-  save_pred = TRUE,
-  parallel_over = "everything",
-  save_workflow = TRUE,
-  no_improve = Inf,
-  verbose_iter = TRUE
-)
-
-cls_kap_mtr <- metric_set(kap, brier_class, roc_auc, pr_auc, mn_log_loss, accuracy, sensitivity, specificity)
-
-set.seed(820)
-xgb_cls_wts_res <-
-  xgb_cls_wts_wflow |>
-  tune_bayes(
-    cyp3A4_rs,
-    metrics = cls_kap_mtr,
-    control = ctrl_bayes,
-    param_info = xgb_cls_wts_param,
-    initial = 10,
-    iter = 25
-  )
-
-set.seed(820)
-xgb_cls_wts_res <-
-  xgb_cls_wts_wflow |>
-  tune_grid(
-    cyp3A4_rs,
-    metrics = cls_kap_mtr,
-    control = ctrl_bayes,
-    param_info = xgb_cls_wts_param,
-    grid = 25
-  )
-```
 
 Subsampling
 

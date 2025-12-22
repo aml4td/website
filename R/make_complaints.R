@@ -5,6 +5,7 @@ library(stringr)
 library(forcats)
 library(janitor)
 library(survival)
+library(sf)
 
 # -------------------------------------------------------------------------
 # Based on https://www.tidymodels.org/learn/statistics/survival-case-study/
@@ -158,6 +159,37 @@ complaints_with_priority <-
 complaints <-
   complaints_with_priority[complete.cases(complaints_with_priority), ]
 
+
+# ------------------------------------------------------------------------------
+# Shapefile for plot
+
+# https://data.cityofnewyork.us/Health/Modified-Zip-Code-Tabulation-Areas-MODZCTA-Map/5fzm-kpwv
+library(sf)
+nyc_geo_data <- st_read(
+  "Modified_Zip_Code_Tabulation_Areas_(MODZCTA)_20251222.geojson"
+)
+
+st_write(nyc_geo_data, "nyc_shapefile.shp")
+
+nyc_map <- st_read("nyc_shapefile.shp")
+
+complaints_by_zip <-
+  complaints |>
+  summarize(
+    `Percent Unresolved` = mean(class == "no") * 100,
+    .by = c(zip_code)
+  ) |>
+  mutate(
+    modzcta = as.character(zip_code, )
+  )
+
+complaints_by_zip <- full_join(
+  nyc_map,
+  complaints_by_zip,
+  by = join_by(modzcta)
+)
+
 # ------------------------------------------------------------------------------
 
 save(complaints, file = "RData/complaints.RData")
+save(complaints_by_zip, file = "RData/complaints_by_zip.RData")
