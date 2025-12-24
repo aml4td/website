@@ -22,6 +22,7 @@ library(gt)
 library(probably)
 library(patchwork)
 library(rules)
+library(sf)
 
 # ------------------------------------------------------------------------------
 # set options
@@ -38,10 +39,12 @@ daemons(parallel::detectCores())
 #| include: false
 
 load("../RData/complaints.RData")
+load("../RData/complaints_by_zip.RData")
 
 set.seed(836)
 complaint_split <- initial_validation_split(complaints, strata = class)
 complaint_train <- training(complaint_split)
+complaint_val <- validation(complaint_split)
 complaint_test <- testing(complaint_split)
 complaint_rs <- validation_set(complaint_split)
 
@@ -80,6 +83,160 @@ This should drive our choice of optimization metric
 
 ## Example: NYC Building Complaints
 
+In New York City, the Department of Buildings (DOB) can receive complaints by dialing 311 or through their online portal^[Website to [File a Complaint](https://www.nyc.gov/site/buildings/dob/file-a-complaint.page).]. Complaints can be related to accidents, unsafe conditions, potentially illegal construction, or the improper use of a building (e.g., after-hours work).  After a complaint is registered, it is assigned to an inspection unit to investigate. Naturally, it may take some time for the complaint to be dispositioned (i.e., resolved). Data on building complaints are available online^[[`https://data.cityofnewyork.us/Housing-Development/DOB-Complaints-Received/eabe-havv/about_data`](https://data.cityofnewyork.us/Housing-Development/DOB-Complaints-Received/eabe-havv/about_data).]. We will model the data where the complaints were registered in 2024 and use information about the complaints to predict the probability that it will be resolved within 250 days of the initial notification date^[An older version of these data were original obtained for an article on [`tidymodels.org`](https://www.tidymodels.org/learn/statistics/survival-metrics-details/) to illustrate survival analysis models. Instead, we will discuss and fit classification models.].
+
+The original outcome data are _times to events_; in this case, the event is the resolution of the complaint. This type of data has some additional statistical nuance associated with it. There is a possibility that the observed time may be _censored_. Censoring occurs when the data are incomplete. For example, suppose you had filed a complaint 10 days ago. If the complaint was still unresolved, you don't know the exact time to resolution, but you do know that it was at least 10 days. In technical terms, your observed time is right-censored at 10 days. Once we confirm that the complaint is resolved, it will be uncensored. There are different types of censoring, but most data tend to be incomplete due to not knowing the event date (as opposed to the date when the time duration started). Luckily, for the 2024 data, less than 2% were censored (i.e., not resolved prior to the most recent date in the data). 
+
+We shouldn't ignore censored event times, and there is an entire field of statistics and machine learning for survival data^[The name for the field is framed in terms of the event being death or some other negative event. This is largely due to its growth primarily in the medical and reliability domains. Survival analysis can be applied to any type of event, although some of the technical terms, such as "survival" and "hazard," may not be ideal when the outcome is something beneficial.]. For these data, a survival analysis model would be created to model the probability that the event occurs at any time. We can then assess the model in terms of the accuracy of the predicted event times or based on classification metrics for the probability of the event occurring at or before some time $t_{eval}$ (i.e., a model  _evaluation time_). In the latter case, models focused on the probability of the event are called dynamic survival models. 
+
+Instead of introducing the theory of survival analysis, we'll fit classification models based on a binary outcome that the complaint has been closed by $t_{eval} = 250$ days. There is some subtlety that should be taken into account when converting a potentially censored data point into a binary event/no-event format. A good reference for this process is GRAF. In Section 6 of their paper, they describe the three general cases that can occur when converting times to events. We'll list them here using their terminology but describe them in the context of our problem: 
+
+- Category 1 - Closed Complaint: There is a recorded resolution date less than or equal to 250 days from the notification. In other words, the event has already happened.
+- Category 2 - Unresolved Complaint: Censored or not, the recorded resolution time is after 250 days. Here, nothing has happened after 250 days from the filing of the complaint. 
+- Category 3 - Ambiguous Results: The complaint's resolution time is censored, and that time is prior to 250 days from the complaint. In this case, we don’t know if anything might have happened by 250 days. 
+
+The ambiguous third group can't be used, and these records are discarded. Our class designation is based on which of the first two categories applies to an individual complaint. Since these data were collected in late 2025, there is sufficient follow-up time to determine the status of most 2024 complaints. Less that 2% of the initial data pool fell into the third category. After some additional light filtering, there were `r format(nrow(complaints), big.mark = ",")` total complaints that were assembled for 2024. Of these, `r round(train_rate * 100, 1)`% were unresolved after 250 days. 
+
+The predictors that are available are: 
+
+- The date of the complaint. Since we are only analyzing data from 2024, this was represented as the integer day of the year. 
+- Which of the five boroughs (e.g., Manhattan, Brooklyn, etc.) is associated with the complaint.
+- Whether the location is within a [special district](https://www.nyc.gov/content/planning/pages/zoning/zoning-districts-guide/special-purpose-districts) or not. 
+- The location's ZIP code. There are `r length(levels(complaints$zip_code))` possible ZIP codes in the area. 
+- The [community board](https://www.nyc.gov/site/brooklyncb1/about/community-boards-explained.page) associated with a location. These are local government organizations that serve as a liaison between residents and the city government. There are `r length(levels(complaints$community_board))` board identifiers in the data.
+- Which of the `r length(levels(complaints$inspection_unit))` inspection units is assigned to investigate the complaint.
+- Which of the `r length(levels(complaints$complaint_category))` categories of complaint is most appropriate (e.g., construction, permits, illegal hotel rooms in residential buildings, etc.).
+- The redefined priority of the complaint: "A" through "D" (and possibly "U" for unknown). 
+
+A three-way split was used to create data partitions, strateifed by the outcome data: 
+
+- Training set: `r format(nrow(complaint_train), big.mark = ",")` complaints.
+- Validation set: `r format(nrow(complaint_val), big.mark = ",")` complaints.
+- Test set: `r format(nrow(complaint_test), big.mark = ",")` complaints.
+
+As usual, our first step is to explore the training set data to understand the nature of the predictors and the outcome. 
+
+### Exploring the Data
+
+There are several features that represent location. Can we tell if these are predictive of complaint resolution? To begin, @fig-nyc-zip-codes shows the rate of unresolved complaints by ZIP code. There is clearly a location effect. The two disjoint land masses near the North East portion of the map (Manhattan Island and the Bronx) generally have low rates. The larger land mass below these, containing Brooklyn to the West and Queens to the East, can have much higher rates. However, there appears to be an increase in the rate as the ZIP codes are further away from  Manhattan. The westernmost landmass, Staten Island, also has relatively large rates of unresolved complaints. 
+
+```{r}
+#| label: fig-nyc-zip-codes
+#| echo: false
+#| out-width: 70%
+#| fig-width: 7
+#| fig-height: 6.5
+#| fig-cap: The rate of unresolved complaints for each New York City Zip code.
+
+complaints_by_zip |>
+  ggplot(aes(geometry = geometry, fill = `Percent Unresolved`)) +
+  geom_sf() +
+  theme_void() +
+  theme(legend.position = "top") +
+  scale_fill_viridis_c()
+```
+
+It would be interesting to know if there are differences in the rate across the community boards, as well as in the types of complaints and their priorities. @fig-complaint-groups shows visualizations for these groups. On the left, there are progressively different rates across community boards, with the percentage ranging from less than 1% to nearly 20%. This should be an informative predictor.
+
+```{r}
+#| label: fig-complaint-groups
+#| echo: false
+#| out-width: 80%
+#| fig-width: 8
+#| fig-height: 8
+#| fig-cap: Rates of unresolved complaints by community board and complaint category, with 90% confidence intervals. I?n each case, groups with fewer than five complinats for the year were excluded. 
+
+rates_by_var <- function(.data, variable, group, conf.level = 0.95, as_percent = TRUE, reorder = TRUE) {
+
+  var_name <- as.character(match.call()$variable)
+  grp_name <- as.character(match.call()$group)
+  
+  lvls <- levels(.data[[var_name]])
+  
+  res <- 
+    .data %>%
+    dplyr::summarise(
+      events = sum({{variable}} == lvls[1], na.rm = TRUE),
+      total = sum(!is.na({{variable}})),
+      .by = c({{group}})
+    ) |> 
+    dplyr::mutate(
+      obj = purrr::map2(events, total, ~ binom.test(.x, .y, conf.level = conf.level)),
+      obj = purrr::map(obj, broom::tidy)
+    ) |> 
+    tidyr::unnest(obj) |> 
+    dplyr::select(-statistic, -parameter, -method, -alternative) |> 
+    dplyr::rename(rate = estimate, p_value = p.value, lower = conf.low, upper = conf.high)
+  
+  if (as_percent) {
+    res$rate <- res$rate * 100
+    res$lower <- res$lower * 100
+    res$upper <- res$upper * 100
+  }
+
+  if (reorder & is.factor(res[[grp_name]])) {
+    res[[grp_name]] <- reorder(res[[grp_name]], res$rate)
+  }
+  res
+}
+
+p_board <- 
+  complaint_train |>  
+  rates_by_var(class, community_board, as_percent = FALSE) |> 
+  filter(total >= 5) |> 
+  ggplot(aes(x = rate, y = community_board)) +
+  geom_point() + 
+  geom_errorbar(aes(xmin = lower, xmax = upper), width = 3 / 4, alpha = 2 / 3)+
+  labs(title = "Community Board", y = NULL, x = "Rate") +
+  scale_x_continuous(labels = scales::percent_format(accuracy = 1L))
+
+p_complaint <- 
+  complaint_train |>  
+  rates_by_var(class, complaint_category, as_percent = FALSE) |> 
+  filter(total >= 5) |> 
+  left_join(
+    complaints |> distinct(complaint_category, complaint_priority),
+    by = join_by(complaint_category)
+  ) |> 
+  arrange(complaint_category) |> 
+  ggplot(aes(x = rate, y = complaint_category, col = complaint_priority, pch = complaint_priority)) +
+  geom_point() + 
+  geom_errorbar(aes(xmin = lower, xmax = upper), width = 3 / 4, alpha = 2 / 3) +
+  # scale_color_manual(values = c("#252916FF", "#225F2FFF", "#5E9432FF", "#B4BF3AFF", "grey")) +
+  scale_color_brewer(palette = "Set1") +
+  labs(title = "Complaint Category/Priority", y = NULL, x = "Rate") +
+  scale_x_continuous(labels = scales::percent_format(accuracy = 1L)) +
+  theme(legend.position = "top", axis.text.y = element_text(size = 6))
+
+p_board + p_complaint
+```
+
+For the complaint data, the rates occur at markedly different frequencies, and the rates for many of the types are less than 5%. There are a few types that are much less likely to be resolved within 250 days, and these are mostly associated with illegal activities: illegal adult establishment (code `75`), illegal conversions (`45`), illegal curb cut/driveway/carport (`35`), and illegal or no certificate of occupancy (`31`). It is unclear whether the priority code is important. The city data portal has a listing from December 2018 with priority values; however, fewer complaint types are listed than are in the actual data. The most recent version (as of 2025) is available on the portal and was dated September 2021. It contains many more complaint types but lacks all priority codes.This also has the potential to be important in the models. 
+
+We can also examine if there are seasonal trends. @fig-complaint-time shows a smooth fit to the unresolved rate based on the date that the complaint was made. The percentages are initially high in the first week of the new year and are about 7% until May. After this, the unresolved rate increases to approximately 12% until the end of the year. Additionally, the variability in the outcome increases after July, with some daily values reaching a maximum of 24%.  
+
+```{r}
+#| label: fig-complaint-time
+#| echo: false
+#| warning: false
+#| message: false
+#| out-width: 60%
+#| fig-width: 6
+#| fig-height: 4
+#| fig-cap: Rates of unresolved complaints over time. The smooth line is a loess fit to the daily rates with corresponding confidence interval. 
+complaint_train |>  
+  rates_by_var(class, day, as_percent = FALSE) |> 
+  mutate(
+    Date = lubridate::ymd("2024-01-01")+ lubridate::days(day - 1)
+  ) |> 
+  ggplot(aes(x = Date, y = rate)) +
+  geom_point(alpha = 3 / 4) +
+  geom_smooth(span = 0.3) +
+  scale_y_continuous(labels = scales::percent_format(accuracy = 1L)) +
+  labs(y = NULL)
+```
+
+For this predictor, a linear model might benefit from a spline term with a fairly low number of degrees of freedom. 
 
 ## Accepting the State of Nature 
 
