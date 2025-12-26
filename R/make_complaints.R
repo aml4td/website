@@ -103,14 +103,14 @@ two_year_complaints <-
   recent_data %>%
   filter(date_entered < max_date - week_lag) |>
   mutate(
-    class = if_else(days_to_disposition < deadline, "yes", "no"),
+    class = if_else(days_to_disposition < deadline, "unresolved", "resolved"),
     class = factor(class)
   ) %>%
   select(-days_to_disposition, -status, -event_time) %>%
   relocate(class)
 
 two_year_complaints |> count(class)
-mean(two_year_complaints$class == "no")
+mean(two_year_complaints$class == "unresolved")
 
 # ------------------------------------------------------------------------------
 # Not currently used but code kept in case we change our mind
@@ -120,7 +120,7 @@ historical_data <-
   filter(year_entered == 2023) |>
   select(week_entered, class) |>
   summarize(
-    historical_rate = mean(class == "no"),
+    historical_rate = mean(class == "unresolved"),
     historical_num_entered = length(class),
     .by = c(week_entered)
   )
@@ -134,7 +134,7 @@ complaints_with_hist <-
   arrange(day)
 
 complaints_with_hist |> count(class)
-mean(complaints_with_hist$class == "no", na.rm = TRUE)
+mean(complaints_with_hist$class == "unresolved", na.rm = TRUE)
 
 # ------------------------------------------------------------------------------
 # Get data from the modeldatatoo version of the data and extract the priority
@@ -176,7 +176,7 @@ nyc_map <- st_read("nyc_shapefile.shp")
 complaints_by_zip <-
   complaints |>
   summarize(
-    `Percent Unresolved` = mean(class == "no") * 100,
+    `Percent Unresolved` = mean(class == "unresolved") * 100,
     .by = c(zip_code)
   ) |>
   mutate(

@@ -21,8 +21,10 @@ library(mirai)
 library(gt)
 library(probably)
 library(patchwork)
+library(bonsai)
 library(rules)
 library(sf)
+library(embed)
 
 # ------------------------------------------------------------------------------
 # set options
@@ -31,6 +33,13 @@ tidymodels_prefer()
 theme_set(theme_bw())
 set_options()
 daemons(parallel::detectCores())
+
+# ------------------------------------------------------------------------------
+
+closest_point <- function(x, what = ".threshold", target = 0.5) {
+  x$delta <- abs(x[[what]] - target)
+  dplyr::slice_min(x, delta, with_ties = FALSE)
+}
 ```
 
 
@@ -146,28 +155,43 @@ It would be interesting to know if there are differences in the rate across the 
 #| fig-height: 8
 #| fig-cap: Rates of unresolved complaints by community board and complaint category, with 90% confidence intervals. I?n each case, groups with fewer than five complinats for the year were excluded. 
 
-rates_by_var <- function(.data, variable, group, conf.level = 0.95, as_percent = TRUE, reorder = TRUE) {
-
+rates_by_var <- function(
+  .data,
+  variable,
+  group,
+  conf.level = 0.95,
+  as_percent = TRUE,
+  reorder = TRUE
+) {
   var_name <- as.character(match.call()$variable)
   grp_name <- as.character(match.call()$group)
-  
+
   lvls <- levels(.data[[var_name]])
-  
-  res <- 
+
+  res <-
     .data %>%
     dplyr::summarise(
-      events = sum({{variable}} == lvls[1], na.rm = TRUE),
-      total = sum(!is.na({{variable}})),
-      .by = c({{group}})
-    ) |> 
+      events = sum({{ variable }} == lvls[1], na.rm = TRUE),
+      total = sum(!is.na({{ variable }})),
+      .by = c({{ group }})
+    ) |>
     dplyr::mutate(
-      obj = purrr::map2(events, total, ~ binom.test(.x, .y, conf.level = conf.level)),
+      obj = purrr::map2(
+        events,
+        total,
+        ~ binom.test(.x, .y, conf.level = conf.level)
+      ),
       obj = purrr::map(obj, broom::tidy)
-    ) |> 
-    tidyr::unnest(obj) |> 
-    dplyr::select(-statistic, -parameter, -method, -alternative) |> 
-    dplyr::rename(rate = estimate, p_value = p.value, lower = conf.low, upper = conf.high)
-  
+    ) |>
+    tidyr::unnest(obj) |>
+    dplyr::select(-statistic, -parameter, -method, -alternative) |>
+    dplyr::rename(
+      rate = estimate,
+      p_value = p.value,
+      lower = conf.low,
+      upper = conf.high
+    )
+
   if (as_percent) {
     res$rate <- res$rate * 100
     res$lower <- res$lower * 100
@@ -180,27 +204,32 @@ rates_by_var <- function(.data, variable, group, conf.level = 0.95, as_percent =
   res
 }
 
-p_board <- 
-  complaint_train |>  
-  rates_by_var(class, community_board, as_percent = FALSE) |> 
-  filter(total >= 5) |> 
+p_board <-
+  complaint_train |>
+  rates_by_var(class, community_board, as_percent = FALSE) |>
+  filter(total >= 5) |>
   ggplot(aes(x = rate, y = community_board)) +
-  geom_point() + 
-  geom_errorbar(aes(xmin = lower, xmax = upper), width = 3 / 4, alpha = 2 / 3)+
+  geom_point() +
+  geom_errorbar(aes(xmin = lower, xmax = upper), width = 3 / 4, alpha = 2 / 3) +
   labs(title = "Community Board", y = NULL, x = "Rate") +
   scale_x_continuous(labels = scales::percent_format(accuracy = 1L))
 
-p_complaint <- 
-  complaint_train |>  
-  rates_by_var(class, complaint_category, as_percent = FALSE) |> 
-  filter(total >= 5) |> 
+p_complaint <-
+  complaint_train |>
+  rates_by_var(class, complaint_category, as_percent = FALSE) |>
+  filter(total >= 5) |>
   left_join(
     complaints |> distinct(complaint_category, complaint_priority),
     by = join_by(complaint_category)
-  ) |> 
-  arrange(complaint_category) |> 
-  ggplot(aes(x = rate, y = complaint_category, col = complaint_priority, pch = complaint_priority)) +
-  geom_point() + 
+  ) |>
+  arrange(complaint_category) |>
+  ggplot(aes(
+    x = rate,
+    y = complaint_category,
+    col = complaint_priority,
+    pch = complaint_priority
+  )) +
+  geom_point() +
   geom_errorbar(aes(xmin = lower, xmax = upper), width = 3 / 4, alpha = 2 / 3) +
   # scale_color_manual(values = c("#252916FF", "#225F2FFF", "#5E9432FF", "#B4BF3AFF", "grey")) +
   scale_color_brewer(palette = "Set1") +
@@ -224,11 +253,11 @@ We can also examine if there are seasonal trends. @fig-complaint-time shows a sm
 #| fig-width: 6
 #| fig-height: 4
 #| fig-cap: Rates of unresolved complaints over time. The smooth line is a loess fit to the daily rates with corresponding confidence interval. 
-complaint_train |>  
-  rates_by_var(class, day, as_percent = FALSE) |> 
+complaint_train |>
+  rates_by_var(class, day, as_percent = FALSE) |>
   mutate(
-    Date = lubridate::ymd("2024-01-01")+ lubridate::days(day - 1)
-  ) |> 
+    Date = lubridate::ymd("2024-01-01") + lubridate::days(day - 1)
+  ) |>
   ggplot(aes(x = Date, y = rate)) +
   geom_point(alpha = 3 / 4) +
   geom_smooth(span = 0.3) +
@@ -248,16 +277,240 @@ Cutoff adjustments
 #| label: model-setup
 #| include: false
 
-cls_mtr <- metric_set(brier_class, roc_auc, pr_auc, kap, mn_log_loss, accuracy, sensitivity, specificity)
+cls_mtr <- metric_set(
+  brier_class,
+  roc_auc,
+  pr_auc,
+  kap,
+  mn_log_loss,
+  accuracy,
+  sensitivity,
+  specificity
+)
 ctrl_grid <- control_grid(
   save_pred = TRUE,
   parallel_over = "everything",
   save_workflow = TRUE
 )
 ctrl_rs <- control_resamples(save_pred = TRUE, save_workflow = TRUE)
+
+bare_rec <- 
+  recipe(class ~ ., data = complaint_train) |> 
+  step_zv(all_predictors())
+
+glmn_rec <- 
+  bare_rec |> 
+  step_lencode_mixed(complaint_category, zip_code, outcome = vars(class)) |> 
+  step_dummy(all_factor_predictors()) |> 
+  step_spline_natural(day, deg_free = 50) |> 
+  step_normalize(all_predictors())
+
+```
+
+```{r}
+#| label: complaint-glmnet-plain
+#| include: false
+#| cache: true
+
+path <- 10^seq(-5, -1, length.out = 25)
+
+glmn_plain_spec <-
+  logistic_reg(penalty = tune(), mixture = tune()) |>
+  set_engine("glmnet", path_values = !!path)
+
+glmn_plain_wflow <- workflow(glmn_rec, glmn_plain_spec)
+
+glmn_plain_grid <-
+  crossing(mixture = c(0.05, (1:5) / 5), penalty = path)
+
+glmn_plain_res <-
+  glmn_plain_wflow |>
+  tune_grid(
+    complaint_rs,
+    metrics = cls_mtr,
+    control = ctrl_grid,
+    grid = glmn_plain_grid
+  )
+
+glmn_plain_best <- select_best(glmn_plain_res, metric = "brier_class")
+glmn_plain_best_mtr <- collect_metrics(glmn_plain_res) |>
+  inner_join(glmn_plain_best, by = ".config")
+glmn_plain_best_pred <- collect_predictions(
+  glmn_plain_res,
+  parameters = glmn_plain_best
+)
+
+glmn_plain_roc_curve <- 
+  glmn_plain_best_pred |>
+  roc_curve(class, .pred_no)
+
+glmn_pr_roc_curve <- 
+  glmn_plain_best_pred |>
+  pr_curve(class, .pred_no)
+
+glmn_plain_roc_default <- closest_point(glmn_plain_roc_curve)
+glmn_plain_pr_default <- closest_point(glmn_pr_roc_curve)
 ```
 
 
+```{r}
+#| label: complaint-lgb-plain
+#| include: false
+#| cache: true
+
+lgb_plain_spec <-
+  boost_tree(
+    trees = 1000,
+    tree_depth = tune(),
+    min_n = tune(),
+    loss_reduction = tune(),
+    mtry = tune(),
+    learn_rate = tune(),
+    stop_iter = tune()
+  ) |>
+  set_mode("classification") |>
+  set_engine("lightgbm")
+
+
+lgb_plain_wflow <- workflow(class ~ ., lgb_plain_spec)
+
+set.seed(820)
+lgb_plain_res <-
+  lgb_plain_wflow |>
+  tune_grid(
+    complaint_rs,
+    metrics = cls_mtr,
+    control = ctrl_grid,
+    grid = 25
+  )
+
+lgb_plain_best <- select_best(lgb_plain_res, metric = "brier_class")
+lgb_plain_best_mtr <- collect_metrics(lgb_plain_res) |>
+  inner_join(lgb_plain_best, by = ".config")
+lgb_plain_best_pred <- collect_predictions(
+  lgb_plain_res,
+  parameters = lgb_plain_best
+)
+
+lgb_roc_curve <- 
+  lgb_plain_best_pred |>
+  roc_curve(class, .pred_no)
+
+lgb_default <- closest_point(lgb_roc_curve)
+lgb_sensitive <- closest_point(lgb_roc_curve, "sensitivity", 0.95)
+
+```
+
+```{r}
+#| label: complaint-ranger-plain
+#| include: false
+#| cache: true
+
+rf_plain_spec <-
+  rand_forest(
+    trees = 2000,
+    min_n = tune(),
+    mtry = tune()
+  ) |>
+  set_mode("classification")
+
+rf_plain_wflow <- workflow(class ~ ., rf_plain_spec)
+
+set.seed(820)
+rf_plain_res <-
+  rf_plain_wflow |>
+  tune_grid(
+    complaint_rs,
+    metrics = cls_mtr,
+    control = ctrl_grid,
+    grid = 25
+  )
+
+rf_plain_best <- select_best(rf_plain_res, metric = "brier_class")
+rf_plain_best_mtr <- collect_metrics(rf_plain_res) |>
+  inner_join(rf_plain_best, by = ".config")
+rf_plain_best_pred <- collect_predictions(
+  rf_plain_res,
+  parameters = rf_plain_best
+)
+
+rf_roc_curve <- 
+  rf_plain_best_pred |>
+  roc_curve(class, .pred_no)
+
+rf_default <- closest_point(rf_roc_curve)
+rf_sensitive <- closest_point(rf_roc_curve, "sensitivity", 0.95)
+```
+
+```{r}
+#| label: complaint-xrf-plain
+#| include: false
+#| cache: true
+
+xrf_plain_spec <-
+  rule_fit(
+    mtry = tune(),
+    trees = tune(),
+    min_n = tune(),
+    tree_depth = tune(),
+    learn_rate = tune(),
+    sample_size = tune(),
+    penalty = tune()
+  ) |>
+  set_engine('xrf', counts = FALSE) |>
+  set_mode('classification')
+
+xrf_rec <- 
+  bare_rec |> 
+  step_dummy(all_factor_predictors(), one_hot = TRUE) |> 
+  step_zv(all_predictors()) |> 
+  step_normalize(all_predictors())
+
+xrf_plain_wflow <- workflow(xrf_rec, xrf_plain_spec)
+
+set.seed(820)
+xrf_plain_res <-
+  xrf_plain_wflow |>
+  tune_grid(
+    complaint_rs,
+    metrics = cls_mtr,
+    control = ctrl_grid,
+    grid = 25
+  )
+
+xrf_plain_best <- select_best(xrf_plain_res, metric = "brier_class")
+xrf_plain_best_mtr <- collect_metrics(xrf_plain_res) |>
+  inner_join(xrf_plain_best, by = ".config")
+xrf_plain_best_pred <- collect_predictions(
+  xrf_plain_res,
+  parameters = xrf_plain_best
+)
+
+xrf_roc_curve <- 
+  xrf_plain_best_pred |>
+  roc_curve(class, .pred_no)
+
+xrf_default <- closest_point(xrf_roc_curve)
+xrf_sensitive <- closest_point(xrf_roc_curve, "sensitivity", 0.95)
+```
+
+
+```{r}
+#| label: complaint-roundup
+#| echo: false
+
+tt <- as_workflow_set(
+  glmnet = glmn_plain_res,
+  boosting = lgb_plain_res,
+  rand_forest = rf_plain_res
+)
+
+rank_results(tt, rank_metric = "brier_class") |> filter(.metric == "brier_class")
+rank_results(tt, rank_metric = "kap") |> filter(.metric == "kap")
+rank_results(tt, rank_metric = "roc_auc") |> filter(.metric == "roc_auc")
+
+autoplot(tt, metric = "kap")
+```
 
 ## Adjustments for Balance
 
