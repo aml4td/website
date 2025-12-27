@@ -111,8 +111,8 @@ two_year_complaints <-
   recent_data %>%
   filter(date_entered < max_date) |>
   mutate(
-    class = if_else(days_to_disposition < deadline, "unresolved", "resolved"),
-    class = factor(class)
+    class = if_else(days_to_disposition > deadline, "unresolved", "resolved"),
+    class = factor(class, levels = c("unresolved", "resolved"))
   ) %>%
   select(-days_to_disposition, -status, -event_time) %>%
   relocate(class)
