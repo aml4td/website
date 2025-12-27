@@ -9,9 +9,17 @@ library(sf)
 
 # -------------------------------------------------------------------------
 # Based on https://www.tidymodels.org/learn/statistics/survival-case-study/
+
 # https://data.cityofnewyork.us/Housing-Development/DOB-Complaints-Received/eabe-havv/about_data
+
 # https://www.nyc.gov/site/buildings/safety/inspection-units.page
+
 # https://www.nyc.gov/site/brooklyncb1/about/community-boards-explained.page
+
+# https://www.nyc.gov/assets/buildings/pdf/complaint_category.pdf (no priorities)
+# file:///Users/max/Downloads/DOBComplaints_complaint_category_list%20(1).pdf (older but has priorities)
+
+# ------------------------------------------------------------------------------
 
 # File pulled on 2025-12-22, 450 MB
 complaints_raw <-
@@ -101,7 +109,7 @@ max_date <- max(recent_data$date_entered)
 
 two_year_complaints <-
   recent_data %>%
-  filter(date_entered < max_date - week_lag) |>
+  filter(date_entered < max_date) |>
   mutate(
     class = if_else(days_to_disposition < deadline, "unresolved", "resolved"),
     class = factor(class)
@@ -165,13 +173,13 @@ complaints <-
 
 # https://data.cityofnewyork.us/Health/Modified-Zip-Code-Tabulation-Areas-MODZCTA-Map/5fzm-kpwv
 library(sf)
-nyc_geo_data <- st_read(
-  "Modified_Zip_Code_Tabulation_Areas_(MODZCTA)_20251222.geojson"
-)
+# nyc_geo_data <- st_read(
+#   "includes/Modified_Zip_Code_Tabulation_Areas_(MODZCTA)_20251222.geojson"
+# )
 
-st_write(nyc_geo_data, "nyc_shapefile.shp")
+# st_write(nyc_geo_data, "nyc_shapefile.shp")
 
-nyc_map <- st_read("nyc_shapefile.shp")
+nyc_map <- st_read("includes/nyc_shapefile.shp")
 
 complaints_by_zip <-
   complaints |>
@@ -180,7 +188,7 @@ complaints_by_zip <-
     .by = c(zip_code)
   ) |>
   mutate(
-    modzcta = as.character(zip_code, )
+    modzcta = as.character(zip_code)
   )
 
 complaints_by_zip <- full_join(
