@@ -50,6 +50,9 @@ closest_point <- function(x, what = ".threshold", target = 0.5) {
 load("../RData/complaints.RData")
 load("../RData/complaints_by_zip.RData")
 
+# set.seed(11)
+# complaints <- complaints |> slice_sample(n = 20000)
+
 set.seed(836)
 complaint_split <- initial_validation_split(complaints, strata = class)
 complaint_train <- training(complaint_split)
@@ -57,11 +60,11 @@ complaint_val <- validation(complaint_split)
 complaint_test <- testing(complaint_split)
 complaint_rs <- validation_set(complaint_split)
 
-train_rate <- mean(complaint_train$class == "no")
+train_rate <- mean(complaint_train$class == "unresolved")
 rate_by_burro <- 
   complaint_train |> 
   summarize(
-    percent = mean(class == "no") * 100,
+    percent = mean(class == "unresolved") * 100,
     number = length(class),
     .by = c(borough)
   ) |> 
@@ -96,9 +99,9 @@ In New York City, the Department of Buildings (DOB) can receive complaints by di
 
 The original outcome data are _times to events_; in this case, the event is the resolution of the complaint. This type of data has some additional statistical nuance associated with it. There is a possibility that the observed time may be _censored_. Censoring occurs when the data are incomplete. For example, suppose you had filed a complaint 10 days ago. If the complaint was still unresolved, you don't know the exact time to resolution, but you do know that it was at least 10 days. In technical terms, your observed time is right-censored at 10 days. Once we confirm that the complaint is resolved, it will be uncensored. There are different types of censoring, but most data tend to be incomplete due to not knowing the event date (as opposed to the date when the time duration started). Luckily, for the 2024 data, less than 2% were censored (i.e., not resolved prior to the most recent date in the data). 
 
-We shouldn't ignore censored event times, and there is an entire field of statistics and machine learning for survival data^[The name for the field is framed in terms of the event being death or some other negative event. This is largely due to its growth primarily in the medical and reliability domains. Survival analysis can be applied to any type of event, although some of the technical terms, such as "survival" and "hazard," may not be ideal when the outcome is something beneficial.]. For these data, a survival analysis model would be created to model the probability that the event occurs at any time. We can then assess the model in terms of the accuracy of the predicted event times or based on classification metrics for the probability of the event occurring at or before some time $t_{eval}$ (i.e., a model  _evaluation time_). In the latter case, models focused on the probability of the event are called dynamic survival models. 
+We shouldn't ignore censored event times, and there is an entire field of statistics and machine learning for survival data^[The name for the field is framed in terms of the event being death or some other negative event. This is largely due to its growth primarily in the medical and reliability domains. Survival analysis can be applied to any type of event, although some of the technical terms, such as "survival" and "hazard," may not be ideal when the outcome is something beneficial.]. For these data, a survival analysis model would be created to model the probability that the event occurs at any time. We can then assess the model in terms of the accuracy of the predicted event times or based on classification metrics for the probability of the event occurring at or before some time $t_{eval}$ (i.e., a model  _evaluation time_). In the latter case, models focused on the probability of the event are called dynamic pfediction survival models [@van2011dynamic;@weiyi2023]. 
 
-Instead of introducing the theory of survival analysis, we'll fit classification models based on a binary outcome that the complaint has been closed by $t_{eval} = 250$ days. There is some subtlety that should be taken into account when converting a potentially censored data point into a binary event/no-event format. A good reference for this process is GRAF. In Section 6 of their paper, they describe the three general cases that can occur when converting times to events. We'll list them here using their terminology but describe them in the context of our problem: 
+Instead of introducing the theory of survival analysis, we'll fit classification models based on a binary outcome that the complaint has been closed by $t_{eval} = 250$ days. There is some subtlety that should be taken into account when converting a potentially censored data point into a binary event/no-event format. A good reference for this process is @graf1999assessment. In Section 6 of their paper, they describe the three general cases that can occur when converting times to events. We'll list them here using their terminology but describe them in the context of our problem: 
 
 - Category 1 - Closed Complaint: There is a recorded resolution date less than or equal to 250 days from the notification. In other words, the event has already happened.
 - Category 2 - Unresolved Complaint: Censored or not, the recorded resolution time is after 250 days. Here, nothing has happened after 250 days from the filing of the complaint. 
@@ -312,7 +315,7 @@ glmn_rec <-
 #| include: false
 #| cache: true
 
-path <- 10^seq(-5, -1, length.out = 25)
+path <- 10^seq(-5, -1, length.out = 20)
 
 glmn_plain_spec <-
   logistic_reg(penalty = tune(), mixture = tune()) |>
@@ -321,7 +324,7 @@ glmn_plain_spec <-
 glmn_plain_wflow <- workflow(glmn_rec, glmn_plain_spec)
 
 glmn_plain_grid <-
-  crossing(mixture = c(0.05, (1:5) / 5), penalty = path)
+  crossing(mixture = c(0.05, (1:4) / 4), penalty = path)
 
 glmn_plain_res <-
   glmn_plain_wflow |>
@@ -334,7 +337,7 @@ glmn_plain_res <-
 
 glmn_plain_best <- select_best(glmn_plain_res, metric = "brier_class")
 glmn_plain_best_mtr <- collect_metrics(glmn_plain_res) |>
-  inner_join(glmn_plain_best, by = ".config")
+  inner_join(glmn_plain_best |> select(.config), by = ".config")
 glmn_plain_best_pred <- collect_predictions(
   glmn_plain_res,
   parameters = glmn_plain_best
@@ -342,16 +345,82 @@ glmn_plain_best_pred <- collect_predictions(
 
 glmn_plain_roc_curve <- 
   glmn_plain_best_pred |>
-  roc_curve(class, .pred_no)
+  roc_curve(class, .pred_unresolved)
 
 glmn_pr_roc_curve <- 
   glmn_plain_best_pred |>
-  pr_curve(class, .pred_no)
+  pr_curve(class, .pred_unresolved)
 
 glmn_plain_roc_default <- closest_point(glmn_plain_roc_curve)
 glmn_plain_pr_default <- closest_point(glmn_pr_roc_curve)
 ```
 
+```{r}
+#| label: complaint-mlp-plain
+#| include: false
+#| cache: true
+mlp_spec <-
+  mlp(
+    hidden_units = tune(),
+    penalty = tune(),
+    learn_rate = tune(),
+    epochs = 25,
+    activation = tune()
+  ) |>
+  set_engine(
+    "brulee",
+    stop_iter = 5,
+    optimizer = "ADAMw",
+    verbose = FALSE,
+    rate_schedule = tune(),
+    batch_size = tune(),
+    momentum = tune()
+  ) |>
+  set_mode("classification")
+
+mlp_rec <- 
+  bare_rec |> 
+  step_dummy(all_factor_predictors(), one_hot = TRUE) |> 
+  step_zv(all_predictors()) |> 
+  step_normalize(all_predictors())
+
+mlp_plain_wflow <- workflow(mlp_rec, mlp_spec)
+mlp_plain_param <- 
+  mlp_plain_wflow |>
+  extract_parameter_set_dials() |> 
+  update(
+    momentum = momentum(c(0.8, 0.99)),
+    penalty = penalty(c(-10, -1)),
+    learn_rate = learn_rate(c(-4, -1)),
+    activation = activation(c("elu", "relu", "tanh", "tanhshrink")),
+    rate_schedule = rate_schedule(c("cyclic", "decay_time", "none"))
+  )
+set.seed(820)
+mlp_plain_res <-
+  mlp_plain_wflow |>
+  tune_grid(
+    complaint_rs,
+    metrics = cls_mtr,
+    control = ctrl_grid,
+    param_info = mlp_plain_param,
+    grid = 25
+  )
+
+mlp_plain_best <- select_best(mlp_plain_res, metric = "brier_class")
+mlp_plain_best_mtr <- collect_metrics(mlp_plain_res) |>
+  inner_join(mlp_plain_best |> select(.config), by = ".config")
+mlp_plain_best_pred <- collect_predictions(
+  mlp_plain_res,
+  parameters = mlp_plain_best
+)
+
+mlp_roc_curve <- 
+  mlp_plain_best_pred |>
+  roc_curve(class, .pred_unresolved)
+
+mlp_default <- closest_point(mlp_roc_curve)
+mlp_sensitive <- closest_point(mlp_roc_curve, "sensitivity", 0.95)
+```
 
 ```{r}
 #| label: complaint-lgb-plain
@@ -386,7 +455,7 @@ lgb_plain_res <-
 
 lgb_plain_best <- select_best(lgb_plain_res, metric = "brier_class")
 lgb_plain_best_mtr <- collect_metrics(lgb_plain_res) |>
-  inner_join(lgb_plain_best, by = ".config")
+  inner_join(lgb_plain_best |> select(.config), by = ".config")
 lgb_plain_best_pred <- collect_predictions(
   lgb_plain_res,
   parameters = lgb_plain_best
@@ -394,7 +463,7 @@ lgb_plain_best_pred <- collect_predictions(
 
 lgb_roc_curve <- 
   lgb_plain_best_pred |>
-  roc_curve(class, .pred_no)
+  roc_curve(class, .pred_unresolved)
 
 lgb_default <- closest_point(lgb_roc_curve)
 lgb_sensitive <- closest_point(lgb_roc_curve, "sensitivity", 0.95)
@@ -428,18 +497,18 @@ rf_plain_res <-
 
 rf_plain_best <- select_best(rf_plain_res, metric = "brier_class")
 rf_plain_best_mtr <- collect_metrics(rf_plain_res) |>
-  inner_join(rf_plain_best, by = ".config")
+  inner_join(rf_plain_best |> select(.config), by = ".config")
 rf_plain_best_pred <- collect_predictions(
   rf_plain_res,
   parameters = rf_plain_best
 )
 
-rf_roc_curve <- 
+rf_plain_roc_curve <- 
   rf_plain_best_pred |>
-  roc_curve(class, .pred_no)
+  roc_curve(class, .pred_unresolved)
 
-rf_default <- closest_point(rf_roc_curve)
-rf_sensitive <- closest_point(rf_roc_curve, "sensitivity", 0.95)
+rf_plain_default <- closest_point(rf_plain_roc_curve)
+rf_plain_sensitive <- closest_point(rf_plain_roc_curve, "sensitivity", 0.95)
 ```
 
 ```{r}
@@ -480,7 +549,7 @@ xrf_plain_res <-
 
 xrf_plain_best <- select_best(xrf_plain_res, metric = "brier_class")
 xrf_plain_best_mtr <- collect_metrics(xrf_plain_res) |>
-  inner_join(xrf_plain_best, by = ".config")
+  inner_join(xrf_plain_best |> select(.config), by = ".config")
 xrf_plain_best_pred <- collect_predictions(
   xrf_plain_res,
   parameters = xrf_plain_best
@@ -488,7 +557,7 @@ xrf_plain_best_pred <- collect_predictions(
 
 xrf_roc_curve <- 
   xrf_plain_best_pred |>
-  roc_curve(class, .pred_no)
+  roc_curve(class, .pred_unresolved)
 
 xrf_default <- closest_point(xrf_roc_curve)
 xrf_sensitive <- closest_point(xrf_roc_curve, "sensitivity", 0.95)
@@ -498,19 +567,71 @@ xrf_sensitive <- closest_point(xrf_roc_curve, "sensitivity", 0.95)
 ```{r}
 #| label: complaint-roundup
 #| echo: false
+#| fig-width: 3
+#| fig-height: 6
+#| out-width: 40%
 
 tt <- as_workflow_set(
   glmnet = glmn_plain_res,
+  nnet = mlp_plain_res,
   boosting = lgb_plain_res,
-  rand_forest = rf_plain_res
+  rand_forest = rf_plain_res,
+  rule_fit = xrf_plain_res
 )
 
 rank_results(tt, rank_metric = "brier_class") |> filter(.metric == "brier_class")
 rank_results(tt, rank_metric = "kap") |> filter(.metric == "kap")
 rank_results(tt, rank_metric = "roc_auc") |> filter(.metric == "roc_auc")
 
-autoplot(tt, metric = "kap")
+# autoplot(tt, metric = "roc_auc")
+tt |> 
+  rank_results(rank_metric = "brier_class") |> 
+  filter(.metric == "brier_class") |> 
+  ggplot(aes(rank, mean, col = wflow_id)) + 
+  geom_point(cex = 1, alpha = 1/2, show.legend = FALSE) + 
+  facet_wrap(~ wflow_id, ncol = 1)
 ```
+
+
+```{r}
+#| label: fig-complaint-rf-plots
+#| echo: false
+#| out-width: 90%
+#| fig-width: 8
+#| fig-height: 4
+#| fig-cap: "Calibration and ROC curves for the best random forest model without adjustments for the class imbalance. The solid blue point on the ROC curve corresponds to the default cutoff, while the red square indicates the threshold used to achieve 95% sensitivity. The validation set predictions were used to compute these visualizations."
+
+rf_plain_cal <- 
+  rf_plain_best_pred |>
+  cal_plot_windowed(class, .pred_unresolved, step_size = 0.02, window_size = 0.2) +
+  labs(title = "Calibration Curve")
+
+rf_plain_roc <- 
+  autoplot(rf_plain_roc_curve) + 
+  geom_point(
+    data = rf_plain_default, 
+    aes(x = 1 - specificity, y = sensitivity),
+    cex = 4, 
+    col = "blue"
+  ) + 
+  geom_point(
+    data = rf_plain_sensitive, 
+    aes(x = 1 - specificity, y = sensitivity),
+    cex = 4, 
+    col = "red",
+    pch = 15
+  ) +
+  labs(title = "ROC Curve", y = "Sensitivity", x = "1 - Specificity")
+
+rf_plain_cal + rf_plain_roc
+```
+
+```{r}
+#| label: plain-default
+
+rf_plain_default
+```
+
 
 ## Adjustments for Balance
 
