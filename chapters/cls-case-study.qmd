@@ -23,6 +23,8 @@ library(patchwork)
 library(bonsai)
 library(rules)
 library(embed)
+library(desirability2)
+library(themis)
 
 # ------------------------------------------------------------------------------
 # set options
@@ -47,13 +49,12 @@ closest_point <- function(x, what = ".threshold", target = 0.5) {
 load("../RData/drug_interactions.RData")
 cyp3A4_fp <- cyp3A4_fp |> map_dfc(as_sparse_integer)
 cyp3A4 <- bind_cols(cyp3A4_outcome, cyp3A4_fp)
+set.seed(11)
+cyp3A4 <- cyp3A4 |> select(class, contains("maccs"), contains("pubchem"))
 
 col_densities <- map_dbl(cyp3A4_fp, mean) * 100
 
 # ------------------------------------------------------------------------------
-
-set.seed(11)
-cyp3A4 <- cyp3A4 |> slice_sample(n = 5000) |> select(class, contains("kr_"))
 
 set.seed(3571)
 cyp3A4_split <- initial_validation_split(cyp3A4, prop = c(0.7, 0.15), strata = class)
@@ -206,15 +207,13 @@ mlp_spec <-
     penalty = tune(),
     learn_rate = tune(),
     epochs = 25,
-    # activation = tune()
-    activation = "elu"
+    activation = "relu"
   ) |>
   set_engine(
     "brulee",
     stop_iter = 5,
     optimizer = "ADAMw",
     verbose = FALSE,
-    rate_schedule = tune(),
     batch_size = tune(),
     momentum = tune()
   ) |>
@@ -228,9 +227,7 @@ mlp_plain_param <-
     momentum = momentum(c(0.8, 0.99)),
     penalty = penalty(c(-10, -1)),
     learn_rate = learn_rate(c(-4, -1)),
-    # activation = activation(c("elu", "relu", "tanh", "tanhshrink")),
-    hidden_units = hidden_units(c(5, 50)),
-    rate_schedule = rate_schedule(c("cyclic", "none"))
+    hidden_units = hidden_units(c(5, 50))
   )
 
 set.seed(821)
@@ -241,7 +238,7 @@ mlp_plain_res <-
     metrics = cls_mtr,
     control = ctrl_grid,
     param_info = mlp_plain_param,
-    grid = 25
+    grid = 50
   )
 
 mlp_plain_best <- select_best(mlp_plain_res, metric = "brier_class")
@@ -252,12 +249,12 @@ mlp_plain_best_pred <- collect_predictions(
   parameters = mlp_plain_best
 )
 
-mlp_roc_curve <- 
+mlp_plain_roc_curve <- 
   mlp_plain_best_pred |>
   roc_curve(class, .pred_inhibitor)
 
-mlp_default <- closest_point(mlp_roc_curve)
-mlp_sensitive <- closest_point(mlp_roc_curve, "sensitivity", 0.95)
+mlp_plain_default <- closest_point(mlp_plain_roc_curve)
+mlp_plain_sensitive <- closest_point(mlp_plain_roc_curve, "sensitivity", 0.95)
 ```
 
 ```{r}
@@ -288,7 +285,7 @@ lgb_plain_res <-
     cyp3A4_rs,
     metrics = cls_mtr,
     control = ctrl_grid,
-    grid = 25
+    grid = 50
   )
 
 lgb_plain_best <- select_best(lgb_plain_res, metric = "brier_class")
@@ -299,12 +296,12 @@ lgb_plain_best_pred <- collect_predictions(
   parameters = lgb_plain_best
 )
 
-lgb_roc_curve <- 
+lgb_plain_roc_curve <- 
   lgb_plain_best_pred |>
   roc_curve(class, .pred_inhibitor)
 
-lgb_default <- closest_point(lgb_roc_curve)
-lgb_sensitive <- closest_point(lgb_roc_curve, "sensitivity", 0.95)
+lgb_plain_default <- closest_point(lgb_plain_roc_curve)
+lgb_plain_sensitive <- closest_point(lgb_plain_roc_curve, "sensitivity", 0.95)
 ```
 
 ```{r}
@@ -329,7 +326,7 @@ rf_plain_res <-
     cyp3A4_rs,
     metrics = cls_mtr,
     control = ctrl_grid,
-    grid = 25
+    grid = 50
   )
 
 rf_plain_best <- select_best(rf_plain_res, metric = "brier_class")
@@ -375,7 +372,7 @@ xrf_plain_res <-
     cyp3A4_rs,
     metrics = cls_mtr,
     control = ctrl_grid,
-    grid = 25
+    grid = 50
   )
 
 xrf_plain_best <- select_best(xrf_plain_res, metric = "brier_class")
@@ -386,12 +383,12 @@ xrf_plain_best_pred <- collect_predictions(
   parameters = xrf_plain_best
 )
 
-xrf_roc_curve <- 
+xrf_plain_roc_curve <- 
   xrf_plain_best_pred |>
   roc_curve(class, .pred_inhibitor)
 
-xrf_default <- closest_point(xrf_roc_curve)
-xrf_sensitive <- closest_point(xrf_roc_curve, "sensitivity", 0.95)
+xrf_plain_default <- closest_point(xrf_plain_roc_curve)
+xrf_plain_sensitive <- closest_point(xrf_plain_roc_curve, "sensitivity", 0.95)
 ```
 
 
@@ -411,7 +408,24 @@ rank_results(tt, rank_metric = "brier_class") |> filter(.metric == "brier_class"
 rank_results(tt, rank_metric = "kap") |> filter(.metric == "kap")
 rank_results(tt, rank_metric = "roc_auc") |> filter(.metric == "roc_auc")
 
-autoplot(tt, metric = "roc_auc")
+rank_plain <- 
+  rank_results(tt, rank_metric = "roc_auc") |> 
+  filter(.metric == "roc_auc")
+
+rank_plain_best <- 
+  rank_plain |> 
+  slice_max(mean, by = c(wflow_id)) |> 
+  mutate(percent_worse = (rank - 1)/ nrow(rank_plain) * 100)
+
+rank_plain |>
+  ggplot(aes(rank, mean, col = wflow_id)) +
+  geom_point() +
+  geom_vline(
+    data = rank_plain_best,
+    aes(col = wflow_id, xintercept = rank),
+    lty = 2
+  ) +
+  theme(legend.position = "top")
 ```
 
 
@@ -453,12 +467,57 @@ rf_plain_cal + rf_plain_roc
 
 rf_plain_default
 ```
+## Subsampling
 
+
+```{r}
+#| label: cyp3A4-lgb-down
+#| include: false
+#| cache: true
+
+lgb_down_wflow <- workflow(down_rec, lgb_plain_spec)
+
+set.seed(820)
+lgb_down_res <-
+  lgb_down_wflow |>
+  tune_grid(
+    cyp3A4_rs,
+    metrics = cls_mtr,
+    control = ctrl_grid,
+    grid = 50
+  )
+
+lgb_down_best <-
+  lgb_down_res |>
+  select_best_desirability(
+    maximize(sensitivity, scale = 2),
+    constrain(specificity, low = 0.8)
+  )
+
+lgb_down_best_mtr <- collect_metrics(lgb_down_res) |>
+  inner_join(lgb_down_best |> select(.config), by = ".config")
+lgb_down_best_pred <- collect_predictions(
+  lgb_down_res,
+  parameters = lgb_down_best
+)
+
+lgb_down_roc_curve <- 
+  lgb_down_best_pred |>
+  roc_curve(class, .pred_inhibitor)
+
+lgb_down_default <- closest_point(lgb_down_roc_curve)
+lgb_down_sensitive <- closest_point(lgb_down_roc_curve, "sensitivity", 0.95)
+```
+
+
+
+## Cost-Sensitive Learning
 
 ```{r}
 #| label: cyp3A4-mlp-cls-wts
 #| include: false
 #| cache: true
+#| eval: false
 
 mlp_cls_wts_spec <-
   mlp(
@@ -466,14 +525,13 @@ mlp_cls_wts_spec <-
     penalty = tune(),
     learn_rate = tune(),
     epochs = 25,
-    activation = tune()
+    activation = "relu"
   ) |>
   set_engine(
     "brulee",
     stop_iter = 5,
     optimizer = "ADAMw",
     verbose = FALSE,
-    rate_schedule = "none",
     batch_size = tune(),
     momentum = tune(),
     class_weights = tune()
@@ -488,15 +546,9 @@ mlp_cls_wts_param <-
     momentum = momentum(c(0.8, 0.99)),
     penalty = penalty(c(-10, -1)),
     learn_rate = learn_rate(c(-4, -1)),
-    activation = activation(c("elu", "relu", "tanh", "tanhshrink")),
     class_weights = class_weights(c(1, 15))
   )
-mlp_cls_wts_grid <- 
-  mlp_cls_wts_param |> 
-  filter(id != "class_weights") |> 
-  grid_space_filling(size = 25) |> 
-  crossing(class_weights = 1:5)
-  
+
 set.seed(820)
 mlp_cls_wts_res <-
   mlp_cls_wts_wflow |>
@@ -505,7 +557,7 @@ mlp_cls_wts_res <-
     metrics = cls_mtr,
     control = ctrl_grid,
     param_info = mlp_cls_wts_param,
-    grid = 25
+    grid = 50
   )
 
 mlp_cls_wts_res |> 
@@ -515,7 +567,12 @@ mlp_cls_wts_res |>
   geom_point() + 
   geom_smooth(se = FALSE)
 
-mlp_cls_wts_best <- select_best(mlp_cls_wts_res, metric = "roc_auc")
+mlp_cls_wts_best <- 
+  mlp_cls_wts_res |>
+  select_best_desirability(
+    maximize(sensitivity, scale = 2),
+    constrain(specificity, low = 0.8)
+  )
 mlp_cls_wts_best_mtr <- collect_metrics(mlp_cls_wts_res) |>
   inner_join(mlp_cls_wts_best |> select(.config), by = ".config")
 mlp_cls_wts_best_pred <- collect_predictions(
@@ -523,19 +580,18 @@ mlp_cls_wts_best_pred <- collect_predictions(
   parameters = mlp_cls_wts_best
 )
 
-mlp_roc_curve <-
+mlp_cls_wts_roc_curve <-
   mlp_cls_wts_best_pred |>
   roc_curve(class, .pred_inhibitor)
 
-mlp_default <- closest_point(mlp_roc_curve)
-mlp_sensitive <- closest_point(mlp_roc_curve, "sensitivity", 0.95)
+mlp_cls_wts_default <- closest_point(mlp_cls_wts_roc_curve)
+mlp_cls_wts_sensitive <- closest_point(mlp_cls_wts_roc_curve, "sensitivity", 0.95)
 ```
 
 ```{r}
 #| label: cyp3A4-lgb-cls-wts
 #| include: false
 #| cache: true
-
 
 lgb_cls_wts_spec <-
   boost_tree(
@@ -558,7 +614,8 @@ lgb_cls_wts_param <-
   extract_parameter_set_dials() |> 
   update(
     mtry = mtry(c(1, ncol(cyp3A4_train) - 1)),
-    scale_pos_weight = class_weights(c(1, 20))
+    scale_pos_weight = class_weights(c(1, 15)),
+    learn_rate = learn_rate(c(-2, 1))
   )
 
 set.seed(820)
@@ -568,10 +625,17 @@ lgb_cls_wts_res <-
     cyp3A4_rs,
     metrics = cls_mtr,
     control = ctrl_grid,
-    grid = 25
+    param_info = lgb_cls_wts_param, 
+    grid = 50
   )
 
-lgb_cls_wts_best <- select_best(lgb_cls_wts_res, metric = "j_index")
+lgb_cls_wts_best <-
+  lgb_cls_wts_res |>
+  select_best_desirability(
+    maximize(sensitivity, scale = 2),
+    constrain(specificity, low = 0.8)
+  )
+
 lgb_cls_wts_best_mtr <- collect_metrics(lgb_cls_wts_res) |>
   inner_join(lgb_cls_wts_best |> select(.config), by = ".config")
 lgb_cls_wts_best_pred <- collect_predictions(
@@ -593,7 +657,7 @@ lgb_cls_wts_sensitive <- closest_point(lgb_cls_wts_roc_curve, "sensitivity", 0.9
 #| label: cyp3A4-ranger-cls-wts
 #| include: false
 #| cache: true
-#| eval: true
+#| eval: false
 
 rf_cls_wts_spec <-
   rand_forest(
@@ -604,14 +668,6 @@ rf_cls_wts_spec <-
   set_mode("classification") |> 
   set_engine("ranger", class.weights = tune())
 
-rf_cls_wts_spec |> 
-  extract_parameter_set_dials() |> 
-  update(
-    mtry = mtry(c(1, ncol(cyp3A4_train) - 1)),
-    class.weights = class_weights(c(1, 10))
-  ) |> 
-  grid_space_filling(size = 25)
-
 rf_cls_wts_wflow <- workflow(class ~ ., rf_cls_wts_spec)
 
 rf_cls_wts_grid <- 
@@ -619,9 +675,9 @@ rf_cls_wts_grid <-
   extract_parameter_set_dials() |> 
   update(
     mtry = mtry(c(1, ncol(cyp3A4_train) - 1)),
-    class.weights = class_weights(c(1, 10))
+    class.weights = class_weights(c(1, 25))
   ) |> 
-  grid_space_filling(size = 25)
+  grid_space_filling(size = 50)
 
 rf_cls_wts_grid_split <- 
   rf_cls_wts_grid |> 
@@ -651,7 +707,6 @@ rf_cls_wts_res <-
     resamples = cyp3A4_rs,
     metrics = cls_mtr,
     control = ctrl_grid,
-    grid = 25,
     seed = 322
   )
 
@@ -666,11 +721,20 @@ rf_cls_wts_mtr <-
         .config = map_chr(index, ~ paste0("mod", .x))), 
     by = join_by(mtry, min_n, class.weights))
 
-rf_cls_wts_best <- 
-  rf_cls_wts_mtr |> 
-  filter(.metric == "j_index") |> 
-  slice_max(mean, n = 1) |> 
-  select(mtry, min_n, class.weights, index)
+rf_cls_wts_best <-
+  rf_cls_wts_mtr |>
+  select(-.estimator, -n, -std_err, -index) |>
+  pivot_wider(
+    id_cols = c(mtry, min_n, class.weights, .config),
+    names_from = .metric,
+    values_from = mean
+  ) |> 
+  mutate(
+    d_sens = d_max(sensitivity, low = 0.5, high = 1, scale = 2), 
+    d_spec = d_box(specificity, low = 0.8, high = 1),
+    d_overall = d_overall(d_sens, d_spec)
+  ) |> 
+  slice_max(d_overall)
   
 rf_cls_wts_best_mtr <- rf_cls_wts_mtr |>
   inner_join(rf_cls_wts_best, by = join_by(mtry, min_n, class.weights))
