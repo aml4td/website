@@ -8,48 +8,69 @@ options(pillar.advice = FALSE, pillar.min_title_chars = Inf)
 
 # ------------------------------------------------------------------------------
 
-set.seed(121)
-smol_class_dat <-
-  two_class_dat |>
-  filter(Class == "Class2") |>
-  slice_sample(n = 100) |>
-  bind_rows(two_class_dat |> filter(Class == "Class1")) |>
+data(myopia, package = "aplore3")
+myopia_df <-
+  myopia |>
+  as_tibble() |>
+  select(-id) |>
+  rename(
+    year = studyyear,
+    class = myopic,
+    age = age,
+    female = gender,
+    spherical_equivalent_refraction = spheq,
+    axial_length = al,
+    anterior_chamber_depth = acd,
+    lens_thickness = lt,
+    vitreous_chamber_depth = vcd,
+    hours_sports = sporthr,
+    hours_reading = readhr,
+    hours_gaming = comphr,
+    hours_studying = studyhr,
+    hours_tv = tvhr,
+    near_work_activities = diopterhr,
+    mother_myopic = mommy,
+    father_myopic = dadmy
+  ) |>
   mutate(
-    Class = ifelse(Class == "Class1", "Majority", "Minority"),
-    Class = factor(Class)
-  )
+    class = factor(tolower(class), levels = c("yes", "no")),
+    female = if_else(female == "Female", 1, 0),
+    mother_myopic = if_else(mother_myopic == "Yes", 1, 0),
+    father_myopic = if_else(father_myopic == "Yes", 1, 0)
+  ) |>
+  select(class, spherical_equivalent_refraction, vitreous_chamber_depth)
 
 # ------------------------------------------------------------------------------
 
-min_to_max <- sum(smol_class_dat$Class == "Minority") /
-  sum(smol_class_dat$Class == "Majority")
+min_to_max <- sum(myopia_df$class == "yes") /
+  sum(myopia_df$class == "No")
 max_to_min <- 1 / min_to_max
 
-smol_class_orig <- smol_class_dat |> mutate(Data = "Original")
+smol_class_orig <- myopia_df |> mutate(Data = "Original")
 
 # ------------------------------------------------------------------------------
 
 set.seed(121)
 smol_class_down <-
-  recipe(Class ~ ., data = smol_class_dat) |>
-  step_downsample(Class) |>
+  recipe(class ~ ., data = myopia_df) |>
+  step_downsample(class) |>
   prep() |>
   bake(new_data = NULL) |>
   mutate(Data = "Downsampled")
 
 set.seed(121)
 smol_class_smote <-
-  recipe(Class ~ ., data = smol_class_dat) |>
-  step_smote(Class) |>
+  recipe(class ~ ., data = myopia_df) |>
+  step_smote(class) |>
   prep() |>
   bake(new_data = NULL) |>
   mutate(Data = "SMOTE")
 
 set.seed(121)
 smol_class_rose <-
-  recipe(Class ~ ., data = smol_class_dat) |>
+  recipe(class ~ ., data = myopia_df) |>
   step_rose(
-    Class,
+    class,
     minority_smoothness = 1 / 2,
     majority_smoothness = 1 / 2,
     over_ratio = 0.98
@@ -58,28 +79,28 @@ smol_class_rose <-
   bake(new_data = NULL) |>
   mutate(Data = "ROSE")
 
-# smol_class_rose |> count(Class)
+# smol_class_rose |> count(class)
 
 set.seed(121)
 smol_class_near_miss <-
-  recipe(Class ~ ., data = smol_class_dat) |>
-  step_nearmiss(Class) |>
+  recipe(class ~ ., data = myopia_df) |>
+  step_nearmiss(class) |>
   prep() |>
   bake(new_data = NULL) |>
   mutate(Data = "Near Miss")
 
 set.seed(121)
 smol_class_tomek <-
-  recipe(Class ~ ., data = smol_class_dat) |>
-  step_tomek(Class) |>
+  recipe(class ~ ., data = myopia_df) |>
+  step_tomek(class) |>
   prep() |>
   bake(new_data = NULL) |>
   mutate(Data = "Tomek")
 
 set.seed(121)
 smol_class_adasyn <-
-  recipe(Class ~ ., data = smol_class_dat) |>
-  step_adasyn(Class) |>
+  recipe(class ~ ., data = myopia_df) |>
+  step_adasyn(class) |>
   prep() |>
   bake(new_data = NULL) |>
   mutate(Data = "Adaptive Synthetic Algorithm")
