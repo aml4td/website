@@ -114,10 +114,90 @@ don't confuse dealing with extreme frequencies with finding important events
 
 ## Example: Predicting Myopia
 
+For demonstration, we'll use data from the Myopia Study, as described in Section 1.6.6 of @hosmer2013applied. Myopia (i.e., nearsightedness) can be caused by the shape of one's eye, genetics, and environmental conditions, including the heavy use of computer or television screens.  
+
+The data are from a medical study running from `r min(myopia_df$year)` to `r max(myopia_df$year)` and contained `r sum(myopia_df$female)` girls and `r sum(myopia_df$female == 0)` ranging from `r min(myopia_df$age)` to `r max(myopia_df$age)` years old. These data are from the initial exam and include demographic factors, several physiological measurements of the eye from an ocular examination, and whether either parent is also myopic. The outcome is determined after a five-year follow-up visit. In this study, `r sum(myopia_df$class == "yes")` (`r round(mean(myopia_df$class == "yes") * 100, 1)`%) of children were nearsighted. 
+
+To begin, a 75%:25% stratified split was used to partition the data into training and testing sets. Stratification was based on the outcome. This results in a training set of `r nrow(myopia_train)` children, only `r sum(myopia_train$class == "yes")` of whom are myopic. For testing, `r sum(myopia_test$class == "yes")` children of `r nrow(myopia_test)` were myopic. Since the training set and the number of events are small, five repeats of 10-fold cross-validation were used with the same stratification strategy.  
+
+We'll conduct some quick exploratory data analysis, then proceed to creating models based on traditional modeling methods, i.e., without making adjustments for class imbalance during model optimization. 
 
 ### Exploring the Data
 
-check for nonlinear trends and interactions
+```{r}
+#| label: myopia-age-sex
+#| inlcude: false
+rates_by_age_sex <- 
+  myopia_train |>
+  count(class, age, female) |>
+  pivot_wider(id_cols = c(female, age), names_from = class, values_from = n) |>
+  mutate(
+    yes = if_else(is.na(yes), 0, yes),
+    n = yes + no,
+    stats = map2(
+      yes,
+      n,
+      ~ tidy(binom.test(x = .x, n = .y, conf.level = .9))
+    ),
+    rate = map_dbl(stats, ~ .x$estimate),
+    lower = map_dbl(stats, ~ .x$conf.low),
+    upper = map_dbl(stats, ~ .x$conf.high),
+    Sex = if_else(female == 1, "Female", "Male")
+  ) 
+
+rates_by_parent <-
+  myopia_train |>
+  count(class, mother_myopic, father_myopic) |>
+  pivot_wider(
+    id_cols = c(mother_myopic, father_myopic),
+    names_from = class,
+    values_from = n
+  ) |>
+  mutate(
+    yes = if_else(is.na(yes), 0, yes),
+    n = yes + no,
+    stats = map2(
+      yes,
+      n,
+      ~ tidy(binom.test(x = .x, n = .y, conf.level = .9))
+    ),
+    rate = round(map_dbl(stats, ~ .x$estimate) * 100, 1),
+    lower = round(map_dbl(stats, ~ .x$conf.low) * 100, 1),
+    upper = round(map_dbl(stats, ~ .x$conf.high) * 100, 1)
+  ) |> 
+  arrange(mother_myopic, father_myopic)
+```
+
+First, let's examine the age and sex of the participants. @fig-myopia-age-sex shows the class percentages for 10 subgroups of the data. The size of the point is based on the number of children in the subgroup, indicating that many of them are 6 years old, while very few are 1 year old. There were no nine-year-old myopic girls in the training set. 
+
+```{r}
+#| label: fig-myopia-age-sex
+#| echo: false
+#| out-width: 80%
+#| fig-width: 7
+#| fig-height: 4
+#| fig-cap: "Training set rates of myopia by age and sex of the children. The errors bars are based on 90% confidence intervals and the size of the point indicates the number of children in each subgroup."
+
+rates_by_age_sex |>
+  ggplot(aes(age, col = Sex)) +
+  geom_point(aes(y = rate, size = n), position = position_dodge(width = 0.25)) +
+  geom_errorbar(
+    aes(ymin = lower, ymax = upper),
+    position = position_dodge(width = 0.25),
+    width = 0.2
+  ) +
+  scale_y_continuous(labels = label_percent()) +
+  labs(x = "Age", y = "Rate of Myopia") +
+  theme(legend.position = "top") +
+  scale_color_manual(values = c("#417839FF", "#E18727FF"))
+```
+
+The points suggest a slight increase in myopia rates among girls, but this is well within the error bars defined by the 90% confidence intervals. Due to the concentration of points in a single age group, it is difficult to determine whether there is an age trend. Since the slight rate increase for girls is constant from ages six to eight, there is little indication of an interaction between these factors. 
+
+Second, do genetics matter? If neither parent is myopic, the rates for their children are low: `r rates_by_parent$rate[1]`% with 90% confidence interval (`r rates_by_parent$lower[1]`%, `r rates_by_parent$upper[1]`%). When _both_ parents have the condition, the rate is  `r rates_by_parent$rate[4]`%  (CI: `r rates_by_parent$lower[4]`%, `r rates_by_parent$upper[4]`%), indicating a string signal. 
+The effects of paternal and material genetics are in between, with rates `r rates_by_parent$rate[2]`% and `r rates_by_parent$rate[3]`%, respectively, with similar confidence intervals.    
+
+The ocular exam yielded five different measurements of the eye. @fig-myopia-splom shows a scatterplot matrix of pairwise relationships, colored by the outcome class. With one exception,  there is little to no correlation between predictors. However, the axial length and the vitreous chamber depth have a high positive correlation. Additionally, most predictors have fairly symmetric distributions, although the spherical equivalent refraction exhibits a moderately strong right skew. This predictor also shows some raw separation between the classes. 
 
 ```{r}
 #| label: fig-myopia-splom
@@ -142,8 +222,6 @@ myopia_train |>
 ## Accepting the State of Nature {#sec-imbalance-acceptance}
 
 problem of never predicting the minory class with poor probabilities
-
-Cutoff adjustments
 
 ```{r}
 #| label: model-setup
@@ -527,7 +605,6 @@ xrf_plain_fit <-
   finalize_workflow(xrf_plain_best) |>
   fit(myopia_train)
 xrf_plain_rules <- xrf_plain_fit |> tidy(penalty = xrf_plain_best$penalty)
-xrf_plain_rules |> print(n = Inf)
 
 xrf_plain_best_pred_ind <- collect_predictions(
     xrf_plain_res,
@@ -535,27 +612,44 @@ xrf_plain_best_pred_ind <- collect_predictions(
     summarize = FALSE
 )
 xrf_max_prob <- xrf_plain_best_pred_ind |> pluck(".pred_yes") |> max()
-
 ```
 
 A regularized logistic regression was used with glmnet penalties. The predictors included main effects and all two-factor interactions. Penalty values ranging from 10<sup>`r min(log10(glmn_plain_ranges$penalty))`</sup> to 10<sup>`r max(log10(glmn_plain_ranges$penalty))`</sup> were evaluated with four mixtures that ranged from `r min(glmn_plain_ranges$mixture* 100)`% to `r max(glmn_plain_ranges$mixture* 100)`% Lasso. A regular grid of `r nrow(glmn_plain_grid)` candidates was used. 
 
 A neural network was tuned over: 
 
+:::: {.columns}
+
+::: {.column width="50%"}
 - The number of hidden units (`r min(mlp_plain_ranges$hidden_units)` to `r max(mlp_plain_ranges$hidden_units)`). 
 - The L<sub>2</sub> penalty (10<sup>`r min(log10(mlp_plain_ranges$penalty))`</sup> to 10<sup>`r max(log10(mlp_plain_ranges$penalty))`</sup>).
 - The learning rate (10<sup>`r min(log10(mlp_plain_ranges$learn_rate))`</sup> to 10<sup>`r max(log10(mlp_plain_ranges$learn_rate))`</sup>).
+:::
+
+::: {.column width="50%"}
 - The batch size (`r min(mlp_plain_ranges$batch_size)` to `r max(mlp_plain_ranges$batch_size)` samples).
 - AdamW momentum (`r min(mlp_plain_ranges$momentum)` to `r max(mlp_plain_ranges$momentum)`).
+:::
+
+::::
 
 SGD via AdamW was used to optimize the model for up to 100 epochs, with early stopping after 5 consecutive poor results. ReLU activation was used. 
 
 Boosted trees (via light GBM) were trained for up to 1,000 iterations with early stopping after 5 bad iterations. The model was tuned over: 
 
+:::: {.columns}
+
+::: {.column width="50%"}
 - Tree depth (`r min(lgb_plain_ranges$tree_depth)` to `r max(mlp_plain_ranges$tree_depth)` splits). 
 - Amount of data needed for further splitting (`r min(lgb_plain_ranges$min_n)` to `r max(mlp_plain_ranges$min_n)` samples).
+:::
+
+::: {.column width="50%"}
 - The learning rate (10<sup>`r min(log10(lgb_plain_ranges$learn_rate))`</sup> to 10<sup>`r max(log10(lgb_plain_ranges$learn_rate))`</sup>).
 - $m_{try}$ (`r min(lgb_plain_ranges$mtry)` to `r max(lgb_plain_ranges$mtry)` predictors).
+:::
+
+::::
 
 Random forests with 2,000 classification trees were tuned over: 
 
@@ -564,12 +658,22 @@ Random forests with 2,000 classification trees were tuned over:
 
 Finally, a RuleFit model was optimized over: 
 
+:::: {.columns}
+
+::: {.column width="50%"}
 - The number of boosting iterations (`r min(xrf_plain_ranges$trees)` to `r max(xrf_plain_ranges$trees)`)
 - Tree depth (`r min(xrf_plain_ranges$tree_depth)` to `r max(xrf_plain_ranges$tree_depth)` splits). 
 - Amount of data needed for further splitting (`r min(xrf_plain_ranges$min_n)` to `r max(xrf_plain_ranges$min_n)` samples).
+
+:::
+
+::: {.column width="50%"}
 - The learning rate (10<sup>`r min(log10(xrf_plain_ranges$learn_rate))`</sup> to 10<sup>`r max(log10(xrf_plain_ranges$learn_rate))`</sup>).
 -  Proportional $m_{try}$ (`r min(round(xrf_plain_ranges$mtry * 100, 1))`% to `r max(round(xrf_plain_ranges$mtry * 100, 1))`%).
 - The L<sub>1</sub> penalty (10<sup>`r min(log10(xrf_plain_ranges$penalty))`</sup> to 10<sup>`r max(log10(xrf_plain_ranges$penalty))`</sup>).
+:::
+
+::::
 
 Apart from the logistic regression, a space-filling design of 25 candidates was used for optimization. 
 
@@ -626,7 +730,7 @@ Additionally, @fig-myopia-logistic shows some diagnostics for the logistic regre
 ```{r}
 #| label: fig-myopia-logistic
 #| echo: false
-#| out-width: 90%
+#| out-width: 80%
 #| fig-width: 8
 #| fig-height: 7
 #| fig-cap: "Results of the logistic regression model optimization (without adjustments for the class imbalance). The top plot shows the performance profile for the two tuning parameters. Underneath are the calibration and ROC curves. The solid blue point on the ROC curve corresponds to the default cutoff. The pooled averaged holdout predictions were used to compute these visualizations."
@@ -743,10 +847,14 @@ The hard class prediction uses the default 50% probability cutoff. A few of the 
 
 If we are satisfied with the model's ability to discriminate between classes (as evidenced by the ROC curve) and that the probabilities are sufficiently calibrated, we can address the sensitivity problem by selecting an appropriate probability threshold. As with most optimization problems, we require an objective function to make the best decision regarding this tuning parameter. There are a few ways we can approach the problem: 
 
- 1. Seek a constrained optimization. For example, we can try to maximize the sensitivity under the constraint that the specificity is at an acceptable value. The ROC curve provides the substrate to make these calculations since it includes sensitivity and specificity for each possible threshold in the data. 
- 2. Optimize an existing composite score that captures the right balance of sensitivity and specificity. The Matthews correlation coefficientis an example of such metrics. 
- 3. Given what we know about how the model will be used, we could define specific costs for false negatives and false positives (with correctly predicted classes having zero cost). Using these values, we can choose a threshold that minimizes the cost of the decision. This is similar to a weighted Kappa approach except the weights would not be symmetric. 
+ 1. Given what we know about how the model will be used, we could define specific costs for false negatives and false positives (with correctly predicted classes having zero cost). Using these values, we can choose a threshold that minimizes the cost of the decision. This is similar to a weighted Kappa approach except the weights would not be symmetric. 
+ 2. Seek a constrained optimization. For example, we can try to maximize the sensitivity under the constraint that the specificity is at an acceptable value. The ROC curve provides the substrate to make these calculations since it includes sensitivity and specificity for each possible threshold in the data. 
+ 3. Optimize an existing composite score that captures the right balance of sensitivity and specificity. The Matthews correlation coefficientis an example of such metrics. 
  4. Use a multiparameter optimization method, such as desirability functions from @sec-cls-multi-objectives, to define a jointly acceptable result (i.e., overall desirability). This would allow us to factor in multiple performance metrics, as well as other variables, in the decision process. 
+ 
+We'll focus on the first two options. 
+
+To choose the threshold using a custom cost metric (the first bullet point above), we would have to determine an appropriate cost structure for false positives and false negatives, usually based on the consequences of either error. For our myopia example, this is a somewhat subjective choice that depends on some context-specific rationale. In other cases, the costs might be analytically calculated as a function of monetary costs. @fig-class-cost shows examples of cost curves if the false positive cost is fixed at 1.0 and the cost of a false negative varies in severity. The y-axis is the mean of the cost values averaged across the `r nrow(myopia_rs)` assessment sets. 
  
 ```{r}
 #| label: myopia-glmnet-threshold
@@ -777,26 +885,89 @@ glmn_thr_res <-
       penalty = c(0.001, glmn_plain_alt_best$penalty), 
       threshold = thresholds)
   )
+
+glmn_thr_pred <- 
+  glmn_thr_res |> 
+  collect_predictions(summarize = FALSE) |> 
+  filter(penalty == glmn_plain_alt_best$penalty)
 ```
 
-take option number 1
- 
-To choose a threshold using an ROC curve, there is an immediate question: "Which data should be used to compute the ROC curve?" _Preferably_, the cutoff selection should use different data than the data used to fit the model. For example, diagnostic tests that require approval from a government agency (e.g., the Food and Drug Administration in the US) require a different data set to set the threshold. However, this may not be feasible if there is not an abundance of data or the resources to acquire such data. If we can't hold out another data set, we can use the assessment sets generated during resampling^[Or a validation set if multiple resamples are not used.]. There are at least two different approaches. 
+```{r}
+#| label: fig-class-cost
+#| echo: false
+#| out-width: 60%
+#| fig-width: 6
+#| fig-height: 4
+#| fig-cap: "Cost curves when the cost of a correct prediction is zero, the cost of a false positive is 1.0, and the cost of a false negative varies."
+costs <- c(2, 5, 10, 15)
 
- - **Option A**: We can pool the assessment set data, as was done to generate the visualizations in @fig-myopia-logistic. From this, we can examine the curve and determine an appropriate point that suits our needs. 
+for (i in seq_along(costs)) {
+  tmp <- 
+    glmn_thr_pred |> 
+    mutate(
+      cost_val = costs[i],
+      .pred_class = if_else(.pred_yes >= threshold, "yes", "no"),
+      .pred_class = factor(.pred_class, levels = c("yes", "no")),
+      cost = 
+        case_when(
+          class == "yes" & .pred_class == "no"  ~ cost_val,
+          class == "no"  & .pred_class == "yes" ~ 1.0,
+          TRUE ~ 0.0)
+    ) |> 
+    summarize(
+      cost = mean(cost), 
+      .by = c(id, id2, threshold, cost_val)
+    )
+  
+  if (i == 1) {
+    cost_mtr <- tmp
+  } else {
+    cost_mtr <- bind_rows(cost_mtr, tmp)
+  }
+}
 
-- **Option B**: We can compute the sensitivity and specificity of predetermined points on each assessment set's ROC curve during resampling. In this way, we can optimize the probability threshold just as we would with any other tuning parameter.  
+cost_mean_mtr <- 
+  cost_mtr |> 
+  summarize(
+    num = sum(!is.na(cost)),
+    cls_cost = mean(cost),
+    std_err = sd(cost),
+    .by = c(threshold, cost_val)
+  )
 
-The primary difference between these approaches lies in data usage: do we compute one large ROC curve or multiple smaller ROC curves and average their results? Statistically, the latter is more appropriate, but either might produce acceptable results.
+cost_best_mtr <- 
+  cost_mean_mtr |> slice_min(cls_cost, by = c(cost_val))
 
-For the second approach, we optimized our glmnet models with an additional tuning parameter (the probability threshold). Since the new parameter has no impact on the Brier scores, this process can be done simultaneously (with three parameters to optimize), or the threshold can be tuned using a secondary grid search. 
+cost_mean_mtr |>
+  ggplot(aes(threshold, col = format(cost_val))) +
+  geom_point(aes(y = cls_cost), alpha = 3 / 4) +
+  geom_line(aes(y = cls_cost), alpha = 3 / 4) +
+  geom_point(data = cost_best_mtr, aes(y = cls_cost), cex = 3) +
+  labs(x = "Probability Threshold", y = "Total Cost", col = "Cost of FN") +
+  scale_x_continuous(labels = label_percent()) +
+  theme(legend.position = "top")
+```
+
+::: {.important-box}
+It is important to realize that this strategy only optimizes the probability threshold. The model fit (e.g., slope and intercept parameter estimates) has not been affected by the cost function.  In the next section, we will consider costs to the objective function that the model uses during training. 
+:::
+
+Moving on to Option 2, when choosing a threshold using an ROC curve, there is an immediate question: "Which data should be used to compute the ROC curve?" _Preferably_, the cutoff selection should use different data than the data used to fit the model. For example, diagnostic tests that require approval from a government agency (e.g., the Food and Drug Administration in the US) require a different data set to set the threshold. However, this may not be feasible if there is not an abundance of data or the resources to acquire such data. If we can't hold out another data set, we can use the assessment sets generated during resampling^[Or a validation set if multiple resamples are not used.]. There are at least two different approaches. 
+
+ - **Option A - _post hoc_ pooling**: After we have resampled our model configurations, we can pool the assessment set predictions for the best candidate. This ROC curve is computed overall existing class probability estimate values. This was the approach that generated the visualizations in @fig-myopia-logistic. 
+
+- **Option B - threshold tuning**: During model tuning we treat the probability threshold as a tuning parameter and include it in the grid search. For each threshold in the grid, conditional on any other tuning parameters, we have resampling estimates for sensitivity and specificity. These points are then used to create an ROC curve. 
+
+The primary difference between these approaches lies in data usage: do we compute one large ROC curve from pooled data or or an ROC curves from resampled statistics? Statistically, the latter is more appropriate, but either might produce acceptable results.
+
+Note that there are a few options when we treat the threshold as a tuning parameter. A one-stage approach would include the threshold along with any other tuning parameters and use a single grid for all. However, recall that the choice of this parameter does not affect any probability-based metrics, such as the Brier score, log-loss, or the area under the ROC curve. We could use a two-stage approach where the non-threshold parameters are optimized to find their best results and then we can use a one-dimensional grid to find the best threshold (based on metrics appropriate for hard class predictions). We took this approach here: `r length(thresholds)` threshold values ranging from `r round(min(thresholds) * 100, 1)`% to `r round(max(thresholds) * 100, 1)`% defined the second-stage grid. 
 
 ```{r}
 #| label: fig-myopia-two-roc
 #| echo: false
-#| out-width: 60%
-#| fig-width: 6
-#| fig-height: 6
+#| out-width: 50%
+#| fig-width: 5
+#| fig-height: 5.1
 #| fig-cap: "Two approaches for optimizing the probability threshold via the ROC curve. Both curves use the regularized logistic regression's resampling results."
 
 glmn_thr_roc <- 
@@ -825,11 +996,11 @@ roc_tradeoff <-
   )
 
 glmn_thr_roc |>
-  mutate(Method = "Many Resampled Curves") |> 
+  mutate(Method = "Threshold Tuning") |> 
   bind_rows(
     glmn_plain_roc_curve |> 
       select(.threshold, sensitivity, specificity) |> 
-      mutate(Method = "One Pooled Curve")
+      mutate(Method = "post hoc Pooling")
   ) |> 
   ggplot(aes(1 - specificity, sensitivity, col = Method)) +
   geom_step(direction = "vh", linewidth = 0.8) +
@@ -839,7 +1010,9 @@ glmn_thr_roc |>
   scale_color_manual(values = c("#8785B2FF", "#DABD61FF"))
 ```
  
-Using either method for composing the ROC tool provides us with a tool to make trade-offs between sensitivity and specificity. For example, if we want to maximize sensitivity on the condition that specificity is at least 80%, the curve produced by Option A indicates that the cutoff should be `r round(roc_tradeoff$threshold * 100, 1)`%. The estimated statistics associated with this value are a sensitivity of `r round(roc_tradeoff$sensitivity * 100, 1)`% and a specificity of `r round(roc_tradeoff$specificity * 100, 1)`%. 
+For the logistic regression model, @fig-myopia-two-roc shows the ROC curves for both schemes. The curves are almost identical for these data. Note that the curve associated with a second-stage grid has `r nrow(glmn_thr_roc) - 2` points on the grid, which is based on our grid. The curve for the _post hoc_ pooling method has `r nrow(glmn_plain_roc_curve) - 2` points, which represents how many unique predicted probabilities are contained in the data pool. Despite this, there is significant overlap in the two curves. 
+ 
+Using either method for composing the ROC tool provides us with a tool to make trade-offs between sensitivity and specificity. For example, if we want to maximize sensitivity on the condition that specificity is at least 80%, the curve produced by threshold tuning indicates that the cutoff should be `r round(roc_tradeoff$threshold * 100, 1)`%. The estimated statistics associated with this value are a sensitivity of `r round(roc_tradeoff$sensitivity * 100, 1)`% and a specificity of `r round(roc_tradeoff$specificity * 100, 1)`%. 
 
 This overall approach involves finding a suitable ML model that does not allow class imbalance to alter our methodology, while deferring cutoff selection until the end of the process. This approach can lead to a well-calibrated model that appropriately classifies new samples. The downside becomes apparent when trying to explain individual results to the model's consumers. 
 
