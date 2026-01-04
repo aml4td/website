@@ -185,11 +185,11 @@ rates_by_age_sex |>
     aes(ymin = lower, ymax = upper),
     position = position_dodge(width = 0.25),
     width = 0.2
-  ) +
-  scale_y_continuous(labels = label_percent()) +
+  )+
+  scale_color_manual(values = c("#417839FF", "#E18727FF")) +
+  scale_y_continuous(labels = label_percent(), limits = c(0, 1)) +
   labs(x = "Age", y = "Rate of Myopia") +
-  theme(legend.position = "top") +
-  scale_color_manual(values = c("#417839FF", "#E18727FF"))
+  theme(legend.position = "top") 
 ```
 
 The points suggest a slight increase in myopia rates among girls, but this is well within the error bars defined by the 90% confidence intervals. Due to the concentration of points in a single age group, it is difficult to determine whether there is an age trend. Since the slight rate increase for girls is constant from ages six to eight, there is little indication of an interaction between these factors. 
@@ -219,9 +219,13 @@ myopia_train |>
   theme(legend.position = "top")
 ```
 
-## Accepting the State of Nature {#sec-imbalance-acceptance}
+Using these data, the next two sections will discuss the two primary strategies for addressing class imbalances.  
 
-problem of never predicting the minory class with poor probabilities
+## Strategy 1: Accepting the State of Nature {#sec-imbalance-acceptance}
+
+In this case, we'll try to build ML models while generally ignoring the imbalance. The idea is that we should initially focus on optimizing metrics based on class probability estimates, such as the Brier score, cross-entropy, or the areas under the ROC or PR curves. Once we have a model with good calibration and/or discrimination, we can then focus on making the best hard class predictions. We'll show the advantages and disadvantages of using this strategy. 
+
+To get started, we'll fit a subset of models to these data and generally follow the process outlined in the previous chapters. There is little to no preprocessing required for these models. There is a single pair of highly correlated predictors, but that will be handled by the model in situations where multicorrelation is a concern. 
 
 ```{r}
 #| label: model-setup
@@ -614,9 +618,9 @@ xrf_plain_best_pred_ind <- collect_predictions(
 xrf_max_prob <- xrf_plain_best_pred_ind |> pluck(".pred_yes") |> max()
 ```
 
-A regularized logistic regression was used with glmnet penalties. The predictors included main effects and all two-factor interactions. Penalty values ranging from 10<sup>`r min(log10(glmn_plain_ranges$penalty))`</sup> to 10<sup>`r max(log10(glmn_plain_ranges$penalty))`</sup> were evaluated with four mixtures that ranged from `r min(glmn_plain_ranges$mixture* 100)`% to `r max(glmn_plain_ranges$mixture* 100)`% Lasso. A regular grid of `r nrow(glmn_plain_grid)` candidates was used. 
+A set of five models were tested. First, a regularized logistic regression was used with glmnet penalties. The predictors included main effects and all two-factor interactions. Penalty values ranging from 10<sup>`r min(log10(glmn_plain_ranges$penalty))`</sup> to 10<sup>`r max(log10(glmn_plain_ranges$penalty))`</sup> were evaluated with four mixtures that ranged from `r min(glmn_plain_ranges$mixture* 100)`% to `r max(glmn_plain_ranges$mixture* 100)`% Lasso. A regular grid of `r nrow(glmn_plain_grid)` candidates was used. 
 
-A neural network was tuned over: 
+Single-layer neural networks were evaluated and were tuned over: 
 
 :::: {.columns}
 
@@ -635,7 +639,7 @@ A neural network was tuned over:
 
 SGD via AdamW was used to optimize the model for up to 100 epochs, with early stopping after 5 consecutive poor results. ReLU activation was used. 
 
-Boosted trees (via light GBM) were trained for up to 1,000 iterations with early stopping after 5 bad iterations. The model was tuned over: 
+Boosted trees (via light GBM) were also trained for up to 1,000 iterations with early stopping after 5 bad iterations. The model was tuned over: 
 
 :::: {.columns}
 
@@ -651,7 +655,7 @@ Boosted trees (via light GBM) were trained for up to 1,000 iterations with early
 
 ::::
 
-Random forests with 2,000 classification trees were tuned over: 
+Additionally, random forests with 2,000 classification trees were tuned over: 
 
 - Amount of data needed for further splitting (`r min(rf_plain_ranges$min_n)` to `r max(rf_plain_ranges$min_n)` samples).
 - $m_{try}$ (`r min(rf_plain_ranges$mtry)` to `r max(rf_plain_ranges$mtry)` predictors)..
@@ -706,7 +710,7 @@ rank_plain_best <-
 
 rank_plain |>
   ggplot(aes(rank, mean, col = wflow_id)) +
-  geom_point(cex = 1) +
+  geom_point(cex = 1/2) +
   geom_vline(
     data = rank_plain_best,
     aes(col = wflow_id, xintercept = rank),
@@ -718,6 +722,9 @@ rank_plain |>
 
 
 While the Rulefit and logistic regressions had the smallest Brier scores, their respective best candidates have issues. For the RuleFit model, the maximum estimated probability of a patient being myopic is `r round(xrf_max_prob * 100, 1)`% across all of the assessment sets. While the values are well-calibrated, this upper limit of probability is probably too small to be the final model. We would expect at least one of the held-out predictions to be closer to one when the patient is truly myopic. 
+
+TODO: problem of never predicting the minor class with poor probabilities
+
 
 For the regularized logistic model, @fig-myopia-logistic shows the relationship of the tuning parameters with the Brier score. We can see that while the numerically best results are to use `r round(glmn_plain_best$mixture * 100, 0)`% Lasso regularization with a penalty of 10<sup>`r min(log10(glmn_plain_best$penalty))`</sup>, there are several other combinations with nearly equivalent metrics. The model fitted on the entire training set could have a maximum of `r max_num_terms` model coefficients (apart from the intercept) since there are `r num_pred` main effects and `r choose(num_pred, 2)` possible two-way interactions. However, the Lasso model can remove predictors, and the fitted model contains only `r nrow(glmn_plain_main)` main effect and `r nrow(glmn_plain_int)` interactions. 
 
@@ -823,11 +830,11 @@ gt(plain_metric_table) |>
   fmt_percent(columns = c(Accuracy, Sensitivity, Specificity), decimals = 1) |>
   cols_move_to_start(`Brier Score`) |> 
   tab_spanner(
-    "Hard Class Estimates",
+    "Hard Class Prediction Metrics",
     columns = c(Accuracy, Sensitivity, Specificity, Kappa)
   ) |> 
     tab_spanner(
-    "Probability Estimates",
+    "Probability Prediction Metrics",
     columns = c(`ROC AUC`, `PR AUC`, `Brier Score`)
   )
 ```
@@ -1033,7 +1040,7 @@ Of course, this is paraphrasing, but the hypothetical conversation does illustra
 This seeming disconnect can become worse as the prevalence becomes smaller. For very rare events (i.e., < 5%), the cutoff associated with the sensitivity-specificity tradeoff can be very small, such as 0.05%. This is the price that is paid for having probability estimates that are consistent with the rate the event occurs in the wild. 
  
  
-## Adjustments for Balance
+## Strategy 2: Corrections for the Imblanace
 
 could be balancing the data, weights, metric contributions, or costs
 
@@ -1115,7 +1122,7 @@ Unrealistic priors
 Logistic regression with altered intercept
 
 
-## Revenge of the Prevlance
+## Revenge of the Prevalence
 
 
 It is worth revisiting the discussion from @sec-cls-two-classes on how the event rate (i.e., prevalence) affects important probabilities. We'll continue to use the myopia data for discussion.  
