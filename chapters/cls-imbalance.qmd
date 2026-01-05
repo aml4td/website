@@ -24,7 +24,7 @@ library(bonsai)
 library(rules)
 library(themis)
 library(ggforce)
-library(partykit)
+library(discrim)
 
 # ------------------------------------------------------------------------------
 # set options
@@ -113,53 +113,6 @@ It is critical that the test set reflects the true event rate in the population 
 :::
 
 We'll conduct some quick exploratory data analysis, then proceed to creating models based on traditional modeling methods, i.e., without making adjustments for class imbalance during model optimization. 
-
-## Underlying mathematical issue
-
-```{r}
-#| label: myopia-tree
-#| include: false
-
-myopia_party <- 
-  myopia_train |> 
-  mutate(father_myopic = factor(ifelse(father_myopic == 1, "myopic", "normal"))) |> 
-  rename(
-    `paternal genetic` = father_myopic,
-    `spherical equivalent refraction` = spherical_equivalent_refraction
-  )
-tree_fit <- ctree(class ~ ., data = myopia_party)
-tree_depth <- depth(tree_fit)
-tree_term_nodes <- 
-  tree_fit |> 
-  predict(, type = "node") |> 
-  vctrs::vec_unique_count()
-tree_terms <- names(varimp(tree_fit))
-tree_terms[tree_terms == "father_myopic"] <- "paternal genetics"
-tree_terms <- gsub("_", " ", tree_terms)
-```
-
-```{r}
-#| label: fig-myopia-tree
-#| echo: false
-#| out-width: 100%
-#| fig-width: 10
-#| fig-height: 7
-#| fig-cap: "A conditional inference tree fir to the myopia training set. Most of the data from the training set are routed through a single rule since thet are the majority class."
-
-plot(tree_fit)
-```
-
-
-## Imbalances should make us think about what we want from our model
-
-Finding events vs accurate predictions
-
-discussion or relative risk vs absolute risk
-
-This should drive our choice of optimization metric
-
-don't confuse dealing with extreme frequencies with finding important events
-
 
 ### Exploring the Data
 
@@ -257,6 +210,91 @@ myopia_train |>
   scale_fill_brewer(palette = "Set1") +
   theme(legend.position = "top")
 ```
+
+## Underlying mathematical issue
+
+```{r}
+#| label: myopia-plain-fda
+#| include: false
+
+myopia_party <- 
+  myopia_train |> 
+  mutate(
+    father_myopic = factor(ifelse(father_myopic == 1, "myopic", "normal")),
+    mother_myopic = factor(ifelse(mother_myopic == 1, "myopic", "normal")),
+    sex = factor(ifelse(female == 1, "Female", "Male"))
+    ) |> 
+  rename(
+    `paternal genetics` = father_myopic,
+    `maternal genetics` = mother_myopic
+  ) |> 
+  rename_with(~ paste0(.x, ")"), contains("hours")) |> 
+  rename_with(~ gsub("hours_", "hours (", .x), contains("hours"))|> 
+  rename_with(~ gsub("_", " ", .x), everything()) |> 
+  select(-female)
+
+smol_grid <- 
+  crossing(
+    `spherical equivalent refraction` = seq(-1, 5, length.out = 100),
+    `axial length` = seq(20, 25, length.out = 100)
+  )
+
+ends <- tribble(
+  ~`spherical equivalent refraction`, ~`axial length`, ~yes, ~no,
+  NA_real_, NA_real_, 0.0, 1.0,
+  NA_real_, NA_real_, 1.0, 0.0
+)
+
+myopia_smol_party <- 
+  myopia_party |> 
+  select(`spherical equivalent refraction`, `axial length`, class)
+
+fda_plain_fit <- discrim_flexible(prod_degree = 2) |> 
+  fit(class ~ ., data = myopia_smol_party)
+fda_plain_pred <- augment(fda_plain_fit, new_data = smol_grid)
+fda_plain_capture <- 
+  augment(fda_plain_fit, new_data = myopia_smol_party) |> 
+  filter(.pred_yes >= 0.5 & class == "yes") |> 
+  nrow()
+```
+
+
+:::: {#fig-myopia-fda}
+
+```{r}
+#| label: myopia-fda
+#| echo: false
+#| fig-width: 4.8
+#| fig-height: 5.2
+#| warning: false
+#| out-width: 50%
+myopia_smol_party |> 
+  ggplot(aes(`spherical equivalent refraction`, `axial length`)) +
+  geom_point(aes(color = class), alpha = 0.5, shape = 16, size = 2, show.legend = FALSE) + 
+  geom_tile(data = fda_plain_pred, aes(fill = .pred_yes), alpha = .1) +
+  geom_contour(data = fda_plain_pred, aes(z = .pred_yes), breaks = 1/2, col = "black") +
+  scale_fill_gradient2(low = "#377EB8", mid = "white", high = "#E41A1C", midpoint = 0.5) +
+  scale_color_brewer(palette = "Set1") + 
+  labs(fill = "Probability") +
+  theme(legend.position = "top")
+```
+
+A flexible discriminant fit to the myopia training set. Using the default probability cutoff of 50%, `r fda_plain_capture` of the `r sum(myopia_smol_party$class == "yes")` events are correctly predicted as events. 
+::::
+
+
+## Imbalances should make us think about what we want from our model
+
+Finding events vs accurate predictions
+
+discussion or relative risk vs absolute risk
+
+This should drive our choice of optimization metric
+
+don't confuse dealing with extreme frequencies with finding important events
+
+
+
 
 Using these data, the next two sections will discuss the two primary strategies for addressing class imbalances.  
 
@@ -1065,7 +1103,7 @@ glmn_thr_roc |>
   scale_color_manual(values = c("#8785B2FF", "#DABD61FF"))
 ```
  
-For the logistic regression model, @fig-myopia-two-roc shows the ROC curves for both schemes. The curves are almost identical for these data. Note that the curve associated with a second-stage grid has `r nrow(glmn_thr_roc) - 2` points on the grid, which is based on our grid. The curve for the _post hoc_ pooling method has `r nrow(glmn_plain_roc_curve) - 2` points, which represents how many unique predicted probabilities are contained in the data pool. Despite this, there is significant overlap in the two curves. 
+For the logistic regression model, @fig-myopia-two-roc shows the ROC curves for both schemes. The curves significantly overlap for these data. Note that the curve associated with a second-stage grid contains `r nrow(glmn_thr_roc) - 2` unique points since it is based on the values used in our second-stage grid. The curve for the _post hoc_ pooling method has `r nrow(glmn_plain_roc_curve) - 2` points, which represents how many unique predicted probabilities are contained in the _post hoc_ data pool. 
  
 Using either method for composing the ROC tool provides us with a tool to make trade-offs between sensitivity and specificity. For example, if we want to maximize sensitivity on the condition that specificity is at least 80%, the curve produced by threshold tuning indicates that the cutoff should be `r round(roc_tradeoff$threshold * 100, 1)`%. The estimated statistics associated with this value are a sensitivity of `r round(roc_tradeoff$sensitivity * 100, 1)`% and a specificity of `r round(roc_tradeoff$specificity * 100, 1)`%. 
 
@@ -1075,7 +1113,7 @@ For our myopia example, suppose we make a prediction for a patient where the pro
 
 > "We estimate that your child has a 20% chance of being severely nearsighted and, based on this, we would give them a diagnosis of myopia." 
 
-It is natural for someone to find the diagnosis counterintuitive and lead the parent to ask: 
+It is natural for someone to find the diagnosis counterintuitive since they are probably comparing the probability to the natural 50% threshold. It might lead the parent to ask:  
 
 > "That probability seems pretty low to make that diagnosis. Is that a mistake?"
 
@@ -1085,16 +1123,71 @@ The non-technical response could be:
 
 Of course, this is paraphrasing, but the hypothetical conversation does illustrate the potential confusion. 
 
-This seeming disconnect can become worse as the prevalence becomes smaller. For very rare events (i.e., < 5%), the cutoff associated with the sensitivity-specificity tradeoff can be very small, such as 0.05%. This is the price that is paid for having probability estimates that are consistent with the rate the event occurs in the wild. 
+This seeming disconnect can become worse as the prevalence becomes smaller. For very rare events (i.e., < 5%), the cutoff associated with the sensitivity-specificity trade off can be very small, perhaps less than 1%. This is the price that is paid for having probability estimates that are consistent with the rate the event occurs in the wild. 
  
  
 ## Strategy 2: Corrections for the Imblanace
 
-could be balancing the data, weights, metric contributions, or costs
+In the previous section, the only operation used to account for the small minority class was to optimize the probability threshold _after_ the model had been chosen. In this section, we'll consider several methods for actively addressing the imbalance during model optimization. The two primary classes of techniques are: 
 
-(Better wording)
+- Changing the composition of the training set data.
+- Upweighting the minority class's effect on the objective function.
+
+As we'll see, these can have a profound effect on the class probability estimates (both good and bad). These techniques are also most effective when the primary goal of the model is to identify events in new data. 
 
 ### Sampling and Synthesis Techniques
+
+
+#### Downsampling
+
+```{r}
+#| label: myopia-down-fda
+#| include: false
+myopia_down_party <- 
+  recipe(class ~ ., data = myopia_train) |> 
+  step_downsample(class) |>
+  prep() |> 
+  bake(new_data = NULL)
+
+myopia_down_smol_party <- 
+  recipe(class ~ ., data = myopia_smol_party) |> 
+  step_downsample(class) |>
+  prep() |> 
+  bake(new_data = NULL)
+
+fda_down_fit <- discrim_flexible(prod_degree = 2) |> 
+  fit(class ~ ., data = myopia_down_smol_party)
+fda_down_pred <- augment(fda_down_fit, new_data = smol_grid)
+fda_down_capture <- 
+  augment(fda_down_fit, new_data = myopia_smol_party) |> 
+  filter(.pred_yes >= 0.5 & class == "yes") |> 
+  nrow()
+```
+
+
+:::: {#fig-myopia-down-fda}
+
+```{r}
+#| label: myopia-down-fda-plot
+#| echo: false
+#| fig-width: 4.8
+#| fig-height: 5.2
+#| warning: false
+#| out-width: 50%
+myopia_smol_party |> 
+  ggplot(aes(`spherical equivalent refraction`, `axial length`)) +
+  geom_point(aes(color = class), alpha = 0.5, shape = 16, size = 2, show.legend = FALSE) + 
+  geom_tile(data = fda_down_pred, aes(fill = .pred_yes), alpha = .1) +
+  geom_contour(data = fda_down_pred, aes(z = .pred_yes), breaks = 1/2, col = "black") +
+  scale_fill_gradient2(low = "#377EB8", mid = "white", high = "#E41A1C", midpoint = 0.5) +
+  scale_color_brewer(palette = "Set1") + 
+  labs(fill = "Probability") +
+  theme(legend.position = "top")
+```
+
+A flexible discriminant fit to the downsampled myopia training set. The subsampling process increased the number of events found using the 50% threshold (`r fda_down_capture` out of `r sum(myopia_smol_party$class == "yes")`). This figure is comparable with @fig-myopia-fda.
+
+::::
 
 
 
@@ -1223,7 +1316,65 @@ lgb_down_res <-
   )
 ```
 
+#### Upsamping
+
+#### SMOTE
+
+#### ROSE
+
+#### Boarderline Methods
+
 ### Cost-sensitive learning
+
+CART book
+
+
+```{r}
+#| label: myopia-cost-fda
+#| include: false
+myopia_smol_wts_party <- 
+  myopia_smol_party |> 
+  mutate(
+    cls_wts = if_else(class == "yes", 15.0, 1.0),
+    cls_wts = importance_weights(cls_wts)
+  )
+
+fda_wts_wflow <- 
+  workflow(class ~ ., discrim_flexible(prod_degree = 2)) |> 
+  add_case_weights(cls_wts)
+
+fda_cost_fit <- fit(fda_wts_wflow, data = myopia_smol_wts_party)
+fda_cost_pred <- augment(fda_cost_fit, new_data = smol_grid)
+fda_cost_capture <- 
+  augment(fda_cost_fit, new_data = myopia_smol_party) |> 
+  filter(.pred_yes >= 0.5 & class == "yes") |> 
+  nrow()
+```
+
+
+:::: {#fig-myopia-cost-fda}
+
+```{r}
+#| label: myopia-cost-grid
+#| echo: false
+#| fig-width: 4.8
+#| fig-height: 5.2
+#| warning: false
+#| out-width: 50%
+myopia_smol_party |> 
+  ggplot(aes(`spherical equivalent refraction`, `axial length`)) +
+  geom_point(aes(color = class), alpha = 0.5, shape = 16, size = 2, show.legend = FALSE) + 
+  geom_tile(data = fda_cost_pred, aes(fill = .pred_yes), alpha = .1) +
+  geom_contour(data = fda_cost_pred, aes(z = .pred_yes), breaks = 1/2, col = "black") +
+  scale_fill_gradient2(low = "#377EB8", mid = "white", high = "#E41A1C", midpoint = 0.5) +
+  scale_color_brewer(palette = "Set1") + 
+  labs(fill = "Probability") +
+  theme(legend.position = "top")
+```
+
+A flexible discriminant fit to the myopia training set using cost-sensitive learning. The myopic subjects had a 15-fold higher cost in the objective function and `r fda_cost_capture` of the `r sum(myopia_smol_party$class == "yes")` events (in red) are identified using the default 50% threshold. This figure is comparable with @fig-myopia-fda and @fig-myopia-down-fda.
+
+::::
 
 
 ```{r}
@@ -1280,16 +1431,16 @@ Logistic regression with altered intercept
 ## Revenge of the Prevalence
 
 
-It is worth revisiting the discussion from @sec-cls-two-classes on how the event rate (i.e., prevalence) affects important probabilities. We'll continue to use the myopia data for discussion.  
+It is worth revisiting the discussion from @sec-cls-two-classes on how the event rate (i.e., prevalence) affects important statistics.  We'll continue to use the myopia data for discussion.  
 
-If we assume that the rate of myopia in the population of interest is consistent with our data set (`r round(roc_tradeoff$prevalence * 100, 1)`%), we can gain a deeper understanding of how well the model performs.  Given our estimates of sensitivity and specificity, the unconditional probabilities are: 
+If we assume that the rate of myopia in the population of interest is consistent with our data set (`r round(roc_tradeoff$prevalence * 100, 1)`%), we can gain a deeper understanding of how well the model performs.  Given our estimates of sensitivity and specificity, the unconditional performance statistics are: 
 
 - positive predictive value (PPV): `r round(roc_tradeoff$ppv * 100, 1)`%
 - negative predictive value (NPV): `r round(roc_tradeoff$npv * 100, 1)`%
 
 Even though our sensitivity and specificity ended up being fairly balanced, the statistics that convey to true ability to predict are not.  
  
-This potentially exacerbates the potential confusion that can occur when explaining the results of a prediction. Continuing the hypothetical conversation from @sec-imbalance-acceptance, the explanation of the PPV might be: 
+This could exacerbate the potential confusion that can occur when explaining the results of a prediction. Continuing the hypothetical conversation from @sec-imbalance-acceptance, the explanation of the PPV might be: 
 
 > "We understand that this rule of thumb might seem overly stringent. 
 > That said, from our data, we know that when we predict that a child is myopic, the probability that they are actually myopic is roughly `r round(roc_tradeoff$ppv * 100, 0)`%.
