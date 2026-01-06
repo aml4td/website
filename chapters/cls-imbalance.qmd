@@ -1167,6 +1167,7 @@ myopia_down_party <-
   prep() |> 
   bake(new_data = NULL)
 
+set.seed(616)
 myopia_down_smol_party <- 
   recipe(class ~ ., data = myopia_smol_party) |> 
   step_downsample(class) |>
@@ -1497,6 +1498,82 @@ for (i in seq_along(all_wts)) {
       grid = glmn_ridge_grid
     )
 }
+```
+
+```{r}
+#| label: cost-metrics
+#| include: false
+
+lgb_cost_mtr <-
+  lgb_cost_res |>
+  collect_metrics(type = "wide") |>
+  mutate(class_weight = 1 / scale_pos_weight)
+
+glmn_wts_mtr <- 
+  all_glmn_wts |> 
+  map2_dfr(
+    all_wts, 
+    ~ collect_metrics(.x, type = "wide") |> 
+      mutate(class_weight = .y)
+  )
+
+cost_mtr <- 
+  bind_rows(
+  lgb_cost_mtr |> 
+  select(.config, sensitivity, specificity, brier_class, class_weight) |> 
+  mutate(
+    Model = "Boosted Tree"),
+  glmn_wts_mtr |> 
+    select(.config, sensitivity, specificity, brier_class, class_weight) |> 
+    mutate(Model = "Logistic Regression")
+  )
+
+cost_rng <-
+  cost_mtr |>
+  summarize(
+    max_wt = max(class_weight),
+    min_wt = min(class_weight),
+    .by = c(Model)
+  )
+
+cost_mtr <- 
+  cost_mtr |> 
+  full_join(cost_rng, by = "Model") |> 
+  mutate(
+    class_weight = log2(class_weight),
+    min_wt = log2(min_wt),
+    max_wt = log2(max_wt),
+    scaled_weight = (class_weight - min_wt) / (max_wt - min_wt)
+  )
+```
+
+
+```{r}
+#| label: fig-myopia-cost-sensitive
+#| echo: false
+#| fig-width: 7
+#| fig-height: 7
+#| out-width: 80%
+#| fig-cap: "Cross-validated statistics for the cost-sensitive models"
+
+cost_roc <- 
+  cost_mtr |>
+  ggplot(aes(1 - specificity, sensitivity, col = scaled_weight)) +
+  geom_point(cex = 1, alpha = 1 / 3) +
+  coord_fixed(xlim = 0:1, ylim = 0:1) +
+  facet_wrap(~ Model) + 
+  labs(color = "Class Weight (scaled)") +
+  theme(legend.position = "bottom")
+
+cost_sens_brier <- 
+  cost_mtr |>
+  ggplot(aes(sensitivity, brier_class, col = class_weight)) +
+  geom_point(cex = 1, alpha = 1 / 3, show.legend = FALSE) +
+  lims(x = 0:1) +
+  facet_wrap(~ Model) +
+  coord_fixed(ratio = 4.5, xlim = 0:1, ylim = c(0.08, 0.30))
+
+cost_roc / cost_sens_brier
 ```
 
 
