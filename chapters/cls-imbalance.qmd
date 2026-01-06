@@ -85,6 +85,8 @@ set.seed(3571)
 myopia_split <- initial_split(myopia_df, strata = class)
 myopia_train <- training(myopia_split)
 myopia_test <- testing(myopia_split)
+
+set.seed(538)
 myopia_rs <- vfold_cv(myopia_train, repeats = 5)
 
 # ------------------------------------------------------------------------------
@@ -279,7 +281,7 @@ myopia_smol_party |>
   theme(legend.position = "top")
 ```
 
-A flexible discriminant fit to the myopia training set. Using the default probability cutoff of 50%, `r fda_plain_capture` of the `r sum(myopia_smol_party$class == "yes")` events are correctly predicted as events. 
+A flexible discriminant fit to the myopia training set. Using the default probability cutoff of 50%, shown as the black contour, `r fda_plain_capture` of the `r sum(myopia_smol_party$class == "yes")` events are correctly predicted as events. 
 ::::
 
 
@@ -345,6 +347,22 @@ glmn_rec <-
 down_rec <-
   bare_rec |>
   step_downsample(class)
+
+smote_rec <-
+  bare_rec |>
+  step_smote(class)
+
+rose_rec <-
+  bare_rec |>
+  step_rose(class)
+
+asa_rec <-
+  bare_rec |>
+  step_adasyn(class)
+
+nm_rec <-
+  bare_rec |>
+  step_nearmiss(class)
 ```
 
 
@@ -1039,13 +1057,13 @@ cost_mean_mtr |>
   theme(legend.position = "top")
 ```
 
-TODO talk about how the trade-off occurs here
+The figure shows that increasing the cost of incorrectly predicting the events yields increasingly smaller thresholds. This is due to classifying more points as events, regardless of their actual class. The cost metric is punished less by incorrectly predicted non-events, so the overall cost statistic decreases substantially in the curves with higher false negative costs. 
 
 ::: {.important-box}
 It is important to realize that this strategy only optimizes the probability threshold. The model fit (e.g., slope and intercept parameter estimates) has not been affected by the cost function.  In the next section, we will consider costs to the objective function that the model uses during training. 
 :::
 
-Moving on to Option 2, when choosing a threshold using an ROC curve, there is an immediate question: "Which data should be used to compute the ROC curve?" _Preferably_, the cutoff selection should use different data than the data used to fit the model. For example, diagnostic tests that require approval from a government agency (e.g., the Food and Drug Administration in the US) require a different data set to set the threshold. However, this may not be feasible if there is not an abundance of data or the resources to acquire such data. If we can't hold out another data set, we can use the assessment sets generated during resampling^[Or a validation set if multiple resamples are not used.]. There are at least two different approaches. 
+Moving on to constrained optimization, when choosing a threshold using an ROC curve, there is an immediate question: "Which data should be used to compute the ROC curve?" _Preferably_, the cutoff selection should use different data than the data used to fit the model. For example, diagnostic tests that require approval from a government agency (e.g., the Food and Drug Administration in the US) require a different data set to set the threshold. However, this may not be feasible if there is not an abundance of data or the resources to acquire such data. If we can't hold out another data set, we can use the assessment sets generated during resampling^[Or a validation set if multiple resamples are not used.]. There are at least two different approaches. 
 
  - **Option A - _post hoc_ pooling**: After we have resampled our model configurations, we can pool the assessment set predictions for the best candidate. This ROC curve is computed overall existing class probability estimate values. This was the approach that generated the visualizations in @fig-myopia-logistic. 
 
@@ -1299,20 +1317,55 @@ TODO
 Subsampling
 
 ```{r}
-#| label: myopia-lgb-down
+#| label: myopia-ridge
+#| include: false
+
+glmn_ridge_spec <-
+  logistic_reg(penalty = tune(), mixture = 0) |>
+  set_engine("glmnet", path_values = !!path)
+
+glmn_ridge_wflow <- workflow(glmn_rec, glmn_ridge_spec)
+
+glmn_ridge_grid <- tibble(penalty = path)
+```
+
+```{r}
+#| label: myopia-sampling
 #| include: false
 #| cache: true
 
-lgb_down_wflow <- workflow(down_rec, lgb_plain_spec)
+sampling_rec_list <-
+  list(
+    Downsample = down_rec,
+    SMOTE = smote_rec,
+    ROSE = rose_rec,
+    `Near Miss` = nm_rec
+  )
 
-set.seed(820)
-lgb_down_res <-
-  lgb_down_wflow |>
-  tune_grid(
-    myopia_rs,
+lgb_plain_grid <-
+  lgb_plain_spec |>
+  extract_parameter_set_dials() |>
+  update(mtry = mtry(c(1, 17))) |>
+  grid_space_filling(size = 25)
+
+sampling_set <-
+  bind_rows(
+    workflow_set(
+      preproc = sampling_rec_list,
+      model = list(glmn = glmn_ridge_spec)
+    ) |>
+      option_add(grid = glmn_ridge_grid),
+    workflow_set(
+      preproc = sampling_rec_list,
+      model = list(lgb = lgb_plain_spec)
+    ) |>
+      option_add(grid = lgb_plain_grid)
+  ) |>
+  workflow_map(
+    resamples = myopia_rs,
     metrics = cls_mtr,
     control = ctrl_grid,
-    grid = 50
+    seed = 837
   )
 ```
 
@@ -1326,7 +1379,7 @@ lgb_down_res <-
 
 ### Cost-sensitive learning
 
-CART book
+CART book, resamping weights versus case weights
 
 
 ```{r}
@@ -1382,42 +1435,70 @@ A flexible discriminant fit to the myopia training set using cost-sensitive lear
 #| include: false
 #| cache: true
 
-lgb_cls_wts_spec <-
+lgb_cost_spec <-
   boost_tree(
     trees = 1000,
     tree_depth = tune(),
     min_n = tune(),
-    loss_reduction = tune(),
     mtry = tune(),
     learn_rate = tune(),
-    stop_iter = tune()
+    stop_iter = 5
   ) |>
   set_mode("classification") |>
   set_engine("lightgbm", scale_pos_weight = tune())
 
+lgb_cost_wflow <- workflow(class ~ ., lgb_cost_spec)
 
-lgb_cls_wts_wflow <- workflow(bare_rec, lgb_cls_wts_spec)
-
-lgb_cls_wts_param <-
-  lgb_cls_wts_wflow |>
-  extract_parameter_set_dials() |>
-  update(
-    mtry = mtry(c(1, ncol(myopia_train) - 1)),
-    scale_pos_weight = class_weights(c(1, 15)),
-    learn_rate = learn_rate(c(-2, 1))
-  )
+lgb_cost_grid <-
+  lgb_plain_grid |>
+  crossing(scale_pos_weight = 2^(-10:0))
 
 set.seed(820)
-lgb_cls_wts_res <-
-  lgb_cls_wts_wflow |>
+lgb_cost_res <-
+  lgb_cost_wflow |>
   tune_grid(
     myopia_rs,
     metrics = cls_mtr,
     control = ctrl_grid,
-    param_info = lgb_cls_wts_param,
-    grid = 50
+    grid = lgb_cost_grid
   )
 ```
+
+
+```{r}
+#| label: myopia-glmn-cls-wts
+#| include: false
+#| cache: true
+
+all_wts <- 2^(seq(0, 4, by = 0.5))
+all_glmn_wts <- vector(mode = "list", length = length(all_wts))
+
+for (i in seq_along(all_wts)) {
+  myopia_wts_train <-
+    myopia_train |>
+    mutate(
+      cls_wts = if_else(class == "yes", all_wts[i], 1.0),
+      cls_wts = importance_weights(cls_wts)
+    )
+
+  set.seed(538)
+  myopia_wts_rs <- vfold_cv(myopia_wts_train, repeats = 5)
+
+  glmn_wts_wflow <-
+    workflow(class ~ ., glmn_ridge_spec) |>
+    add_case_weights(cls_wts)
+
+  all_glmn_wts[[i]] <-
+    glmn_wts_wflow |>
+    tune_grid(
+      myopia_wts_rs,
+      metrics = cls_mtr,
+      control = ctrl_grid,
+      grid = glmn_ridge_grid
+    )
+}
+```
+
 
 ### Other Methods
 
