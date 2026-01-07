@@ -219,7 +219,7 @@ myopia_train |>
 #| label: myopia-plain-fda
 #| include: false
 
-myopia_party <- 
+myopia_formatted <- 
   myopia_train |> 
   mutate(
     father_myopic = factor(ifelse(father_myopic == 1, "myopic", "normal")),
@@ -247,15 +247,15 @@ ends <- tribble(
   NA_real_, NA_real_, 1.0, 0.0
 )
 
-myopia_smol_party <- 
-  myopia_party |> 
+myopia_smol_formatted <- 
+  myopia_formatted |> 
   select(`spherical equivalent refraction`, `axial length`, class)
 
 fda_plain_fit <- discrim_flexible(prod_degree = 2) |> 
-  fit(class ~ ., data = myopia_smol_party)
+  fit(class ~ ., data = myopia_smol_formatted)
 fda_plain_pred <- augment(fda_plain_fit, new_data = smol_grid)
 fda_plain_capture <- 
-  augment(fda_plain_fit, new_data = myopia_smol_party) |> 
+  augment(fda_plain_fit, new_data = myopia_smol_formatted) |> 
   filter(.pred_yes >= 0.5 & class == "yes") |> 
   nrow()
 ```
@@ -270,7 +270,7 @@ fda_plain_capture <-
 #| fig-height: 5.2
 #| warning: false
 #| out-width: 50%
-myopia_smol_party |> 
+myopia_smol_formatted |> 
   ggplot(aes(`spherical equivalent refraction`, `axial length`)) +
   geom_point(aes(color = class), alpha = 0.5, shape = 16, size = 2, show.legend = FALSE) + 
   geom_tile(data = fda_plain_pred, aes(fill = .pred_yes), alpha = .1) +
@@ -281,7 +281,7 @@ myopia_smol_party |>
   theme(legend.position = "top")
 ```
 
-A flexible discriminant fit to the myopia training set. Using the default probability cutoff of 50%, shown as the black contour, `r fda_plain_capture` of the `r sum(myopia_smol_party$class == "yes")` events are correctly predicted as events. 
+A flexible discriminant fit to the myopia training set. Using the default probability cutoff of 50%, shown as the black contour, `r fda_plain_capture` of the `r sum(myopia_smol_formatted$class == "yes")` events are correctly predicted as events. 
 ::::
 
 
@@ -1161,24 +1161,24 @@ As we'll see, these can have a profound effect on the class probability estimate
 ```{r}
 #| label: myopia-down-fda
 #| include: false
-myopia_down_party <- 
+myopia_down_formatted <- 
   recipe(class ~ ., data = myopia_train) |> 
   step_downsample(class) |>
   prep() |> 
   bake(new_data = NULL)
 
 set.seed(616)
-myopia_down_smol_party <- 
-  recipe(class ~ ., data = myopia_smol_party) |> 
+myopia_down_smol_formatted <- 
+  recipe(class ~ ., data = myopia_smol_formatted) |> 
   step_downsample(class) |>
   prep() |> 
   bake(new_data = NULL)
 
 fda_down_fit <- discrim_flexible(prod_degree = 2) |> 
-  fit(class ~ ., data = myopia_down_smol_party)
+  fit(class ~ ., data = myopia_down_smol_formatted)
 fda_down_pred <- augment(fda_down_fit, new_data = smol_grid)
 fda_down_capture <- 
-  augment(fda_down_fit, new_data = myopia_smol_party) |> 
+  augment(fda_down_fit, new_data = myopia_smol_formatted) |> 
   filter(.pred_yes >= 0.5 & class == "yes") |> 
   nrow()
 ```
@@ -1193,7 +1193,7 @@ fda_down_capture <-
 #| fig-height: 5.2
 #| warning: false
 #| out-width: 50%
-myopia_smol_party |> 
+myopia_smol_formatted |> 
   ggplot(aes(`spherical equivalent refraction`, `axial length`)) +
   geom_point(aes(color = class), alpha = 0.5, shape = 16, size = 2, show.legend = FALSE) + 
   geom_tile(data = fda_down_pred, aes(fill = .pred_yes), alpha = .1) +
@@ -1204,7 +1204,7 @@ myopia_smol_party |>
   theme(legend.position = "top")
 ```
 
-A flexible discriminant fit to the downsampled myopia training set. The subsampling process increased the number of events found using the 50% threshold (`r fda_down_capture` out of `r sum(myopia_smol_party$class == "yes")`). This figure is comparable with @fig-myopia-fda.
+A flexible discriminant fit to the downsampled myopia training set. The subsampling process increased the number of events found using the 50% threshold (`r fda_down_capture` out of `r sum(myopia_smol_formatted$class == "yes")`). This figure is comparable with @fig-myopia-fda.
 
 ::::
 
@@ -1436,14 +1436,67 @@ sampling_sens_spec / sampling_sens_brier
 
 ### Cost-sensitive learning
 
+We’ve previously talked about the consequences of making an incorrect prediction. For example, @sec-mushrooms showed a model that predicts whether mushrooms are poisonous or not. We could think about this in terms of the general cost of a prediction (not too dissimilar to the discussion related to SVM models). 
+
+If we have $C$ classes, we could write down a cost matrix that defines the specific costs $\mathcal{c}_{j|k}$ of incorrectly predicting a data point to be class $j$ when it is truly class $k$. In many instances, the diagonal terms of this matrix are zero since there is no real "cost" to making the correct prediction. There are cases where different types of benefits are associated with different types of correct predictions. See REF for an example. However, for the purposes of our discussion here, we will assume that the diagonal is zero. 
+
+If we have this cost structure, we can use the predicted class probabilities to estimate the expected costs for a collection of data by averaging a set of individual costs. 
+
+Let’s say that $C=3$ and the cost matrix is 
+
+
+$$
+\mathcal{C} = 
+\begin{pmatrix}
+0.00 & 1.00 & 3.00 \\
+0.50 & 0.00 & 2.00 \\ 
+0.25 & 0.75 & 0.00
+\end{pmatrix}
+$$
+
+where the true values are in columns and the predicted class levels are rows. For example, the cost of predicting a data point that is Class 3 as Class 1 is $\mathcal{c}_{3|1} = 3.00$. 
+
+Here are some examples of probabilities and their individual costs. 
+
+If our ML model can utilize custom objective functions, minimizing the expected cost is a fairly rational way to ensure your model is fit for purpose. If not, we can use the expected cost to help optimize the tuning parameters of our model (as we did in @fig-class-cost). 
+
+Another way some researchers have parameterized cost is to collapse the matrix, resulting in a general cost for misclassifying a sample, regardless of what it was misclassified as. In this case, we sum the cost matrix over rows (COLUMNS?) so that there is one cost per class. XXX describes these as class weights. 
+
+For a two-class outcome (e.g., myopia or not), the class weights are the same as the two off-diagonal entries in the cost matrix. 
+
+If we consider class-specific costs as weights, we can generalize many performance metrics to be cost-sensitive. For example, we can make the Brier score cost-sensitive using a modified version of @eq-brier
+
+$$
+Brier = \frac{1}{WC}\sum_{i=1}^n\sum_{k=1}^C w_k(y_{ik} - \hat{p}_{ik})^2
+$$ {#eq-brier-cost}
+
+where $w_k$ is the cost or weight for class $k$ and $W$ is the sum of the $n$ weights. If we have two classes and $w_1 = 5$ and $w_2 = 1$, every data point whose true outcome is the first class will have five-fold more influence over the objective function. In this way, we can train the model to ensure that it performs better in predicting specific classes than others. This is the basis for _cost-sensitive learning_^[Note that our previous use of costs in @fig-class-cost was _after_ the model was trained. In this section, we will use weights/costs so that the model adapts to the cost structure during training.]. 
+
+In practice, our implementations of ML model metrics may or may not enable cost-sensitive learning. If not, they may have the capacity to handle _case weights_. These are numeric values associated with each row of the data set that specify how it should affect the computations. There are many types of case weights for different purposes. Here are a few examples: 
+
+- Frequency weights are integers that specify how often the specific predictor pattern occurs in the data. If there were two categorical predictions with a total of 25 combinations, a very large data set can be compressed by using a case weight that reflects how often each of the 25 patterns occurs. Frequency weights would be assigned to both the training and testing sets. 
+
+- Importance weights are numbers (decimal and non-negative) that reflect how important the row is to the model fit. This is the type of weight that we’ve discussed above. Importance weights should only be assigned to the training set; the test set should not use them, as it should accurately reflect the state of the data in the real world. 
+
+If the metric implementation allows for case weights, we can use importance weights to make them sensitive to different classes. 
+
+::: {.note-box}
+While not related to class imbalances, importance weights are also useful for time-series data, where we would like more recent data to have a higher priority in the model fit. It can also be useful for dealing with problematic/anomalous data in a model. For example, data collected during the global COVID-19 pandemic can have a negative impact on fits, but it may still need to be included. Assigning these row small case weights may solve those issues. 
+:::
+
+Note that the scale of class weights may differ across metrics and/or models (as we’ll see below). For one type of model, minority class weights ranging from 1 to 50 might have the same performance as another model/metric that ranges from 1 to 5. There is some trial and error associated with tuning the weights. 
+
+If your problem has a well-known cost structure, likely expressed in units of currency, there is probably little ambiguity about it. Otherwise, we might use class weights to either decrease the likelihood of tragic errors from occurring in the model or to help the model overcome a severe class imbalance. In other words, the "importance" in importance weights could mean many different things. 
+
 CART book, resampling weights versus case weights
 
+To visualize an example, @fig-myopia-cost-fda shows the same data as @fig-myopia-fda but in this case, case weights were used so that the myopic data (in red) had a 15-fold larger impact on the objective function than the non-myopic children. The same FDA model was trained on the data, but it used the case weights. The result is a class boundary that bends in the middle, allowing it to encompass a greater portion of the minority class than the original fit. 
 
 ```{r}
 #| label: myopia-cost-fda
 #| include: false
-myopia_smol_wts_party <- 
-  myopia_smol_party |> 
+myopia_smol_wts_formatted <- 
+  myopia_smol_formatted |> 
   mutate(
     cls_wts = if_else(class == "yes", 15.0, 1.0),
     cls_wts = importance_weights(cls_wts)
@@ -1453,14 +1506,13 @@ fda_wts_wflow <-
   workflow(class ~ ., discrim_flexible(prod_degree = 2)) |> 
   add_case_weights(cls_wts)
 
-fda_cost_fit <- fit(fda_wts_wflow, data = myopia_smol_wts_party)
+fda_cost_fit <- fit(fda_wts_wflow, data = myopia_smol_wts_formatted)
 fda_cost_pred <- augment(fda_cost_fit, new_data = smol_grid)
 fda_cost_capture <- 
-  augment(fda_cost_fit, new_data = myopia_smol_party) |> 
+  augment(fda_cost_fit, new_data = myopia_smol_formatted) |> 
   filter(.pred_yes >= 0.5 & class == "yes") |> 
   nrow()
 ```
-
 
 :::: {#fig-myopia-cost-fda}
 
@@ -1471,7 +1523,7 @@ fda_cost_capture <-
 #| fig-height: 5.2
 #| warning: false
 #| out-width: 50%
-myopia_smol_party |> 
+myopia_smol_formatted |> 
   ggplot(aes(`spherical equivalent refraction`, `axial length`)) +
   geom_point(aes(color = class), alpha = 0.5, shape = 16, size = 2, show.legend = FALSE) + 
   geom_tile(data = fda_cost_pred, aes(fill = .pred_yes), alpha = .1) +
@@ -1482,10 +1534,15 @@ myopia_smol_party |>
   theme(legend.position = "top")
 ```
 
-A flexible discriminant fit to the myopia training set using cost-sensitive learning. The myopic subjects had a 15-fold higher cost in the objective function and `r fda_cost_capture` of the `r sum(myopia_smol_party$class == "yes")` events (in red) are identified using the default 50% threshold. This figure is comparable with @fig-myopia-fda and @fig-myopia-down-fda.
+A flexible discriminant fit to the myopia training set using cost-sensitive learning. The myopic subjects had a 15-fold higher cost in the objective function and `r fda_cost_capture` of the `r sum(myopia_smol_formatted$class == "yes")` events (in red) are identified using the default 50% threshold. This figure is comparable with @fig-myopia-fda and @fig-myopia-down-fda.
 
 ::::
 
+Case weights based on the class can also approximate some of the subsampling methods shown in the previous section. For example, instead of dropping training set rows from the data, we can adjust the importance weights so that the sum of the weights in the majority class equals the sum of the weights in the minority class. By doing this, we may be able to obtain a better model since the majority of the majority class is not lost.  Similarly, an approximation to upsampling would only increase the minority class weights so that the class weight totals are in equilibrium. This would also result in faster training times than basic oversampling.
+
+It should be noted that some stochastic ensemble implementations (e.g., boosting and random forests) confuse the terms "case weights" and "sampling weights." In these instances, the weights are used to preferentially sample the training set while fitting the models (usually trees) without directly impacting the objective function. This process is more akin to downsampling and upsampling than to cost-sensitive learning. 
+
+To demonstrate with the full myopia data set, boosted trees and regularized logistic regression were used once again. The lightgbm implementation was used and, while their documentation is unclear about how the weights are used, it appears that the weights are applied to the objective function and not just the sampling mechanism^[A GitHub issue ([`https://github.com/microsoft/LightGBM/issues/1299`](https://github.com/microsoft/LightGBM/issues/1299)) has evidence that the weights are a “multiplication applied to every positive label weight” and shows some C++ code to that effect.].
 
 ```{r}
 #| label: myopia-lgb-cls-wts
@@ -1604,6 +1661,11 @@ cost_mtr <-
   )
 ```
 
+The same grids were used as in the previous section for both models. For the case weights ranges for each model, some investigation was required to find appropriate changes in the performance metrics. While both parameter ranges were explored in log<sub>2</sub> units, starting at 1.0, the boosted model used a maximum weight of 2<sup>10</sup>, whereas logistic regression used maximum weights of 2<sup>4</sup>. The majority class weights were kept at a value of 1.0 for both models. For each model, a sequence of weights was created in a 1D grid, and these were crossed with the original grids.
+
+@fig-myopia-cost-sensitive shows the results where the ranges of the weights have been standardized across the two models to be within [0, 1]. In the top panel, another ROC-like visualization is used to demonstrate the effect of using higher weights for the myopic samples. We can see that both models tend to increase sensitivity as the weights increase^[As with the previous section, these statistics use the default 50% threshold.]. This is not always the case, as some tuning parameters for the model were suboptimal on their own, and adjusting the class weights did not yield a significant change. For the most part, the increase in sensitivity comes with the price of reduced specificity. The different class weights enable us to select the optimal trade-off between the two. 
+
+As with subsampling and synthesis methods, the class probabilities generated by this model become increasingly inconsistent with reality as the cost of the minority class increases. The bottom panel shows the degradation in the Brier score tracks with increased sensitivity. Once again, we caution against using these probability estimates with users, as they may not accurately emulate the true likelihood of the event.
 
 ```{r}
 #| label: fig-myopia-cost-sensitive
@@ -1625,7 +1687,7 @@ cost_roc <-
 
 cost_sens_brier <- 
   cost_mtr |>
-  ggplot(aes(sensitivity, brier_class, col = class_weight)) +
+  ggplot(aes(sensitivity, brier_class, col = scaled_weight)) +
   geom_point(cex = 2, alpha = 1 / 3, show.legend = FALSE) +
   lims(x = 0:1) +
   facet_wrap(~ Model) +
