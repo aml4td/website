@@ -379,7 +379,7 @@ glmn_plain_spec <-
 
 glmn_plain_wflow <- workflow(glmn_rec, glmn_plain_spec)
 
-glmn_plain_grid <-crossing(mixture = round((0:3) / 3, 2), penalty = path)
+glmn_plain_grid <- crossing(mixture = round((0:3) / 3, 2), penalty = path)
 
 glmn_plain_res <-
   glmn_plain_wflow |>
@@ -1049,11 +1049,14 @@ cost_best_mtr <-
 
 cost_mean_mtr |>
   ggplot(aes(threshold, col = format(cost_val))) +
-  geom_point(aes(y = cls_cost), alpha = 3 / 4) +
-  geom_line(aes(y = cls_cost), alpha = 3 / 4) +
+  geom_point(aes(y = cls_cost), alpha = 1) +
+  geom_line(aes(y = cls_cost), alpha = 1) +
   geom_point(data = cost_best_mtr, aes(y = cls_cost), cex = 3) +
   labs(x = "Probability Threshold", y = "Total Cost", col = "Cost of FN") +
   scale_x_continuous(labels = label_percent()) +
+  scale_color_manual(
+    values = c("#c3cf88", "#ABDDA4FF", "#66C2A5FF", "#3288BDFF")
+  ) +
   theme(legend.position = "top")
 ```
 
@@ -1380,6 +1383,8 @@ sampling_set <-
 
 #### Comparisons
 
+The top panel of @fig-myopia-sampling shows the model configuration statistics for different sampling and synthesis methods. The visualization emulates an ROC curve by plotting the sensitivity versus the false positive rate (i.e., one minus specificity) to demonstrate the trade-offs between the two types of errors. The downsampling panel shows a tight cluster of model results for both types of models, located in the region where sensitivity and specificity are approximately equal. Unsurprisingly, this is due to the equal frequencies of the two classes in the training data (post-sampling). However, this will not always be the case for other data sets. Near-miss sampling has a similar pattern with tighter clustering of model configuration results. 
+
 ```{r}
 #| label: sampling-metrics
 #| include: false
@@ -1434,6 +1439,12 @@ sampling_sens_brier <-
 sampling_sens_spec / sampling_sens_brier
 ```
 
+The two synthetic methods showed slightly different patterns. ROSE and SMOTE with logistic regression yielded another tight cluster of results, with somewhat smaller statistics than downsampling. For boosting, both SMOTE and ROSE showed more versatility in the tuning parameter results, allowing for a trade-off to be made between sensitivity and specificity. However, the pattern of the configurations favored specificity over sensitivity, especially for SMOTE. 
+
+The bottom panel of @fig-myopia-sampling shows that, when sensitivity is improved by these tools, there can be a corresponding increase in the Brier scores. The boosting results show that a high sensitivity raises the Brier to values that would indicate a complete lack of calibration in the predicted probability estimates. This is deliberate; the goal of rebalancing is to have parity in the class frequencies. This enables the model to increase the likelihood of identifying events in the data. The consequence of doing so is that our class probability distributions are biased towards overestimating the probability of an event. However, when assessing the model, we use unbalanced data, and the increased probability of an event is not consistent with the true event rate (as seen outside of the balanced training set).
+
+This highlights the idea that rebalancing tools can help a model do better at finding events and that the user should only focus on hard class predictions (and perhaps avoid exposing the users to the probability estimates). 
+
 ### Cost-sensitive learning
 
 We’ve previously talked about the consequences of making an incorrect prediction. For example, @sec-mushrooms showed a model that predicts whether mushrooms are poisonous or not. We could think about this in terms of the general cost of a prediction (not too dissimilar to the discussion related to SVM models). 
@@ -1447,22 +1458,63 @@ Let’s say that $C=3$ and the cost matrix is
 
 $$
 \mathcal{C} = 
-\begin{pmatrix}
+\begin{bmatrix}
 0.00 & 1.00 & 3.00 \\
 0.50 & 0.00 & 2.00 \\ 
 0.25 & 0.75 & 0.00
-\end{pmatrix}
+\end{bmatrix}
 $$
 
-where the true values are in columns and the predicted class levels are rows. For example, the cost of predicting a data point that is Class 3 as Class 1 is $\mathcal{c}_{3|1} = 3.00$. 
+where the true values are in columns and the predicted class levels are rows. For example, the cost of predicting a data point that is Class 3 as Class 1 is $\mathcal{c}_{1|3} = 3.00$. Here are some examples of probabilities and their individual costs:
 
-Here are some examples of probabilities and their individual costs. 
+```{r}
+#| label: cost-examples
+#| echo: false
+ex_costs <- 
+  tribble(
+    ~truth, ~estimate, ~cost,
+    "A", "B", 0.50,
+    "A", "C", 0.25,
+    "B", "A", 1.00,
+    "B", "C", 0.75,
+    "C", "A", 3.00,
+    "C", "B", 2.00
+  )
+
+ex_cost_dat <- 
+  tribble(
+    ~.prob_A, ~.prob_B, ~.prob_C, ~truth,
+    1 / 3, 1 / 3, 1 / 3,  1L,
+    1 / 3, 1 / 3, 1 / 3,  2L,
+    1 / 3, 1 / 3, 1 / 3,  3L,
+    0.1, 0.5, 0.4,  1L,
+    0.4, 0.5, 0.1,  3L,
+  ) |> 
+  mutate(truth = factor(LETTERS[truth]))
+
+cost_res <- NULL
+for (i in 1:nrow(ex_cost_dat)) {
+  tmp <- 
+    ex_cost_dat |> 
+    slice(i) |> 
+    classification_cost(truth, .prob_A:.prob_C, costs = ex_costs) 
+  cost_res <- bind_rows(cost_res, tmp)
+}
+
+cost_tbl <- 
+  bind_cols(ex_cost_dat, cost_res) |> 
+  select(Truth = truth, A = .prob_A, B = .prob_B, C = .prob_C, Cost = .estimate)
+
+cost_tbl |> 
+  gt() |> 
+  fmt_number(c(-Truth)) |> 
+  tab_spanner(columns= A:C, label = "Probability Estimates")
+```
+
 
 If our ML model can utilize custom objective functions, minimizing the expected cost is a fairly rational way to ensure your model is fit for purpose. If not, we can use the expected cost to help optimize the tuning parameters of our model (as we did in @fig-class-cost). 
 
-Another way some researchers have parameterized cost is to collapse the matrix, resulting in a general cost for misclassifying a sample, regardless of what it was misclassified as. In this case, we sum the cost matrix over rows (COLUMNS?) so that there is one cost per class. XXX describes these as class weights. 
-
-For a two-class outcome (e.g., myopia or not), the class weights are the same as the two off-diagonal entries in the cost matrix. 
+Another way some researchers have parameterized cost is to collapse the matrix, resulting in a general cost for misclassifying a sample, regardless of what it was misclassified as. In this case, we sum the cost matrix over columns so that there is one cost per class. XXX describes these as class weights. In our example matrix shown above, the class weights are $\mathcal{C}_1 = 0.75$,  $\mathcal{C}_2 = 1.75$,  and  $\mathcal{C}_3 = 5.00$. For a two-class outcome (e.g., myopia or not), the class weights are the same as the two off-diagonal entries in the cost matrix. 
 
 If we consider class-specific costs as weights, we can generalize many performance metrics to be cost-sensitive. For example, we can make the Brier score cost-sensitive using a modified version of @eq-brier
 
@@ -1697,6 +1749,7 @@ cost_sens_brier <-
 cost_roc / cost_sens_brier
 ```
 
+When comparing subsampling/synthetic methods to cost-sensitive learning, the latter appears to be more versatile than the former. It enables the user to have more direct control over the trade-off between false-negative and false-positive rates. The downside to cost-sensitive learning is that it may be dependent on the implementation of the method, whereas subsampling/synthetic tools can be used anywhere, as they are specialized preprocessors. 
 
 ### Other Methods
 
