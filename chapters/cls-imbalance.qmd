@@ -42,7 +42,6 @@ closest_point <- function(x, what = ".threshold", target = 0.5) {
 }
 ```
 
-
 ```{r}
 #| label: load-data
 #| include: false
@@ -103,10 +102,9 @@ Prior versus likelihood, posterior
 
 note on time slices to make events
 
+## Example: Predicting Myopia {#sec-yyopia}
 
-## Example: Predicting Myopia
-
-For demonstration, we'll use data from the myopia study as described in Section 1.6.6 of @hosmer2013applied. Myopia (i.e., nearsightedness) can be caused by the shape of one's eye, genetics, and environmental conditions, including the heavy use of computer or television screens. The data are from a medical study running from `r min(myopia_df$year)` to `r max(myopia_df$year)` and contained `r sum(myopia_df$female)` girls and `r sum(myopia_df$female == 0)` ranging from `r min(myopia_df$age)` to `r max(myopia_df$age)` years old. These data are from the initial exam and include demographic factors, several physiological measurements of the eye from an ocular examination, and whether either parent is also myopic. The outcome is determined after a five-year follow-up visit. In this study, `r sum(myopia_df$class == "yes")` (`r round(mean(myopia_df$class == "yes") * 100, 1)`%) of children were nearsighted. 
+For demonstration, we'll use data from the myopia study as described in Section 1.6.6 of @hosmer2013applied. Myopia (i.e., nearsightedness) can be caused by the shape of one's eye, genetics, and environmental conditions, including the heavy use of computer or television screens. The data are from a medical study running from `r min(myopia_df$year)` to `r max(myopia_df$year)` and contained `r sum(myopia_df$female)` girls and `r sum(myopia_df$female == 0)` boys ranging from `r min(myopia_df$age)` to `r max(myopia_df$age)` years old. These data are from the initial exam and include demographic factors, several physiological measurements of the eye from an ocular examination, and whether either parent is also myopic. The outcome is determined after a five-year follow-up visit. In this study, `r sum(myopia_df$class == "yes")` (`r round(mean(myopia_df$class == "yes") * 100, 1)`%) of children were nearsighted. 
 
 To begin, a 3:1 stratified split was used to partition the data into training and testing sets. Stratification was based on the outcome. This results in a training set of `r nrow(myopia_train)` children, only `r sum(myopia_train$class == "yes")` of whom are myopic. For the test set, `r sum(myopia_test$class == "yes")` children out of `r nrow(myopia_test)` were myopic. Since the training set and the number of events are small, five repeats of 10-fold cross-validation were used with the same stratification strategy. The repeats will help increase the precision of our resampling statistics. 
 
@@ -116,7 +114,7 @@ It is critical that the test set reflects the true event rate in the population 
 
 We'll conduct some quick exploratory data analysis, then proceed to creating models based on traditional modeling methods, i.e., without making adjustments for class imbalance during model optimization. 
 
-### Exploring the Data
+### Exploring the Data {#sec-myopia-eda}
 
 ```{r}
 #| label: myopia-age-sex
@@ -213,7 +211,11 @@ myopia_train |>
   theme(legend.position = "top")
 ```
 
-## Underlying mathematical issue
+## Underlying Mathematical Issue {#sec-imbalance-math}
+
+talk about specific literature on logistic models. 
+
+We’ll use two predictors in the myopia data to visualize the effects of different techniques. In the upper-left panel of the lower diagonal of @fig-myopia-splom we see the spherical equivalent refraction and vitreous chamber depth predictor data from the training set, colored by the outcome class. A flexible discriminant analysis model using MARS basis functions was used to model these data. Interactions between hinge functions were allowed, and generalized cross-validation was used to automatically determine the optimal level of model complexity. The model was fit to the training set, and @fig-myopia-fda shows the class boundary, defined using the 50% probability cutoff. The events (in red) occupy the space to the left of the main data stream. The class boundary does its best to find the optimal partition of the data, but we can see that less than half of the training set events are not to the left of the boundary. 
 
 ```{r}
 #| label: myopia-plain-fda
@@ -260,7 +262,6 @@ fda_plain_capture <-
   nrow()
 ```
 
-
 :::: {#fig-myopia-fda}
 
 ```{r}
@@ -284,21 +285,40 @@ myopia_smol_formatted |>
 A flexible discriminant fit to the myopia training set. Using the default probability cutoff of 50%, shown as the black contour, `r fda_plain_capture` of the `r sum(myopia_smol_formatted$class == "yes")` events are correctly predicted as events. 
 ::::
 
+Trees provide another example that demonstrates how models can overly focus on the majority class. Since most trees employ a greedy search, the first split is often one that captures the majority of the majority class. As the tree-growing process continues, the minority class becomes less likely to be predicted in the nodes, since $n_{min}$ limits will restrict fine-grained splits. Also, many pruning methods will remove nodes with higher uncertainty, which is often a function of sample size; smaller nodes are more likely to be pruned. When a standard CART model was fit to the data, the rules to each terminal node were:  
 
-## Imbalances should make us think about what we want from our model
+ 1. if spherical equivalent refraction $\ge 0.28$ then rate = 6% ($n$ = 382)
+ 2. if spherical equivalent refraction $\in [0.23, 0.28)$ then rate = 60% ($n$ = 15) 
+ 3. if spherical equivalent refraction $\in [-0.05, 0.23)$ then rate = 33% ($n$ = 46) 
+ 4. if spherical equivalent refraction $\le  -0.05$ then rate = 74% ($n$ = 19)
+ 
+Split 1 was the initial split, and we can see that it captures most of the non-myopic children. The second and third rules attempt to identify spaces where myopic children can be identified, but these two equations are likely the result of overfitting. Regardless, the splits demonstrate how the majority class can dominate the objective function, making the majority class data more likely to be correctly predicted.  
 
-Finding events vs accurate predictions
+This also brings up a pattern that can occur when dealing with class imbalances that is somewhat counterintuitive: models that are _less_ complex tend to work better than highly complex models. In essence, the more models can adapt to the data, the more likely they are to overfit to the majority class. The rule set shown above is a good example. Tree-based models employ a greedy optimization approach to train the model and can carve out small subspaces of predictors to make local predictions. It would be very difficult for a logistic regression to do the same, at least without enormously complex feature engineering. As a result, these simpler models can have sufficient predictive power to be useful, but not so much as to discern minute patterns in the data, thereby correctly predicting the few events and risking overfitting.  We'll see this pattern in the example data, which is admittedly small, but it has also repeated in much larger datasets with class imbalances. 
 
-discussion or relative risk vs absolute risk
+Before moving on to specific techniques, let's discuss a potential fallacy encountered when there are rare events: correctly predicting the events to the detriment of the overall model goals is often inappropriate. 
 
-This should drive our choice of optimization metric
+## Imbalances Make Us Focus on Our Goals {#sec-imbalance-goals}
 
-don't confuse dealing with extreme frequencies with finding important events
+Before starting the model development process, it is essential to consider how class balance impacts the project goals. It is often the case that the fact that events rarely occur means that the goal of the model is to identify the precious events in a large dataset (such as in information retrieval), even if it is at the cost of more false positives than we would ordinarily tolerate. In other words, finding the events is of paramount importance, and other considerations, such as interpretability, inference, and explanation of predictions, are not terribly important. This is often the case where the hard class prediction is used in an automated system that only takes the qualitative prediction as input. For example, @apm discusses a model used for a high-performance computing grid to route computational jobs to the correct queue based on their execution time. The system only needs to know where to send the job, and measures of uncertainty, such as estimated probabilities for how long the job will take, play no role in the process. 
 
+However, it can also be the case that we need to understand why the model works or why a data point was predicted to belong to a specific class. In @sec-drug-interactions, we’ll discuss a project from drug development where a model is used to estimate the risk of a potential drug causing patient harm. We definitely want to find the events (e.g., problematic drugs), but we also need a good understanding of how certain we are that there is an issue. 
 
+::: {.important-box}
+In other words, we should not confuse what we will do to deal with extreme frequencies with the idea that we should just care about finding important events. 
+:::
 
+These issues are important to consider because, for class imbalances, several approaches can be taken to mitigate the disparity in class frequencies. Some of them can subvert the accuracy of the predicted class probabilities (i.e., result in poor calibration). If we require a model that predicts useful probabilistic outputs, we would avoid some modeling techniques. 
 
-Using these data, the next two sections will discuss the two primary strategies for addressing class imbalances.  
+Additionally, we should settle on what performance metrics are most important. We may need multiple metrics, including some to measure calibration (Brier scores), overall class separation (ROC curves), and/or the ability to detect events (PR curves). Additionally, knowing how well the hard class predictions work may require attention to sensitivity, specificity, recall, and other metrics. 
+
+These are all issues that should be thought about for every modeling project. We emphasize it here because imbalances, especially extreme ones, substantially raise the level of difficulty.
+
+The next two sections will outline two general philosophies when modeling imbalanced data. The first is to accept that the imbalance and model it as-is. We can utilize all the tools and methods previously discussed to create a model driven by performance statistics based on probabilistic predictions, such as log-loss or the area under the receiver operator characteristic curve. Once we have an appropriate model for these criteria, we can focus on how to postprocess the predictions to produce the optimal hard class predictions. 
+
+The second philosophy is to circumvent the issue of the imbalance by either removing it or by making the performance metric aware that some training set points (e.g., the events) are more important than others. Both approaches bias the model to be less focused on the majority class.
+
+Both philosophies have advantages and disadvantages. Generally, if finding the events is the overriding goal, the second philosophy will likely be the best choice.   
 
 ## Strategy 1: Accepting the State of Nature {#sec-imbalance-acceptance}
 
@@ -364,7 +384,6 @@ nm_rec <-
   bare_rec |>
   step_nearmiss(class)
 ```
-
 
 ```{r}
 #| label: myopia-glmnet-plain
@@ -555,7 +574,6 @@ lgb_plain_spec <-
   ) |>
   set_mode("classification") |>
   set_engine("lightgbm")
-
 
 lgb_plain_wflow <- workflow(class ~ ., lgb_plain_spec)
 
@@ -825,7 +843,6 @@ rank_plain |>
   theme(legend.position = "top")
 ```
 
-
 While the Rulefit and logistic regressions had the smallest Brier scores, their respective best candidates have issues. For the RuleFit model, the maximum estimated probability of a patient being myopic is `r round(xrf_max_prob * 100, 1)`% across all of the assessment sets. While the values are well-calibrated within the observed data range, this upper limit of probability is probably too small to be the final model. We would expect at least one of the held-out predictions to be closer to one when the patient is truly myopic. We also do not have a clear sense of how well-calibrated the predictions are when values are closer to one. 
 
 TODO: problem of never predicting the minor class with poor probabilities
@@ -952,12 +969,12 @@ Resampled performance metrics for the best candidates across different models. T
 
 :::: 
 
-The hard class predictions in @tbl-plain-metrics use the default 50% probability cutoff. A few of the models have accuracies that are larger than the rate that the majority class occurs in the training set (`r round(mean(myopia_train$class == "no") * 100, 1)`%). The Kappa statistics suggest that there is a signal in the models for predicting qualitative class membership. However, with this cutoff, the model is effectively useless at predicting which people are myopic, as the best possible sensitivity is `r round(max(plain_metric_table$Sensitivity) * 100, 1)`%. 
+The hard class predictions in @tbl-plain-metrics use the default 50% probability cutoff. A few of the models have accuracies that are larger than the rate that the majority class occurs in the training set (`r round(mean(myopia_train$class == "no") * 100, 1)`%). The Kappa statistics indicate a significant signal in the models for predicting qualitative class membership. However, with this cutoff, the model is effectively useless at predicting which people are myopic, as the best possible sensitivity is `r round(max(plain_metric_table$Sensitivity) * 100, 1)`%. 
 
 If we are satisfied with the model's ability to discriminate between classes (as evidenced by the ROC curve) and that the probabilities are sufficiently calibrated, we can address the sensitivity problem by selecting an appropriate probability threshold. As with most optimization problems, we require an objective function to make the best decision regarding this tuning parameter. There are a few ways we can approach the problem: 
 
  1. Given what we know about how the model will be used, we could define specific costs for false negatives and false positives (with correctly predicted classes having zero cost). Using these values, we can choose a threshold that minimizes the cost of the decision. This is similar to a weighted Kappa approach, except the weights would not be symmetric. 
- 2. Seek a constrained optimization. For example, we can try to maximize the sensitivity under the constraint that the specificity is at an acceptable value. The ROC curve provides the substrate to make these calculations since it includes sensitivity and specificity for many thresholds in the data. 
+ 2. Seek a constrained optimization. For example, we can try to maximize the sensitivity under the constraint that the specificity is at an acceptable value. The ROC curve provides the substrate for these calculations, as it includes sensitivity and specificity for various thresholds in the data. 
  3. Optimize an existing composite score that captures the right balance of sensitivity and specificity. The Matthews correlation coefficient and F-statistics are examples of such metrics. 
  4. Use a multiparameter optimization method, such as desirability functions from @sec-cls-multi-objectives, to define a jointly acceptable result (i.e., overall desirability). This would enable us to consider multiple performance metrics, as well as other variables, in the decision-making process. 
  
@@ -1068,9 +1085,9 @@ It is important to realize that this strategy only optimizes the probability thr
 
 Moving on to constrained optimization, when choosing a threshold using an ROC curve, an immediate question arises: "Which data should be used to compute the ROC curve?" _Preferably_, the cutoff selection should use different data than the data used to fit the model. For example, diagnostic tests that require approval from a government agency (e.g., the Food and Drug Administration in the US) require a different data set to set the threshold. However, this may not be feasible if there is not an abundance of data or the resources to acquire such data. If we can't hold out another data set, we can use the assessment sets generated during resampling^[Or a validation set if multiple resamples are not used.]. There are at least two different approaches. 
 
- - **Option A - _post hoc_ pooling**: After we have resampled our model configurations, we can pool the assessment set predictions for the best candidate. This ROC curve is computed based on the overall existing class probability estimate values. This approach generated the visualizations in @fig-myopia-logistic. 
+ - **Option 2A - _post hoc_ pooling**: After we have resampled our model configurations, we can pool the assessment set predictions for the best candidate. This ROC curve is computed based on the overall existing class probability estimate values. This approach generated the visualizations in @fig-myopia-logistic. 
 
-- **Option B - threshold tuning**: During model tuning, we treat the probability threshold as a tuning parameter and include it in the grid search. For each threshold in the grid, conditional on any other tuning parameters, we have resampling estimates for sensitivity and specificity. These points are then used to create an ROC curve. 
+- **Option 2B - threshold tuning**: During model tuning, we treat the probability threshold as a tuning parameter and include it in the grid search. For each threshold in the grid, conditional on any other tuning parameters, we have resampling estimates for sensitivity and specificity. These points are then used to create an ROC curve. 
 
 The primary difference between these approaches lies in data usage: do we compute one large ROC curve from pooled data or an ROC curve from resampled statistics? Statistically, the latter is more appropriate, but either might produce acceptable results.
 
@@ -1146,8 +1163,7 @@ Of course, this is paraphrasing, but the hypothetical conversation does illustra
 
 This seeming disconnect can become worse as the prevalence becomes smaller. For very rare events (i.e., < 5%), the cutoff associated with the sensitivity-specificity trade-off can be very small, perhaps less than 1%. This is the price paid for having probability estimates that are consistent with the rate at which the event occurs in the wild. 
  
- 
-## Strategy 2: Corrections for the Imbalance
+## Strategy 2: Correcting the Imbalance {#sec-imblance-correction}
 
 In the previous section, the only operation used to account for the small minority class was to optimize the probability threshold _after_ the model had been chosen. In this section, we'll consider several methods for actively addressing the imbalance during model optimization. The two primary classes of techniques are: 
 
@@ -1156,10 +1172,13 @@ In the previous section, the only operation used to account for the small minori
 
 As we'll see, these can have a profound effect on the class probability estimates (both good and bad). These techniques are also most effective when the primary goal of the model is to identify events in new data. 
 
-### Sampling and Synthesis Techniques
+### Sampling and Synthesis Techniques {#sec-sampling-synthesis}
 
+One strategy for addressing a class imbalance is to eliminate it in the training set by adding or removing rows, depending on the class. A "sampling" method would remove existing rows from the data (likely from the majority class) to even the class frequencies. The removal may be random or based on characteristics of the existing data. Other sampling methods can oversample existing data. "Synthesis" methods invent new rows of the data in a way that makes them similar to or consistent with existing examples from the same class. 
 
-#### Downsampling
+Regardless of the method used, note that rebalancing occurs only on the data being used to train the model. If we are within a resampling loop, the analysis sets are affected, but the assessment sets are not. If we are going to fit a model to the entire data set, the training set is rebalanced, but the test set^[And validation set, if any] are unaffected. The reason for this is that the data used to measure how well the models work should be drawn from the same population as the data the model will eventually be used to predict. Rebalancing tools deliberately bias the sample to be unlike the population being predicted. 
+
+#### Downsampling {#sec-downsampling}
 
 ```{r}
 #| label: myopia-down-fda
@@ -1186,7 +1205,6 @@ fda_down_capture <-
   nrow()
 ```
 
-
 :::: {#fig-myopia-down-fda}
 
 ```{r}
@@ -1211,8 +1229,6 @@ A flexible discriminant fit to the downsampled myopia training set. The subsampl
 
 ::::
 
-
-
 ::: {#fig-subsampling}
 
 ::: {.figure-content}
@@ -1230,7 +1246,6 @@ library(dplyr)
 
 source("https://raw.githubusercontent.com/aml4td/website/main/R/shiny-setup.R")
 # source("https://raw.githubusercontent.com/aml4td/website/main/R/shiny-sa.R")
-
 
 ui <- page_fillable(
   theme = bs_theme(bg = "#fcfefe", fg = "#595959"),
@@ -1273,7 +1288,6 @@ server <- function(input, output) {
   output$plot <-
     renderPlot(
       {
-        # browser()
         dat <- imbalanced_sampled %>%
           dplyr::filter(Data == input$method) |>
           dplyr::bind_rows(orig) |>
@@ -1316,7 +1330,6 @@ app
 TODO
 
 :::
-
 
 Subsampling
 
@@ -1373,15 +1386,15 @@ sampling_set <-
   )
 ```
 
-#### Upsamping
+#### Upsamping {#sec-upsampling}
 
-#### SMOTE
+#### SMOTE {#sec-smote}
 
-#### ROSE
+#### ROSE {#sec-rose}
 
-#### Boarderline Methods
+#### Boarderline Methods {#sec-borderline}
 
-#### Comparisons
+#### Comparisons Using the Myopia Data {#sec-myopia-sampling}
 
 The top panel of @fig-myopia-sampling shows the model configuration statistics for different sampling and synthesis methods. The visualization emulates an ROC curve by plotting the sensitivity versus the false positive rate (i.e., one minus specificity) to demonstrate the trade-offs between the two types of errors. The downsampling panel shows a tight cluster of model results for both types of models, located in the region where sensitivity and specificity are approximately equal. Unsurprisingly, this is due to the equal frequencies of the two classes in the training data (post-sampling). However, this will not always be the case for other data sets. Near-miss sampling has a similar pattern with tighter clustering of model configuration results. 
 
@@ -1404,7 +1417,6 @@ sampling_mtr <-
     values_from = mean
   )
 ```
-
 
 ```{r}
 #| label: fig-myopia-sampling
@@ -1431,7 +1443,7 @@ sampling_sens_brier <-
   ggplot(aes(sensitivity, brier_class, col = model, pch = model)) +
   geom_point(cex = 2, alpha = 2 / 3, show.legend = FALSE) +
   facet_wrap(~model) +
-  coord_fixed(ratio = 4.5, xlim = 0:1, ylim = c(0.1, 0.28)) +
+  coord_fixed(ratio = 4) +
   labs(y = "Brier Score")+
   scale_shape_manual(values = c(1:0)) +
   scale_color_manual(values = c("#EF7C12FF", "#172869FF"))
@@ -1439,13 +1451,13 @@ sampling_sens_brier <-
 sampling_sens_spec / sampling_sens_brier
 ```
 
-The two synthetic methods showed slightly different patterns. ROSE and SMOTE with logistic regression yielded another tight cluster of results, with somewhat smaller statistics than downsampling. For boosting, both SMOTE and ROSE showed more versatility in the tuning parameter results, allowing for a trade-off to be made between sensitivity and specificity. However, the pattern of the configurations favored specificity over sensitivity, especially for SMOTE. 
+The two synthetic methods showed slightly different patterns. ROSE and SMOTE with logistic regression yielded another tight cluster of results, with somewhat smaller statistics than those obtained through downsampling. For boosting, both SMOTE and ROSE demonstrated greater versatility in the tuning parameter results, enabling trade-offs between sensitivity and specificity. However, the pattern of the configurations favored specificity over sensitivity, especially for SMOTE. 
 
 The bottom panel of @fig-myopia-sampling shows that, when sensitivity is improved by these tools, there can be a corresponding increase in the Brier scores. The boosting results show that a high sensitivity raises the Brier to values that would indicate a complete lack of calibration in the predicted probability estimates. This is deliberate; the goal of rebalancing is to have parity in the class frequencies. This enables the model to increase the likelihood of identifying events in the data. The consequence of doing so is that our class probability distributions are biased towards overestimating the probability of an event. However, when assessing the model, we use unbalanced data, and the increased probability of an event is not consistent with the true event rate (as seen outside of the balanced training set).
 
 This highlights the idea that rebalancing tools can help a model do better at finding events and that the user should only focus on hard class predictions (and perhaps avoid exposing the users to the probability estimates). 
 
-### Cost-sensitive learning
+### Cost-Sensitive Learning {#sec-cost-sensitive-learning}
 
 We’ve previously talked about the consequences of making an incorrect prediction. For example, @sec-mushrooms showed a model that predicts whether mushrooms are poisonous or not. We could think about this in terms of the general cost of a prediction (not too dissimilar to the discussion related to SVM models). 
 
@@ -1454,7 +1466,6 @@ If we have $C$ classes, we could write down a cost matrix that defines the speci
 If we have this cost structure, we can use the predicted class probabilities to estimate the expected costs for a collection of data by averaging a set of individual costs. 
 
 Let’s say that $C=3$ and the cost matrix is 
-
 
 $$
 \mathcal{C} = 
@@ -1465,7 +1476,7 @@ $$
 \end{bmatrix}
 $$
 
-where the true values are in columns and the predicted class levels are rows. For example, the cost of predicting a data point that is Class 3 as Class 1 is $\mathcal{c}_{1|3} = 3.00$. Here are some examples of probabilities and their individual costs:
+where the true values are in columns, and the predicted class levels are rows. For example, the cost of predicting a data point that is Class 3 as Class 1 is $\mathcal{c}_{1|3} = 3.00$. Here are some examples of probabilities and their individual costs:
 
 ```{r}
 #| label: cost-examples
@@ -1511,10 +1522,9 @@ cost_tbl |>
   tab_spanner(columns= A:C, label = "Probability Estimates")
 ```
 
-
 If our ML model can utilize custom objective functions, minimizing the expected cost is a fairly rational way to ensure your model is fit for purpose. If not, we can use the expected cost to help optimize the tuning parameters of our model (as we did in @fig-class-cost). 
 
-Another way some researchers have parameterized cost is to collapse the matrix, resulting in a general cost for misclassifying a sample, regardless of what it was misclassified as. In this case, we sum the cost matrix over columns so that there is one cost per class. XXX describes these as class weights. In our example matrix shown above, the class weights are $\mathcal{C}_1 = 0.75$,  $\mathcal{C}_2 = 1.75$,  and  $\mathcal{C}_3 = 5.00$. For a two-class outcome (e.g., myopia or not), the class weights are the same as the two off-diagonal entries in the cost matrix. 
+Another way some researchers have parameterized cost is to collapse the matrix, resulting in a general cost for misclassifying a sample, regardless of what it was misclassified as. In this case, we sum the cost matrix over columns, resulting in one cost per class. XXX describes these as class weights. In our example matrix shown above, the class weights are $\mathcal{C}_1 = 0.75$,  $\mathcal{C}_2 = 1.75$,  and  $\mathcal{C}_3 = 5.00$. For a two-class outcome (e.g., myopia or not), the class weights are the same as the two off-diagonal entries in the cost matrix. 
 
 If we consider class-specific costs as weights, we can generalize many performance metrics to be cost-sensitive. For example, we can make the Brier score cost-sensitive using a modified version of @eq-brier
 
@@ -1542,7 +1552,7 @@ If your problem has a well-known cost structure, likely expressed in units of cu
 
 CART book, resampling weights versus case weights
 
-To visualize an example, @fig-myopia-cost-fda shows the same data as @fig-myopia-fda but in this case, case weights were used so that the myopic data (in red) had a 15-fold larger impact on the objective function than the non-myopic children. The same FDA model was trained on the data, but it used the case weights. The result is a class boundary that bends in the middle, allowing it to encompass a greater portion of the minority class than the original fit. 
+To visualize an example, @fig-myopia-cost-fda shows the same data as @fig-myopia-fda, but in this case, case weights were used so that the myopic data (in red) had a 15-fold larger impact on the objective function than the non-myopic children. The same FDA model was trained on the data, but it used the case weights. The result is a class boundary that bends in the middle, allowing it to encompass a greater portion of the minority class than the original fit. 
 
 ```{r}
 #| label: myopia-cost-fda
@@ -1592,9 +1602,9 @@ A flexible discriminant fit to the myopia training set using cost-sensitive lear
 
 Case weights based on the class can also approximate some of the subsampling methods shown in the previous section. For example, instead of dropping training set rows from the data, we can adjust the importance weights so that the sum of the weights in the majority class equals the sum of the weights in the minority class. By doing this, we may be able to obtain a better model since the majority of the majority class is not lost.  Similarly, an approximation to upsampling would only increase the minority class weights so that the class weight totals are in equilibrium. This would also result in faster training times than basic oversampling.
 
-It should be noted that some stochastic ensemble implementations (e.g., boosting and random forests) confuse the terms "case weights" and "sampling weights." In these instances, the weights are used to preferentially sample the training set while fitting the models (usually trees) without directly impacting the objective function. This process is more akin to downsampling and upsampling than to cost-sensitive learning. 
+It is worth noting that some stochastic ensemble implementations (e.g., boosting and random forests) often confuse the terms "case weights" and "sampling weights." In these instances, the weights are used to preferentially sample the training set while fitting the models (usually trees) without directly impacting the objective function. This process is more akin to downsampling and upsampling than to cost-sensitive learning. 
 
-To demonstrate with the full myopia data set, boosted trees and regularized logistic regression were used once again. The lightgbm implementation was used and, while their documentation is unclear about how the weights are used, it appears that the weights are applied to the objective function and not just the sampling mechanism^[A GitHub issue ([`https://github.com/microsoft/LightGBM/issues/1299`](https://github.com/microsoft/LightGBM/issues/1299)) has evidence that the weights are a “multiplication applied to every positive label weight” and shows some C++ code to that effect.].
+To demonstrate with the full myopia data set, boosted trees and regularized logistic regression were used once again. The lightgbm implementation was used and, while their documentation is unclear about how the weights are used, it appears that the weights are applied to the objective function and not just the sampling mechanism^[A GitHub issue ([`https://github.com/microsoft/LightGBM/issues/1299`](https://github.com/microsoft/LightGBM/issues/1299)) has evidence that the weights are a "multiplication applied to every positive label weight" and shows some C++ code to that effect.].
 
 ```{r}
 #| label: myopia-lgb-cls-wts
@@ -1629,7 +1639,6 @@ lgb_cost_res <-
     grid = lgb_cost_grid
   )
 ```
-
 
 ```{r}
 #| label: myopia-glmn-cls-wts
@@ -1751,17 +1760,7 @@ cost_roc / cost_sens_brier
 
 When comparing subsampling/synthetic methods to cost-sensitive learning, the latter appears to be more versatile than the former. It enables the user to have more direct control over the trade-off between false-negative and false-positive rates. The downside to cost-sensitive learning is that it may be dependent on the implementation of the method, whereas subsampling/synthetic tools can be used anywhere, as they are specialized preprocessors. 
 
-### Other Methods
-
-case weights
-
-Unrealistic priors
-
-Logistic regression with altered intercept
-
-
-## Revenge of the Prevalence
-
+## Revenge of the Prevalence {#sec-prevalence-again}
 
 It is worth revisiting the discussion from @sec-cls-two-classes on how the event rate (i.e., prevalence) affects important statistics.  We'll continue to use the myopia data for discussion.  
 
@@ -1792,5 +1791,4 @@ For example, @covidcdc calculated COVID-19 cases and deaths, and estimated cumul
 This illustrates that computations that depend on the event rate can be challenging, as the values can systematically change under different conditions and over time. 
 
 ## Chapter References {.unnumbered}
-
  
