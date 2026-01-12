@@ -1097,8 +1097,8 @@ Note that there are a few options when we treat the threshold as a tuning parame
 #| label: fig-myopia-two-roc
 #| echo: false
 #| out-width: 50%
-#| fig-width: 5
-#| fig-height: 5.1
+#| fig-width: 4.5
+#| fig-height: 4.7
 #| fig-cap: "Two approaches for optimizing the probability threshold via the ROC curve. Both curves use the regularized logistic regression's resampling results."
 
 glmn_thr_roc <- 
@@ -1178,7 +1178,11 @@ One strategy for addressing a class imbalance is to eliminate it in the training
 
 Regardless of the method used, note that rebalancing occurs only on the data being used to train the model. If we are within a resampling loop, the analysis sets are affected, but the assessment sets are not. If we are going to fit a model to the entire data set, the training set is rebalanced, but the test set^[And validation set, if any] are unaffected. The reason for this is that the data used to measure how well the models work should be drawn from the same population as the data the model will eventually be used to predict. Rebalancing tools deliberately bias the sample to be unlike the population being predicted. 
 
+Note that all the techniques mentioned here should be considered as yet another preprocessing method. As such, it is in the interest of the modeler to resample the models and include these steps within the resampling process. It would be inappropriate to apply a technique such as downsampling and then resample the data. Since these methods involve randomness, we need to account for it in our performance statistics. 
+
 #### Downsampling {#sec-downsampling}
+
+This approach is straightforward: every class with more data than the minority class is randomly sampled, ensuring that all classes have the same number of training set points. The minority class stays the same. For our myopia data, the majority class is randomly reduced from `r nrow(myopia_train)` to `r sum(myopia_df$class == "yes")` patients. Figures x and y show examples for the two predictor subset, the latter also shows how the FDA fit changes with the reduced data set. We can see that the class boundary is more simplistic but has shifted to the right, capturing more events with the default 50% cutoff (at the expense of increased false positives). 
 
 ```{r}
 #| label: myopia-down-fda
@@ -1243,6 +1247,8 @@ library(shiny)
 library(bslib)
 library(ggplot2)
 library(dplyr)
+library(munsell)
+library(scales)
 
 source("https://raw.githubusercontent.com/aml4td/website/main/R/shiny-setup.R")
 # source("https://raw.githubusercontent.com/aml4td/website/main/R/shiny-sa.R")
@@ -1326,11 +1332,11 @@ app
 
 :::
 
-TODO
+The effect of a few sampling and synthesis techniques on two of the predictors in the myopia training set. 
 
 :::
 
-Subsampling
+Besides rebalancing, the advantage of downsampling is that models can be trained faster. The downside is that important information might be lost in the majority class(es) due to random sampling. We are diminishing the influence of the non-minority classes and creating a smaller training set. Another effect of this is that our models will tend to be more simplistic, as the data cannot support excessive complexity. 
 
 ```{r}
 #| label: myopia-ridge
@@ -1385,9 +1391,19 @@ sampling_set <-
   )
 ```
 
+TODO add the fda fits to the shiny app? 
+
 #### Upsamping {#sec-upsampling}
 
+Upsampling will create random replicates of the majority class(es) so that all classes have the same frequency in the training set. This increases the training set, sometimes to orders of magnitude larger, so training time can become excessive for some models. There is also the issue of having a potentially large number of replicates for each non-majority class value in the original training set. For example, for models such as random forest that use bootstrap samples to fit models, we could have even more replicates of these data points. Another complication occurs when a model, such as K-nearest neighbors, is used; all of the nearest neighbors might be the same data point. 
+
+Upsampling is probably the least used of these techniques do to these issues. 
+
 #### SMOTE {#sec-smote}
+
+The Synthetic Minority Oversampling Technique (SMOTE) is a method that combines random sampling with the creation of novel data points, which are fusions and/or perturbations of existing points. There are a few flavors of this method, but we'll focus on the original technique by REF where all predictors are required to be numeric. 
+
+For each data point in the minority class, compute its K-nearest neighbors. The create a new artificial data point, we select a minority class point at random ($\boldsymbol{x}_i$) as well as one of its neighbors. For each predictor, we compute the difference between the original data point and its chosen neighbor (call this $\delta_j$ for predictor $j$). For each predictor, we compute a uniform random number $u_j \sim U(0, 1)$ and modify the original point as $x^*_{ij} = x_{ij} + u_j\delta_j$. Essentially, SMOTE generates a hyperrectangle between the selected point and its chosen neighbor, and then randomly places the new sample within the hyperrectangle. 
 
 #### ROSE {#sec-rose}
 
@@ -1454,14 +1470,138 @@ The two synthetic methods showed slightly different patterns. ROSE and SMOTE wit
 
 The bottom panel of @fig-myopia-sampling shows that, when sensitivity is improved by these tools, there can be a corresponding increase in the Brier scores. The boosting results show that a high sensitivity raises the Brier to values that would indicate a complete lack of calibration in the predicted probability estimates. This is deliberate; the goal of rebalancing is to have parity in the class frequencies. This enables the model to increase the likelihood of identifying events in the data. The consequence of doing so is that our class probability distributions are biased towards overestimating the probability of an event. However, when assessing the model, we use unbalanced data, and the increased probability of an event is not consistent with the true event rate (as seen outside of the balanced training set).
 
-did it make the ROC or PR curve better?
+It is worth noting that we could also optimize the threshold to further fine-tune the sensitivity and specificity values. Unlike the analysis in the previous section, the custom thresholds are much less likely to be excessively small (or large). However, if this is required, we are probably better off using unsampled training sets or using cost-sensitive learning (shown in the next section).
 
-could adjust thresholds again (slightly better?)
+```{r}
+#| label: sampling-comparisons
+#| include: false
+#| cache: true
 
+glmn_plain_pred <-
+  glmn_thr_res |>
+  collect_predictions(summarize = TRUE) |>
+  filter(
+    penalty == glmn_plain_alt_best$penalty & 
+      threshold == roc_tradeoff$threshold
+  ) |>
+  select(.row, plain = .pred_yes) |>
+  mutate(model = "Logistic Regression")
 
-This highlights the idea that rebalancing tools can help a model do better at finding events and that the user should only focus on hard class predictions (and perhaps avoid exposing the users to the probability estimates). 
+plain_pred <-
+  bind_rows(
+    glmn_plain_pred,
+    lgb_plain_best_pred |>
+      select(.row, plain = .pred_yes) |>
+      mutate(model = "Boosted Tree")
+  )
 
+best_sampling <-
+  sampling_mtr |>
+  slice_max(roc_auc, by = c(sampling, model), with_ties = FALSE) |>
+  select(wflow_id, .config, model, sampling, roc_auc)
 
+sampling_pred <- NULL
+for (i in seq_along(best_sampling$wflow_id)) {
+  tmp_preds <-
+    sampling_set |>
+    extract_workflow_set_result(id = best_sampling$wflow_id[i]) |>
+    collect_predictions(summarize = TRUE) |>
+    filter(.config == best_sampling$.config[i]) |>
+    select(class, .pred_yes, .row) |>
+    mutate(
+      model = best_sampling$model[i],
+      sampling = best_sampling$sampling[i]
+    )
+
+  sampling_pred <- bind_rows(sampling_pred, tmp_preds)
+}
+
+sampling_pred <-
+  sampling_pred |>
+  pivot_wider(
+    id_cols = c(class, .row, model),
+    names_from = sampling,
+    values_from = .pred_yes
+  )
+
+plain_sampling_pred <-
+  sampling_pred |>
+  full_join(plain_pred, by = c(".row", "model"))
+
+# ------------------------------------------------------------------------------
+
+sampling_roc_auc <- function(split) {
+  grps <- c("Downsample", "SMOTE", "ROSE", "Near Miss")
+  rocs <- rep(NA, length(grps))
+  dat <- analysis(split) |> dplyr::select(-.row)
+  plain_roc <- dat |> roc_auc(class, plain) |> pluck(".estimate")
+  for (j in seq_along(grps)) {
+    rocs[j] <- roc_auc_vec(dat$class, dat[[grps[j]]])
+  }
+  tibble(term = grps, estimate = plain_roc - rocs)
+}
+
+set.seed(518)
+sampling_glmn_roc_reps <-
+  plain_sampling_pred |>
+  filter(model == "Logistic Regression") |> 
+  bootstraps(times = 2000) |>
+  mutate(stats = map(splits, sampling_roc_auc)) |> 
+  int_pctl(stats, alpha = 0.1) |> 
+  mutate(model = "Logistic Regression")
+
+set.seed(518)
+sampling_lgb_roc_reps <-
+  plain_sampling_pred |>
+  filter(model == "Boosted Tree") |> 
+  bootstraps(times = 2000) |>
+  mutate(stats = map(splits, sampling_roc_auc)) |> 
+  int_pctl(stats, alpha = 0.1) |> 
+  mutate(model = "Boosted Tree")
+
+sampling_roc_reps <- 
+  bind_rows(
+    sampling_glmn_roc_reps,
+    sampling_lgb_roc_reps
+  ) |> 
+  mutate(
+    model = factor(model, levels = c("Logistic Regression", "Boosted Tree"))
+  )
+
+glmn_samp_roc_rng <- range(best_sampling$roc_auc[best_sampling$model == "Logistic Regression"])
+lgb_samp_roc_rng <- range(best_sampling$roc_auc[best_sampling$model == "Boosted Tree"])
+```
+
+We can see that these tools have an effect on the hard class prediction metrics, such as sensitivity and specificity. Although @fig-myopia-sampling indicates that the calibration properties are not good, meaning that probability estimates do not reflect the rate at which events occur. However, it is possible that the probabilities can help discriminate between the classes for some threshold. For the four sampling methods used on these data, their ROC AUC values for the best logistic regression models ranged from `r round(glmn_samp_roc_rng[1], 3)` to `r round(glmn_samp_roc_rng[2], 3)` The range for the boosted tree models was `r round(lgb_samp_roc_rng[1], 3)` to `r round(lgb_samp_roc_rng[2], 3)`. Are these any better or worse than the models that were developed in @sec-imbalance-acceptance? Using the bootstrap techniques in @sec-compare-holdout, we linked the predictions by row for all of these models, created 2,000 bootstrap samples, and then computed the difference in the area under the ROC curves. @fig-myopia-sampling-comparison shows the results. For these data, there doesn’t appear to be any improvement in the ROC AUCs when subsampling and synthesis tools are used. Note that the x-axis scale is fairly small; these AUC values are very similar to one another. One comparison did not cover zero, indicating that using logistic regression with SMOTE had a slightly worse AUC than simply using the training set as is. 
+
+```{r}
+#| label: fig-myopia-sampling-comparison
+#| echo: false
+#| fig-width: 6
+#| fig-height: 4
+#| out-width: 70%
+#| fig-cap: "Bootstrap 90% confidence intervals to assess whether subsampling and synthesis methods improve the area under the ROC curve. Negative values indicate that the AUC values were higher for models developed in @sec-imbalance-acceptance."
+
+sampling_roc_reps |>
+  ggplot(aes(y = term, col = model)) +
+  geom_vline(xintercept = 0, lty = 3, col = "black") +
+  geom_point(aes(x = .estimate), position = position_dodge(width = 0.5)) +
+  geom_errorbar(
+    aes(xmin = .lower, xmax = .upper),
+    width = 1 / 2,
+    position = position_dodge(width = 0.5),
+    alpha = 3 / 4
+  ) +
+  scale_color_manual(values = c("#EF7C12FF", "#172869FF")) +
+  labs(
+    x = "Difference in ROC AUC\n(sampling - basic)",
+    y = NULL,
+    color = "Model"
+  ) +
+  theme(legend.position = "top")
+```
+
+These results highlights the idea that rebalancing tools can help a model do better at finding events and that the user should only focus on hard class predictions (and perhaps avoid exposing the users to the probability estimates). 
 
 ### Cost-Sensitive Learning {#sec-cost-sensitive-learning}
 
