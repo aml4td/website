@@ -1182,7 +1182,7 @@ Note that all the techniques mentioned here should be considered as yet another 
 
 #### Downsampling {#sec-downsampling}
 
-This approach is straightforward: every class with more data than the minority class is randomly sampled, ensuring that all classes have the same number of training set points. The minority class stays the same. For our myopia data, the majority class is randomly reduced from `r nrow(myopia_train)` to `r sum(myopia_df$class == "yes")` patients. Figures x and y show examples for the two predictor subset, the latter also shows how the FDA fit changes with the reduced data set. We can see that the class boundary is more simplistic but has shifted to the right, capturing more events with the default 50% cutoff (at the expense of increased false positives). 
+This approach is straightforward: every class with more data than the minority class is randomly sampled, ensuring that all classes have the same number of training set points. The minority class stays the same. For our myopia data, the majority class is randomly reduced from `r nrow(myopia_train)` to `r sum(myopia_df$class == "yes")` patients. @fig-myopia-subsampling show examples for the two predictor subset including how the FDA fit changes with the reduced data set. We can see that the class boundary is slightly more simplistic than @fig-myopia-fda but has shifted to the right, capturing more events with the default 50% cutoff (at the expense of increased false positives). 
 
 ```{r}
 #| label: myopia-down-fda
@@ -1209,31 +1209,7 @@ fda_down_capture <-
   nrow()
 ```
 
-:::: {#fig-myopia-down-fda}
-
-```{r}
-#| label: myopia-down-fda-plot
-#| echo: false
-#| fig-width: 4.8
-#| fig-height: 5.2
-#| warning: false
-#| out-width: 50%
-myopia_smol_formatted |> 
-  ggplot(aes(`spherical equivalent refraction`, `axial length`)) +
-  geom_point(aes(color = class), alpha = 0.5, shape = 16, size = 2, show.legend = FALSE) + 
-  geom_tile(data = fda_down_pred, aes(fill = .pred_yes), alpha = .1) +
-  geom_contour(data = fda_down_pred, aes(z = .pred_yes), breaks = 1/2, col = "black") +
-  scale_fill_gradient2(low = "#377EB8", mid = "white", high = "#E41A1C", midpoint = 0.5) +
-  scale_color_brewer(palette = "Set1") + 
-  labs(fill = "Probability") +
-  theme(legend.position = "top")
-```
-
-A flexible discriminant fit to the downsampled myopia training set. The subsampling process increased the number of events found using the 50% threshold (`r fda_down_capture` out of `r sum(myopia_smol_formatted$class == "yes")`). This figure is comparable with @fig-myopia-fda.
-
-::::
-
-::: {#fig-subsampling}
+::: {#fig-myopia-subsampling}
 
 ::: {.figure-content}
 
@@ -1269,14 +1245,15 @@ ui <- page_fillable(
           "SMOTE",
           "ROSE",
           "Near Miss",
-          "Adaptive Synthetic Algorithm",
-          "Tomek"
+          "Adaptive Synthetic Algorithm"
         ),
         selected = c("Downsampled")
       )
     )
   ),
-  as_fill_carrier(plotOutput("plot"))
+  as_fill_carrier(plotOutput("plot")),
+  br(),
+  textOutput("text")
 )
 
 server <- function(input, output) {
@@ -1284,8 +1261,8 @@ server <- function(input, output) {
     "https://raw.githubusercontent.com/aml4td/website/main/RData/imbalanced_sampled.RData"
   ))
 
-  xrng <- extendrange(imbalanced_sampled$spherical_equivalent_refraction)
-  yrng <- extendrange(imbalanced_sampled$vitreous_chamber_depth)
+  xrng <- range(imbalanced_sampled$spherical_equivalent_refraction)
+  yrng <- range(imbalanced_sampled$vitreous_chamber_depth)
 
   orig <- imbalanced_sampled %>%
     dplyr::filter(Data == "Original")
@@ -1299,30 +1276,66 @@ server <- function(input, output) {
           dplyr::mutate(
             Data = factor(Data, levels = c("Original", input$method))
           )
+
+        grid <- imbalanced_grid %>%
+          dplyr::filter(Data == input$method) |>
+          dplyr::select(-Data) |>
+          filter(!is.na(.pred_yes))
         p <-
           dat |>
-          ggplot(aes(
-            spherical_equivalent_refraction,
-            vitreous_chamber_depth,
-            col = class,
-            pch = class,
-            alpha = class
-          )) +
-          geom_point(alpha = 0.5, cex = 1.6) +
+          ggplot(
+            aes(
+              spherical_equivalent_refraction,
+              vitreous_chamber_depth
+            )
+          ) +
+          geom_point(
+            aes(
+              col = class,
+              pch = class
+            ),
+            cex = 1.6,
+            alpha = 2 / 3
+          ) +
           facet_wrap(~Data) +
-          coord_fixed(xlim = xrng, ylim = yrng)
+          coord_fixed(ratio = 1.4, xlim = xrng, ylim = yrng)
 
         p <- p +
           theme(legend.position = "top") +
-          labs(
-            x = "spherical equivalent refraction",
-            y = "vitreous chamber depth"
-          ) +
           scale_color_brewer(drop = FALSE, palette = "Set1", direction = 01) +
           theme_light_bl()
+
+        p <-
+          p +
+          geom_tile(data = grid, aes(fill = .pred_yes), alpha = .1) +
+          geom_contour(
+            data = grid,
+            aes(z = .pred_yes),
+            breaks = 1 / 2,
+            col = "black"
+          ) +
+          scale_fill_gradient2(
+            low = "#377EB8",
+            mid = "white",
+            high = "#E41A1C",
+            midpoint = 0.5
+          ) +
+          labs(
+            x = "spherical equivalent refraction",
+            y = "vitreous chamber depth",
+            fill = "Probability"
+          )
         print(p)
       },
       res = 100
+    )
+  
+  output$text <-
+    renderText(
+      paste(
+        "Using the default 50% threshold, this method correctly identified", 
+        imbalanced_hits[input$method], 
+        "truly myopic subjects (out of 60).") 
     )
 }
 
@@ -1332,7 +1345,7 @@ app
 
 :::
 
-The effect of a few sampling and synthesis techniques on two of the predictors in the myopia training set. 
+The effect of a few sampling and synthesis techniques on two of the predictors in the myopia training set. The class boundary is based on a 50% probability cutoff.
 
 :::
 
@@ -1391,11 +1404,9 @@ sampling_set <-
   )
 ```
 
-TODO add the fda fits to the shiny app? 
-
 #### Upsamping {#sec-upsampling}
 
-Upsampling will create random replicates of the majority class(es) so that all classes have the same frequency in the training set. This increases the training set, sometimes to orders of magnitude larger, so training time can become excessive for some models. There is also the issue of having a potentially large number of replicates for each non-majority class value in the original training set. For example, for models such as random forest that use bootstrap samples to fit models, we could have even more replicates of these data points. Another complication occurs when a model, such as K-nearest neighbors, is used; all of the nearest neighbors might be the same data point. 
+Upsampling will create random replicates of the majority class(es) so that all classes have the same frequency in the training set. This increases the training set, sometimes to orders of magnitude larger, so training time can become excessive for some models. There is also the issue of having a potentially large number of replicates for each non-majority class value in the original training set. For example, for models such as random forest that use bootstrap samples to fit models, we could have even more replicates of these data points. Another complication occurs when a model, such as _K_-nearest neighbors, is used; all of the nearest neighbors might be the same data point. 
 
 Upsampling is probably the least used of these techniques do to these issues. 
 
