@@ -73,47 +73,59 @@ To get started, the first chapter summarizes an old, traditional model for class
 
 K-nearest neighbors (KNN) is predicated on the idea that data points that are close to one another in the predictor space should have outcomes that are also similar. If we are predicting a new sample, we find the _K_ training set points that are "closest" to the new data point and use their outcome values to estimate the prediction. There is essentially no training set here; everything happens when the sample is being predicted. KNN falls into a class of techniques called instance-based learning since it stores the training set instances and directly uses these data during prediction.  
 
-What does "similar" and/or "close" mean? For this, we have to define a distance metric. A common choice is the Euclidean distance, but a more generalized tool is the Minkowski distance. For a new data point $\boldsymbol{u}$ with $p$ predictors, the Minkowski distance is: 
+What does "similar" and/or "close" mean? The operational definition of "proximity" or "closeness" requires specifying either a distance or similarity metric. While Euclidean distance is a common metric, the Minkowski distance provides a more flexible framework. For a new observation $\boldsymbol{u}$ with $p$ predictors, the Minkowski distance is defined as:
 
 $$
 d(\boldsymbol{u}, \boldsymbol{x}) ={\biggl (}\sum _{j=1}^{p}|u_j-x_{j}|^{degree}{\biggr )}^{\frac {1}{degree}},
 $$ 
 
-which is Euclidean when $degree = 2$,  Manhattan distance (a.k.a., street-block distance) with $degree = 1$, and others are in between. 
+where $degree$ is the distance parameter. This formulation yields Euclidean distance when $degree = 2$, Manhattan distance (also called taxicab or city-block distance) when $degree = 1$, and intermediate distance metrics for other values of $degree$.
 
-With numeric predictors, there are other choices for distance metrics. Previously, in @sec-isomap, we also described geodesic distance based on a general distance matrix that results in a graph between points. Also, in @sec-centroids, Haversine distance is an appropriate choice when comparing geographic distances (on Earth). If we believe that the predictors are highly correlated and there is sufficient data to estimate a covariance metric, the Mahalanobis distance [@JohnsonWichern;@DeMaesschalck20001] can scale the differences in predictor values by the variances and covariances. It is also closely related to discriminant analysis. 
+The choice of distance metric can substantially influence model performance and should be considered a tuning parameter in practice.
 
-For these distances, numeric values are required for all predictors. For Minkowski distance, we should also ensure that the predictors are in the same units, which can be achieved by centering and scaling, or by using comparable methods. Correcting for skewness is also a good idea. 
+Beyond the Minkowski family, several specialized distance metrics may be appropriate depending on the structure and nature of the predictor space:
 
-For qualitative data, indicators are an option and these should be preprocessed in the same way as more dense numeric columns. Alternatively, when there are mixed predictor types, Gower distance [@gower] can also be used. This metric is computed separately for each predictor, and then the overall distance is a sum of the terms: 
+* Geodesic distance (discussed in @sec-isomap) is based on a general distance matrix to construct a graph-based representation of inter-point relationships.
+
+* Haversine distance (introduced in @sec-centroids) accounts for the curvature of the Earth's surface and is the appropriate metric when predictors represent geographic coordinates (latitude and longitude).
+
+* Mahalanobis distance [@JohnsonWichern; @DeMaesschalck20001] incorporates the covariance structure among predictors, effectively scaling predictor differences by their variances and correlations. This metric is particularly valuable when predictors exhibit substantial correlation and sufficient data are available to reliably estimate the covariance matrix. The Mahalanobis distance has a direct connection to the mathematics of discriminant analysis.
+
+These distance-based metrics require numeric predictors. For the Minkowski distance, predictors must be expressed in the same units to prevent variables with larger scales from dominating the distance calculation. This is typically accomplished through centering and scaling (standardization) or other normalization techniques. Additionally, addressing skewness through appropriate transformations (e.g., Box-Cox, Yeo-Johnson, orderNorm, etc.) prior to distance calculation is recommended, as highly skewed distributions can distort relationships and degrade model performance.
+
+For qualitative predictors, one approach is to encode them as indicator (dummy) variables, which should then be preprocessed in the same way as continuous predictors. However, when the predictor set contains a mixture of data types, Gower distance [@gower] provides a unified framework that accommodates different variable types without requiring uniform encoding.  Gower distance computes a dissimilarity measure separately for each predictor according to its data type, then aggregates these component distances:
 
 $$
 d(\boldsymbol{u}, \boldsymbol{x}) =\frac {1}{p}\sum _{j=1}^{p}d(u_j, x_{j}),
 $$
 
-where the $d_j$ values depend on the data type. For dense numeric data, this is
+where $d_j$ denotes the distance function for predictor $j$.  For continuous predictors, the component distance is range-normalized:
 
 $$
 d(u_j, x_{j})=1-{\frac {|u_{j}-x_{j}|}{R_{j}}}
 $$
 
-and $R_j$ is the range of predictor $j$'s values in the training set. For categorical predictors, $d(u_j, x_{j}) = I(u_j = x_j)$ which is a 0/1 indicator of agreement of the levels. 
+where $R_j$ represents the range of predictor $j$ in the training set. This normalization ensures all continuous predictors contribute equally regardless of their original scales.
 
-See @cunningham2021k for more discussion of distances.
+For categorical predictors, the component distance is a simple mismatch indicator, $d(u_j, x_{j}) = I(u_j = x_j)$.  This binary metric assigns zero distance for matching categories and unit distance otherwise.
 
-For classification data, we find the _K_ neighbors, then estimate class probabilities via:
+For a comprehensive treatment of distance metrics in the context of nearest neighbor methods, see @cunningham2021k.
+
+For classification problems, KNN identifies the _K_ nearest neighbors and estimates class probabilities as the proportion of neighbors belonging to each class:
 
 $$
 \widehat{\pi}_{c} = \frac{1}{K}\sum_{k=1}^K y_{kc}
 $$
 
-where $y_{kc}$ denotes the 0/1 class indicator that neighbor $k$ has class value $c$. For small values of _K_, this isn’t a very good estimate. The Laplace correction previously mentioned in @sec-naive-bayes can again be used to regularize the estimate: 
+where $y_{kc}$ is a binary indicator equal to 1 if neighbor $k$ belongs to class $c$, and 0 otherwise.  For small values of K, these empirical probability estimates can be unreliable, particularly when certain classes are underrepresented among the neighbors. The Laplace correction (previously discussed in @sec-naive-bayes) can be used to regularize the estimate:
 
 $$
 \widehat{\pi}_{c} = \frac{1}{K}\sum_{k=1}^K \frac{y_{kc} +\alpha}{K + \alpha C}
 $$
 
-for $\alpha \in [0, 2]$. Also, it is common to fix _K_ and collect all neighbors, no matter the value of their distances. Alternatively, one can put a cap on the maximum distance or use a more informative approach of using weighted distances:
+where $C$ denotes the number of classes and $\alpha \in [0, 2]$ is a smoothing parameter. Setting $\alpha = 0$  yields the unregularized estimate, while $\alpha > 0$ shrinks extreme probabilities toward a uniform distribution.
+
+It is common to fix _K_ and collect all neighbors, regardless of their distances to the query point. Alternatively, one can put a cap on the maximum distance or use a more informative approach of using weighted distances:
 
 $$
 \widehat{p}_{c} = \frac{1}{W}\sum_{k=1}^K g(d_k)\;y_{kc}
@@ -261,23 +273,23 @@ Poor results occurred when there were fewer than twenty neighbors, and subsequen
 
 ## Sidebar: Dot Products
 
-Dot products will become important in multiple sections of this chapter. They are a valuable tool for comparing two vectors. Since we just focused on distance, which is another tool for comparing vectors, now is a good time to discuss them. This will require a little bit of linear algebra and geometry. 
+Dot products will become important in several subsequent sections of this chapter. While distance metrics (such as those used in KNN) provide one framework for comparing vectors, dot products offer another perspective that captures different geometric properties. Understanding their relationship requires some basic linear algebra and geometry.
 
-Recall that vectors have a magnitude and direction. 
+Vectors are characterized by two fundamental properties:
 
-- Magnitude is usually measured by its length, which we'll denote by $||\boldsymbol{a}||$ for some vector $\boldsymbol{a}$ with $p$ elements. This is usually computed as the square root of the sum of the squared elements (a.k.a., Euclidean distance). 
+- Magnitude (or length) is denoted $||\boldsymbol{a}||$ for a vector $\boldsymbol{a}$ with $p$ elements. The standard measure is the Euclidean norm, computed as the square root of the sum of squared elements: $||\boldsymbol{a}|| = \sqrt{\sum_{i=1}^p a_i^2}$.
 
-- Direction is concerned with the angle of the vector to something, say another vector $\boldsymbol{y}$ with the same dimension ($p$). We'll denote this angle as $\vartheta$.
+- Direction is defined relative to another reference (say another vector $\boldsymbol{y}$ with the same dimension ($p$)), typically quantified by the angle $\vartheta$ between two vectors of equal dimension.
 
-The "nearest" in KNN was driven by the magnitude between two vectors and was not affected by the angle between two vectors. 
+Distance-based methods like KNN depend solely on the magnitude of the difference between vectors and do not consider the angle between them.
 
-The dot product of two vectors with length $p$ is: 
+The dot product (or inner product) of two $p$-dimensional vectors is defined as:
 
 $$
 \boldsymbol{a}'\boldsymbol{b} = \sum_{i=1}^p a_ib_i
 $$  {#eq-dot-prod-sum}
 
-Note that the dot product could not be considered a distance metric since the distance between itself could never be zero unless all of its elements are zero. 
+Note that the dot product does not satisfy the properties of a distance metric since the distance between itself could never be zero unless all of its elements are zero. 
 
 Dot products measure both the magnitude of each vector as well as the angle between them ($\vartheta$). We can rewrite @eq-dot-prod-sum as
 
@@ -285,7 +297,7 @@ $$
 \boldsymbol{a}'\boldsymbol{b} = ||\boldsymbol{a}||\,||\boldsymbol{b}|| \cos{\vartheta}
 $$  {#eq-dot-prod-vec}
 
-Let's consider a few different cases. First, when would the dot product be zero? This can occur if either vectors have zero magnitude, but, more importantly, it can also be zero when $\cos{\vartheta}$ is zero. That happens when the two vectors are _orthogonal_ (i.e., perpendicular) to one another. In $p=2$ dimensions, this means that there is a right angle ($\vartheta = 90^{\circ}$) between the two vectors and the cosine of this angle is zero.
+This formulation reveals that:  The dot product is maximized when vectors are parallel ($\vartheta = 0^{\circ}$, $\cos\vartheta = 1$), it equals zero when vectors are orthogonal ($\vartheta = 90^{\circ}$, $\cos\vartheta = 0$), and it is negative when vectors point in generally opposite directions ($\vartheta > 90^{\circ}$).  This dual sensitivity to both magnitude and direction distinguishes dot products from distance-based comparisons and makes them particularly useful in certain modeling contexts.
 
 To illustrate, @fig-dot-products shows the dot products of a vector $\boldsymbol{x} = (2.0, 0.5)$ to a grid of vectors with elements ranging between $\pm 3$. We can see a diagonal region of light colored values that have dot products close to or at zero. This represents vectors that are orthogonal to $\boldsymbol{x}$. There is also a dotted line extending to the origin (0.0, 0.0) that coincides with this line.  
 
