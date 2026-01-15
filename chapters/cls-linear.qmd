@@ -1179,17 +1179,769 @@ This model appears to be adequate, but _it is not_. There is a major issue relat
 
 ### A Potential Problem: Multicollinearity {#sec-logistic-multicollinearity}
 
+Examining which model terms demonstrate statistical significance offers a valuable framework for assessing their relative importance within the model.  Basic logistic regression via MLE provides a foundation for standard hypothesis tests. @tbl-logistic-reg shows the five most statistically significant terms (excluding the intercept) based on their p-values. Notably, the county effect encoding appears among the top predictors, which should be unsurprising since it captures the shrunken mean logit for each county. The remaining significant terms all correspond to spline basis expansion terms. Using an $\alpha$ value that corresponds to a 10% false positive rate, `r sum(best_mle_coef$p.value <= 0.1)` terms out of `r nrow(best_mle_coef)` achieve statistical "significance".  When interpreting these results, it is important to note that the original predictors were normalized to approximate a standard normal distribution, meaning that most of the predictor values should be between $\pm 3$, prior to making spline and/or interaction terms. 
+
+```{r}
+#| label: tbl-logistic-reg
+#| tbl-cap: "The top five most signficant model terms (top) and the five terms with the highest standard errors (bottom)."
+#| echo: false
+
+logistic_fit_tbl <-
+  bind_rows(
+    best_mle_coef |>
+      filter(term != "(Intercept)") |>
+      slice_min(p.value, n = 5) |>
+      mutate(listing = "Smallest p-values"),
+    best_mle_coef |>
+      filter(term != "(Intercept)") |>
+      slice_max(std.error, n = 5) |>
+      mutate(listing = "Largest Standard Errors") |>
+      arrange(desc(std.error))
+  ) |>
+  mutate(
+    term = gsub("_0", " (spline #", term),
+    term = gsub(")", " ", term),
+    term = ifelse(grepl("spline", term), paste0(term, ")"), term),
+    term = gsub("_10", " (spline #10)", term),
+    term = gsub("precip_annual", "annual preciptation", term),
+    p.value = format.pval(p.value)
+  ) |>
+  select(-Type, -vif)
+
+logistic_fit_tbl |>
+  group_by(listing) |>
+  gt() |>
+  fmt_number(
+    columns = c(estimate, std.error, statistic),
+    n_sigfig = 3,
+    drop_trailing_zeros = FALSE
+  ) |>
+  cols_label(
+    term = "Model Term",
+    estimate = "Estimate",
+    statistic = "t-statistic",
+    std.error = "Std. Err.",
+    p.value = "p-value"
+  ) |>
+  tab_style(
+    style = cell_text(style = "italic"),
+    locations = cells_row_groups()
+  )
+```
+
+```{r}
+#| label: max-spline
+#| include: false
+features <- 
+  forest_spline_rec |> 
+  prep() |> 
+  bake(new_data = NULL, -class)
+
+abs_cor <- 
+  features |> 
+  cor() |> 
+  abs()
+abs_cor <- abs_cor[upper.tri(abs_cor)]
+
+upper_vals <- 
+  features |> 
+  select(contains("precip_annual")) |> 
+  map_dbl(~ max(.x)) |> 
+  mean() |> 
+  round(3)
+
+cor_data <- forested_train |>
+  select(-class, -county)
+
+cor_mat <- cor_data %>%
+  cor(use = "pairwise.complete.obs")
+```
+
+For further insight, it is instructive to examine which predictors show no evidence of being different from zero. The bottom of the table shows five terms with large p-values, all of which are spline terms derived from annual precipitation. However, notice that the estimated coefficients and their standard error terms are of magnitude in the _hundreds_.  Given that the predictor values for these spline terms range between zero and `r upper_vals` (on average), it is difficult to imagine that the coefficients and their values are reasonable. 
+
+```{r}
+#| label: two-param-colin-calc
+#| include: false
+
+elevation_fit <-
+  logistic_reg() |>
+  fit(class ~ elevation, data = forested_train) |>
+  tidy() |>
+  mutate(Model = "elevation only")
+
+annual_mean_fit <-
+  logistic_reg() |>
+  fit(class ~ temp_annual_mean, data = forested_train) |>
+  tidy() |>
+  mutate(Model = "mean temperature only")
+
+both_fit <-
+  logistic_reg() |>
+  fit(class ~ elevation + temp_annual_mean, data = forested_train)
+
+both_vif <-
+  both_fit |>
+  extract_fit_engine() |>
+  vif() |>
+  tibble::enframe() |>
+  set_names(c("term", "VIF"))
+
+both_fit <-
+  both_fit |>
+  tidy() |>
+  mutate(Model = "both") |>
+  full_join(both_vif, by = "term")
+
+all_terms <-
+  bind_rows(elevation_fit, annual_mean_fit, both_fit) |>
+  left_join(name_key |> rename(term = variable), by = "term") |>
+  mutate(
+    text = case_when(
+      term == "(Intercept)" ~ "Intercept",
+      term == "elevation" ~ "Elevation",
+      TRUE ~ tools::toTitleCase(text)
+    )
+  ) |>
+  select(Model, text, estimate, std_err = std.error, VIF)
+```
+
+The reason for these excessively large becomes apparent when examining @fig-corr-plot, which revealed several predictors that had large (absolute) correlations with one another. High correlation between multiple predictors, known as _multicollinearity_^[Meaning that multiple predictors are "co-linear" or have a strong linear relationship with one another], is a well-known challenge in regression analysis and occurs frequently in many data sets.  As illustrated in the correlation matrix heatmap (@fig-corr-plot), numerous climate-related predictors exhibit strong correlations with one another.  This issue intensifies after creating spline and interaction terms: there are `r sum(abs_cor > 3/4)` pairwise correlations between model terms that have correlations greater than 0.75 and `r sum(abs_cor > 9/10)` term pairs with correlations greater than 0.90.  
+
+While this model's predictive performance is good, the model coefficients are extremely unstable. Multicollinearity not only inflates the variance of the parameter estimates but can also reverse the coefficient's sign, leading to an incorrect interpretation (see below). 
+
+The variance inflation factor (VIF) quantifies the extent to which the variance of a coefficient estimate is inflated due to correlations among predictors [@belsley2005regression]. Specifically, VIF measures the ratio of the variance for a set of potentially correlated predictors relative to a set of completely uncorrelated predictors. For linear regression, the VIF is calculated as:
+
+$$ \text{VIF}_j = \frac{1}{1 - R_j^2} $$
+
+where $R_j^2$ represents the coefficient of determination from a linear regression in which predictor $X_j$ serves as the response variable and the remaining $j-1$ predictors function as explanatory variables. While originally developed for linear regression contexts, @weissfeld1991multicollinearity extended this diagnostic framework to generalized linear models. A general rule of thumb suggest that VIF values exceeding 5.0 or 10.0 indicate substantial multicollinearity, reflecting overlapping information among predictors. For our model, the median VIF across the parameters was `r signif(median(best_mle_vifs$vif), 3)` with the largest being `r format(max(best_mle_vifs$vif), big.mark = ",", scientific = FALSE)`, which corresponds to an annual precipitation spline term. 
+
+@tbl-logistic-colin demonstrates the multicollinearity problem using a simplified model with two untransformed predictors: elevation and mean temperature. The correlation between these two predictors is `r signif(cor(forested_train$elevation, forested_train$temp_annual_mean), 2)`, indicating substantial collinearity. The first two rows present single-predictor models, while the third row displays the results when both predictors are included simultaneously. The parameter estimates undergo dramatic changes in the combined model: the elevation coefficient reverses sign, and the mean temperature coefficient increases by several orders of magnitude. Notably, the variance inflation factor reaches sufficiently high levels to flag this multicollinearity issue.
+
+:::: {.columns}
+
+::: {.column width="8%"}
+:::
+
+::: {.column width="84%"}
+
+::: {#tbl-logistic-colin}
+
+```{r}
+#| label: logistic-colin
+#| echo: false
+
+all_terms |>
+  pivot_wider(
+    id_cols = c(Model),
+    names_from = c(text),
+    values_from = c(estimate, std_err, VIF)
+  ) |>
+  relocate(
+    Model,
+    contains("Intercept"),
+    contains("Elevation"),
+    contains("Mean")
+  ) |>
+  gt() |>
+  tab_spanner(label = "Intercept", columns = contains("Intercept")) |>
+  tab_spanner(label = "Elevation", columns = contains("Elevation")) |>
+  tab_spanner(label = "Annual Mean Temperature", columns = contains("Mean")) |>
+  sub_missing(columns = c(everything()), missing_text = "---") |>
+  fmt_number(columns = c(contains("Intercept")), n_sigfig = 3) |>
+  fmt_number(columns = c(contains("Elevation")), n_sigfig = 3) |>
+  fmt_number(columns = c(contains("Mean")), n_sigfig = 3) |>
+  cols_label(
+    contains("estimate_") ~ "Estimate",
+    contains("std_er") ~ "Std. Error",
+    contains("VIF") ~ "VIF"
+  ) |>
+  cols_width(Model ~ pct(25))
+```
+
+An example of how highly colinear predictors can affect parameter estimates and standard errors in a logistic regression model.
+
+:::
+
+:::
+
+::: {.column width="8%"}
+:::
+
+:::: 
+
+What can we do about this problem? Several strategies exist for mitigating multicollinearity. First, transforming the original predictors using principal component analysis (PCA) or partial least squares (PLS) can substantially reduce correlations among predictors. However, this approach complicates the incorporation of interaction terms and nonlinear relationships, as each derived predictor represents a composite of all original variables. Second, a correlation filter can be employed to remove the minimal set of predictors necessary to reduce multicollinearity's overall impact. While this represents a practical approach, it carries a risk of predictive performance degradation. Given that machine learning performance improvements often derive from incremental gains, the removal of nearly redundant predictors may diminish predictive ability.
+
+For logistic regression specifically, the most effective solution is to retain the original predictor set while employing regularization—an alternative parameter estimation technique that naturally addresses multicollinearity.
+
 `r r_comp("cls_linear.html#sec-logistic-multicollinearity")`
 
 ### Regularization Through Penalization {#sec-logistic-penalized}
+
+Regularization is a technique that coerces a potentially complex solution into one that is less extreme. We’ve already seen regularization a few times: 
+
+- Early stopping when fitting neural networks (@sec-model-development-whole-game, footnote) prevented model training to become worse.
+- Effect encodings (@sec-effect-encodings) moved naive statistical estimates toward more moderate values.
+- Bayes’ Rule for estimating a proportion (@sec-single-proportion) shrank the naive probability estimate towards the prior. 
+- Tree complexity tuning parameters (e.g. $n_{min}$, see @sec-external-validation) restrict tree depth by preventing splits on small subsets.
+
+This section examines regularization techniques commonly applied to regression models, primarily through the penalization of model coefficients. The next section introduces Bayesian estimation as a framework that naturally produces regularization effects.
+
+Why would we regularize a logistic regression model? There are several reasons. First, regularization prevents coefficient estimates from exploding to  magnitudes larger than appropriate. As demonstrated in the preceding section, highly correlated predictors can produce abnormally large coefficients—potentially with incorrect signs—and inflated standard errors. Second, regularization enables feature selection: when a predictor has no relationship with the outcome, any non-zero coefficient should be reduced toward zero.
+
+In logistic regression, parameter estimation proceeds through maximization of the Bernoulli log-likelihood function (@eq-bernoulli). The most common approach is to incorporating a penalty term to the log-likelihood ($\mathcal{P}(\boldsymbol{\beta})$) that discourages large parameter values. This penalty function may also include tuning parameters.
+
+::: {.important-box}
+All of the techniques discussed in this section make the implicit assumption that the model features have been standardized to be in the same units (including indicator features). 
+:::
+
+Ridge regression represents one of the earliest penalization methods developed for regression models [@hoerl1970a;@hoerl1970b;@hoerl2020ridge]. The ridge penalty function reduces the log-likelihood by subtracting the sum of squared regression coefficients^[This approach is commonly referred to as an $L_2$ penalty, as it employs the quadratic norm of the coefficients. Also, in neural network literature, this penalty is often termed "weight decay."]:
+
+$$
+\mathcal{P}_{rr}(\boldsymbol{\beta};\lambda) =  \lambda\sum_{j=1}^{p} \beta_j^2
+$$ {#eq-ridge-penalty}
+
+The summation index starts at one, reflecting the convention that $\beta_0$ denotes the intercept parameter.  *Intercept terms are universally excluded from regularization penalties* for several compelling reasons. First, the intercept lacks any meaningful null value toward which shrinkage would be appropriate. A value of $\beta_0 = 0$ corresponds to a probability estimate of 0.5, which may differ substantially from the true population intercept determined by outcome prevalence. Forcing shrinkage toward this value risks substantial model degradation by directing the intercept toward an incorrect location. Second, for the summation in Equation @eq-ridge-penalty to function appropriately, predictors need to be in the same units.  When data are standardized to common mean and variance, the intercept's mean and variance become fixed at one and zero, respectively. Including the intercept in this summation would be like comparing apples to horses; it doesn’t make sense and lacks statistical justification.  Third, the intercept may naturally have a large magnitude when outcome prevalence is extremely low or high. _Squaring_ such a large value and incorporating it into the penalty sum causes the penalty to be dominated by this single term, thereby overwhelming the regularization effect on the slope coefficients—the parameters of primary inferential and predictive interest.
+
+For a generalized linear model and a fixed value of the $\lambda$ penalty, we estimate parameters that maximize the penalized log-likelihood: 
+
+$$
+\underset{\boldsymbol{\beta}}{\text{minimize}}:  -\log \ell(x| \boldsymbol{\beta}) + \mathcal{P}(\boldsymbol{\beta};\lambda)
+$$ 
+
+Ridge regression is particularly effective when the feature matrix is ill-conditioned—that is, when we cannot compute the inverse of critical matrices (notably $X'X$). This condition typically arises in two scenarios: when the number of features exceeds the number of training set points, or when severe multicollinearity exists among predictors. The ridge penalty has the effect of **shrinking** the model coefficients, driving them toward zero at varying rates across predictors. This shrinkage prevents parameter estimates from becoming too large due to multicollinearity, stabilizes the standard errors of estimates, and can mitigate coefficient sign instability, as signs may fluctuate with penalty magnitude changes.
+
+The amount of regularization is a tuning parameter, with effective values typically falling between zero and 0.1 (although larger values may be appropriate in certain contexts). When the penalty becomes excessively large, all coefficients shrink toward zero and the model effectively reduces to an intercept-only specification, yielding approximately uniform predictions across all observations. The penalty parameter is commonly evaluated on a $\log_{10}$ scale to facilitate tuning across orders of magnitude.
+
+@fig-two-feature-penalty illustrates the behavior of parameter estimates for the forestry model containing elevation and mean annual precipitation. To ensure comparability, the orderNorm transformation was applied to both predictors prior to model fitting. This standardization procedure eliminates precipitation skewness and places both predictors have the same units. The dashed horizontal lines represent parameter estimates obtained through ordinary maximum likelihood estimation without regularization. As the ridge penalty increases, each estimate smoothly decreases toward zero. At very large penalty levels, the elevation coefficient reverses sign to negative values before approaching zero.
+
+::: {#fig-two-feature-penalty}
+
+::: {.figure-content}
+
+```{shinylive-r}
+#| label: shiny-two-feature-penalty
+#| viewerHeight: 550
+#| standalone: true
+
+library(shiny)
+library(bslib)
+library(dplyr)
+library(ggplot2)
+library(scales)
+
+source("https://raw.githubusercontent.com/aml4td/website/main/R/shiny-setup.R")
+source("https://raw.githubusercontent.com/aml4td/website/main/R/shiny-penalty.R")
+
+app
+```
+
+:::
+
+The path of coefficients for a logistic regression with two features when using different penalization methods. The horizontal dashed lines indicate the unpenalized coefficients. 
+
+:::
+
+We choose the amount of regularization just like any other parameter: using a performance metric to decide an appropriate value.  As we’ll see in  subsequent analyses, the penalty-response surface typically exhibits a plateau region where model performance remains relatively stable across a broad range of penalty values. This characteristic makes it virtually impossible to select a penalty magnitude that induces overfitting. Suboptimal tuning parameter choices instead manifest as over-regularization, wherein coefficients shrink excessively toward zero (i.e. underfitting).
+
+As previously mentioned, standard maximum likelihood estimation yields unbiased estimates; the estimates $\hat{\beta}$ have expected values that equal the true, unknown parameters $\beta$.  We can conceptualize this as "MLE is aiming for the right target." In contrast, the penalization methods discussed herein introduce bias into the estimates, with the magnitude of bias increasing monotonically with penalty strength. The advantage of ridge regression lies in its substantial reduction of parameter estimate variance as bias increases incrementally. This phenomenon exemplifies the fundamental bias-variance tradeoff: when the variance reduction outweighs the increase in squared bias, the mean squared error improves. However, when the predictor set lacks substantial multicollinearity, introducing bias provides no benefit, as variance reduction opportunities are minimal and the effects on estimation accuracy are adverse.
+ 
+We can also penalize the regression using sum of the absolute value of the parameters: 
+
+$$
+\mathcal{P}_{lasso}(\boldsymbol{\beta};\lambda) =  \lambda\sum_{j=1}^{p} |\beta_j|
+$$ {#eq-lasso-penalty}
+
+There are various methods that can be used to optimize this version of the penalized log-likelihood [@breiman1995better;@lar], but the Lasso framework introduced by @tibshirani1996regression has emerged as the predominant approach^[The term "Lasso" is an acronym for "least absolute shrinkage and selection operator." Also, a penalty based on the absolute parameter values is commonly referred to as an $L_1$ penalty.]. The Lasso penalty has an interesting theoretical property: at sufficient penalty magnitudes, individual parameter estimates can take a value of **exactly zero**, meaning that they are functionally eliminated from the model. This characteristic makes the Lasso one of the most effective tools for automated feature selection. However, there are numerical issues that require careful attention. Standard gradient-based optimization algorithms cannot produce exact zero values due to numerical limitations, instead yielding parameter estimates arbitrarily close to zero without reaching exactly aero. Consequently, specialized optimization tools are required to achieve genuine feature elimination.
+
+There are a few ways that Lasso penalization regularizes the parameter estimates that are different than ridge regression. First, while ridge penalization simultaneously moves groups of correlated features towards zero, the Lasso will often choose a single feature out of a group of correlated features. @friedman2010regularization summarized this nicely:
+
+> "Ridge regression is known to shrink the coefficients of correlated predictors towards each other, allowing them to borrow strength from each other. In the extreme case of $k$ identical predictors, they each get identical coefficients with $1/k^{th}$ the size that any single one would get if fit alone.[...]
+>
+> Lasso, on the other hand, is somewhat indifferent to very correlated predictors, and will tend to pick one and ignore the rest."
+
+Another phenomenon occurs when one or more features are set to zero: the rate of shrinkage to zero can change from the remaining parameters, and, in some rare cases, a parameter may become non-zero again. 
+
+Figure @fig-two-feature-penalty illustrates the behavior of parameter estimates under varying Lasso penalty magnitudes for the two-feature model. Specifically, the elevation coefficient reaches zero and is eliminated from the model before the precipitation coefficient reaches zero. Once elevation has been removed, the remaining coefficient exhibits a slower rate of shrinkage toward zero compared to its trajectory when both predictors were present in the model.
+
+As the comments above indicate, the Lasso model is more strongly associated with feature selection than mitigating the effects of multicollinearity (where the ridge penalty is favored). Why not use a combination to accomplish both goals? @zou2005regularization describe the _elastic net_ model that includes a separate penalty for both criteria:  
+
+$$
+\mathcal{P}_{en}(\boldsymbol{\beta};\lambda_1 \lambda_2) =  \lambda_1\sum_{j=1}^{p} \beta_j^2 + \lambda_2\sum_{j=1}^{p} |\beta_j|
+$$ {#eq-elastic-penalty}
+
+Alternatively, @friedman2010regularization described what is referred to as the _glmnet penalty_ that uses the form: 
+
+$$
+\mathcal{P}_{gn}(\boldsymbol{\beta};\lambda, \alpha) =  \lambda \left[\frac{1}{2}(1 - \alpha) \sum_{j=1}^{p} \beta_j^2 + \alpha \sum_{j=1}^{p} |\beta_j|  \right] 
+$$ {#eq-glmnet-penalty}
+
+where $\lambda$ is the total amount of regularization and $\alpha$  controls the mixture of the two methods so that $\alpha = 1$ is a Lasso model and $\alpha = 0$ is ridge regression. The glmnet penalty formulation tends to be favored by users. 
+
+The combination strategy can help the model move between the goals of dealing with multicollinearity (and similar issues) and feature selection. By tuning the penalty and the mixing parameters, we can let the data decide which penalty it needs most (and how much). As we’ll see below, a typical pattern is a fairly flat plain where there isn’t much change in our preferred metric for a wide range of penalty values. Also, the relationship between the penalty and performance can be similar for different mixtures but shows a lagging pattern over values of $\alpha$. As such, we can achieve virtually the same performance but with different numbers of non-zero coefficients. 
+
+The lagging trend might be related to the half contribution of the ridge penalty in @eq-glmnet-penalty. If we consider a pure ridge model ($\alpha = 0$) versus a pure lasso model ($\alpha = 1$), the total amount of regularization for the former is half of the latter. This will be offset by the magnitudes of the summations; a summation of squared parameters will be larger than the sum of absolute parameter estimates. However, we have observed that pure ridge solutions can require larger $\lambda$ values than pure lasso models to have the same effect on performance metrics. 
+
+When choosing the best parameters for glmnet, we might want to factor in the number of "active features" along with performance. For example, we could use desirability functions to blend the two outcomes or create a more direct rule, such as "choose $\lambda$ and $\alpha$ with the fewest number of predictors as long as the area under the ROC curve is greater than 0.85."
+
+@fig-two-feature-penalty shows the glmnet results for the two-feature model. Starting with $\alpha = 1.0$, we have the same solution as the Lasso results. Using the slider to decrease the proportion of Lasso in the penalty slowly shifts the curves to the right, where more penalization is needed to eliminate both parameters (since more ridge regression is used). Also, as $\alpha$ moves closer to the minimum of 10%, there becomes less difference in the slopes for the mean annual temperature before and after elevation is removed. In any case, elevation is removed before mean annual temperature for each setting. 
+
+The nature of penalized models, such as Lasso and glmnet, makes them likely to be able to exploit submodels (@sec-submodels) for very efficient model tuning. For a specific mixture percentage, we can fit one glmnet model and evaluate a large number of penalty values almost for free^[This depends on the implementation, though.]. This is only the case when the tuning grid has many $\lambda$ values for each $\alpha$. Space-filling designs and iterative search would not be good choices here; regular grids for these model parameters can be _more_ computationally efficient. 
+
+The glmnet framework represents the most widely adopted approach to model regularization, yet it exhibits limitations when one or more parameter estimates are excessively large. Under Lasso or ridge penalization, a parameter estimate outlier can exert linear or quadratic influence on the penalty term, respectively. This disproportionate effect can draw other estimates toward the outlier, thereby granting it undue influence on the penalization. @fan2001variable and @mcp introduced alternative approaches—the smoothly clipped absolute deviation (SCAD) and minimax concave penalty (MCP) models, respectively—which address this vulnerability through their respective penalty functions:
+
+$$
+\mathcal{P}_{scad}(\boldsymbol{\beta};\lambda, \gamma) =     \begin{cases}
+	 \sum_{j=1}^{p}\lambda|\beta_j| & |\beta_j| \le \lambda \\
+	 \sum_{j=1}^{p} \lambda|\beta_j| \frac{2\gamma\lambda|\beta_j|-\beta_j^2-\lambda^2}{2(\gamma - 1)} & \lambda < |\beta_j| \le \gamma\lambda \\
+	 \frac{\lambda^2(\gamma + 1)}{2} & |\beta_j| \ge \gamma\lambda
+	\end{cases} 
+$$ {#eq-scad-penalty}
+
+and
+
+$$
+\mathcal{P}_{mcp}(\boldsymbol{\beta};\lambda, \gamma) =   \begin{cases}
+	 \sum_{j=1}^{p}\frac{\lambda|\beta_j| - \beta_j^2}{2\gamma} & |\beta_j| \le \gamma\lambda \\
+	 \sum_{j=1}^{p}\frac{\lambda^2\gamma}{2} & |\beta_j| > \gamma\lambda
+	\end{cases} 
+$$ {#eq-mcp-penalty}
+
+Both SCAD and MCP incorporate an additional tuning parameter $\gamma$ that provides a "clipping" effect. When coefficient magnitudes become sufficiently large (i.e., exceeding the threshold $\lambda\gamma$), the penalty function becomes constant. This mechanism constrains the influence that abnormally large parameters have on the regularization procedure. Consequently, these methods offer particular advantages in scenarios where the ratio of features to training samples is exceeding large, as they prevent individual outliers from dominating the penalization process.
+
+These two penalties are also shown in @fig-two-feature-penalty where there is an extra control for the clipping parameter ($\gamma$). For clipping values $\gamma < 10$, there is a sharp change in the parameter paths where they abruptly jump to their unpenalized values. This is related to the limit of $\lambda\gamma$; values above this combination are clipped at a value that does not involve the $\beta$ parameters. As $\gamma$ becomes relatively large for these data, the static penalty has a less abrupt effect on the parameter estimates, and the change is not as instantaneous as it is for smaller clipping values. For this example, there is very little difference between the SCAD and MCP approaches. 
+
+Penalization of generalized linear models has been a very fertile area of research, and there are many more variations of these models.
+
+- _Grouped penalization_: Predictors can be organized into groups that share a common penalty term, ensuring they enter or exit the model simultaneously [@simon2013sparse;@bien2013lasso]. This approach facilitates targeted regularization for natural groupings, such as spline terms derived from a single parameter or sets of dummy variables representing high-cardinality categorical predictors.
+
+- _Hierarchical interaction constraints_: Models containing extensive interaction terms can be regularized such that interaction effects remain eligible for removal only when their corresponding main effects are also eliminated from the model, thereby enforcing the hierarchy principle for interactions [@lim2015learning;@bien2013lasso].
+
+- _Adaptive and two-stage methods_: Initial model fits inform subsequent estimation and penalization strategies [@zou2006adaptive;@meinshausen2007relaxed]. For instance, the UniLasso method developed by @chatterjee2025univariate employs slope coefficients from unpenalized univariate models to enhance Lasso penalty performance.
+
+@hastie2015statistical provides a comprehensive overview of penalized regression frameworks, with particular emphasis on Lasso and similar penalties that achieve sparse solutions through predictor elimination.
+
+A significant limitation of most penalization methods involves their incompatibility with traditional statistical inference techniques^[The main exception is standard ridge regression, where covariance matrices can be computed once the penalty value is finalized.]. Quantifying parameter estimate uncertainty becomes particularly challenging when feature selection occurs through Lasso penalties. Even bootstrap resampling encounters substantial difficulties: the bootstrap distributions for many parameters are bimodal, reflecting a mixture of coefficient estimates from models where the parameter was retained and a concentrated mass at zero when it was excluded. While bootstrap confidence intervals for individual parameters may be out of reach, Section 6.2 of @hastie2015statistical presents bootstrap analyses that quantify selection stability by estimating the probability of non-zero coefficients for each predictor across bootstrap samples.
 
 `r r_comp("cls_linear.html#sec-logistic-penalized")`
 
 #### Refitting the Forestation Model  {.unnumbered}
 
+```{r}
+#| label: glmn-calc
+#| include: false
+#| cache: true
+
+glmn_pen <- 10^seq(-6, -1, length.out = 50)
+glmn_grid <- crossing(penalty = glmn_pen, mixture = c(0:4) / 4)
+
+glmn_spec <-
+  logistic_reg(penalty = tune(), mixture = tune()) |>
+  set_engine("glmnet", path_values = !!glmn_pen)
+
+glmn_wflow <-
+  best_mle_wflow |>
+  update_model(glmn_spec)
+
+glmn_res <-
+  glmn_wflow |>
+  tune_grid(
+    resamples = forested_rs,
+    grid = glmn_grid,
+    control = control_grid(save_pred = TRUE, save_workflow = TRUE),
+    metrics = cls_mtr
+  )
+
+glmn_best_param <- select_best(glmn_res, metric = "brier_class")
+glmn_best_metric <- show_best(glmn_res, metric = "brier_class", n = 1)
+```
+
+```{r}
+#| label: tuned-glmn-penalties
+#| include: false
+#| cache: true
+
+pen_target <- -3
+glmn_sel_param <-
+  glmn_res |>
+  collect_metrics() |>
+  mutate(diff = abs(log10(penalty) - pen_target)) |>
+  slice_min(diff, n = 1) |>
+  filter(mixture == glmn_best_param$mixture) |>
+  slice_head(n = 1) |>
+  select(penalty, mixture, .config)
+
+glmn_best_fit <- fit_best(glmn_res, parameters = glmn_sel_param)
+
+set.seed(799)
+glmn_sel_int <-
+  glmn_res |>
+  int_pctl(
+    times = 2000,
+    metrics = cls_mtr,
+    allow_par = FALSE,
+    parameters = glmn_sel_param
+  )
+
+lr_coefs <-
+  inner_join(
+    tidy(best_mle_fit) |> select(term, MLE = estimate),
+    tidy(glmn_best_fit) |> select(term, glmnet = estimate),
+    by = "term"
+  ) |>
+  filter(term != "(Intercept)") |>
+  mutate(
+    Type = case_when(
+      grepl("(_10)|(_0[1-9])", term) ~ "Spline",
+      grepl("_x_", term) ~ "Interaction",
+      TRUE ~ "Main Effect"
+    ),
+    Type = factor(Type, levels = c("Spline", "Interaction", "Main Effect"))
+  )
+
+num_rm <- sum(lr_coefs$glmnet == 0)
+
+p_glmnet_tune <-
+  autoplot(glmn_res, metric = "brier_class") +
+  theme(legend.position = "top") +
+  labs(y = "Brier (Resampled)")
+
+# ------------------------------------------------------------------------------
+
+glmn_best_coef <-
+  glmn_best_fit |>
+  extract_fit_engine() |>
+  tidy() |>
+  filter(term != "(Intercept)")
+
+feature_nms <- unname(name_list)
+for (i in seq_along(name_list)) {
+  glmn_best_coef$term <- gsub(
+    name_list[[i]],
+    names(name_list)[i],
+    glmn_best_coef$term,
+    fixed = TRUE
+  )
+}
+
+glmn_best_coef$term <- gsub("_x_", " X ", glmn_best_coef$term)
+glmn_best_coef$term <- gsub("_", " ", glmn_best_coef$term)
+
+top_best <- 5
+show_pen <- glmn_pen[which.min(abs(glmn_pen - 10^(-4)))]
+at_best <-
+  glmn_best_coef |>
+  filter(lambda == glmn_best_param$penalty) |>
+  slice_max(abs(estimate), n = top_best)
+
+best_path <-
+  inner_join(glmn_best_coef, at_best |> select(term), by = "term")
+
+at_show <-
+  best_path |>
+  filter(lambda == show_pen) |>
+  mutate(label = term)
+```
+
+Let’s take our previous logistic regression Model #5 and create a penalized fit via the glmnet framework. The tuning process involves simultaneous optimization over the amount of penalization and Lasso mixing proportion. We evaluated `r length(glmn_pen)` penalization values from 10<sup>`r log10(min(glmn_pen))`</sup> to 10<sup>`r log10(max(glmn_pen))`</sup>.   In addition, we evaluated five mixing parameter values: pure ridge (0% Lasso), 25% Lasso, 50% Lasso, 75% Lasso, and pure Lasso (100%). All combinations of these parameters form a complete regular grid for evaluation.
+
+Figure @fig-logistic-glmnet (top panel) presents the tuning results, with the Brier score serving as the performance metric. The curves demonstrate that excessive penalty strength leads to elimination of important features and consequent underfitting. Conversely, at minimal penalty levels, Brier scores remain relatively stable across the entire range of mixing proportions. The numerically optimal combination corresponds to `r glmn_best_param$mixture * 100`% Lasso with a penalty value of 10<sup>`r signif(log10(glmn_best_param$penalty), 2)`</sup>. However, there are many different combinations with near equal Brier scores.
+
+The bottom panel of Figure @fig-logistic-glmnet reveals that despite the relative stability of Brier scores across the parameter grid, estimates exhibit substantial variation. The labeled predictors are those with the largest absolute coefficient values at the best penalty/mixture combination. These values are spline basis expansion terms for several different predictors. 
+
+```{r}
+#| label: fig-logistic-glmnet
+#| fig-width: 7
+#| fig-height: 8
+#| fig-align: center
+#| out-width: 70%
+#| fig-cap: "Top: Results of tuning the complex logistic model using the glmnet penalty. The dotted vertical line designates the numerically optimal result while the dashed line is the selected penalty value. Bottom: Parameter estimates over penalty values for the best model. The features with the largest values at the selected penalty are highlighted."
+#| warning: false
+
+set.seed(836)
+p_glmnet_param <-
+  glmn_best_coef |>
+  ggplot(aes(lambda, estimate, group = term)) +
+  geom_vline(xintercept = glmn_sel_param$penalty, lty = 2) +
+  geom_vline(xintercept = glmn_best_param$penalty, lty = 3) +
+  geom_line(show.legend = FALSE, alpha = 1 / 3, col = "grey") +
+  geom_line(
+    data = best_path,
+    aes(col = term),
+    show.legend = TRUE,
+    alpha = 1,
+    linewidth = 1.1
+  ) +
+  # geom_label_repel(data = at_show, aes(col = term, label = label), show.legend = FALSE, alpha = 0.9) +
+  scale_x_log10() +
+  labs(x = penalty()$label, y = "Estimate") +
+  scale_color_brewer(palette = "Dark2") +
+  theme(legend.position = "bottom") +
+  guides(colour = guide_legend(ncol = 3, title = ""))
+
+mix_colors <- scales::brewer_pal(palette = "Blues")(9)[-(1:2)]
+
+(p_glmnet_tune +
+  geom_vline(xintercept = glmn_sel_param$penalty, lty = 2) +
+  geom_vline(xintercept = glmn_best_param$penalty, lty = 3) +
+  scale_color_manual(values = mix_colors)) /
+  p_glmnet_param +
+  plot_layout(heights = c(2, 3))
+```
+
+However, when we use the numerically optimal parameter settings, there is substantial evidence of multicollinearity, as evidenced by the continued presence of large parameter values. Consequently, we decided to reduce the penalty value to about 10<sup>`r pen_target`</sup> (designated as the vertical dashed line). This adjustment yields more substantially attenuated coefficients without incurring any meaningful increase in the Brier score, which is estimated to be `r signif(glmn_sel_int$.estimate[glmn_sel_int$.metric == "brier_class"], 3)` with 90% confidence interval (`r signif(glmn_sel_int$.lower[glmn_sel_int$.metric == "brier_class"], 3)`, `r signif(glmn_sel_int$.upper[glmn_sel_int$.metric == "brier_class"], 3)`). With these tuning parameter values, `r cli::format_inline("{num_rm} parameter{?s} {?was/were}")` were set to zero. 
+
 `r r_comp("cls_linear.html#refitting-the-forestation-model")`
 
 ### Bayesian Estimation {#sec-logistic-bayes} 
+
+Having examined parameter estimation for logistic regression through maximum likelihood methods—both penalized and unpenalized—we now turn to Bayesian estimation approaches. It is important to note that this explanation presents a simplified conceptual framework;  the mechanisms for serious Bayesian analysis are highly optimized and sophisticated.  Our example will demonstrate fundamental principles but would be inadequate for for solving most real problems.
+
+Recall that the Bayesian posterior distribution is the endpoint of a Bayesian analysis.  It combines our prior belief with the observed data to make a complete probabilistic description of the parameters, given the data.  For a small-scale illustration, we will employ a single-predictor model:
+
+$$
+log\left(\frac{\pi_i}{1 - \pi_i}\right) = \beta_0 + \beta_1 {x}_i
+$$ 
+
+where $i=1, \ldots, 100$. We'll simulate the 100 training set data points using $\beta_0 = 1.0$ and $\beta_1 = -1.5$, with predictor values drawn from a uniform distribution on $\pm 1$. Under these specifications, the simulated dataset exhibits an event rate of `r round(mean(tr_data$class== "A")*100, 1)`%.
+
+Let's assume that the data are independent Bernoulli random variables. Instead of maximizing the likelihood, the goal is to optimize the posterior probability:
+
+$$
+Pr[\boldsymbol{\beta}| x] = \frac{Pr[\boldsymbol{\beta}]  \ell(x| \boldsymbol{\beta})}{Pr[x]}
+$$
+
+As mentioned in @sec-bayes, the objective of Bayesian estimation is to optimize the posterior distribution of the parameters rather than merely identifying point estimates. This requires specifying prior distributions for both unknown parameters. If we know a lot about the data, then we could make an informed decision about the prior distributions. For instance, if we were extremely sure that the slope parameter $\beta_1$ should be non-negative, then a right-skewed distribution with no negative values would be appropriate. However, keep in mind that our priors define the feasible parameter space. For example, if we used a uniform prior with limits of $\pm 2.0$, the posterior distribution will never have values outside those limits, since they have zero prior probability of occurring. 
+
+In the absence of strong prior information, the conventional approach employs broad, diffuse distributions that exert minimal influence on the posterior distribution. Since regression parameters may take values across the entire real line, independent Gaussian priors $N(0, 10)$ represent a natural choice for both $\beta_0$ and $\beta_1$. Given that approximately 99.7% of probability mass for these distributions lies within $\pm 3$ standard deviations, these priors are sufficiently diffuse to provide minimal prior information about likely parameter values. While @gelman2008weakly makes a recommendation for a weakly informative default prior, we'll discuss more complex methods later in this section. 
+
+At this point, we can calculate the likelihood and the prior probabilities for proposed parameter values. Note that Bayes Rule above also includes $Pr[x]$. This is a normalizing constant and is not a function of the unknown parameters. It is not generally ignorable, but, in this case, the methodology used here does not require its calculation; we'll multiply the prior and likelihood to compute an un-normalized posterior probability. 
+
+A practical computational challenge arises in Bayesian estimation: multiplying numerous small probability values can produce products that are numerically indistinguishable from zero. The standard solution involves working in logarithmic space, summing log-probabilities rather than multiplying probabilities directly. Maximizing the sum of log-posterior values yields equivalent results to maximizing the posterior in its natural units, but the logarithmic transformation provides both computational stability and analytical insights.  This may seem trivial, but it also helps us understand the effect of the prior. In our example, the prior contribution consists of two probability values, with the product of $Pr[\boldsymbol{\beta}]$. The likelihood for this example is the product of $n_{tr} = 100$ probability density values. When computing the log of the posterior, we sum 102 individual log-probabilities, with precisely two originating from the prior distribution. Although these two values come from different probability scales, they contribute to less than 2% of the total sum. Conversely, with a substantially smaller training set of $n_{tr} = 8$ observations, the prior would account for 20% of the posterior. This numerical relationship demonstrates that, absent other factors, the influence of prior information is inherently constrained by sample sizeunless it is extraordinarily opinionated and/or narrow).
+
+The Metropolis-Hastings (MH) algorithm is used to demonstrate the process of estimating parameters [@Robert2004;@chib1995understanding;@van2018simple]. Current technology employs substantially more sophisticated and efficient methods for posterior estimation; however, MH is valuable for illustrating the fundamental principles of Markov Chain Monte Carlo (MCMC) methods. The algorithmic structure resembles simulated annealing, which represents a specific application of the MH framework.
+
+The procedure begins with initial draws from the two prior distributions, denoted as $\boldsymbol{\beta}^{(0)}$. Using these initial values in conjunction with the observed data, we compute the unnormalized posterior probability. Similar to simulated annealing, we generate proposals within a local neighborhood of the current parameter values. For this demonstration, we'll take a simple approach and simulate proposed values, $\boldsymbol{\beta}^{(1)}$, that are within $\pm 2.0$ of our current initial values.  Upon computing the posterior probability for the proposed values, the acceptance decision as follows:
+
+* If the proposed posterior probability exceeds the current value, accept $\boldsymbol{\beta}^{(1)}$ as the new best estimate
+* Otherwise, accept $\boldsymbol{\beta}^{(1)}$ if a random uniform number is larger than the ratio of the first posterior value to the second.
+
+If $\boldsymbol{\beta}^{(1)}$ is close (in posterior probability) to $\boldsymbol{\beta}^{(0)}$, we have a higher probability of accepting it (as with simulated annealing). 
+
+@tbl-mcmc shows some of the initial iterations of the MH algorithm. Following the initial parameter value, another proposal is generated in the nearby parameter space. The log-posterior for this proposal is smaller than the initial value, so we do not automatically accept it. The acceptance probability is effectively zero, since the difference in the log-posterior values is `r round(param$log_post[2] - param$log_post[1])`, and the exponentiated value is very close to zero. The random uniform value for this decision (`r signif(param$random[2], 3)`) formally rejects it. The subsequent proposal, also based on the initial value, is likewise rejected. On the third iteration, the proposed parameter value achieves a larger log-posterior probability and is therefore accepted as the current state.
+
+```{r}
+#| label: tbl-mcmc
+#| tbl-cap: "A set of iterations of the Metropolis-Hastings algorithm for Bayesian logistic regression at the beginning and ending phases of the optimization."
+#| echo: false
+
+dec_lvls <- c("initial", "improvement", "acceptable", "rejected")
+
+param <- param |>
+  mutate(
+    Decision = case_when(
+      better ~ "improvement",
+      !better & accept ~ "acceptable",
+      TRUE ~ "rejected"
+    ),
+    Decision = ifelse(row_number() == 1, "initial", Decision),
+    Decision = factor(Decision, levels = dec_lvls)
+  )
+
+slice_size <- 8
+param |>
+  slice_head(n = slice_size + 1) |>
+  mutate(Phase = "Beginning") |>
+  bind_rows(
+    param |>
+      slice_tail(n = slice_size + 1) |>
+      mutate(Phase = "Ending")
+  ) |>
+  mutate(random = ifelse(is.na(accept_prob), NA, random)) |>
+  select(
+    Iteration = iteration,
+    Parent = parent,
+    Intercept = beta_0,
+    Slope = beta_1,
+    `(Log) Posterior` = log_post,
+    `Pr[Accept]` = accept_prob,
+    Random = random,
+    Decision
+  ) |>
+  gt() |>
+  fmt_number(columns = c(Intercept, Slope, `(Log) Posterior`), n_sigfig = 3) |>
+  fmt_number(columns = c(`(Log) Posterior`), n_sigfig = 4) |>
+  fmt_number(columns = c(`Pr[Accept]`, Random), decimals = 3) |>
+  fmt_number(columns = c(Iteration, Parent), decimals = 0) |>
+  sub_missing(
+    columns = c(`Pr[Accept]`, Parent, Random),
+    missing_text = "---"
+  ) |>
+  tab_row_group(label = " ", rows = Iteration <= slice_size + 1)
+```
+
+This process, called the "warm up phase," proceeds a large number of times (as defined by the user). We can monitor the proposed parameter values and assess if they appear to converge to a stable parameter space. @fig-mcmc-warmup shows the progress of MH for the first `r warmup` iterations. The process starts far away from the true parameters (represented by the dotted lines), and the next 25 iterations happen to sample slope values ($\beta_1$) in a narrow, negative range. There are some improved values until the slope meanders to larger values, where new proposals are consistently accepted. 
+
+```{r}
+#| label: fig-mcmc-warmup
+#| echo: false
+#| out-width: 50%
+#| fig-width: 4.2
+#| fig-height: 4.5
+#| fig-align: center
+#| fig-cap: The coefficient path during the warmup period for Metropolis-Hastings optimization.
+true_means <- c(1.0, -1.5)
+
+warmup_data |>
+  ggplot(aes(beta_0, beta_1, col = Decision, pch = Decision)) +
+  geom_point() +
+  geom_vline(xintercept = true_means[1], lty = 3) +
+  geom_hline(yintercept = true_means[2], lty = 3) +
+  labs(x = expression(beta[0]), y = expression(beta[1])) +
+  scale_color_manual(
+    values = c(rgb(0, 0, 0, 3 / 4), rgb(0, 0, 1, 3 / 4), rgb(0, 0, 0, 1 / 4))
+  ) +
+  scale_shape_manual(values = c(16, 17, 4)) +
+  theme(legend.position = "top")
+```
+
+Around iteration 55, the MH process has settled near the region surrounding the true parameter values. Throughout the remainder of the warm up phase of `r warmup` iterations, proposals continue to be generated within this high-probability region. The acceptance distribution during this stable period consists of `r round(100 * mean(warmup_data$Decision[55:warmup] == "rejected"), 1)`% being outright rejected, `r round(100 * mean(warmup_data$Decision[55:warmup] == "acceptable"), 1)`% are provisionally accepted, and `r round(100 * mean(warmup_data$Decision[55:warmup] == "improvement"), 1)`% are improvements (proposals that increase posterior probability and are automatically accepted).
+
+```{r}
+#| label: post-summary
+#| echo: false
+
+term_rate <-
+  param |>
+  slice_tail(n = 500) |>
+  summarize(rate = round(mean(better | accept) * 100, 1)) |>
+  pluck("rate")
+
+post_point <-
+  posterior |>
+  dplyr::select(-iteration) |>
+  colMeans() |>
+  signif(digits = 3)
+
+post_lower <-
+  posterior |>
+  dplyr::select(-iteration) |>
+  map_dbl(~ quantile(.x, prob = 0.05)) |>
+  signif(digits = 3)
+
+post_upper <-
+  posterior |>
+  dplyr::select(-iteration) |>
+  map_dbl(~ quantile(.x, prob = 0.95)) |>
+  signif(digits = 3)
+
+mle_coef <-
+  glm(class ~ x, data = tr_data, family = binomial) |>
+  tidy()
+```
+
+At this point, it is reasonable to believe the MH has converged to the location of the optimal values. Since we may not be able to analytically determine the true distribution of the posterior, we spend a good deal of time running new iterations. The non-rejected proposals form a sample of the posterior, and we continue to sample until there are enough data points to make precise numerical summaries. After a total of `r format(nrow(param) - warmup - 1, big.mark = ",")` additional iterations, there were `r format(sum(param$Decision[(warmup+1):nrow(param)] != "rejected"), big.mark = ",")` usable samples. In the last 500 iterations of MH, approximately `r term_rate`% of proposals were not rejected. 
+
+@fig-logistic-posterior shows the univariate distributions of our parameters. The slope's posterior mean was `r post_point[2]`, with 90% of the samples within (`r post_lower[2]`, `r post_upper[2]`). This interval is credible and can come from a more rational probability statement about this parameter (compared to a confidence interval). 
+
+```{r}
+#| label: fig-logistic-posterior
+#| echo: false
+#| out-width: 70%
+#| fig-width: 6
+#| fig-height: 3.1
+#| fig-align: center
+#| fig-cap: Samples of the posterior distribution (post-warm) for the two logistic regression parameters.
+
+true_means <- c(1.0, -1.5)
+
+posterior |>
+  pivot_longer(
+    cols = c(intercept, slope),
+    names_to = "parameter",
+    values_to = "value"
+  ) |>
+  ggplot(aes(value)) +
+  geom_histogram(bins = 20, col = "white") +
+  facet_wrap(~parameter, scales = "free_x") +
+  labs(x = "Parameter Values")
+```
+
+The previous section showed how penalizing the likelihood can mitigate issues with our model related to multicollinearity or irrelevant predictions. Penalization produces biased estimates for those models since they are shrunken towards zero. From a Frequentist perspective, using priors in Bayesian estimation also produces biased estimates since the posterior is shrunken to the prior (to some degree). 
+
+We mentioned that there are more specialized priors that can be used. For example, we can choose priors to encourage sparsity in our regression parameters (as we did with the lasso model). It turns out that the regularization of the Lasso model is equivalent to using a Laplace distribution (a.k.a the double exponential distribution) as a prior [@tibshirani1996regression]. @fig-sparse-posteriors (left) show an example of the Laplace distribution. Compared to a similar Gaussian distribution, the Laplacian has larger probabilities near zero and in the distribution's tails.  Bayesian models using this prior are discussed by @park2008bayesian.
+
+```{r}
+#| label: fig-sparse-posteriors
+#| echo: false
+#| out-width: 70%
+#| fig-width: 6
+#| fig-height: 3.1
+#| fig-align: center
+#| fig-cap: Examples of priors that can be used to encourage sparsity in the parameter values. The spike distribution has been scaled to be smaller for illustration.
+x_seq <- seq(-25, 25, by = 0.005)
+
+dbl_expo <- function(x, mu = 0, scale = 1) {
+  1 / (2 * scale) * exp(-abs(x - mu) / scale)
+}
+
+gau_lap <-
+  bind_rows(
+    tibble(
+      Parameter = x_seq,
+      density = dbl_expo(x_seq, scale = 10),
+      Distribution = "Laplacian"
+    ),
+    tibble(
+      Parameter = x_seq,
+      density = dnorm(x_seq, sd = 10),
+      Distribution = "Gaussian"
+    )
+  )
+
+p_gau_lap <-
+  ggplot(gau_lap, aes(x = Parameter, y = density, col = Distribution)) +
+  geom_line(linewidth = 3 / 4, alpha = 3 / 4) +
+  theme(legend.position = "top") +
+  scale_color_manual(values = c("#A8BE74FF", "#BF7417FF"))
+
+slab <- dnorm(x_seq, mean = 0, sd = 10)
+
+# Normalize for printing
+spike <- dnorm(x_seq, mean = 0, sd = 0.1)
+spike <- spike / max(spike)
+spike <- spike * max(slab) * 3
+zero_spike <- spike > .Machine$double.eps
+
+spike_slab <- bind_rows(
+  tibble(Parameter = x_seq, density = slab, Distribution = "Slab"),
+  tibble(
+    Parameter = x_seq[zero_spike],
+    density = spike[zero_spike],
+    Distribution = "Spike"
+  )
+)
+
+p_spike_slab <-
+  ggplot(spike_slab, aes(x = Parameter, y = density, col = Distribution)) +
+  labs(y = NULL) +
+  geom_line(linewidth = 3 / 4) +
+  theme(legend.position = "top") +
+  scale_color_manual(values = c("#D64358FF", "#4F5791FF"))
+
+p_gau_lap + p_spike_slab
+```
+
+Another idea is to use a composite distribution. The "spike and slab" prior contains three distributions [@mitchell1988bayesian;@malsiner2011comparing]. The first is a slab: a very wide distribution such as our earlier N(0, 10). This is designed to represent our (weak) belief for parameters that should have a non-sparse/non-zero value. The spike element is an incredibly tight distribution centered around zero (such as an N(0, 0.1)) and typifies parameters that should have little or no effect on the model. These two choices are shown in @fig-sparse-posteriors (right). Finally, the mixture distribution has values on [0, 1] that indicate how to blend the spike and slab elements. For example, with the values given above, the spike-slab prior could be: 
+
+$$
+Pr[\beta|\alpha] = (1 - \alpha) N(0, 10) + \alpha N(0, 0.1)
+$$
+
+What should we use for the mixture prior $Pr[\alpha]$? With a Beta distribution, we could have the prior take values of the entire range. This would include a uniform distribution if we lack an opinion on the sparsity rate or enable more informative beliefs. Alternatively, we could choose a Bernoulli distribution that produces values in $\alpha \in \{0, 1\}$ with some probability. We would choose a value for $Pr[\alpha = 1]$ or put yet another prior on that parameter. 
+
+While these approaches do regularize parameters toward zero, it is important to remember that Bayesian models _do not_ produce a single point estimate for each parameter, but rather a posterior distribution of values. In contrast, methods such as the Lasso and glmnet can shrink coefficients exactly to zero, thereby removing predictors entirely from the model. This behavior does not generally occur in Bayesian models. As illustrated by the priors in @fig-sparse-posteriors, there is theoretically only an infinitesimal probability that a continuous posterior distribution will place substantial mass at exactly zero. In the case of spike-and-slab priors, the posterior distribution may be bimodal, with one mode concentrated at zero. Nevertheless, even in this setting, predictors are not deterministically excluded from the model. In summary, Bayesian regularization can strongly shrink coefficients toward zero but does not, in practice, eliminate predictors from the prediction equation.
+
+The _posterior predictive distribution_ is used to generate predictions for new data. When predicting a new observation at $x_0$, this distribution incorporates both uncertainty in the model parameters (as reflected in the posterior) and uncertainty in the new observation itself, represented by $Pr[X = x_0]$, where $X$ denotes the random predictor variable. Samples from the posterior predictive distribution are used to estimate class probabilities. Although it is common to report a single predictive summary—such as the posterior mean or mode—we can also report credible intervals that quantify uncertainty in these predictions. This ability to directly characterize predictive uncertainty is a key advantage of Bayesian estimation for these models.
 
 `r r_comp("cls_linear.html#sec-logistic-bayes")`
 
