@@ -25,6 +25,7 @@ library(rules)
 library(themis)
 library(ggforce)
 library(discrim)
+library(RANN)
 
 # ------------------------------------------------------------------------------
 # set options
@@ -1404,6 +1405,9 @@ sampling_set <-
   )
 ```
 
+
+Can also be used inside of SGB and RF
+
 #### Upsamping {#sec-upsampling}
 
 Upsampling will create random replicates of the majority class(es) so that all classes have the same frequency in the training set. This increases the training set, sometimes to orders of magnitude larger, so training time can become excessive for some models. There is also the issue of having a potentially large number of replicates for each non-majority class value in the original training set. For example, for models such as random forest that use bootstrap samples to fit models, we could have even more replicates of these data points. Another complication occurs when a model, such as _K_-nearest neighbors, is used; all of the nearest neighbors might be the same data point. 
@@ -1415,6 +1419,216 @@ Upsampling is probably the least used of these techniques do to these issues.
 The Synthetic Minority Oversampling Technique (SMOTE) is a method that combines random sampling with the creation of novel data points, which are fusions and/or perturbations of existing points. There are a few flavors of this method, but we'll focus on the original technique by REF where all predictors are required to be numeric. 
 
 For each data point in the minority class, compute its K-nearest neighbors. The create a new artificial data point, we select a minority class point at random ($\boldsymbol{x}_i$) as well as one of its neighbors. For each predictor, we compute the difference between the original data point and its chosen neighbor (call this $\delta_j$ for predictor $j$). For each predictor, we compute a uniform random number $u_j \sim U(0, 1)$ and modify the original point as $x^*_{ij} = x_{ij} + u_j\delta_j$. Essentially, SMOTE generates a hyperrectangle between the selected point and its chosen neighbor, and then randomly places the new sample within the hyperrectangle. 
+
+@fig-smote-rose illustrates the process using a selected point (large red circle) in the north-west portion of the previously shown predictor space. A neighbor was selected below and to the right of the original point (large red square). The dotted lines show the area where newly synthesized points can be placed, and twenty examples are shown (open circles). 
+
+```{r}
+#| label: fig-smote-rose
+#| echo: false
+#| out-width: 80%
+#| fig-width: 7
+#| fig-height: 3.5
+#| warning: false
+#| fig-cap: "Demonstrations of how SMOTE and ROSE synthesize new samples. The chosen point is the large red circle, and SMOTE's selected nearest neighbor is the large red square. The ellipses in panel (b) represent Gaussian probability contours based on the kernel density estimate. Twenty points are synthesized for each panel."
+
+train_minority <-
+  myopia_smol_formatted |>
+  filter(class == "yes")
+
+scaled_train <-
+  recipe(class ~ ., data = myopia_smol_formatted) |>
+  step_normalize(all_predictors()) |>
+  prep() |>
+  bake(new_data = NULL)
+
+scaled_train_minority <-
+  scaled_train |>
+  filter(class == "yes")
+
+neighbors <- 5
+selected_neighbor <- 4
+selected_ind <- 38
+num_synth <- 20
+num_pred <- 2
+hmult <- 1 / 2
+
+graph <- nn2(
+  scaled_train_minority |> select(-class) |> as.matrix(),
+  k = neighbors
+)
+
+train_minority_nn <-
+  train_minority |>
+  slice(graph$nn.idx[selected_ind, ])
+
+train_minority_nn_sel <-
+  train_minority |>
+  slice(graph$nn.idx[selected_ind, selected_neighbor])
+
+train_minority_example <-
+  train_minority |>
+  slice(selected_ind)
+
+# ------------------------------------------------------------------------------
+# ROSE example
+
+n <- sum(myopia_smol_formatted$class == "yes")
+yes_ind <- which(myopia_smol_formatted$class == "yes")
+yes_pred <- myopia_smol_formatted |> filter(class == "yes") |> select(-class)
+ids.generation <- rep(selected_ind, num_synth)
+
+set.seed(282)
+cons.kernel <- (4 / ((num_pred + 2) * n))^(1 / (num_pred + 4))
+H <- hmult * cons.kernel * diag(apply(yes_pred, 2, sd), num_pred)
+rose_synth <- matrix(rnorm(num_synth * num_pred), num_synth, num_pred) %*% H
+rose_synth <- as_tibble(rose_synth + yes_pred[ids.generation, ])
+point_center <- as.numeric(yes_pred[ids.generation[1], 1:2])
+
+# ------------------------------------------------------------------------------
+# plot range
+
+tmp <-
+  bind_rows(
+    rose_synth,
+    train_minority_nn,
+    train_minority_example
+  )
+
+xrng <- extendrange(tmp$`spherical equivalent refraction`)
+yrng <- extendrange(tmp$`axial length`)
+# make lower right range wider
+xrng[2] <- 0.5
+yrng[1] <- 22
+
+# ------------------------------------------------------------------------------
+
+p_rose <-
+  myopia_smol_formatted |>
+  ggplot(aes(`spherical equivalent refraction`, y = `axial length`))
+
+for (i in 1:4) {
+  ell <-
+    ellipse::ellipse(0, scale = diag(H), centre = point_center, t = i) |>
+    as_tibble() |>
+    setNames(names(yes_pred))
+  p_rose <-
+    p_rose +
+    geom_path(data = ell, lty = 2, alpha = 1 / 4)
+}
+
+p_rose <-
+  p_rose +
+  geom_point(aes(col = class), alpha = 1 / 2) +
+  lims(x = xrng, y = yrng) +
+  geom_point(
+    data = train_minority_example,
+    aes(x = `spherical equivalent refraction`, y = `axial length`, col = class),
+    cex = 5,
+    show.legend = FALSE
+  ) +
+  geom_point(
+    data = rose_synth,
+    pch = 1
+  ) +
+  theme(legend.position = "none") +
+  labs(title = "(b) ROSE")
+
+
+# ------------------------------------------------------------------------------
+# SMOTE example
+
+myopia_smote_neighbor <-
+  train_minority |>
+  slice(selected_ind) |>
+  bind_cols(
+    train_minority |>
+      slice(graph$nn.idx[selected_ind, selected_neighbor]) |>
+      select(ser = `spherical equivalent refraction`, al = `axial length`)
+  )
+
+set.seed(332)
+smote_synth <-
+  tibble(
+    `spherical equivalent refraction` = runif(
+      num_synth,
+      min = train_minority_example[[1]],
+      max = train_minority_nn_sel[[1]]
+    ),
+    `axial length` = runif(
+      num_synth,
+      min = train_minority_nn_sel[[2]],
+      max = train_minority_example[[2]]
+    )
+  )
+
+p_smote <-
+  myopia_smol_formatted |>
+  ggplot(aes(`spherical equivalent refraction`, y = `axial length`)) +
+  geom_point(aes(col = class), alpha = 1 / 2, show.legend = FALSE) +
+  lims(x = xrng, y = yrng) +
+  geom_point(
+    data = myopia_smote_neighbor,
+    aes(x = `spherical equivalent refraction`, y = `axial length`, col = class),
+    cex = 5,
+    show.legend = FALSE
+  ) +
+  geom_point(
+    data = myopia_smote_neighbor,
+    aes(x = ser, y = al, col = class),
+    cex = 5,
+    pch = 15,
+    show.legend = FALSE
+  ) +
+  geom_point(
+    data = myopia_smote_neighbor,
+    aes(ser, y = al, col = class),
+    cex = 2,
+    show.legend = FALSE
+  ) +
+  geom_segment(
+    data = myopia_smote_neighbor,
+    aes(
+      x = `spherical equivalent refraction`,
+      xend = `spherical equivalent refraction`,
+      y = `axial length`,
+      yend = al
+    ),
+    lty = 2
+  ) +
+  geom_segment(
+    data = myopia_smote_neighbor,
+    aes(x = ser, xend = ser, y = `axial length`, yend = al),
+    lty = 2
+  ) +
+  geom_segment(
+    data = myopia_smote_neighbor,
+    aes(
+      x = `spherical equivalent refraction`,
+      xend = ser,
+      y = `axial length`,
+      yend = `axial length`
+    ),
+    lty = 2
+  ) +
+  geom_segment(
+    data = myopia_smote_neighbor,
+    aes(x = `spherical equivalent refraction`, xend = ser, y = al, yend = al),
+    lty = 2
+  ) +
+  geom_point(
+    data = smote_synth,
+    pch = 1
+  ) +
+  labs(title = "(a) SMOTE")
+
+p_smote + p_rose 
+```
+
+Note that SMOTE does not center the new samples around the original point; they can only be adjacent to it, since newly created data points must lie between it and the neighbor. This has the effect of clumping or clustering points to some degree. This can be seen in @fig-myopia-sampling where there are gaps in the minority class distribution where no minority class data reside.  This can be resolved by increasing the number of neighbors, but adding too many would lead to overlap in predictor distributions for each class. One could tune the number of neighbors, but it may not produce a clear winner for this parameter.  
+
+note overfitting in @fig-myopia-sampling
+
+generalizations
 
 #### ROSE {#sec-rose}
 
