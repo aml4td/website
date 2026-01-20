@@ -1181,6 +1181,8 @@ Regardless of the method used, note that rebalancing occurs only on the data bei
 
 Note that all the techniques mentioned here should be considered as yet another preprocessing method. As such, it is in the interest of the modeler to resample the models and include these steps within the resampling process. It would be inappropriate to apply a technique such as downsampling and then resample the data. Since these methods involve randomness, we need to account for it in our performance statistics. 
 
+We'll describe each technique in the context of its use to modify the training set (or the analysis set when resampling). However, for models that resample the data, such as stochastic gradient boosting or random forests, these tools could also be applied within each resample. For example, our first technique described below, _downsamples_ the majority class to reduce its size. A random forest model could do the same by using a stratified bootstrap sample that produces the sample number of data points for each class [@chen2004using]. @chawla2003smoteboost and @galar2011review provide similar examples. This is highly dependent on the implementation, but it might be advantageous because the sampling/synthesis methods would be applied repeatedly, which can reduce model variance by exposing it to more unique data points. 
+
 #### Downsampling {#sec-downsampling}
 
 This approach is straightforward: every class with more data than the minority class is randomly sampled, ensuring that all classes have the same number of training set points. The minority class stays the same. For our myopia data, the majority class is randomly reduced from `r nrow(myopia_train)` to `r sum(myopia_df$class == "yes")` patients. @fig-myopia-subsampling show examples for the two predictor subset including how the FDA fit changes with the reduced data set. We can see that the class boundary is slightly more simplistic than @fig-myopia-fda but has shifted to the right, capturing more events with the default 50% cutoff (at the expense of increased false positives). 
@@ -1208,6 +1210,10 @@ fda_down_capture <-
   augment(fda_down_fit, new_data = myopia_smol_formatted) |> 
   filter(.pred_yes >= 0.5 & class == "yes") |> 
   nrow()
+
+load(url(
+  "https://raw.githubusercontent.com/aml4td/website/main/RData/imbalanced_sampled.RData"
+))
 ```
 
 ::: {#fig-myopia-subsampling}
@@ -1503,22 +1509,27 @@ yrng[1] <- 22
 
 # ------------------------------------------------------------------------------
 
+rose_grid <- crossing(
+  `spherical equivalent refraction` = seq(xrng[1], xrng[2], length.out = 100),
+  `axial length` = seq(yrng[1], yrng[2], length.out = 100)
+)
+
+# Assumed independent in H so we can use the product of two univariates
+rose_grid$probability <- 
+  dnorm(rose_grid$`spherical equivalent refraction`, mean = point_center[1], sd = sqrt(H[1,1])) *
+  dnorm(rose_grid$`axial length`, mean = point_center[2], sd = sqrt(H[2,2]))
+
 p_rose <-
   myopia_smol_formatted |>
-  ggplot(aes(`spherical equivalent refraction`, y = `axial length`))
-
-for (i in 1:4) {
-  ell <-
-    ellipse::ellipse(0, scale = diag(H), centre = point_center, t = i) |>
-    as_tibble() |>
-    setNames(names(yes_pred))
-  p_rose <-
-    p_rose +
-    geom_path(data = ell, lty = 2, alpha = 1 / 4)
-}
-
-p_rose <-
-  p_rose +
+  ggplot(aes(`spherical equivalent refraction`, y = `axial length`)) +
+  geom_raster(data = rose_grid, aes(fill = probability), alpha = 0.2) +
+  geom_contour(
+    data = rose_grid,
+    aes(z = probability),
+    col = "#DE2D26",
+    alpha = 0.2,
+    bins = 5
+  ) +
   geom_point(aes(col = class), alpha = 1 / 2) +
   lims(x = xrng, y = yrng) +
   geom_point(
@@ -1532,8 +1543,8 @@ p_rose <-
     pch = 1
   ) +
   theme(legend.position = "none") +
-  labs(title = "(b) ROSE")
-
+  labs(title = "(b) ROSE") +
+  scale_fill_continuous(palette = c("white", "#FEE0D2", "#FC9272", "#DE2D26"))
 
 # ------------------------------------------------------------------------------
 # SMOTE example
@@ -1636,13 +1647,8 @@ generalizations
 #### Neighbor-Based Sampling {#sec-knn-sampling}
 
 ```{r}
-#| label: fig-near-miss
-#| echo: false
-#| out-width: 50%
-#| fig-width: 5
-#| fig-height: 5
-#| warning: false
-#| fig-cap: "Data to demonstrate Near Miss and Tomek Link methods."
+#| label: near-miss-data
+#| include: false
 
 num_sim_min <- 4
 num_sim_maj <- 6
@@ -1676,6 +1682,18 @@ min_maj <-
   ) |>
   arrange(class, V1) |>
   mutate(id = factor(row_number(), levels = 1:(num_sim_min + num_sim_maj)))
+```
+
+@mani2003knn describe tools for undersampling the majority class using nearest neighbors. Their idea is to find points to remove based on how close (or far) they are from the minority class data. They outlined three procedures that use the name "NearMiss". We'll briefly describe each in turn and use a small "toy" data set to outline the details. These data are shown in @fig-near-miss. There are `r num_sim_min + num_sim_maj` data points in the simulated training. The first `r num_sim_maj` samples are from the majority class, and the next `r num_sim_min` samples labeled are from the minority data. Each of the three NearMiss methods uses a $`r num_sim_min` \times `r num_sim_maj`$ distance matrix that captures the distances between the majority and minority class data (there is no need to find the neighbors within these two groups). 
+
+```{r}
+#| label: fig-near-miss
+#| echo: false
+#| out-width: 50%
+#| fig-width: 5
+#| fig-height: 5
+#| warning: false
+#| fig-cap: "Data to demonstrate Near Miss and Tomek Link methods."
 
 min_maj |>
   ggplot(aes(V1, V2, col = class)) +
@@ -1841,7 +1859,7 @@ for (i in seq_along(nm3_info)) {
 }
 ```
 
-NearMiss-1 retains the majority-class samples with the smallest average distances to their _K_ nearest neighbors. For example, using _K_ = 2, this table shows the distances between the minority and majority class samples. For the first majority-class observation, its closest minority-class samples are #7 and #8 (each column's two nearest neighbors are highlighted with a background accent color). The average distance between its two neighbors is `r round(nm1_dists[1], 2)`. 
+The technique called "NearMiss-1" retains the majority-class samples with the smallest average distances to their _K_ nearest neighbors. For example, using _K_ = 2, this table shows the distances between the minority and majority class samples:
 
 :::: {.columns}
 
@@ -1877,16 +1895,15 @@ nm1_gt |>
 
 :::: 
 
-To balance the data, NearMiss-1 would retain four samples: `r nm1_sel`.
+For the first majority-class observation, its closest minority-class samples are #7 and #8 (each column's two nearest neighbors are highlighted with a background accent color). The average distance between its two neighbors is `r round(nm1_dists[1], 2)`. To balance the data, NearMiss-1 would retain four samples: `r nm1_sel`.
 
-The algorithm for the second NearMiss variant focuses on using the _K_ farthest neighbors, i.e., those with the largest distance between points. However, the instructions from REFERENCE are somewhat ambiguous:
+The algorithm for the second NearMiss variant focuses on using the _K_ farthest neighbors, i.e., those with the largest distance between points. However, the instructions from @mani2003knn are somewhat ambiguous:
 
 > The second method (NearMiss-2) selects [majority] examples that are close to _all_ [minority] examples. In this method, examples are selected based on their average distances to the three farthest [minority] examples.  
 
-
 It is unclear whether the largest or the smallest average distance is used to determine which majority class data to keep. We'll use the minimum average distance here. 
 
-This table highlights the two furthest neighbors (i.e., "2FN") and their average distances. Note that the neighbors are the opposite of those in the previous table.
+This table highlights the two furthest neighbors (i.e., "2FN") and their average distances: 
 
 :::: {.columns}
 
@@ -1922,8 +1939,7 @@ nm2_gt |>
 
 :::: 
 
-
-In this instance, we would retain samples `r nm2_sel`. 
+Note that the neighbors are the opposite of those in the previous table. In this instance, we would retain samples `r nm2_sel`. 
 
 NearMiss-3 is a two-step process. First, the nearest _K_<sub>1</sub> nearest neighbors are found for each minority sample. Any majority-class samples that were not on the list of neighbors are excluded. After this, we determine the _K_<sub>2</sub> nearest neighbors of the majority class samples. Of these, the majority class observations with the _largest_ average distance are retained. 
 
@@ -1965,7 +1981,7 @@ nm3_gt |>
 
 :::: 
 
-NearMiss-3 selects `r nm3_sel`. 
+Based on these distances, NearMiss-3 selects `r nm3_sel` to include in the majority class. 
 
 ```{r}
 #| label: tomek-calcs
@@ -1995,13 +2011,19 @@ keep_maj <- apply(nn_mat_maj, 1, function(x) all(x == 0)) |> which() |> names()
 
 tomek_sel <- sort(c(keep_maj, keep_min))
 tomek_sel <- cli::format_inline("{paste0('#', tomek_sel)}")
+
+tomek_myopia <- imbalanced_sampled |> filter(Data == "Tomek") |> count(class)
 ```
 
-Tomek Links is a filtering method that is the opposite of NearMiss. In this case, we will _remove_ data points that are close to some theoretical class boundary. The goal is to create a sort of gap between the predictor distributions for each class. For each class, we determine the (single) nearest neighbor from the opposite class. Two samples form a Tomek Link when they are each other's nearest neighbors and belong to opposing classes. We would remove both data points that form such a link. 
+Tomek Links [@ivan1976two] is a filtering method that is the opposite of NearMiss. In this case, we will _remove_ data points that are close to some theoretical class boundary. The goal is to create a sort of gap between the predictor distributions for each class. For each class, we determine the (single) nearest neighbor from the opposite class. Two samples form a Tomek Link when they are each other's nearest neighbors and belong to opposing classes. We would remove both data points that form such a link. @kubat1997addressing describe algorithms with similar goals. 
 
-An easy example from @fig-near-miss is the closeness of samples #4 and #9. They are extremely close to one another, yet in different classes. A counter-example is sample #3; its neighbor is #9, but the converse is not true since #9 and #4 are neighbors too. 
+An easy example from @fig-near-miss is the closeness of samples #4 and #9. They are extremely close to one another, yet in different classes. A counter-example is sample #3; its neighbor is #9, but the converse is not true since #9 and #4 are neighbors too. For this data set, only samples `r tomek_sel` are _not_ Tomek Links and these are retained. 
 
-For this data set, only samples `r tomek_sel` are retained. 
+When applied to the myopia data, the number of myopic samples is reduced from `r sum(myopia_train$class == "yes")` to `r tomek_myopia$n[tomek_myopia$class == "yes"]` and the number of non-myopic rows in the training set drops from `r sum(myopia_train$class == "no")` to `r tomek_myopia$n[tomek_myopia$class == "no"]`. While the reduction in events might compromise the model's effectiveness, @fig-myopia-subsampling shows that the FDA class boundaries produced with the entire data set and the reduced version are extremely similar. 
+
+Another potential downside to removing Tomek Links is increased instability. Using a single nearest-neighbor approach yields high variance, since small changes in the data can lead to substantially different solutions. That added variance in the training set might be passed along to the classifier. 
+
+Removing Tomek Links is a process that can be applied to data sets with balanced or unbalanced class frequencies; the goal is to reduce overlap in predictor distributions so the model can find a clearer trend in the data. It can also be used in conjunction with other sampling or synthesis methods, preferably afterwards. 
 
 #### Boarderline Methods {#sec-borderline}
 
