@@ -19,11 +19,16 @@ library(tidymodels)
 library(torch)
 library(mirai)
 library(spatialsample)
+library(discrim)
 library(important)
 library(embed)
 library(bestNormalize)
-library(patchwork)
 library(gt)
+library(probably)
+library(patchwork)
+library(important)
+library(paletteer)
+library(brulee)
 library(paletteer)
 library(brulee)
 
@@ -35,6 +40,8 @@ theme_set(theme_bw())
 set_options()
 theme_set(theme_bw())
 daemons(parallel::detectCores())
+
+cls_mtr <- metric_set(brier_class, roc_auc, pr_auc, mn_log_loss)
 
 # ------------------------------------------------------------------------------
 # load data 
@@ -58,11 +65,778 @@ To get started, the first chapter summarizes an old, traditional model for class
 
 ## Nonlinear Discriminants  {#sec-nonlinear-da}
 
+Discriminant analysis is a classical statistical method for classification. While its prominence in the statistical learning literature has diminished in recent decades, understanding its foundations provides valuable context for several modern and highly effective classification methods. This section focuses on linear discriminant analysis (LDA).
+
+Linear discriminant analysis [LDA; @mclachlan2005discriminant;@murphy2012machine] produces linear classification boundaries and can be motivated via Bayes’ Rule. 
+Let's say that our training set predictors for class $k$ are contained in the vector $\boldsymbol{X}_k$ with $p$ elements. LDA assumes that the predictor distributions within each class follow a multivariate Gaussian distribution with class-specific mean vectors but a common covariance matrix across all classes. Formally, for class $k$, the conditional distribution of the predictors given class membership is $\boldsymbol{X}|Y=k \sim N(\boldsymbol{\mu}_k, \boldsymbol{\Sigma})$.
+
+To classify a new observation with predictor vector $\boldsymbol{x}$, LDA applies Bayes' theorem to compute the posterior probability of class membership. Given a prior probability $Pr[Y = k]$ for class $k$, the posterior probability is:
+
+$$
+Pr[Y = k |\boldsymbol{x}] =\frac{Pr[Y = k]Pr[\boldsymbol{x}|Y = k]}{\sum\limits_{l=1}^C Pr[Y = l]Pr[\boldsymbol{x}|Y = l]}
+$$ {#eq-discrim}
+
+This equation is straightforward to calculate. The parameters $\boldsymbol{\mu}_k$ and $\boldsymbol{\Sigma}$ are estimated from the training data using their maximum likelihood estimates: the class-specific sample mean vectors $\bar{\boldsymbol{x}}_k$ and the pooled sample covariance matrix $\boldsymbol{S}$, respectively. The class-conditional densities are then evaluated using the multivariate normal probability density function, which modern statistical software computes efficiently. In practice, computational efficiency can be improved by calculating only the numerator of @eq-discrim for each class, then normalizing these values to ensure the posterior probabilities sum to 1.  For a new observation $\boldsymbol{x}$, the class with the maximum posterior probability is assigned as the predicted class. Alternatively, we can frame the prediction in terms of the discriminant function: 
+
+$$
+D_k(\boldsymbol{x}) = \boldsymbol{x}'\boldsymbol{\Sigma}^{-1}\boldsymbol{\mu}_k + \frac{1}{2}\boldsymbol{\mu}_k'\boldsymbol{\Sigma}^{-1}\boldsymbol{\mu}_k + \log\left(Pr[Y = k]\right)
+$$ {#eq-discrim-func}
+
+The discriminant values are conceptually similar to the linear predictor in logistic regression, taking values on the real line, with larger values corresponding to higher posterior probabilities. The predicted class is determined by identifying which discriminant function yields the largest value. 
+
+A notable advantage of LDA is its explicit modeling of the predictor covariance structure through $\boldsymbol{\Sigma}$. This characteristic renders the method robust to moderate levels of multicollinearity among predictors. Furthermore, the framework naturally extends to multi-class problems. 
+
+However, LDA has important limitations. The method requires that $\boldsymbol{\Sigma}$ be non-singular (invertible). When the training set contains fewer observations than predictors ($n < p$) or when perfect linear dependencies exist among predictors, the sample covariance matrix becomes singular and the discriminant functions cannot be computed. Additionally, the Gaussian distributional assumption is fundamental to the method's theoretical justification. While binary indicator variables can technically be included in the model (as they are numeric), their discrete, non-Gaussian nature violates the model assumptions and undermines the probabilistic interpretation of the results. For datasets with categorical predictors or high-dimensional settings where $n < p$, alternative classification methods may be more appropriate as we will see later.
+
+As presented, LDA is limited as a classification tool. Its assumption of a common covariance matrix across classes restricts it to producing linear decision boundaries. While nonlinear boundaries could be induced through feature engineering (e.g., adding polynomial or interaction terms), such an approach would be better done using by logistic regression.
+
+Nevertheless, the discriminant analysis framework has led to extensions that address the various limitations of LDA. Quadratic discriminant analysis (QDA) [@ghojogh2019linear] relaxes the assumption of a common covariance matrix, allowing each class to have its own covariance structure: $\boldsymbol{X}|Y=k \sim N(\boldsymbol{\mu}_k, \boldsymbol{\Sigma}_k)$. This modification results in quadratic decision boundaries, providing greater flexibility at the cost of estimating additional parameters. Robust variants of both LDA and QDA have been developed to mitigate the influence of outliers on parameter estimation [@hubert2024robust], addressing the well-known sensitivity of maximum likelihood estimates to extreme observations. Additionally, regularized discriminant analysis methods [@friedman1989regularized;@pang2009shrinkage] introduce penalty terms that shrink the covariance matrix estimates, improving stability and predictive performance, particularly when sample sizes are modest relative to the number of predictors.
+
+Two extensions of discriminant analysis are practically useful. The first, naive Bayes classification, represents a simplification that assumes conditional independence among predictors within each class. The second, flexible discriminant analysis (FDA), is a generalization of the LDA framework. FDA can accommodate nonlinear decision boundaries, perform implicit feature selection, and incorporate various modeling strategies, making it a considerably more versatile tool for classification problems. These methods are discussed in the following sections.
+
 ### Naive Bayes {#sec-naive-bayes}
+
+While LDA estimates the class-conditional density $Pr[\boldsymbol{x}|Y = k]$ using a multivariate Gaussian distribution, naive Bayes [@hand2001idiot] adopts an alternative approach by decomposing this joint density into a product of univariate marginal distributions:
+
+$$
+Pr[\boldsymbol{x}|Y = k] = \prod_{j=1}^p Pr[x_j|Y = k] 
+$$ {#eq-ind-probs}
+
+This formulation assumes conditional independence among all predictors within each class; i.e., the predictors are all statistically independent of one another. This assumption is often violated in practice. Despite this seemingly restrictive assumption, naive Bayes classifiers can occasionally perform surprisingly well in practice.
+
+The primary advantage of the conditional independence assumption is that it relaxes the distributional requirements for individual predictors. Unlike LDA, which requires joint multivariate normality, naive Bayes allows each predictor to follow its own distribution, which does not need to be Gaussian. Moreover, these distributions do not even need to be fully parametric. 
+
+For continuous predictors, kernel density estimation [@Silverman86;@chen2017tutorial] provides a flexible, nonparametric approach to estimating $Pr[x_j|Y = k]$. Kernel density estimators are smoothing methods that adaptively characterize the empirical distribution of the data. A kernel function $K(\cdot)$ is a non-negative, symmetric function that integrates to one and serves as a weighting scheme^[We'll see kernel functions two more times in this chapter.].  Common kernel functions are:
+
+* The **uniform kernel**, which assigns equal weight to all observations within a fixed range
+* The **Gaussian kernel**, $K(u) = \frac{1}{\sqrt{2\pi}}\exp(-u^2/2)$, which assigns weights that decrease exponentially with distance from the point of interest
+
+The kernel density estimate at a point $x$ is constructed as:
+
+$$
+\hat{f}(x) = \frac{1}{nh}\sum_{i=1}^n K\left(\frac{x - x_i}{h}\right)
+$$
+
+where $n$ is the number of observations, $x_i$ are the observed data points, and $h$ is the bandwidth parameter that controls the smoothness of the estimate.  We’ll come back to the bandwidth parameter shortly.
+
+For example, @fig-densities displays estimated densities for the minimum vapor pressure variable across three subsets of the data. Kernel density estimates are shown in blue, while fully parametric Gaussian density estimates (assuming $N(\mu, \sigma)$) are shown in orange. The left-hand panel presents the entire training set, which exhibits modest right skewness. Both estimation approaches provide reasonable approximations for vapor pressure values above 200 Pa × 100. However, the Gaussian estimate lacks the flexibility to adequately capture the density in the middle of the range, and both methods perform poorly for values below 200 Pa × 100, where the data are sparse.
+
+The middle panel shows the density for non-forested locations. The histogram suggests these data are approximately trimodal with left skewness, and the kernel density estimate successfully captures these multiple modes. In contrast, the Gaussian does not capture the multimodal structure, and relying on this parametric assumption would likely result in underfitting and poor probability estimates for classification.
+
+The right-hand panel displays the density for forested locations, which exhibits right skewness. The parametric Gaussian approach provides a particularly poor fit for the lower half of this distribution, where the bulk of the data reside. The kernel density estimate adapts to the asymmetry and provides a better representation of the empirical distribution.
+
+These examples illustrate the potential advantage of kernel density estimation within the naive Bayes framework: the ability to accommodate non-Gaussian, multimodal, and skewed distributions without requiring distributional transformations or parametric assumptions that may be violated in practice.
+
+```{r}
+#| label: fig-densities
+#| echo: false
+#| out-width: 75%
+#| fig-width: 6.5
+#| fig-height: 3
+#| fig-cap: Parametric and nonparametric density estimates for the minimum vapor predictor, shown separately for the entire training set and then for each class. The blue line is the nonparametric estimate, and the orange curve is the traditional Gaussian estimate. 
+
+forested_dens <- 
+  forested_train |> 
+  dplyr::select(vapor_min, county) |> 
+  mutate(class = "All") |> 
+  bind_rows(
+    forested_train |> 
+      dplyr::select(vapor_min, county, class) |> 
+      mutate(class = as.character(class))
+  ) |> 
+  mutate(
+    class = factor(class, levels = c("All", "No", "Yes"))
+  )
+
+forested_dens |> 
+  ggplot(aes(vapor_min)) + 
+  geom_histogram(aes(y = after_stat(density)), bins = 20, col = "white", alpha = 1 / 4) + 
+  geom_density(col = "#088BBEFF", linewidth = 3 / 4) + 
+  geom_line(
+    aes(
+      y = dnorm(vapor_min,
+                mean = tapply(vapor_min, class, mean, na.rm = TRUE)[PANEL],
+                sd = tapply(vapor_min, class, sd, na.rm = TRUE)[PANEL])),
+    color = "#F7AA14FF", linewidth = 3 / 4) +
+  geom_rug(alpha = 3 / 4) + 
+  facet_wrap(~ class, ncol = 3) + 
+  labs(x = "Minimum Vapor (Pa x 100)")
+```
+
+The kernel density estimator contains a tuning parameter: the bandwidth $h$, which controls the degree of smoothing applied to the density estimate. The bandwidth determines the effective width of the kernel's influence around each observation. Small bandwidth values produce density estimates that closely track the observed data, potentially capturing fine-scale features but risking variability and overfitting. Conversely, large bandwidth values distribute the kernel weight over a broader range, yielding smoother density estimates that may obscure multimodality or other important distributional characteristics.
+
+Several data-driven methods exist for selecting the bandwidth that optimizes specific criteria. Common approaches include minimizing an estimate of the mean integrated squared error or using cross-validation [@park1990comparison]. These default bandwidth selection methods are designed to produce generally accurate density estimates.
+
+However, the bandwidth that yields the most accurate density estimate may not necessarily produce the best classification performance. The objective in density estimation—minimizing the mean squared error—differs from the classification objective of minimizing prediction error. To address this potential misalignment, the bandwidth can be treated as a tuning parameter in the naive Bayes model. Rather than directly tuning $h$, it is often more convenient to tune a bandwidth adjustment factor that is a multiplier of the bandwidth.  A value greater than 1.0 encourages more smoothing of the data, while a smaller values make very bumpy densities.
+
+Since naive Bayes does not assume much about $Pr[x_j|Y = k]$, categorical predictors can be readily incorporated into the model. For a categorical predictor, the conditional probabilities are estimated directly from the observed frequencies within each class. @fig-counties showed the raw probabilities associated with the forested class (i.e., $Pr[y = forested]$).
+
+However, sparse data can create computational difficulties. Some counties contain no forested locations, while others have very few locations at all. When a particular predictor-class combination is unobserved in the training data, the estimated probability is zero. Due to the multiplicative structure in @eq-ind-probs, a single zero probability causes the entire class-conditional probability to equal zero, regardless of the values of other predictors. This results in the class receiving zero posterior probability, which is clearly problematic.
+
+Several smoothing methods address this issue by adjusting probability estimates away from the boundaries of zero and one. One approach employs a Beta-Binomial model, as described in @eq-beta-bin-mean, which shrinks extreme estimates toward more moderate values. For example, consider a county with ten locations, none of which are forested. The Beta-Binomial method with $\alpha = 1$ and $\beta = 3$ would pull the estimate from zero to `r round((0 + 1) / (10 + 1 + 3) * 100, 1)`%. 
+
+Alternatively, Laplace smoothing [@Manning2009, Section 11.3.2] provides another approach:
+
+$$
+\hat{p}_{k} = \frac {x_k+\alpha }{n_k+\alpha C_{x}}
+$$ {#eq-laplace-smooth}
+
+where $C_{x}$ is the number of levels of the qualitative predictor and $x_k$ and $n_k$ are the number of events and locations, respectively. Here, with $C_x = 2$ and $\alpha = 1$, the new estimate is `r round((0 + 1) / (10 + 1 * 2) * 100, 1)`%. 
+
+Despite the potentially unrealistic assumption of conditional independence among predictors, naive Bayes classifiers can demonstrate competitive predictive performance with other methods.  In addition, naive Bayes models can be computationally efficient since many of the calculations can be done in parallel.  Depending on how the conditional densities are computed, they can be easily added to database tables, and the final prediction can be executed using highly efficient SQL.
+
+```{r}
+#| label: forested-nb
+#| include: false
+#| cache: false
+#| warning: false
+nb_rec <-
+  recipe(class ~ ., data = forested_train) |>
+  step_predictor_best(
+    all_predictors(),
+    score = "imp_rf",
+    prop_terms = tune()
+  )
+
+nb_wflow <- workflow(nb_rec, naive_Bayes(smoothness = tune(), Laplace = 1))
+
+get_filter_info <- function(x) x |> extract_recipe() |> tidy(number = 1)
+
+ctrl_nb <- 
+  control_grid(
+      save_pred = TRUE,
+      save_workflow = TRUE,
+      extract = get_filter_info, 
+      parallel_over = "resamples"
+    )
+
+set.seed(872)
+forest_nb_res <-
+  nb_wflow |>
+  tune_grid(
+    resamples = forested_rs,
+    grid = crossing(
+      smoothness = seq(0.5, 1.5, by = 0.1),
+      prop_terms = (1:5 / 5)
+    ),
+    metrics = cls_mtr,
+    control = ctrl_nb
+  )
+```
+
+```{r}
+#| label: forested-nb-calcs
+#| include: false
+nb_best_res <- show_best(forest_nb_res, metric = "brier_class")
+forest_nb_mtr <-
+  forest_nb_res |> 
+  collect_metrics(summarize = FALSE) |> 
+  mutate(wflow_id = "naive Bayes") |> 
+  relocate(wflow_id)
+forest_nb_best <- select_best(forest_nb_res, metric = "brier_class")
+
+forest_nb_pred <-
+  forest_nb_res |> 
+  collect_predictions(parameters = forest_nb_best) |> 
+  mutate(wflow_id = "naive Bayes") |> 
+  relocate(wflow_id)
+
+forest_nb_mtr_ex <- 
+  forest_nb_pred |> 
+  cls_mtr(class, estimate = .pred_class, .pred_Yes)
+
+metric_corr <- 
+  forest_nb_res |> 
+  collect_metrics(type = "wide") |> 
+  dplyr::select(brier_class, roc_auc, mn_log_loss) |> 
+  cor() |> 
+  round(2)
+```
+
+One potential downside for this model is that there is a tendency for the class probability estimates to be seriously uncalibrated. Since we treat the predictors as independent entities, we end up multiplying many probabilities together. When the predictors _are_ related, this means including redundant terms. When any set of probabilities is multiplied together, there is a tendency for the values to become polar; the products tend to migrate towards zero or one. This may not effect the ability of the model to separate classes, but it will compromise the accuracy of the probability estimates. Many predictions, when incorrect, are _confidently_ incorrect.
+
+@fig-nb-probs illustrates the probability distribution and calibration performance for one model candidate applied to the forestation data. The left panel demonstrates that the predicted probabilities exhibit a bimodal distribution, with the majority of observations concentrated near the boundaries of zero and one, while relatively few observations fall in the intermediate probability range. The right panel presents the corresponding calibration curve, which reveals severe miscalibration. Specifically, observations assigned predicted probabilities near zero exhibit observed event rates of approximately 10%, while those with predicted probabilities approaching one show similarly discordant observed rates. The intermediate probabilities are no better, with observed event rates clustering near 0.5 across multiple bins regardless of predicted probability.  The Brier score for these data is poor (`r round(forest_nb_mtr_ex$.estimate[forest_nb_mtr_ex$.metric == "brier_class"], 3)`) but the area under the ROC curve (`r round(forest_nb_mtr_ex$.estimate[forest_nb_mtr_ex$.metric == "roc_auc"], 3)`) shows good separation of the classes by the model.
+
+```{r}
+#| label: fig-nb-probs
+#| echo: false
+#| out-width: 80%
+#| fig-width: 7
+#| fig-height: 4
+#| fig-cap: An example of how the probability estimates produced by naive Bayes can have poor calibration properties. 
+
+p_nb_prob <- 
+  forest_nb_pred |> 
+  ggplot(aes(.pred_Yes)) + 
+  geom_histogram(binwidth = 0.025) + 
+  facet_wrap(~class, ncol = 1) + 
+  geom_rug(alpha = 1 / 4) +
+  labs(x = "Probability of forestation")
+
+p_nb_cal <- 
+  forest_nb_pred |> 
+  cal_plot_windowed(class, .pred_Yes, window_size = 0.2, step_size = 0.025)
+
+p_nb_prob + p_nb_cal
+```
+
+To address these calibration issues, an initial feature filter could be helpful. Reducing the number of predictors may improve probability estimates by mitigating potential overfitting or reducing noise from uninformative predictors. For the forestation data, a random forest model was computed (within each resample), and predictors were ranked according to their permutation importance scores. We can choose a proportion of parameters to retain and then fit our naive Bayes models. Proportions of 20%, 40%, ..., 100% were used during the tuning process.  @fig-forested-rf-imp displays the resulting importance scores, with error bars representing 90% confidence intervals estimated using the 10 replicate values produced during cross-validation.
+
+```{r}
+#| label: fig-forested-rf-imp
+#| echo: false
+#| out-width: 80%
+#| fig-width: 6.5
+#| fig-height: 3
+#| fig-cap: Aggregate feature rankings using a random forest importance score on the forestation data. The bands reflect 90% confidence intervals computed using replicates over cross-validation.
+
+forest_nb_res |>
+  collect_extracts() |>
+  dplyr::select(-.config, -id) |>
+  unnest(.extracts) |>
+  distinct() |>
+  filter(prop_terms == 1 & smoothness == 1) |>
+  summarize(
+    n = length(score),
+    sd = sd(score),
+    mean = mean(score),
+    .by = c(terms, prop_terms)
+  ) |>
+  mutate(
+    lower = mean - qnorm(0.05) * sd / sqrt(n),
+    upper = mean + qnorm(0.05) * sd / sqrt(n)
+  ) |>
+  rename(variable = terms) |>
+  full_join(name_key, by = "variable") |>
+  mutate(text = if_else(is.na(text), variable, text)) |> 
+  ggplot(aes(mean, reorder(text, mean))) +
+  geom_point(cex = 3/4) +
+  geom_errorbar(aes(xmin = lower, xmax = upper), width = 1 / 3, alpha = 1 / 2) +
+  labs(y = NULL, x = "Random Forest Importance Score")
+```
+
+The results show that, according to random forest, annual precipitation has, by far, the largest effect on the prediction function. The second tier of importance includes maximum vapor pressure and longitude predictors, which exhibit nearly equivalent importance scores. A moderate cluster of predictors shows intermediate importance values, while several predictors—including county, year, eastness, and westness—yield low importance scores. 
+
+It is important to note that variable importance measures are model-specific and should not be interpreted as universal or absolute assessments of predictor relevance^[A different view of predictor importance will be seem later in @fig-forested-fda-imp.].  In this context, the random forest importance scores serve as a filtering mechanism to identify and remove potentially irrelevant predictors prior to fitting the classification model, rather than as definitive decisions regarding predictor-response relationships.
+
+Additionally, we have summarized the results over resamples for visualization. In practice, we execute the random forest within each resample and then fit the model on that resample's listing of which predictors are "important". We _do not_ compute the importance once and use the same ranking across resamples. 
+
+For the forestation data, the naive Bayes kernel adjustment parameter was tuned over values ranging from 0.5 to 1.5, while the Laplace smoothing parameter was held constant at $\alpha = 1$. Beyond feature selection, no additional preprocessing was applied; the categorical counties remained as-is , and no transformations were applied to the data.
+
+The tuning results for Brier score and ROC AUC are presented in @fig-nb-tune. Both metrics achieved optimal performance when the full predictor set was retained, with substantial performance degradation observed when only 20% of predictors were included. Across all feature selection thresholds, the results favor smaller kernel bandwidths (more wiggly). However, the magnitude of improvement attributable to bandwidth adjustment is modest relative to the effect of feature selection proportion.
+
+The predictions for the _best_ candidate are those shown in @fig-nb-probs. As noted there, the Brier score was mediocre while the ROC curve results indicate that the model can do a good job at qualitative separating the classes. 
+
+```{r}
+#| label: fig-nb-tune
+#| echo: false
+#| out-width: 55%
+#| fig-width: 5
+#| fig-height: 4
+#| fig-cap: Naive Bayes tuning results for the forestation data. 
+autoplot(forest_nb_res, metric = c("brier_class", "roc_auc")) + 
+  labs(y = "Brier Score") + 
+  scale_colour_paletteer_d("calecopal::eschscholzia") +
+  theme(legend.position = "top")
+```
+
+It is also worth noting that, for this model, the Brier and ROC AUC values point to similar findings. Across all of the candidates, the correlation between these metrics was `r metric_corr[1,2]`; they tend to agree very often. The correlation between these metrics and cross-entropy was slightly lower: `r cli::format_inline("{metric_corr[3,1:2]}")` for the Brier score and the ROC AUC, respectively. 
+
+Now, let's turn our attention to the other notable variation of LDA: flexible discriminant analysis. 
 
 `r r_comp("cls-nonlinear.html#sec-naive-bayes")`
 
 ### Flexible Discriminants {#sec-fda}
+
+Flexible discriminant analysis (FDA) by @hastie1994flexible extends LDA to accommodate more complex discriminant functions. The derivation involves substantial linear algebra; you can skip to the "Important" box below for the key concepts.
+
+@hand1981discrimination and @breiman1984nonlinear demonstrated that the LDA model can be estimated through a series of basic linear regressions. To do this, we first construct an $n_{tr}\times C$ indicator matrix $\boldsymbol{Y}$ where each column contains binary indicators for the corresponding class. Next, create a $C\times (C-1)$ matrix of initial "scores" $\boldsymbol{\Omega}$ using a contrast function (see @sec-indicators). @mda_2024 employ a Helmert-like contrast matrix. For $C=3$ classes, the Helmert contrast is 
+
+$$
+Helmert = 
+\begin{pmatrix} 
+-1 & -1 \\ 
+\phantom{-}  1 & -1 \\ 
+\phantom{-}  0 &\phantom{-}   2 \\ 
+\end{pmatrix}
+$$
+
+which is then normalized using a function of training set class proportions. For example, with $C = 3$ equally frequent classes, the initial score matrix is:
+
+$$
+\boldsymbol{\Omega} = 
+\begin{pmatrix} 
+\phantom{-} 1.22 & -0.71 \\ 
+-1.22 & -0.71 \\ 
+\phantom{-} 0.00 & \phantom{-} 1.41 \\ 
+\end{pmatrix}
+$$
+
+Being a contrast matrix, the column means are zero and have covariances of zero. 
+
+The modified response matrix for linear regression is computed as $\boldsymbol{\Omega}^* = \boldsymbol{Y}\boldsymbol{\Omega}$. Using the predictor matrix $\boldsymbol{X}$ and the columns of $\boldsymbol{\Omega}^*$ as outcomes, multivariate linear regression yields coefficient matrix $\widehat{\boldsymbol{B}}$ and fitted values $\hat{\boldsymbol{\Omega}} = \boldsymbol{X}\hat{\boldsymbol{B}}$.
+
+An eigendecomposition of $\boldsymbol{\Omega}'\hat{\boldsymbol{\Omega}}$ produces eigenvalues and a matrix of eigenvectors $\boldsymbol{\Phi}$.
+
+The matrix $\boldsymbol{\Phi}$ scales the linear regression predictions to approximate the discriminant functions in @eq-discrim-func. For a new sample $\boldsymbol{x}$, the vector of discriminant functions is:
+
+$$
+\boldsymbol{D}(\boldsymbol{x}) \approx \hat{\boldsymbol{\Omega}}\Phi = \boldsymbol{x}'\hat{\boldsymbol{B}}\Phi
+$$ {#eq-fda-discrim}
+
+This $(C-1) \times 1$ vector contains entries for all but the reference class^[The approximation involves scaling factors derived from the eigenvalues of $\boldsymbol{\Phi}$.]. Class probabilities are computed from the discriminant functions (typically using the softmax transformation).  We compute last probability estimate using $\hat{\pi}_C = 1 - \sum_k^{C-1}\hat{\pi}_k$.
+
+::: {.important-box}
+The magic in @hastie1994flexible is that linear regression can be replaced with any regression method while maintaining the discriminant analysis framework. For example, ridge or lasso regression can produce improved predictions that are then converted to class probabilities by rescaling with $\boldsymbol{\Phi}$ as in @eq-fda-discrim.
+:::
+
+@hastie1994flexible originally implemented FDA using multivariate adaptive regression splines (MARS) and a penalized spline method called Bruto. In practice, we have found that the best application of FDA uses MARS, which will be discussed further in @sec-mars.
+
+As we will see in @sec-reg-nonlinear, MARS is a forward stepwise procedure that sequentially adds pairs of features for each predictor. These features are derived via a _hinge function_: $h(x) = xI(x > 0)$. At each iteration, MARS identifies the optimal predictor and split point $a$, then adds two terms: $h(x - a)$ and $h(a - x)$. The first term equals zero for $x < a$, while the second equals zero for $x > a$. @fig-fda-hinge illustrates these "left" and "right" hinge functions.
+
+::: {#fig-fda-hinge}
+
+::: {.figure-content}
+
+```{shinylive-r}
+#| label: shiny-fda-hinge
+#| viewerHeight: 600
+#| viewerWidth: "100%"
+#| standalone: true
+#| fig-alt: Examples of a single set of MARS features. 
+library(shiny)
+library(bslib)
+library(ggplot2)
+library(dplyr)
+library(tidyr)
+
+source("https://raw.githubusercontent.com/aml4td/website/main/R/shiny-setup.R")
+
+ui <- page_fillable(
+  theme = bs_theme(bg = "#fcfefe", fg = "#595959"),
+  padding = "1rem",
+  layout_columns(
+    fill = FALSE,
+    col_widths = breakpoints(xs = c(-2, 8, -2), sm = 4),
+    sliderInput(
+      "beta_1",
+      label = "Left slope",
+      min = -4.0,
+      max = 4.0,
+      step = 0.5,
+      value = 1
+    ),
+    sliderInput(
+      "beta_2",
+      label = "Right slope",
+      min = -4.0,
+      max = 4.0,
+      step = 0.5,
+      value = 1
+    ),
+    sliderInput(
+      "split",
+      label = "Split",
+      min = 0,
+      max = 10,
+      step = 0.1,
+      value = 5
+    )
+  ),
+  layout_columns(
+    fill = FALSE,
+    col_widths = breakpoints(xs = c(-2, 8, -2)),
+    as_fill_carrier(plotOutput("plots"))
+  )
+)
+
+server <- function(input, output) {
+  theme_set(theme_bw())
+  output$plots <-
+    renderPlot({
+      dat <- tibble(x = seq(0, 10, by = 0.05))
+
+      h_right <- function(x, a) ifelse(x > a, x - a, 0)
+      h_left <- function(x, a) ifelse(x < a, a - x, 0)
+
+      split <- input$split
+      beta_0 <- 0
+      beta_1 <- input$beta_1
+      beta_2 <- input$beta_2
+
+      feat <-
+        dat |>
+        mutate(
+          left = h_left(x, split),
+          right = h_right(x, split),
+          pred = beta_0 + beta_1 * left + beta_2 * right
+        )
+
+      p <-
+        feat |>
+        pivot_longer(
+          cols = c(left, right, pred),
+          names_to = "side",
+          values_to = "value"
+        ) |>
+        mutate(
+          group = case_when(
+            side == "left" ~ "Left Hinge: h(x - a)",
+            side == "right" ~ "Right Hinge: h(a - x)",
+            TRUE ~ "Regression Equation"
+          ),
+          group = factor(
+            group,
+            levels = c("Left Hinge: h(x - a)", "Right Hinge: h(a - x)", "Regression Equation")
+          )
+        ) |>
+        ggplot(aes(x, value)) +
+        geom_line() +
+        geom_vline(xintercept = split, lty = 3) +
+        facet_wrap(~group, ncol = 1, scale = "free_y") +
+        labs(x = "Original Predictor", y = "Feature Value") 
+
+      print(p)
+    }, res = 100)
+}
+
+app <- shinyApp(ui, server)
+
+app
+```
+
+:::
+
+An example of how MARS partitions the predictor space into two distinct regions, each with its own regression line that connects at the split point. For the bottom panel, we assume an intercept of $\beta_0 = 0$ for @fig-fda-hinge.
+
+:::
+
+As seen in the figure, the hinge feature $h(x − a)$ isolates the effect of the predictor to values greater than $a$. Likewise, its companion feature $h(a − x)$ restricts the effect of the predictor only when $x < a$. If $x$ is the first predictor selected by MARS, these functions create a flexible segmented regression:
+
+$$
+y_i = \beta_0 + \beta_1 h(x_{i1} - a) + \beta_2 h(a - x_{i1}) + \epsilon_i
+$$
+
+which is estimated using ordinary linear regression. The figure illustrates the impact of different values of $\beta_1$ and $\beta_2$.
+
+The "growing" phase of MARS creates new pairs of features by evaluating all prospective pairs, retaining the pair that most improves model fit, and repeating until a user-specified maximum number of terms is reached.
+
+During the training process, MARS may split the same predictor multiple times when the predictor-response relationship exhibits substantial nonlinearity. For categorical predictors with $C$ levels, MARS automatically generates $C$ binary indicators that can then be split. The algorithm can also include a predictor in its original form (without hinge functions) if that representation best improves the model at a given iteration. The maximum number of model terms is an important tuning parameter that controls model complexity.
+
+Thus far, we have described MARS when it is constrained to produce an _additive_model (i.e., where each feature depends on a single predictor).  MARS can also generate interaction terms. After selecting an initial pair of hinge functions on one predictor, the algorithm conducts a secondary search over all other predictors (and their candidate split points) to find the combination that most improves the model. This produces four new features, each representing a distinct two-dimensional region of the predictor space. The degree of interaction (typically one or two) is a tuning parameter; higher-order interactions are possible but computationally prohibitive.
+
+Following the growing phase, MARS performs a backward pass that sequentially removes terms using _generalized cross-validation_ (GCV), an efficient approximation to leave-one-out cross-validation that is available when parameters are estimated by ordinary least squares [@golub1979generalized]. GCV quantifies the increase in prediction error when a given term is removed. During pruning, one or both members of a hinge pair may be removed. The final model consists of the retained features, their estimated coefficients, and the $\Phi$ matrix, which together define the prediction function.
+
+FDA-MARS models can produce class boundaries that are segmented or trapezoidal. For example, the "Medium Complexity" and "High Complexity" panels in @fig-cls-boundaries were generated using FDA-MARS, with interactions and differing numbers of retained features.
+
+Regarding preprocessing, MARS internally converts categorical predictors to binary indicators, so this transformation should not prior to model fitting. Since MARS estimates feature coefficients using ordinary least squares, standard preprocessing techniques for linear models apply. For instance, transforming predictors to improve symmetry may enhance performance. Missing values must also be imputed prior to modeling.
+
+MARS performs automatic feature selection: if a predictor is never used in a basis function or if all terms containing that predictor are removed during pruning, the final model is independent of that predictor. This property extends to FDA-MARS. As illustrated in @fig-irrelevant-predictors, irrelevant predictors can be included during training without adverse effects, eliminating the need for a separate feature selection step.  However, including irrelevant features will increase computation time.  This may or may not have a practical impact, depending on the data set size and number of irrelevant features.
+
+For using MARS with FDA with our forestation data, we initially generated a total of 200 features (apart from the intercept) during the growing phase. To tune the model, we considered additive and interaction models as well as using forward and backward removal strategies for the pruning phase. The number of retained terms was optimized to be between 2 and 50 final model terms. 
+
+```{r}
+#| label: forested-fda
+#| include: false
+#| cache: true
+fda_spec <- 
+  discrim_flexible(num_terms = tune(), prod_degree = tune(), prune_method = tune()) |> 
+  set_engine("earth", nk = 201)
+
+fda_wflow <- workflow(class ~ .,  fda_spec)
+
+fda_param <- 
+  fda_wflow |> 
+  extract_parameter_set_dials() |> 
+  update(num_terms = num_terms(c(2, 100)))
+
+shears <- c("backward", "forward")
+
+set.seed(872)
+forest_fda_res <-
+  fda_wflow |>
+  tune_grid(
+    resamples = forested_rs,
+    grid = crossing(num_terms = 2:50, prod_degree= 1:2, prune_method = shears),
+    param_info = fda_param,
+    metrics = cls_mtr,
+    control = control_grid(
+      save_pred = TRUE,
+      save_workflow = TRUE,
+      parallel_over = "everything"
+    )
+  )
+```
+
+```{r}
+#| label: fda-details
+#| include: false
+forest_fda_best <- tibble(num_terms = 30, prune_method = "forward", prod_degree = 2)
+
+fda_fit <-
+  fda_wflow |>
+  finalize_workflow(forest_fda_best) |>
+  fit(forested_train)
+
+forest_fda_mtr <-
+  forest_fda_res |> 
+  collect_metrics(summarize = FALSE) |> 
+  mutate(wflow_id = "FDA/MARS") |> 
+  relocate(wflow_id)
+
+forest_fda_best_mtr <- 
+  forest_fda_res |> 
+  collect_metrics() |> 
+  inner_join(forest_fda_best, by = join_by(num_terms, prod_degree, prune_method))
+
+forest_fda_pred <-
+  forest_fda_res |> 
+  collect_predictions(parameters = forest_fda_best) |> 
+  mutate(wflow_id = "FDA/MARS") |> 
+  relocate(wflow_id)
+```
+
+```{r}
+#| label: fda-terms
+#| include: false
+
+mars_fit <- 
+  fda_fit |>
+  extract_fit_engine() |>
+  pluck("fit")
+
+name_sub <- function(x) {
+  x <- ifelse(grepl("county", x), "county", x)
+  mtch <- name_list %in% x
+  no_mtch <- !(x %in% name_list)
+  text_nms <- names(name_list)[mtch]
+  res <- c(text_nms, x[no_mtch])
+  if (length(x) > 1) {
+    res <- paste(sort(c(text_nms, x[no_mtch])), collapse = ", ")
+    res <- paste0("{", res, "}")
+  } 
+  res
+}
+
+fda_coefs <- 
+  mars_fit |> 
+  stats::coef() |> 
+  as_tibble(rownames = "term") |> 
+  mutate(
+    pred_chr = map(term, ~ sort(all.vars(as.formula(paste("~", .x))))),
+    text = map_chr(pred_chr, name_sub),
+    num_var = map_int(pred_chr, length)
+  )
+
+counts <- 
+  fda_coefs |> 
+  filter(term != "(Intercept)") |>
+  count(text, num_var) |> 
+  mutate(nums = ifelse(n > 1, paste0(n, " times"), "1 time")) |> 
+  arrange(num_var, desc(n), text) |> 
+  dplyr::select(text, nums)
+
+fda_imp <-
+  mars_fit |>
+  earth::evimp() |>
+  unclass() |>
+  as_tibble(rownames = "variable") |>
+  mutate(
+    variable = ifelse(
+      grepl("county", variable),
+      gsub("county", "county: ", variable),
+      variable
+    )
+  ) |> 
+  full_join(name_key, by = "variable")
+
+# some are missing from training set
+missing_mars_cols <- 
+  tibble::as_tibble_col(names(forested_train)[-1], column_name = "variable") |> 
+  anti_join(fda_imp |> filter(!grepl("county", variable)), by = "variable") |> 
+  filter(variable != "county")
+
+fda_imp <- 
+  fda_imp |> 
+  bind_rows(missing_mars_cols) |> 
+  mutate(
+    text = if_else(is.na(text), variable, text),
+    gcv = ifelse(is.na(gcv), 0.0, gcv)
+  )
+
+excluded <- sort(fda_imp$text[is.na(fda_imp$used)])
+exluded_text <- cli::format_inline("{excluded}")
+
+for (i in seq_along(name_list)) {
+  col_nm <- name_list[[i]]
+  new_nm <- names(name_list)[i]
+  fda_coefs$term <- gsub(col_nm, new_nm, fda_coefs$term)
+}
+
+fda_coefs$term <- gsub("county", "county: ", fda_coefs$term)
+fda_coefs$term <- gsub("-", " - ", fda_coefs$term)
+fda_coefs$term <- gsub("*", " x ", fda_coefs$term, fixed = TRUE)
+
+fda_coefs <- dplyr::rename(fda_coefs, `Model Term` = term)
+
+num_int <- length(grep(" x ", fda_coefs$`Model Term`))
+num_main <- nrow(fda_coefs) - 1 - num_int
+num_ind <- length(grep("county", fda_coefs$`Model Term`))
+```
+
+We can see how this worked out in @fig-fda-tune. Performance leveled off around 25-35 terms for each pruning method, with forward selection showing a tiny advantage for these data. Models with interaction effects were uniformly more successful than additive models. An interaction model using forward selection and 30 terms appears to be a reasonable choice. This configuration had an estimated Brier score of `r round(forest_fda_best_mtr$mean[forest_fda_best_mtr$.metric == "brier_class"], 3)` and an area under the ROC curve of `r round(forest_fda_best_mtr$mean[forest_fda_best_mtr$.metric == "roc_auc"], 3)`.
+
+```{r}
+#| label: fig-fda-tune
+#| echo: false
+#| warning: false
+#| message: false
+#| out-width: 90%
+#| fig-width: 8
+#| fig-height: 4
+#| fig-cap: FDA-MDA tuning results for the forestation data.  
+forest_fda_res |> 
+  collect_metrics() |> 
+  filter(.metric == "brier_class") |> 
+  mutate(
+    `Model Type` = if_else(prod_degree == 1, "Additive", "Interactions"),
+    prune_method = tools::toTitleCase(paste(prune_method, "Selection Pruning"))
+  ) |> 
+  ggplot(aes(num_terms, mean, col = `Model Type`)) + 
+  geom_point() + 
+  geom_line() + 
+  facet_wrap(~ prune_method) + 
+  labs(x = "# Model Terms", y = "Brier Score")+
+  theme(legend.position = "top")
+```
+
+Once the FDA-MARS model was fit to the training set, the results was `r nrow(fda_coefs)` total coefficients. The implementation of MARS checks several stopping conditions for the growing phase based on the coefficient of determination (a.k.a. R<sup>2</sup>), including: 
+
+- Reached a R<sup>2</sup> of 0.999 or more.
+- No new term increases R<sup>2</sup>
+- Adding a term changes R<sup>2</sup> by less than 0.001.
+
+The last condition triggered the training procedure to stop at `r nrow(fda_coefs)` model terms instead of the `r forest_fda_best$num_terms`  that were requested. Of these terms, `r num_main` used a single predictor and `r num_int` were interaction terms. The categorical predictor (county) was used `r num_ind` times in both main effects and interactions. To give the reader a sense of what the linear regression model looks like, @tbl-fda-coefs shows the set of coefficients, the model terms, and split points.
+
+::::::: columns
+::: {.column width="10%"}
+:::
+
+:::: {.column width="80%"}
+::: {#tbl-fda-coefs}
+
+```{r}
+#| label: fda-coefs
+#| echo: false
+
+fda_coefs |>
+  # dplyr::select(`Model Term`, Coefficient) |>
+  dplyr::select(1:2) |>
+  gt() |>
+  fmt_number(n_sigfig = 3)
+```
+
+Model terms contained used the final FDA-MARS fit from the training set. There were `r nrow(fda_coefs)` total coefficients, `r num_main` of which used a single predictor, and `r num_int` were interaction terms. The categorical predictor (county) was used in `r num_ind` terms. 
+
+:::
+::::
+
+::: {.column width="10%"}
+:::
+:::::::
+
+To better understand what is driving the model, MARS has an _internal_ variable importance metric.  The method estimates variable importance based on the improvement in model fit as terms are added. During the forward pass, MARS quantifies the reduction in GCV associated with each new basis function and attributes this improvement to the corresponding predictor(s). These GCV reductions are summed across all terms involving each predictor and scaled to range from 0 to 100, where 0 indicates the predictor does not appear in the final model. For our model, @fig-forested-fda-imp displays the results. Annual precipitation and annual maximum temperature were the most influential predictors, each receiving an importance score of 100. Terrain roughness, annual mean temperature, and longitude also contributed substantially to the classifier. There were `r length(excluded)` predictors that were not used at all: `r exluded_text`.
+
+```{r}
+#| label: fig-forested-fda-imp
+#| echo: false
+#| out-width: 80%
+#| fig-width: 6.5
+#| fig-height: 3
+#| fig-cap: MARS feature importance for the final forested model.
+
+fda_imp |> 
+  ggplot(aes(gcv, reorder(text, gcv))) + 
+  geom_point() +
+  labs(y = NULL, x = "MARS Importance (GCV)")
+```
+
+FDA via MARS occupies a middle ground between fully interpretable models and black-box methods. While it may not achieve optimal predictive performance, it often approaches it while still being interpretable through visualization, particularly when the model is additive.
+
+For example, suppose we chose an additive model based on the tuning results in @fig-fda-tune. In an additive model, the functional form relating each predictor to the outcome is independent of the other predictors. Although the values of other predictors shift the range of predicted probabilities, the shape of each predictor's effect remains constant. This property enables us to construct partial dependence plots showing how predicted class probabilities vary with each predictor while holding others fixed. @fig-fda-profiles illustrates such profiles from an additive fit, enabling an interpretation of the model's behavior.
+
+```{r}
+#| label: fig-fda-profiles
+#| echo: false
+#| warning: false
+#| message: false
+#| out-width: 90%
+#| fig-width: 8
+#| fig-height: 5
+#| fig-cap: Profile plots showing how each predictor related to the probability of forestation when an additive FDA-MDA is used. The y-axis has no numbers since the probabilities are relative. 
+fda_additive_spec <- 
+  discrim_flexible(num_terms = 30, prod_degree = 1, prune_method = "forward") |> 
+  set_engine("earth", nk = 201, keepxy = TRUE)
+
+fda_additive_fit <- 
+  workflow(class ~ .,  fda_additive_spec) |> 
+  fit(forested_train)
+
+mars_additive_fit <- 
+  fda_additive_fit |> 
+  extract_fit_engine() |> 
+  pluck("fit")
+
+additive_terms <- rownames(earth::evimp(mars_additive_fit))
+additive_num_terms <- additive_terms[!grepl("county", additive_terms)]
+df_num_terms <- forested_train |> dplyr::select(all_of(additive_num_terms))
+df_medians <- 
+  forested_train |> 
+  dplyr::select(-class, -county) |> 
+  map_dbl(median) |> 
+  tibble::as_tibble_row() |> 
+  mutate(county = forested_train$county[1])
+
+additive_preds <- NULL
+for (i in seq_along(additive_num_terms)) {
+  nm <- additive_num_terms[i]
+  rng <- range(forested_train[[nm]])
+  grid <- 
+    tibble(x = seq(rng[1], rng[2], length.out = 500)) |> 
+    setNames(nm) |> 
+    vctrs::vec_cbind(df_medians |> dplyr::select(-all_of(nm)))
+  
+  prd <- 
+    augment(fda_additive_fit, grid, type = "prob") |> 
+    dplyr::select(all_of(nm), .pred_Yes) |> 
+    setNames(c("value", "probability")) |> 
+    mutate(variable = nm)
+  
+  additive_preds <- bind_rows(additive_preds, prd)
+}
+
+additive_preds <- 
+  additive_preds |> 
+  full_join(name_key, by = "variable") |> 
+  mutate(Predictor = if_else(is.na(text), variable, text)) |> 
+  filter(!is.na(probability))
+
+additive_preds |> 
+  ggplot(aes(value, probability)) + 
+  geom_line() + 
+  facet_wrap(~ Predictor, scale = "free") + 
+  theme() +
+  theme(axis.text.y = element_blank()) +
+  labs(y = "Relative Probability", x = NULL)
+```
+
+For example, we can say that: 
+
+- The probability of forestation has notable jump after the year 2020.
+- The probability increases sharply when annual precipitation exceeds approximately 500 mm and remains elevated thereafter (holding other predictors constant).
+- The downward spike in the longitude corresponds to the unforested region east of Seattle.
+
+and so on. These patterns illustrate how individual predictors influence the classification boundary in an interpretable manner.
 
 `r r_comp("cls-nonlinear.html#sec-fda")`
 
@@ -1055,6 +1829,7 @@ However, if we have a small dataset, a low-to-medium complexity architecture, or
 ```{r}
 #| label: load-forested-mlp
 #| incude: false
+# Code in R/forested_mlp.R
 load("../RData/forested_mlp.RData")
 
 brier_param_cor <- 
@@ -1237,6 +2012,90 @@ top_five |>
 Digging in further, @tbl-mlp-top-five displays the top five candidates from a pool of 300. They are a mixture of one- and two-layer networks, but note that we have to go to the third decimal place to distinguish their Brier scores. Constant learning rates did well as long as their rates were fairly low and batch sizes were fairly small. The number of parameters varied as well; increasing the model’s complexity did not appear to help for this dataset. In fact, the rank correlation between the Brier score and the number of parameters was `r brier_param_cor`, implying that there is little evidence that adding more layers and/or units to the MLP improves the model.
 
 The Brier scores are low and the areas under the ROC curves are all at least 0.94, indicating that the predictions effectively separate the classes and that the probability estimates are accurate. Across the candidates, the rank correlation between the Brier score and the ROC AUC was `r mtr_cor`; in this case, their optimization results are well-aligned. 
+
+```{r}
+#| label: mlp-mtr-diffs
+#| inlcude: false
+#| cache: true
+
+mtr_differences <- function(split, ref_model) {
+  mtr_vals <-
+    split |>
+    rsample::analysis() |>
+    pivot_longer(cols = c(-class), names_to = "Model", values_to = "value") |>
+    group_by(Model) |>
+    cls_mtr(class, value) |>
+    dplyr::select(-.estimator) |>
+    pivot_wider(
+      id_cols = c(.metric),
+      names_from = Model,
+      values_from = .estimate
+    ) |>
+    full_join(metrics_info(cls_mtr), by = ".metric") |>
+    dplyr::select(-type)
+  models <- colnames(mtr_vals)
+  models <- setdiff(models, c(".metric", "direction", ref_model))
+  for (i in models) {
+    diffs <- mtr_vals[[ref_model]] - mtr_vals[[i]]
+    new_nm <- paste0("loss_", i)
+    mtr_vals[[new_nm]] <-
+      if_else(mtr_vals$direction == "minimize", -diffs, diffs)
+  }
+  if (length(models) > 1) {
+    mtr_vals <-
+      mtr_vals |>
+      dplyr::select(.metric, starts_with("loss_")) |>
+      pivot_longer(
+        cols = c(starts_with("loss_")),
+        names_to = "term",
+        values_to = "estimate"
+      ) |>
+      mutate(term = gsub("loss_", "", term))
+  } else {
+    mtr_vals <-
+      mtr_vals |>
+      dplyr::select(.metric, all_of(new_nm)) |>
+      set_names(c(".metric", "estimate")) |>
+      mutate(term = i)
+  }
+  mtr_vals
+}
+
+# ------------------------------------------------------------------------------
+
+nonlin_pred <-
+  mlp_best_res |>
+  collect_predictions(parameters = mlp_best_config) |>
+  dplyr::select(.row, mlp = .pred_Yes) |>
+  full_join(
+    forest_fda_pred |> dplyr::select(.row, class, fda = .pred_Yes),
+    by = ".row"
+  ) |>
+  dplyr::select(-.row)
+
+set.seed(789)
+mlp_mtr_bt <-
+  nonlin_pred |>
+  bootstraps(times = 2000) |>
+  mutate(stats = map(splits, mtr_differences, ref_model = "mlp"))
+
+mlp_mtr_diffs <- 
+  mlp_mtr_bt |>
+  int_pctl(stats, alpha = 0.1)
+
+mlp_mtr <- 
+  mlp_best_res |> 
+  collect_metrics() |> 
+  inner_join(mlp_best_config |> dplyr::select(.config), by = ".config")
+
+mlp_brier <- mlp_mtr$mean[mlp_mtr$.metric == "brier_class"]
+fda_brier <- forest_fda_best_mtr$mean[forest_fda_best_mtr$.metric == "brier_class"]
+
+mlp_roc <- mlp_mtr$mean[mlp_mtr$.metric == "roc_auc"]
+fda_roc <- forest_fda_best_mtr$mean[forest_fda_best_mtr$.metric == "roc_auc"]
+```
+
+How do these results compare to the previous FDA model? The Brier scores are very close: `r signif(mlp_brier, 3)` for the neural network and `r signif(fda_brier, 3)` for FDA. The difference is very small, and a 90% confidence interval for the difference is (`r signif(mlp_mtr_diffs$.lower[mlp_mtr_diffs$.metric == "brier_class"], 3)`, `r signif(mlp_mtr_diffs$.upper[mlp_mtr_diffs$.metric == "brier_class"], 3)`), suggesting that performance for each model is within the experimental noise of the data. The difference in the area under the ROC curve is `r signif(mlp_roc - fda_roc, 3)` with interval (`r signif(mlp_mtr_diffs$.lower[mlp_mtr_diffs$.metric == "roc_auc"], 3)`, `r format(signif(mlp_mtr_diffs$.upper[mlp_mtr_diffs$.metric == "roc_auc"], 3), scientific = FALSE)`), leading us to a similar conclusion. Given that the FDA model uses fewer predictors and far fewer parameters, we might favor that model over our neural network. 
 
 `r r_comp("cls-nonlinear.html#sec-cls-nnet")`
 
