@@ -1246,7 +1246,8 @@ ui <- page_fillable(
           "SMOTE",
           "ROSE",
           "Near Miss",
-          "Adaptive Synthetic Algorithm"
+          "Adaptive Synthetic Algorithm",
+          "Tomek"
         ),
         selected = c("Downsampled")
       )
@@ -1410,7 +1411,7 @@ Can also be used inside of SGB and RF
 
 #### Upsamping {#sec-upsampling}
 
-Upsampling will create random replicates of the majority class(es) so that all classes have the same frequency in the training set. This increases the training set, sometimes to orders of magnitude larger, so training time can become excessive for some models. There is also the issue of having a potentially large number of replicates for each non-majority class value in the original training set. For example, for models such as random forest that use bootstrap samples to fit models, we could have even more replicates of these data points. Another complication occurs when a model, such as _K_-nearest neighbors, is used; all of the nearest neighbors might be the same data point. 
+Upsampling will create random replicates of the majority class(es) so that all classes have the same frequency in the training set. This increases the training set, sometimes to orders of magnitude larger, so training time can become excessive for some models. There is also the issue of having a potentially large number of replicates for each minority^[If there are more than two classes, you can substitute "non-majority" class here.] class value in the original training set. For example, for models such as random forest that use bootstrap samples to fit models, we could have even more replicates of these data points. Another complication occurs when a model, such as _K_-nearest neighbors, is used; all of the nearest neighbors might be the same data point. 
 
 Upsampling is probably the least used of these techniques do to these issues. 
 
@@ -1631,6 +1632,376 @@ note overfitting in @fig-myopia-sampling
 generalizations
 
 #### ROSE {#sec-rose}
+
+#### Neighbor-Based Sampling {#sec-knn-sampling}
+
+```{r}
+#| label: fig-near-miss
+#| echo: false
+#| out-width: 50%
+#| fig-width: 5
+#| fig-height: 5
+#| warning: false
+#| fig-cap: "Data to demonstrate Near Miss and Tomek Link methods."
+
+num_sim_min <- 4
+num_sim_maj <- 6
+min_labs <- (num_sim_maj + 1):(num_sim_min + num_sim_maj)
+min_labs <- paste(min_labs)
+
+set.seed(57)
+min_sim <-
+  MASS::mvrnorm(
+    num_sim_min,
+    mu = c(0, 0),
+    Sigma = matrix(c(1, .6, .6, 1), nrow = 2)
+  ) |>
+  as_tibble() |>
+  mutate(class = "minority")
+
+maj_sim <-
+  MASS::mvrnorm(
+    num_sim_maj,
+    mu = c(-1, 1 / 2),
+    Sigma = matrix(c(1, .9, .9, 1), nrow = 2)
+  ) |>
+  as_tibble() |>
+  mutate(class = "majority")
+
+min_maj <-
+  rbind(min_sim, maj_sim) |>
+  mutate(
+    V1 = as.numeric(scale(V1)),
+    V2 = as.numeric(scale(V2))
+  ) |>
+  arrange(class, V1) |>
+  mutate(id = factor(row_number(), levels = 1:(num_sim_min + num_sim_maj)))
+
+min_maj |>
+  ggplot(aes(V1, V2, col = class)) +
+  geom_point(cex = 9, pch = 1) +
+  geom_text(aes(label = id), cex = 6, show.legend = FALSE) +
+  lims(
+    x = extendrange(min_maj$V1),
+    y = extendrange(min_maj$V2)
+  ) + 
+  labs(x = "Predictor A", y = "Predictor B") +
+  coord_fixed()
+```
+
+```{r}
+#| label: near-miss-calcs
+#| include: false
+
+min_sim <- min_maj |> filter(class == "minority")
+maj_sim <- min_maj |> filter(class == "majority")
+
+distances <-
+  proxyC::dist(
+    x = min_sim |> select(-class, -id) |> as.matrix(),
+    y = maj_sim |> select(-class, -id) |> as.matrix()
+  )
+# minority rows x majority rows
+dist_mat <- as.matrix(distances, 1)
+colnames(dist_mat) <- 1:nrow(maj_sim)
+rownames(dist_mat) <- (1:nrow(min_sim)) + nrow(maj_sim)
+
+dist_df <-
+  dist_mat |>
+  as_tibble(rownames = "Minority")
+
+dist_and_ind <- function(x, k = 5, ...) {
+  ordering <- order(x, ...)
+  inds <- seq_along(x)[order(x, ...)]
+  closest <- inds[1:k]
+  mn <- mean(x[closest])
+  list(index = closest, mean = mn, labels = min_labs[closest])
+}
+
+# ------------------------------------------------------------------------------
+
+
+nm1_info <- apply(distances, 2, dist_and_ind, k = 2)
+nm1_dists <- map_dbl(nm1_info, ~ .x$mean)
+names(nm1_dists) <- colnames(dist_mat)
+nm1_sel <- names(sort(nm1_dists))
+nm1_sel <- sort(nm1_sel[1:min(num_sim_min, length(nm1_sel))])
+nm1_sel <- cli::format_inline("{paste0('#', nm1_sel)}")
+
+nm1_df <-
+  bind_rows(
+    dist_df,
+    tibble::as_tibble_row(nm1_dists) |>
+      mutate(Minority = "2NN Mean")
+  )
+
+nm1_gt <-
+  nm1_df |>
+  gt() |>
+  fmt_number(
+    columns = -Minority,
+    decimals = 2,
+    drop_trailing_zeros = FALSE
+  )
+
+for (i in seq_along(nm1_info)) {
+  nm1_gt <-
+    nm1_gt |>
+    tab_style(
+      style = list(
+        cell_fill(color = "#B0E0E6")
+      ),
+      locations = cells_body(
+        columns = i + 1,
+        rows = nm1_info[[i]]$index
+      )
+    )
+}
+
+# ------------------------------------------------------------------------------
+
+nm2_info <- apply(distances, 2, dist_and_ind, k = 2, decreasing = TRUE)
+nm2_dists <- map_dbl(nm2_info, ~ .x$mean)
+names(nm2_dists) <- colnames(dist_mat)
+nm2_sel <- names(sort(nm2_dists))
+nm2_sel <- sort(nm2_sel[1:min(num_sim_min, length(nm2_sel))])
+nm2_sel <- cli::format_inline("{paste0('#', nm2_sel)}")
+
+nm2_df <-
+  bind_rows(
+    dist_df,
+    tibble::as_tibble_row(nm2_dists) |>
+      mutate(Minority = "2FN Mean")
+  )
+
+nm2_gt <-
+  nm2_df |>
+  gt() |>
+  fmt_number(
+    columns = -Minority,
+    decimals = 2,
+    drop_trailing_zeros = FALSE
+  )
+
+for (i in seq_along(nm2_info)) {
+  nm2_gt <-
+    nm2_gt |>
+    tab_style(
+      style = list(
+        cell_fill(color = "#B0E0E6")
+      ),
+      locations = cells_body(
+        columns = i + 1,
+        rows = nm2_info[[i]]$index
+      )
+    )
+}
+
+# ------------------------------------------------------------------------------
+
+reverse_info <- apply(distances, 1, dist_and_ind, k = 2)
+nm3_keep <- map(reverse_info, ~ .x$index) |> unlist() |> sort() |> unique()
+nm3_distances <- distances[, nm3_keep]
+
+nm3_info <- apply(nm3_distances, 2, dist_and_ind, k = 2)
+nm3_dists <- map_dbl(nm3_info, ~ .x$mean)
+names(nm3_dists) <- colnames(dist_mat)[nm3_keep]
+nm3_sel <- names(sort(nm3_dists, decreasing = TRUE))
+nm3_sel <- sort(nm3_sel[1:min(num_sim_min, length(nm3_sel))])
+nm3_sel <- cli::format_inline("{paste0('#', nm3_sel)}")
+
+nm3_df <-
+  bind_rows(
+    dist_df |> select(Minority, all_of(paste(nm3_keep))),
+    tibble::as_tibble_row(nm3_dists) |>
+      mutate(Minority = "2NN Mean")
+  )
+
+nm3_gt <-
+  nm3_df |>
+  gt() |>
+  fmt_number(
+    columns = -Minority,
+    decimals = 2,
+    drop_trailing_zeros = FALSE
+  )
+
+for (i in seq_along(nm3_info)) {
+  nm3_gt <-
+    nm3_gt |>
+    tab_style(
+      style = list(
+        cell_fill(color = "#B0E0E6")
+      ),
+      locations = cells_body(
+        columns = i + 1,
+        rows = nm3_info[[i]]$index
+      )
+    )
+}
+```
+
+NearMiss-1 retains the majority-class samples with the smallest average distances to their _K_ nearest neighbors. For example, using _K_ = 2, this table shows the distances between the minority and majority class samples. For the first majority-class observation, its closest minority-class samples are #7 and #8 (each column's two nearest neighbors are highlighted with a background accent color). The average distance between its two neighbors is `r round(nm1_dists[1], 2)`. 
+
+:::: {.columns}
+
+::: {.column width="8%"}
+:::
+
+::: {.column width="84%"}
+
+```{r}
+#| label: near-miss-1
+#| echo: false
+nm1_gt |> 
+  cols_width(
+    Minority ~ px(90),
+    everything() ~ px(80)
+  ) |> 
+  tab_spanner(label = "Majority Point Labels", columns = c(-Minority)) |> 
+  tab_style(
+    style = cell_borders(
+      sides = "bottom",
+      col = "#D3D3D3",
+      weight = px(2)
+    ),
+    locations = cells_body(rows = nrow(nm1_df) - 1)
+  ) |> 
+  tab_options(table.width = pct(80))
+```
+
+:::
+
+::: {.column width="8%"}
+:::
+
+:::: 
+
+To balance the data, NearMiss-1 would retain four samples: `r nm1_sel`.
+
+The algorithm for the second NearMiss variant focuses on using the _K_ farthest neighbors, i.e., those with the largest distance between points. However, the instructions from REFERENCE are somewhat ambiguous:
+
+> The second method (NearMiss-2) selects [majority] examples that are close to _all_ [minority] examples. In this method, examples are selected based on their average distances to the three farthest [minority] examples.  
+
+
+It is unclear whether the largest or the smallest average distance is used to determine which majority class data to keep. We'll use the minimum average distance here. 
+
+This table highlights the two furthest neighbors (i.e., "2FN") and their average distances. Note that the neighbors are the opposite of those in the previous table.
+
+:::: {.columns}
+
+::: {.column width="8%"}
+:::
+
+::: {.column width="84%"}
+
+```{r}
+#| label: near-miss-2
+#| echo: false
+nm2_gt |> 
+  cols_width(
+    Minority ~ px(90),
+    everything() ~ px(80)
+  ) |> 
+  tab_spanner(label = "Majority Point Labels", columns = c(-Minority)) |> 
+  tab_style(
+    style = cell_borders(
+      sides = "bottom",
+      col = "#D3D3D3",
+      weight = px(2)
+    ),
+    locations = cells_body(rows = nrow(nm1_df) - 1)
+  ) |> 
+  tab_options(table.width = pct(80))
+```
+
+:::
+
+::: {.column width="8%"}
+:::
+
+:::: 
+
+
+In this instance, we would retain samples `r nm2_sel`. 
+
+NearMiss-3 is a two-step process. First, the nearest _K_<sub>1</sub> nearest neighbors are found for each minority sample. Any majority-class samples that were not on the list of neighbors are excluded. After this, we determine the _K_<sub>2</sub> nearest neighbors of the majority class samples. Of these, the majority class observations with the _largest_ average distance are retained. 
+
+In our example, we'll use two neighbors for both calculations. In the first stage, the majority sample #3 is not a neighbor of any minority-class point, so it is discarded. 
+
+This table shows the reduced distance matrix and the average distances: 
+
+:::: {.columns}
+
+::: {.column width="8%"}
+:::
+
+::: {.column width="84%"}
+
+```{r}
+#| label: near-miss-3
+#| echo: false
+nm3_gt |> 
+  cols_width(
+    Minority ~ px(90),
+    everything() ~ px(80)
+  ) |> 
+  tab_spanner(label = "Majority Point Labels", columns = c(-Minority)) |> 
+  tab_style(
+    style = cell_borders(
+      sides = "bottom",
+      col = "#D3D3D3",
+      weight = px(2)
+    ),
+    locations = cells_body(rows = nrow(nm1_df) - 1)
+  ) |> 
+  tab_options(table.width = pct(80))
+```
+
+:::
+
+::: {.column width="8%"}
+:::
+
+:::: 
+
+NearMiss-3 selects `r nm3_sel`. 
+
+```{r}
+#| label: tomek-calcs
+#| include: false
+nn_mat_min <- nn_mat_maj <- dist_mat * 0
+tom_col_info <- apply(distances, 2, dist_and_ind, k = 1)
+tom_col_nn <- map_int(tom_col_info, ~ .x$ind)
+tom_row_info <- apply(distances, 1, dist_and_ind, k = 1)
+tom_row_nn <- map_int(tom_row_info, ~ .x$ind)
+
+min_ind <- 7:10
+for (i in seq_along(tom_col_nn)) {
+  tmp_row <- tom_col_nn[i]
+  nn_mat_maj[tmp_row, i] <- 1
+}
+
+for (j in seq_along(tom_row_info)) {
+  tmp_col <- tom_row_nn[j]
+  nn_mat_min[j, tmp_col] <- 1
+}
+
+# nn_mat_min
+keep_min <- apply(nn_mat_min, 2, function(x) all(x == 0)) |> which() |> names()
+
+# nn_mat_maj
+keep_maj <- apply(nn_mat_maj, 1, function(x) all(x == 0)) |> which() |> names()
+
+tomek_sel <- sort(c(keep_maj, keep_min))
+tomek_sel <- cli::format_inline("{paste0('#', tomek_sel)}")
+```
+
+Tomek Links is a filtering method that is the opposite of NearMiss. In this case, we will _remove_ data points that are close to some theoretical class boundary. The goal is to create a sort of gap between the predictor distributions for each class. For each class, we determine the (single) nearest neighbor from the opposite class. Two samples form a Tomek Link when they are each other's nearest neighbors and belong to opposing classes. We would remove both data points that form such a link. 
+
+An easy example from @fig-near-miss is the closeness of samples #4 and #9. They are extremely close to one another, yet in different classes. A counter-example is sample #3; its neighbor is #9, but the converse is not true since #9 and #4 are neighbors too. 
+
+For this data set, only samples `r tomek_sel` are retained. 
 
 #### Boarderline Methods {#sec-borderline}
 
