@@ -15,6 +15,8 @@ source("../R/_common.R")
 
 # ------------------------------------------------------------------------------
 
+library(rpart)
+library(partykit)
 library(tidymodels)
 library(mirai)
 library(gt)
@@ -91,17 +93,43 @@ myopia_rs <- vfold_cv(myopia_train, repeats = 5)
 
 # ------------------------------------------------------------------------------
 
+myopia_formatted <- 
+  myopia_train |> 
+  mutate(
+    father_myopic = factor(ifelse(father_myopic == 1, "myopic", "normal")),
+    mother_myopic = factor(ifelse(mother_myopic == 1, "myopic", "normal")),
+    sex = factor(ifelse(female == 1, "Female", "Male"))
+    ) |> 
+  rename(
+    `paternal genetics` = father_myopic,
+    `maternal genetics` = mother_myopic
+  ) |> 
+  rename_with(~ paste0(.x, ")"), contains("hours")) |> 
+  rename_with(~ gsub("hours_", "hours (", .x), contains("hours"))|> 
+  rename_with(~ gsub("_", " ", .x), everything()) |> 
+  select(-female)
+
+# ------------------------------------------------------------------------------
+
 num_pred <- ncol(myopia_train) - 1
 max_num_terms <- num_pred + choose(num_pred, 2)
+
+# ------------------------------------------------------------------------------
+
+post_prob <- function(prior, estimate) {
+  (estimate * prior) / ((estimate * prior) + ((1 - estimate) * (1 - prior)))
+}
+
+best_prob <- function(x, ...) {
+  abs(post_prob(estimate = x, ...) - 0.5)
+}
 ```
 
-Examples: churn, click through, diseases (trip test, Parkinson’s), blood specimen mixups
+When the outcome classes have very different rates of occurrence, we call this a _class imbalance_. Recalling the Wordle data shown in @sec-cls-distributions, we saw that the rates of correct word identification on the first and second guesses were very low relative to the other class values. When this is an imbalance, there are often only two class levels given the somewhat arbitrary designations of "events" and "non-events." We'll focus on two class problems in this chapter, although most of the tools described here can handle data sets with three or more classes^[We'll use the terms "majority" and "minority" class here. For more than two classes, you could substitute "non-minority" for "majority."]. Imbalances can frequently occur. For example, the rate of hospital laboratory specimens is very low [@mitani2020highly], as are most rates of infectious diseases and violent crimes. 
 
-Focus on two class problems, but an issue for all classes
+This chapter will describe many modeling and statistical issues surrounding imbalances and how they can affect the interpretation of models and their estimates. Imbalances have been discussed at length in the literature and on social media. This chapter also tries to clear up many misconceptions of the "right way" to analyze such data. There is no global solution for modeling rate events, and our emphasis is on defining the purpose of models based on imbalanced data and choosing methods that are well-suited to that purpose. 
 
-Prior versus likelihood, posterior
-
-note on time slices to make events
+First, let's take a look at the main data set used in this chapter. 
 
 ## Example: Predicting Myopia {#sec-yyopia}
 
@@ -212,31 +240,37 @@ myopia_train |>
   theme(legend.position = "top")
 ```
 
-## Underlying Mathematical Issue {#sec-imbalance-math}
+## Underlying Mathematical Issues {#sec-imbalance-math}
 
-talk about specific literature on logistic models. 
+There are several aspects of class imbalance that make it one of the most challenging problems in machine learning. 
 
-We’ll use two predictors in the myopia data to visualize the effects of different techniques. In the upper-left panel of the lower diagonal of @fig-myopia-splom we see the spherical equivalent refraction and vitreous chamber depth predictor data from the training set, colored by the outcome class. A flexible discriminant analysis model using MARS basis functions was used to model these data. Interactions between hinge functions were allowed, and generalized cross-validation was used to automatically determine the optimal level of model complexity. The model was fit to the training set, and @fig-myopia-fda shows the class boundary, defined using the 50% probability cutoff. The events (in red) occupy the space to the left of the main data stream. The class boundary does its best to find the optimal partition of the data, but we can see that less than half of the training set events are not to the left of the boundary. 
+First, most performance metrics are not robust to imbalances. Recall that in @sec-cls-metrics, accuracy was used as a prime example. For a two-class outcome with an event rate of $\pi$, a model can automatically achieve an accuracy of $1 - \pi$ _without any predictors_, simply by predicting the majority class. This is the case for most metrics. The areas under the ROC and PR curves are notably effective in the presence of an imbalance [@sec-compare-roc-pr], as is the Kappa statistic. In other words, while still being accurate, it will not treat the minority class data with the importance that it has to the modeling project. 
+
+Second, as one would expect, classes with the most data are most likely to be predicted well. For example, if the minority class is associated with the event of interest, the confidence intervals for specificity will reflect greater certainty (i.e., narrower intervals) than those for sensitivity. Another consequence of one class having most of the training data is that the model may be drawn to patterns in the majority class. This is especially true for models that have high complexity (e.g., low bias). To demonstrate, @fig-myopia-cart shows a simple CART model fit to the myopia training data (using automated cost-complexity pruning). The first split captures a large majority of the training set since these are easily predicted to be non-myopic children. The remainder of the tree is splitting small amounts of non-myopic data to create pure terminal nodes. 
+```{r}
+#| label: fig-myopia-cart
+#| echo: false
+#| fig-width: 10
+#| fig-height: 5
+#| fig-cap: A CART fit to the myopia training set. Most of the training set data are covered by the initial split, which focuses on the majority class. 
+#| out-width: 90%
+rpart(class ~ ., data = myopia_formatted) |> 
+  as.party() |> 
+  plot()
+```
+
+
+The model is doing what it is intended to do; it does not know that we might be most interested in our minority class samples. The default objective function doesn't account for class frequencies, so it optimizes over the entire training set, giving the majority class the most leverage. 
+
+This also brings up a pattern that can occur when dealing with class imbalances that is somewhat counterintuitive: models that are _less_ complex tend to work better than highly complex models. In essence, the more models can adapt to the data, the more likely they are to overfit to the majority class. The decision tree shown above is a good example. Tree-based models employ a greedy optimization approach to train the model and can carve out small subspaces of predictors to make local predictions. It would be very difficult for a logistic regression to do the same, at least without enormously complex feature engineering. As a result, these simpler models can have sufficient predictive power to be useful, but not so much as to discern minute patterns in the data, thereby correctly predicting the few events and risking overfitting.  We'll see this pattern in the example data, which is admittedly small, but it has also repeated in much larger datasets with class imbalances. 
+
+Third, the event rate significantly affects our class probability estimates, even in non-Bayesian models. Recall from @sec-nonlinear-da that one of the prior distributions corresponds to the probability distribution of our outcome ($Pr[Y = k]$ in @eq-discrim). If our supervised model is represented by $Pr[\boldsymbol{x}|Y = k]$, its predicted probabilities are shown by the event rate to produce the posterior probability. In other words, if the minority class event rate is 5% and our model predicts that a sample estimates the probability of being an event as 80%, the overall (posterior) probability of being an event is about `r round(post_prob(0.05, 0.8) * 100, 0)`%. This raises the bar for the supervised model, requiring exquisite performance to overcome the prevalence. With this event rate, the model would have to produce a class probability estimate of `r round(optimize(best_prob, c(0.8, 1), prior = 0.05)$minimum * 100, 0)`% or more to produce a posterior probability of at least 50%. We'll discuss this idea in the next section as well as in @sec-prevalence-again.
+
+In future section, we’ll use two predictors in the myopia data to visualize the effects of different techniques. In the upper-left panel of the lower diagonal of @fig-myopia-splom we see the spherical equivalent refraction and vitreous chamber depth predictor data from the training set, colored by the outcome class. A flexible discriminant analysis model using MARS basis functions was used to model these data. Interactions between hinge functions were allowed, and generalized cross-validation was used to automatically determine the optimal level of model complexity. The model was fit to the training set, and @fig-myopia-fda shows the class boundary, defined using the 50% probability cutoff. The events (in red) occupy the space to the left of the main data stream. The class boundary does its best to find the optimal partition of the data, but we can see that less than half of the training set events are not to the left of the boundary. 
 
 ```{r}
 #| label: myopia-plain-fda
 #| include: false
-
-myopia_formatted <- 
-  myopia_train |> 
-  mutate(
-    father_myopic = factor(ifelse(father_myopic == 1, "myopic", "normal")),
-    mother_myopic = factor(ifelse(mother_myopic == 1, "myopic", "normal")),
-    sex = factor(ifelse(female == 1, "Female", "Male"))
-    ) |> 
-  rename(
-    `paternal genetics` = father_myopic,
-    `maternal genetics` = mother_myopic
-  ) |> 
-  rename_with(~ paste0(.x, ")"), contains("hours")) |> 
-  rename_with(~ gsub("hours_", "hours (", .x), contains("hours"))|> 
-  rename_with(~ gsub("_", " ", .x), everything()) |> 
-  select(-female)
 
 smol_grid <- 
   crossing(
@@ -286,22 +320,19 @@ myopia_smol_formatted |>
 A flexible discriminant fit to the myopia training set. Using the default probability cutoff of 50%, shown as the black contour, `r fda_plain_capture` of the `r sum(myopia_smol_formatted$class == "yes")` events are correctly predicted as events. 
 ::::
 
-Trees provide another example that demonstrates how models can overly focus on the majority class. Since most trees employ a greedy search, the first split is often one that captures the majority of the majority class. As the tree-growing process continues, the minority class becomes less likely to be predicted in the nodes, since $n_{min}$ limits will restrict fine-grained splits. Also, many pruning methods will remove nodes with higher uncertainty, which is often a function of sample size; smaller nodes are more likely to be pruned. When a standard CART model was fit to the data, the rules to each terminal node were:  
-
- 1. if spherical equivalent refraction $\ge 0.28$ then rate = 6% ($n$ = 382)
- 2. if spherical equivalent refraction $\in [0.23, 0.28)$ then rate = 60% ($n$ = 15) 
- 3. if spherical equivalent refraction $\in [-0.05, 0.23)$ then rate = 33% ($n$ = 46) 
- 4. if spherical equivalent refraction $\le  -0.05$ then rate = 74% ($n$ = 19)
- 
-Split 1 was the initial split, and we can see that it captures most of the non-myopic children. The second and third rules attempt to identify spaces where myopic children can be identified, but these two equations are likely the result of overfitting. Regardless, the splits demonstrate how the majority class can dominate the objective function, making the majority class data more likely to be correctly predicted.  
-
-This also brings up a pattern that can occur when dealing with class imbalances that is somewhat counterintuitive: models that are _less_ complex tend to work better than highly complex models. In essence, the more models can adapt to the data, the more likely they are to overfit to the majority class. The rule set shown above is a good example. Tree-based models employ a greedy optimization approach to train the model and can carve out small subspaces of predictors to make local predictions. It would be very difficult for a logistic regression to do the same, at least without enormously complex feature engineering. As a result, these simpler models can have sufficient predictive power to be useful, but not so much as to discern minute patterns in the data, thereby correctly predicting the few events and risking overfitting.  We'll see this pattern in the example data, which is admittedly small, but it has also repeated in much larger datasets with class imbalances. 
-
 Before moving on to specific techniques, let's discuss a potential fallacy encountered when there are rare events: correctly predicting the events to the detriment of the overall model goals is often inappropriate. 
 
 ## Imbalances Make Us Focus on Our Goals {#sec-imbalance-goals}
 
 Before starting the model development process, it is essential to consider how class balance impacts the project goals. It is often the case that the fact that events rarely occur means that the goal of the model is to identify the precious events in a large dataset (such as in information retrieval), even if it is at the cost of more false positives than we would ordinarily tolerate. In other words, finding the events is of paramount importance, and other considerations, such as interpretability, inference, and explanation of predictions, are not terribly important. This is often the case where the hard class prediction is used in an automated system that only takes the qualitative prediction as input. For example, @apm discusses a model used for a high-performance computing grid to route computational jobs to the correct queue based on their execution time. The system only needs to know where to send the job, and measures of uncertainty, such as estimated probabilities for how long the job will take, play no role in the process. 
+
+A good example of such a project was worked on by one of the authors for clinical trials of a Parkinson's Disease (PD) therapy. Patients with PD have issues with movement, including tremors, slowness, and physical instability. One problem with neurological diseases is that they might be misdiagnosed. For example, @meara1999accuracy show data where several other diseases may present as PD, such as gait apraxia or dementia preceding motor symptoms. 
+
+For clinical trials, this can be a major issue. If a patient is enrolled who does not have Parkinson's Disease, any therapy for PD will not show improvements. Most regulatory bodies require an "intention-to-treat" analysis of clinical trial data, in which patients are grouped by their original diagnosis, regardless of what is learned after entry. This means that any misdiagnosed PD patients' results will count against the evaluation of how well the therapy works.
+
+For this reason, a project was started to determine whether an ML model could be trained on external patient data to predict which patients originally diagnosed with PD actually had PD based on longer-term follow-up data. An effective model would be used to create an exclusion criterion for entry to the trial: if we predict that there is sufficient evidence that they might not have PD, they should not be included in the study. Even though the prevalence of PD is low, the company was willing to accept erroneously excluding true PD patients as long as they were extremely confident that only PD patients were enrolled. 
+
+Based on this, we would pursue an objective function that focused on finding events and did not require reporting well-calibrated probabilities^[The author's manager, a dogmatic Bayesian, strongly discouraged spending time on the project since there was no way to overcome the low event rate. In the end, it was immaterial; the initial clinical data showed that the drug was ineffective, and the whole project was cancelled.]. The model would require significant clinical validation to demonstrate that our probability threshold for calling a patient "truly PD" meets its stated performance characteristics. Here, PR-curves and Gain Charts would be of paramount importance. 
 
 However, it can also be the case that we need to understand why the model works or why a data point was predicted to belong to a specific class. In @sec-drug-interactions, we’ll discuss a project from drug development where a model is used to estimate the risk of a potential drug causing patient harm. We definitely want to find the events (e.g., problematic drugs), but we also need a good understanding of how certain we are that there is an issue. 
 
