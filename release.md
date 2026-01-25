@@ -1,5 +1,6 @@
 Release notes
 
+- [ ] Update news file
 - [ ] review potential changes to the DESCRIPTION file
 - [ ] (optional) update R packages with DESCRIPTION file
 - [ ] (optional) `renv::snapshot()` 
