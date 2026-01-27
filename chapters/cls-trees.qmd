@@ -17,6 +17,11 @@ source("../R/_common.R")
 library(tidymodels)
 library(mirai)
 library(spatialsample)
+library(future)
+library(rpart)
+library(partykit)
+library(patchwork)
+library(rpart.plot)
 
 # ------------------------------------------------------------------------------
 # set options
@@ -31,15 +36,656 @@ daemons(parallel::detectCores())
 load("../RData/forested_data.RData")
 ```
 
+Classification trees are a powerful and interpretable approach for classification problems.  Their structure consists of nested if-then statements that partition the predictor space into regions, where each is associated with a specific class. We've already seen them in a few different places:  @fig-reg-tree visualized a regression tree for the food delivery data while @fig-hotels-agent-missing shows a classification tree to understand missingness. 
+
+The two seminal works in this area are @breiman1984classification and @quinlan1993c4. Additionally, @loh2014fifty provides a more recent and comprehensive review of these models
+
+This chapter has two goals. First, we discuss the major components of classification trees, including the elements used to create or predict a tree model. The second part of the chapter describes several tree-based models, each using a different set of these elements. 
+
 ## Elements of Trees  {#sec-cls-tree-elements}
+
+The fundamental elements of classification trees are splitting, growing, pruning, and handling of missing data.  These concepts are essential for effectively implementing and interpreting these models. This section explores these elements in depth, providing a overview and understanding of how classification trees are constructed, optimized, and applied.
 
 ### Splitting {#sec-cls-tree-split}
 
+Splitting or recursively partitioning the data is the foundation of classification tree construction.  Unlike regression trees that aim to minimize variance, classification trees focus on creating nodes with high purity, that is, nodes that contain a higher proportion of samples from a single class.  The effectiveness of a classification tree largely depends on how well the method partitions the predictor space into regions that separate the classes.
+
+#### Splitting Criteria  {#sec-tree-splitting}
+
+The choice of splitting criterion is a critical decision in tree construction, because this determines how the algorithm evaluates potential splits.  Several metrics exist to evaluate the quality of potential splits, each with its own theoretical foundation and practical implications.
+
+The Gini index [@breiman1984classification] is one of the most widely used splitting criterion in classification trees. For a two-class problem, the Gini index is defined as:
+
+$$
+\text{Gini} = p_1(1-p_1) + p_2(1-p_2) = 2p_1p_2
+$$
+
+where $p_1$ and $p_2$ are the class probabilities in the node.  The Gini index can be interpreted as a measure of node impurity. It reaches its minimum value of zero when a node contains only one class (perfect purity) and its maximum value of 0.5 when classes are evenly distributed (maximum impurity).  When evaluating a potential split, the algorithm calculates the weighted average of the Gini indices for the resulting child nodes, with weights proportional to the number of samples in each node. The split that minimizes this weighted average is selected.
+
+For example, consider a node with 100 samples, 60 from Class 1 and 40 from Class 2. The Gini index for this node would be $2 \times 0.6 \times 0.4 = 0.48$. Now suppose a split creates two child nodes: the first with 50 samples (45 from Class 1 and 5 from Class 2) and the second with 50 samples (15 from Class 1 and 35 from Class 2). The Gini indices for these nodes would be $2 \times 0.9 \times 0.1 = 0.18$ and $2 \times 0.3 \times 0.7 = 0.42$, respectively. The weighted average would be $0.5 \times 0.18 + 0.5 \times 0.42 = 0.30$, representing a reduction in impurity from 0.48 to 0.30.
+
+Another common splitting criterion is based on information theory and is often referred to as information gain or entropy. This approach measures the reduction in uncertainty achieved by a split. The information content (or entropy) of a node is defined as:
+
+$$
+\text{info} = -[p \log_2p + (1-p) \log_2(1-p)]
+$$
+
+for a two-class problem, where $p$ is the proportion of samples in the first class. The information gain is then calculated as the difference between the information content before and after the split:
+
+$$
+\text{gain(split)} = \text{info(prior to split)} - \text{info(after split)}
+$$
+
+The information content is measured in bits and can be interpreted as the average number of bits needed to encode the class of a randomly selected sample from the node. A node with perfect purity (all samples belonging to the same class) has an information content of zero, while a node with maximum impurity (equal distribution of classes) has the highest information content. Splits with larger information gains are preferred as they create more homogeneous nodes.
+
+Using the same example as before, the information content of the original node would be $-[0.6 \log_2(0.6) + 0.4 \log_2(0.4)] = 0.97$ bits. After the split, the information content of the first child node would be $-[0.9 \log_2(0.9) + 0.1 \log_2(0.1)] = 0.47$ bits, and for the second child node, it would be $-[0.3 \log_2(0.3) + 0.7 \log_2(0.7)] = 0.88$ bits. The weighted average would be $0.5 \times 0.47 + 0.5 \times 0.88 = 0.68$ bits, resulting in an information gain of $0.97 - 0.68 = 0.29$ bits.
+
+A limitation of information gain is its bias toward predictors with many possible values, particularly categorical predictors with numerous categories. To address this issue, Quinlan introduced the gain ratio in the C4.5 algorithm. The gain ratio is calculated by dividing the information gain by the intrinsic information of the split, which measures the potential information generated by dividing the samples according to the predictor:
+
+$$
+\text{gain ratio(split)} = \frac{\text{gain(split)}}{\text{intrinsic information(split)}}
+$$
+
+The intrinsic information is calculated as:
+
+$$
+\text{intrinsic information(split)} = -\sum_{i=1}^{n} \frac{|S_i|}{|S|} \log_2 \frac{|S_i|}{|S|}
+$$
+
+Where $|S|$ is the number of samples in the parent node, $|S_i|$ is the number of samples in the $i$-th child node, and $n$ is the number of child nodes. The gain ratio penalizes splits that create many small partitions, thus addressing the bias of information gain toward predictors with many values.
+
+#### The Splitting Process for Continuous and Categorical Predictors {#sec-tree-splits-other}
+
+```{r}
+# Example to illustrate how split points are determined using
+# Gini Index, Information Gain, and Gain Ratio for the vapor_max variable
+split_example <-
+  forested_train %>%
+  dplyr::select(class, vapor_max)
+
+if ("Yes" %in% levels(split_example$class)) {
+  positive_class <- "Yes"
+} else {
+  positive_class <- levels(split_example$class)[1]
+}
+
+# Entropy function
+entropy_binary <- function(p) {
+  if (is.na(p)) {
+    return(NA_real_)
+  }
+  if (p <= 0 || p >= 1) {
+    return(0)
+  }
+  -(p * log2(p) + (1 - p) * log2(1 - p))
+}
+
+# Compute metrics for one split point s:
+compute_split_metrics <- function(x, y_factor, s, positive_class) {
+  left_idx <- x <= s
+  right_idx <- !left_idx
+
+  nL <- sum(left_idx)
+  nR <- sum(right_idx)
+  N <- length(x)
+
+  # Guard against degenerate splits
+  if (nL == 0 || nR == 0) {
+    return(tibble(
+      split = s,
+      n_left = nL,
+      n_right = nR,
+      p_left = NA_real_,
+      p_right = NA_real_,
+      gini_index = NA_real_,
+      info_gain = NA_real_,
+      gain_ratio = NA_real_
+    ))
+  }
+
+  # Class proportions (positive class) in each node
+  pL <- mean(y_factor[left_idx] == positive_class)
+  pR <- mean(y_factor[right_idx] == positive_class)
+  p0 <- mean(y_factor == positive_class)
+
+  # 1) Gini Index (as specified): pL(1-pL) + pR(1-pR)
+  gini_idx <- pL * (1 - pL) + pR * (1 - pR)
+
+  # 2) Information Gain
+  info_before <- entropy_binary(p0)
+  info_after <- (nL / N) * entropy_binary(pL) + (nR / N) * entropy_binary(pR)
+  info_gain <- info_before - info_after
+
+  # 3) Gain Ratio
+  # Intrinsic information of the split: -sum_i w_i log2(w_i)
+  wL <- nL / N
+  wR <- nR / N
+  intrinsic_info <- 0
+  if (wL > 0) {
+    intrinsic_info <- intrinsic_info - wL * log2(wL)
+  }
+  if (wR > 0) {
+    intrinsic_info <- intrinsic_info - wR * log2(wR)
+  }
+
+  gain_ratio <- if (intrinsic_info > 0) info_gain / intrinsic_info else NA_real_
+
+  tibble(
+    split = s,
+    n_left = nL,
+    n_right = nR,
+    p_left = pL,
+    p_right = pR,
+    gini_index = gini_idx,
+    info_gain = info_gain,
+    gain_ratio = gain_ratio
+  )
+}
+
+# Enumerate split points
+unique_vals <- sort(unique(split_example$vapor_max))
+
+# Midpoints between consecutive unique values
+split_points <- (head(unique_vals, -1) + tail(unique_vals, -1)) / 2
+
+# Evaluate all splits
+
+results <- purrr::map_dfr(
+  split_points,
+  ~ compute_split_metrics(
+    x = split_example$vapor_max,
+    y_factor = split_example$class,
+    s = .x,
+    positive_class = positive_class
+  )
+)
+
+# Get optimal split for each method
+best_gini_split <-
+  results %>%
+  filter(!is.na(gini_index)) %>%
+  slice_min(gini_index, n = 1, with_ties = FALSE) %>%
+  pull(split)
+
+best_ig_split <-
+  results %>%
+  filter(!is.na(info_gain)) %>%
+  slice_max(info_gain, n = 1, with_ties = FALSE) %>%
+  pull(split)
+
+best_gr_split <-
+  results %>%
+  filter(!is.na(gain_ratio)) %>%
+  slice_max(gain_ratio, n = 1, with_ties = FALSE) %>%
+  pull(split)
+
+# Graph results
+# Long format for faceting
+results_long <-
+  results %>%
+  select(split, gini_index, info_gain, gain_ratio) %>%
+  pivot_longer(
+    cols = c(gini_index, info_gain, gain_ratio),
+    names_to = "metric",
+    values_to = "value"
+  ) %>%
+  mutate(
+    metric = factor(
+      metric,
+      levels = c("gini_index", "info_gain", "gain_ratio"),
+      labels = c("Gini Index", "Information Gain", "Gain Ratio")
+    )
+  )
+
+best_splits <- tibble::tibble(
+  metric = factor(
+    c("Gini Index", "Information Gain", "Gain Ratio"),
+    levels = levels(results_long$metric)
+  ),
+  split = c(best_gini_split, best_ig_split, best_gr_split)
+)
+
+# Faceted plot: one panel per metric
+p_faceted <-
+  ggplot(results_long, aes(x = split, y = value, color = metric)) +
+  geom_line(show.legend = FALSE) +
+  #geom_point(size = 0.8, alpha = 0.7, show.legend = FALSE) +
+  facet_wrap(~metric, scales = "free_y", ncol = 1) +
+  geom_vline(
+    data = best_splits,
+    aes(xintercept = split),
+    color = "black",
+    linetype = "dashed",
+    linewidth = 0.6
+  ) +
+  labs(
+    x = "Maximum Vapor Split Point",
+    y = "Metric Value"
+  ) +
+  theme_bw(base_size = 12) +
+  theme(strip.text = element_text(face = "bold"))
+```
+
+```{r}
+# Example to illustrate how creating k-1 dummy variables leads to 
+# a larger rpart tree
+adjacent_split_model <-
+  rpart(
+    class ~ .,
+    control = rpart.control(
+      minbucket = 3,
+      minsplit = 10,
+      cp = 0.004,
+      xval = 10
+    ),
+    data = forested_train
+  )
+
+max_depth_adjacent_split_model <-
+  max(rpart:::tree.depth(as.integer(row.names(adjacent_split_model$frame))))
+
+# Create binary split variables for each county
+binary_rec <-
+  recipe(class ~ ., data = forested_train) %>%
+  step_dummy(all_nominal_predictors(), one_hot = FALSE)
+
+prep_binary_rec <-
+  prep(binary_rec, training = forested_train)
+
+forested_train_encoded <-
+  bake(prep_binary_rec, new_data = NULL)
+
+binary_split_model <-
+  rpart(class ~ ., data = forested_train_encoded)
+
+binary_split_model <-
+  rpart(
+    class ~ .,
+    control = rpart.control(
+      minbucket = 3,
+      minsplit = 10,
+      cp = 0.004,
+      xval = 10
+    ),
+    data = forested_train_encoded
+  )
+
+max_depth_binary_split_model <-
+  max(rpart:::tree.depth(as.integer(row.names(binary_split_model$frame))))
+```
+
+For continuous predictors, the process of finding the optimal split point involves evaluating all possible binary partitions of the data based on the predictor values. The algorithm first orders the samples according to the predictor values, then evaluates splits between adjacent unique values. For each potential split point, it calculates the chosen impurity metric (described above) and selects the split that optimizes this criteria.
+
+The computational complexity of this process is generally $O(n \log n)$ for each predictor, where $n$ is the number of samples, due to sorting. Once the samples are sorted, evaluating each potential split point is efficient, as the class distributions can be updated incrementally when moving through the sorted list.
+
+@fig-split-methods illustrates the metrics described in the previous section for the maximum vapor predictor in the forested data.  For this predictor, the information gain and gain ratio metrics identify the same split point for maximum vapor (`r best_ig_split`).  The Gini Index also has a near minimum at the split point.  However, the metric is minimized at a much larger maximum vapor value of `r best_gini_split`.  In this example, choice of metric would have an impact on the samples contained in the resulting nodes and could lead to vastly different models.
+
+```{r}
+#| label: fig-split-methods
+#| echo: false
+#| out-width: 55%
+#| fig-width: 5
+#| fig-height: 6
+#| fig-cap: Comparison of the Gini index, information gain, and gain ratio for the maximum vapor predictor.
+
+p_faceted
+```
+
+It's worth noting that for large datasets with many unique predictor values, some implementations use approximations to reduce computational cost [@ke2017lightgbm;@ranka1998clouds]. For example, the implementations might consider only a subset of potential split points or use binning techniques to group similar predictor values.
+
+Handling categorical predictors in classification trees presents unique challenges as compared to continuous predictors. There are two main approaches to incorporating categorical predictors in tree models.  The first approach allows the algorithm to bin the levels of a predictor into two categories, while the second approach creates new dummy variables for each category (@sec-indicators).
+
+When using the binning approach, the algorithm must determine how to optimally partition the categories into two groups.   For a predictor with $k$ categories, there are $2^{k-1} - 1$ possible ways to create a binary split. Evaluating all these possibilities becomes computationally infeasible for predictors with many categories. Therefore, algorithms often use heuristics to find good splits without exhaustive search. For example, in the Classification and Regression Trees (CART) methodology [@breiman1984classification], categorical predictors are ordered based on the proportion of samples in a selected class, and then binary splits are evaluated between adjacent categories in this ordering. This approach reduces the computational complexity while still allowing the algorithm to find effective splits.
+
+The second approach creates $k$ binary dummy variables, one for each category (or $k-1$ dummy variables to avoid redundancy). Each dummy variable is then treated as a separate predictor in the tree-building process. This approach, referred to as using independent categories, forces binary splits for the categories and effectively implements a one-versus-all splitting strategy.
+
+The choice between these approaches can impact model complexity and interpretability. Using grouped categories can results in more complex trees, especially when predictors have many categories.  In the forest data, the county variable is the only grouped category predictor and has `r length(unique(forested_train$county))` unique values.  When a recursive partitioning tree was constructed on the original data set, the maximum tree depth was `r paste0(max_depth_adjacent_split_model)` (@fig-split-adjacent-tree).  When dummy variables were created to represent the county variable, the resulting recursive partioning tree had a depth of `r paste0(max_depth_binary_split_model)` and did not include any of the dummy county variables (@fig-split-binary-tree).
+
+```{r}
+#| label: fig-split-adjacent-tree
+#| echo: false
+#| warning: false
+#| out-width: 90%
+#| fig-width: 14
+#| fig-height: 14
+#| fig-cap: Recursive partitioning tree when using the county variable in its adjacent category form.  The labels for the split points for the county variable have been simplified to summarize the number of counties included at each split. 
+
+county_split_fun <- function(x, labs, digits, varlen, faclen) {
+  #sub(" ", "\n", labs)
+  # Get the frame to check variable names
+  frame <- adjacent_split_model$frame
+  split_vars <- as.character(frame$var)
+
+  new_labs <- character(length(labs))
+
+  for (i in 1:length(labs)) {
+    lab <- labs[i]
+
+    # Check if label is long and contains commas (categorical split)
+    if (nchar(lab) > 15 && grepl(",", lab)) {
+      # Count the number of categories
+      categories <- trimws(strsplit(lab, ",")[[1]])
+      n_cats <- length(categories)
+      new_labs[i] <- paste0(n_cats, " counties")
+    } else {
+      new_labs[i] <- sub(" ", "\n", lab)
+    }
+  }
+
+  return(new_labs)
+}
+
+# Create the plot
+rpart.plot(
+  adjacent_split_model,
+  type = 4,
+  extra = 101,
+  box.palette = "GnBn",
+  split.fun = county_split_fun,
+  cex = 0.75,
+  tweak = 1.6,
+  clip.right.labs = FALSE,
+  under = TRUE
+)
+```
+
+```{r}
+#| label: fig-split-binary-tree
+#| echo: false
+#| warning: false
+#| out-width: 90%
+#| fig-width: 14
+#| fig-height: 14
+#| fig-cap: Recursive partitioning tree when transforming the county variable into many dummy, binary variables.
+
+# Create the plot
+rpart.plot(
+  binary_split_model,
+  type = 4,
+  extra = 101,
+  box.palette = "GnBn",
+  split.fun = function(x, labs, digits, varlen, faclen) {
+    sub(" ", "\n", labs)
+  },
+  cex = 0.75,
+  tweak = 1.6,
+  clip.right.labs = FALSE,
+  under = TRUE
+)
+```
+
+However, the grouped categories approach can sometimes capture more complex relationships between categories and the response variable. It allows the algorithm to group categories that have similar effects on the response, potentially leading to more accurate and interpretable models. The independent categories approach, on the other hand, treats each category independently, which may miss important interactions between categories but often results in simpler models.
+
+#### Ordinal Predictors and Linear Combination Splits {#sec-other-splits}
+
+While most partitioning algorithms treat ordinal predictors as either continuous or categorical, some specialized approaches preserve the ordinal nature of these predictors. For example, the algorithm might restrict splits to maintain the ordering of categories, only allowing splits that group adjacent categories.
+
+Some advanced tree algorithms consider splits based on linear combinations of predictors [@murthy1994system;@wickramarachchi2016hhcart] These oblique trees can capture more complex decision boundaries than traditional trees, which are limited to axis-parallel splits. For example, an oblique tree might use a split like "if $2 \times \text{Predictor A} + 3 \times \text{Predictor B} > 5$ then...". While these splits can lead to more accurate models, they often sacrifice the interpretability.
+
+#### Understanding Bias in Splitting {#sec-tree-bias}
+
+An important consideration in split selection is the understanding the potential for selection bias. Predictors with many possible values (such as continuous predictors with many unique values or categorical predictors with many categories) have an advantage in the split selection process because they offer more potential split points, increasing the chance of finding a split that appears to improve the impurity measure by chance.
+
+This bias can lead to overfitting and poor generalization performance. Various techniques have been proposed to address this issue, including the gain ratio mentioned earlier and statistical approaches like conditional inference trees, which use statistical tests to select splits in an unbiased manner.
+
 ### Growing {#sec-cls-tree-grow}
+
+Growing a classification tree involves recursively applying the splitting process described above until a stopping criterion is met. The continual partitioning of the data, also referred to as recursive partitioning, creates a hierarchical or tree structure that can capture complex relationships between predictors and the response variable. The tree-growing process is a critical phase in tree construction, as it determines the relationships that will later be refined through pruning.
+
+The tree growth process begins with all data in a single root node. The algorithm then searches for the best predictor and split point according to the chosen splitting criterion, as described in the previous section.  Once the best split is identified, the data is divided into child nodes based on this split. This process is then repeated recursively for each child node until one or more stopping criteria are met.
+
+At each step, the algorithm considers all available predictors and all possible split points for each predictor. This exhaustive search ensures that the selected split is the best possible split according to the chosen criterion. However, it also makes tree growing computationally intensive, especially for large datasets with many predictors.
+
+The recursive nature of tree growing means that each split is conditional on the previous splits. This allows trees to capture interactions between predictors automatically, without the need for explicit interaction terms. For example, in @fig-split-adjacent-tree, the first partition on the left side used the maximum vapor variable.  This split was followed by a split using the roughness variable. This structure implicitly models an interaction between maximum vapor and roughness.
+
+To further illustrate how recursive partitioning across predictors serves as an implicit surrogate for predictor interactions, consider @fig-split-interactions, which displays heatmaps of the predicted probability of forestation for two different pairs of variables from the forestation data set.
+
+The left panel was constructed using a logistic regression model with maximum vapor, roughness, and their two-way interaction as predictors. The predicted probability of forestation is represented by color, where green indicates high probability of forestation and brown indicates high probability of non-forestation. The probability surface exhibits notable curvature, with the probability of forestation changing substantially across values of maximum vapor conditional on the value of roughness. This non-linear relationship between the predictors and the outcome is the hallmark of a statistical interaction: accurate prediction requires knowledge of both predictor values simultaneously, as neither predictor's effect can be understood in isolation.
+
+In contrast, the right panel displays results from a logistic regression model using maximum vapor, northness, and their two-way interaction term as predictors. Here, the probability surface shows no curvature, with the probability of forestation remaining relatively constant across values of northness for any given value of maximum vapor. The straight contours indicate the absence of a meaningful statistical interaction between these predictors. In this case, the predictors contribute additively to the probability of forestation, and each predictor's effect can be interpreted independently of the other's value.
+
+```{r}
+#| label: fig-split-interactions
+#| echo: false
+#| warning: false
+#| out-width: 90%
+#| fig-width: 10
+#| fig-height: 5
+#| fig-cap: (a) Heat map of predicted probabilities of forestation from a model of maximum vapor, roughness and their two-way interaction.  (b) Heat map of predicted probabilities of forestation from a model of northness, maximum vapor and their two-way interaction. 
+vapor_max_roughness_model <-
+  glm(
+    class ~ vapor_max + roughness + vapor_max:roughness,
+    data = forested_train,
+    family = binomial()
+  )
+
+vapor_range <- seq(
+  min(forested_train$vapor_max),
+  max(forested_train$vapor_max),
+  length.out = 100
+)
+roughness_range <- seq(
+  min(forested_train$roughness),
+  max(forested_train$roughness),
+  length.out = 100
+)
+vapor_max_roughness_grid <- expand.grid(
+  vapor_max = vapor_range,
+  roughness = roughness_range
+)
+
+vapor_max_roughness_grid$probability <-
+  predict(
+    vapor_max_roughness_model,
+    newdata = vapor_max_roughness_grid,
+    type = "response"
+  )
+
+vapor_max_roughness_fig <-
+  ggplot(
+    vapor_max_roughness_grid,
+    aes(x = vapor_max, y = roughness, fill = probability)
+  ) +
+  geom_tile(show.legend = FALSE) +
+  scale_fill_gradient2(
+    low = "#d4ad42",
+    mid = "white",
+    high = "#218239",
+    midpoint = 0.5,
+    limits = c(0, 1)
+  ) +
+  labs(title = "(a)", x = "Maximum Vapor", y = "Roughness") +
+  theme_light() +
+  theme(plot.title = element_text(hjust = 0, size = 14))
+
+vapor_max_northness_model <-
+  glm(
+    class ~ vapor_max + northness + vapor_max:northness,
+    data = forested_train,
+    family = binomial()
+  )
+
+vapor_max_range <- seq(
+  min(forested_train$vapor_max),
+  max(forested_train$vapor_max),
+  length.out = 100
+)
+northness_range <- seq(
+  min(forested_train$northness),
+  max(forested_train$northness),
+  length.out = 100
+)
+vapor_max_northness_grid <- expand.grid(
+  vapor_max = vapor_max_range,
+  northness = northness_range
+)
+
+vapor_max_northness_grid$probability <-
+  predict(
+    vapor_max_northness_model,
+    newdata = vapor_max_northness_grid,
+    type = "response"
+  )
+
+vapor_max_northness_fig <-
+  ggplot(
+    vapor_max_northness_grid,
+    aes(x = vapor_max, y = northness, fill = probability)
+  ) +
+  geom_tile() +
+  scale_fill_gradient2(
+    low = "#d4ad42",
+    mid = "white",
+    high = "#218239",
+    midpoint = 0.5,
+    limits = c(0, 1)
+  ) +
+  labs(title = "(b)", color = "P(class)") +
+  theme_light() +
+  theme(
+    plot.title = element_text(hjust = 0, size = 14),
+    legend.position = "right"
+  )
+
+vapor_max_roughness_fig + vapor_max_northness_fig
+```
+
+As the tree grows, the nodes become increasingly homogeneous with respect to the response variable. In the extreme case, each terminal node would contain samples from only one class, resulting in perfect classification on the training data. However, such a tree would likely overfit the training data and perform poorly on new, unseen data. Therefore, various stopping criteria are used to prevent excessive tree growth.
+
+When should the algorithm stop recursively partitioning the data?  There are several parameters control when tree growth should terminate. These stopping criteria are essential for preventing overfitting and ensuring that the tree generalizes well to new data.
+
+One common criterion is the minimum node size which prevents the algorithm from splitting when a node contains fewer than a specified number of samples. This criterion ensures that each node has sufficient data to make reliable predictions. If a node has too few samples, any patterns observed in that node might be due to random variation rather than true relationships in the data. The optimal minimum node size depends on the dataset size and the complexity of the underlying relationships. Larger minimum node sizes lead to smaller trees with fewer terminal nodes, reducing the risk of overfitting but potentially increasing the risk of underfitting and missing important patterns in the data.
+
+A second stopping criterion is tree depth, which limits the number of levels in the tree. A tree with a maximum depth of 1 would have only the root node.  While a tree with no maximum depth constraint could potentially have as many levels as there are samples in the training data. Like minimum node size, the maximum depth controls the complexity of the tree.  Deeper trees can capture more complex relationships but are more prone to overfitting.
+
+Some tree-growing algorithms also use a minimum improvement criterion, which requires that a split improve the impurity measure by at least a specified amount to be considered. This criterion prevents splits that provide only marginal improvements in purity, which are likely to be capturing noise rather than true patterns. The minimum improvement threshold can be set based on statistical significance (as in conditional inference trees) or as a fixed value.
+
+Another criterion is early stopping. In this approach, the tree is grown incrementally, and the performance on a validation set is monitored. When the validation performance starts to deteriorate, tree growth is stopped. This approach directly optimizes for generalization performance but requires additional computational resources for cross-validation.
+
+Stopping criterion is a tuning parameter.  To find a good fit for the data, that is a model that does not under or overfit, we should utilize some context appropriate form of cross-validation (@sec-resampling-basics).
+
+#### Terminal Nodes {#sec-tree-estimates}
+
+After the classification tree is built, each terminal node generates a probability for each class based on the training samples that fall into that node. For a binary classification problem, this vector consists of the proportion of samples in each class within the node. For example, if a terminal node contains 80 samples from Class 1 and 20 samples from Class 2, the class probability vector would be (0.8, 0.2).
+
+For a new sample, the predicted class probabilities are determined by the terminal node it reaches after traversing the tree according to the splitting rules.  The sample is typically assigned to the class with the highest probability in that node, which is equivalent to the majority class among the training samples in the node.
+
+Some tree implementations also provide confidence intervals or other measures of uncertainty for these probability estimates. For example, C4.5 uses a pessimistic estimate of the error rate to provide upper and lower bounds on the class probabilities.
+The class probability estimates from terminal nodes can be used not only for classification but also for ranking or probability estimation tasks.
 
 ### Pruning {#sec-cls-tree-prune}
 
+Trees grown to maximum depth typically overfit the training data, capturing noise rather than underlying predictive patterns. Pruning addresses this issue by simplifying an overgrown tree, removing branches that do not contribute significantly to the model's predictive performance. Pruning is a critical step in tree construction, as it helps balance the trade-off between model complexity and predictive performance.
+
+Unpruned classification trees often exhibit excellent performance on the training data but poor performance on new, unseen data. This discrepancy occurs because the tree has learned not only the underlying patterns in the data but also the random noise present in the training samples. By fitting the noise, the tree becomes overly complex and fails to generalize well.
+
+Pruning aims to identify and remove the parts of the tree that are likely capturing noise rather than true patterns. The goal is to find a subtree of the original tree that minimizes the expected error on new data. This subtree should be complex enough to capture the important patterns in the data but simple enough to avoid fitting the noise.
+
+The pruning process can be viewed as a form of regularization, similar to the penalty terms used in linear models like ridge regression or lasso. By penalizing complexity, pruning encourages the model to focus on the most important patterns in the data and ignore the noise.
+
+#### Cost-Complexity Pruning {#sec-cost-complexity}
+
+Cost-complexity pruning, also known as weakest link pruning, is the pruning method used in the CART methodology. It introduces a complexity parameter ($\alpha$) that penalizes the tree size:
+
+$$
+R_\alpha(T) = R(T) + \alpha|T|
+$$
+
+Where $R(T)$ is the misclassification rate (or another measure of error) on the training data, $|T|$ is the number of terminal nodes in the tree, and $\alpha$ controls the trade-off between accuracy and complexity. Larger values of α result in smaller trees, as the penalty for additional nodes increases.
+
+The cost-complexity pruning process involves several steps:
+1.	Grow a maximal tree $T_{max}$ that fits the training data as well as possible, subject only to minimum node size constraints.
+2.	Calculate a sequence of nested subtrees $T_1, T_2, ..., T_k$ and corresponding complexity parameters $\alpha_1, \alpha_2, ..., \alpha_k$, where $T_k$ is the root node (a tree with a single node). Each subtree $T_i$ is obtained by pruning $T_{i-1}$ in a way that minimizes the cost-complexity measure for the corresponding $\alpha_i$.
+3.	Use cross-validation to estimate the optimal complexity parameter $\alpha_{opt}$ that minimizes the expected error on new data.
+4.	Return the subtree $T_i$ corresponding to $\alpha_{opt}$ as the final pruned tree.
+
+The sequence of nested subtrees is constructed by iteratively collapsing the internal node that results in the smallest increase in the training error per node removed. This node is called the "weakest link" because it contributes the least to the tree's performance relative to its complexity.
+
+Cross-validation is used to select the optimal complexity parameter because the training error alone is not a reliable indicator of generalization performance. In $k$-fold cross-validation, the training data is divided into $k$ subsets. For each subset, a maximal tree is grown on the remaining $k-1$ subsets, and a sequence of pruned subtrees is generated as described above. The performance of each subtree is evaluated on the held-out subset. This process is repeated for each of the $k$ subsets, and the results are averaged to estimate the expected error for each complexity parameter value. The complexity parameter that minimizes this expected error is selected.
+
+Some implementations of CART use a "one standard error" rule when selecting the optimal complexity parameter. Instead of choosing the complexity parameter with the minimum cross-validated error, they select the largest complexity parameter (resulting in the smallest tree) whose cross-validated error is within one standard error of the minimum. This rule favors simpler models when the difference in performance is not statistically significant.
+
+#### Pessimistic Pruning (C4.5) {#sec-pessinistic-pruning}
+
+Pessimistic pruning, used in the C4.5 algorithm, takes a different approach to pruning than cost-complexity pruning. Instead of using cross-validation, which can be computationally expensive, pessimistic pruning uses a statistical heuristic to estimate the expected error on new data.
+
+The key insight of pessimistic pruning is that the apparent error rate on the training data is an optimistic estimate of the true error rate on new data. To correct for this optimism, C4.5 calculates an upper confidence bound on the error rate, which serves as a pessimistic estimate of the true error rate.
+
+For a node with $N$ training samples and $E$ misclassifications, the apparent error rate is $E/N$. The pessimistic error rate is calculated using the upper bound of a confidence interval for this proportion:
+
+$$
+\text{pessimistic error rate} = \frac{E + z_{\alpha/2} \sqrt{\frac{E(N-E)}{N}}}{N}
+$$
+
+Where $z_{\alpha/2}$ is the critical value from the standard normal distribution for the desired confidence level. C4.5 uses a default confidence level of 75% (corresponding to $z_{\alpha/2} = 0.69$), but this can be adjusted as a tuning parameter.
+The pessimistic pruning process involves a bottom-up traversal of the tree, starting from the terminal nodes. For each internal node, the algorithm compares the pessimistic error rate of the subtree rooted at that node with the pessimistic error rate if the node were converted to a terminal node (i.e., if the subtree were pruned). If pruning would reduce the pessimistic error rate, the subtree is pruned.
+
+C4.5 also considers a more complex operation called "subtree raising," where a subtree is moved up to replace its parent node. This operation is evaluated using the same pessimistic error rate criterion.
+
+While pessimistic pruning lacks the theoretical foundation of cost-complexity pruning, it is computationally efficient and often works well in practice. The confidence level parameter allows some control over the aggressiveness of pruning, with higher confidence levels resulting in more aggressive pruning.
+
 ### Missing Data Handling {#sec-cls-missing-data}
+
+Classification trees have built-in mechanisms for handling missing predictor values, which provides a significant advantage over many other modeling techniques. Instead of requiring imputation or discarding samples with missing values, trees can work directly with incomplete data, both during training and prediction.
+
+Missing data is a common issue in many datasets and can arise for various reasons, such as measurement errors, non-response, or data integration problems.  Traditional predictive modeling methods often require complete data, forcing the user to either discard incomplete samples or impute missing values.
+
+Discarding samples or imputing missing values have drawbacks.  Discarding samples with missing values can lead to biased results, especially when the missingness is due to a specific underlying cause.  On the other hand, imputation can introduce assumptions about the missing values and, if there is a sufficient amount of missingness, may distort the relationships in the data.
+
+Classification trees offer an alternative approach that can handle missing values directly, without requiring sample deletion or explicit imputation. This capability stems from the tree's hierarchical structure and the flexibility of the splitting and prediction processes.
+
+#### CART Approach to Missing Data {#sec-surrogate-splits}
+
+In the CART methodology, missing values are handled differently during tree construction and prediction. During tree construction, CART uses a "surrogate split" approach. When evaluating a potential split on a predictor with missing values, only the samples with non-missing values for that predictor are used to determine the optimal split point and calculate the improvement in the impurity measure. This ensures that the split is based on actual data rather than imputed values.
+
+Once a split has been selected, CART identifies surrogate splits that can be used when the primary split variable is missing. A surrogate split is an alternative split on a different predictor that mimics the primary split as closely as possible. Specifically, CART looks for splits that send samples to the same child nodes as the primary split would.
+
+For example, the first split in @fig-split-adjacent-tree is based on the maximum vapor predictor.  The first surrogate for this split is `r rownames(data.frame(adjacent_split_model$splits)[2,])`  There are no missing values for the forestation data set.  However, if a sample had a missing value for the maximum vapor predictor, then the model would use the `r rownames(data.frame(adjacent_split_model$splits)[2,])` at this point in the tree to send direct the sample to a terminal node (provided the sample did not have a missing value for this predictor).
+
+CART ranks surrogate splits based on their predictive association with the primary split, measured by how well they mimic the primary split on the training data. Multiple surrogate splits can be identified for each primary split, creating a hierarchy of alternatives to use when various predictors have missing values.
+
+During prediction, when a sample reaches a node with a split on a predictor for which the sample has a missing value, CART uses the best available surrogate split to determine which child node the sample should go to. If all potential surrogate splits also involve predictors with missing values for that sample, CART sends the sample in the direction of the majority of training samples.
+
+This approach allows CART to make predictions for samples with missing values without requiring explicit imputation. It also naturally handles patterns of missingness, as the surrogate splits are chosen based on the relationships observed in the training data.
+
+#### C4.5 Approach to Missing Data {#sec-missing-propagation}
+
+The C4.5 algorithm takes a different approach to handling missing values, based on probabilistic weighting rather than surrogate splits. During tree construction, C4.5 adjusts the information gain calculations to account for missing values. When evaluating a potential split on a predictor with missing values, C4.5 calculates the information gain using only the samples with non-missing values for that predictor, then scales this gain by the fraction of non-missing data. This adjustment ensures that predictors with many missing values are not unfairly penalized or favored.
+
+C4.5 also modifies how it handles categorical predictors with missing values. When calculating the information value for a categorical predictor (used in the gain ratio calculation), C4.5 treats missing values as a separate category. This increases the number of branches in the split and affects the penalty applied to the information gain.
+
+A distinctive aspect of C4.5's approach is how it handles missing values when determining the class distribution in the resulting splits. Instead of assigning samples with missing values to a specific child node, C4.5 allows these samples to contribute fractionally to all child nodes. The fractional contribution is based on the distribution of non-missing values among the child nodes.
+
+For example, if 70% of samples with non-missing values go to the left child and 30% go to the right child, a sample with a missing value would contribute 0.7 of a sample to the left child and 0.3 of a sample to the right child. This fractional accounting means that the class frequency distribution in each node may not contain whole numbers, and the number of errors in a terminal node can also be fractional.
+
+During prediction, C4.5 uses a similar fractional approach. When a sample with missing values reaches a node with a split on a predictor for which the sample has a missing value, the sample is sent down all possible paths, with weights proportional to the distribution of non-missing values in the training data. The final prediction is based on a weighted vote from all relevant terminal nodes.
+
+This approach allows C4.5 to make use of all available information in a sample, even when some predictors have missing values. It also provides a natural way to incorporate uncertainty due to missing values into the prediction process.
+
+#### Comparison of Approaches {#sec-tree-missing-comparison}
+
+Both the CART and C4.5 approaches to handling missing data have their strengths and weaknesses. The CART approach with surrogate splits is more deterministic, as each sample follows a single path through the tree. This can make the prediction process easier to interpret and explain. Surrogate splits also explicitly model relationships between predictors, which can provide additional insights into the data. However, identifying and storing surrogate splits increases the computational complexity and memory requirements of the model.
+
+The C4.5 approach with fractional samples is more probabilistic and can better represent the uncertainty introduced by missing values. By allowing samples to contribute to multiple nodes, it makes use of all available information in the tree. This approach can be particularly effective when missingness is informative or when there are complex patterns of missingness in the data. However, the fractional accounting can make the model more difficult to interpret, and the prediction process is more complex.
+
+Both approaches have been shown to perform well in practice, and the choice between them often depends on the specific requirements of the application, such as the need for interpretability, the patterns of missingness in the data, and the computational resources available.
+
+#### Handling Missing Values in Rule-Based Models {#sec-missing-rules}
+
+Rule-based models, which can be derived from classification trees, also need mechanisms for handling missing values. In C4.5Rules, which converts C4.5 trees into rule sets, the handling of missing values is integrated into the rule evaluation process. When evaluating whether a rule applies to a sample with missing values, C4.5Rules considers the rule to be partially satisfied, with the degree of satisfaction depending on the distribution of non-missing values in the training data. This partial satisfaction contributes to the overall confidence in the rule's prediction.
+
+During prediction, multiple rules may be partially satisfied due to missing values. C4.5Rules aggregates the confidence values from all relevant rules to make the final prediction, similar to the weighted voting approach used in C4.5 trees.
+This approach allows rule-based models to handle missing values without requiring explicit imputation, maintaining the flexibility and robustness of the original tree model.
+
+#### Practical Considerations for Missing Data {#sec-tree-missing-considerations}
+
+While classification trees can handle missing values directly, there are still practical considerations to keep in mind when working with incomplete data.
+
+First, the effectiveness of the missing value handling mechanisms depends on the patterns of missingness in the data. If values are missing completely at random (MCAR), both the CART and C4.5 approaches should work well. If values are missing at random (MAR) or missing not at random (MNAR), the performance may depend on whether the tree can capture the relationships between the missingness and other predictors or the response variable.
+
+Second, very high rates of missingness can still be problematic, even with these sophisticated handling mechanisms. If a predictor has too many missing values, it may not be selected as a split variable, even if it would be highly informative when available. In such cases, imputation might still be beneficial as a preprocessing step.
+
+Third, the handling of missing values can interact with other aspects of the tree-building process, such as pruning. For example, in C4.5, the fractional accounting for missing values affects the calculation of the pessimistic error rate used for pruning. This interaction should be considered when tuning the model.
 
 ## Single Trees {#sec-cls-single-tree}
 
