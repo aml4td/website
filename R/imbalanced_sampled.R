@@ -83,12 +83,7 @@ smol_class_smote <-
 set.seed(seed)
 smol_class_rose <-
   recipe(class ~ ., data = myopia_train) |>
-  step_rose(
-    class,
-    minority_smoothness = 1 / 2,
-    majority_smoothness = 1 / 2,
-    over_ratio = 0.98
-  ) |>
+  step_rose(class, over_ratio = 0.98) |>
   prep() |>
   bake(new_data = NULL) |>
   mutate(Data = "ROSE")
