@@ -571,7 +571,7 @@ After the classification tree is built, each terminal node generates a probabili
 For a new sample, the predicted class probabilities are determined by the terminal node it reaches after traversing the tree according to the splitting rules.  The sample is typically assigned to the class with the highest probability in that node, which is equivalent to the majority class among the training samples in the node.
 
 Some tree implementations also provide confidence intervals or other measures of uncertainty for these probability estimates. For example, C4.5 uses a pessimistic estimate of the error rate to provide upper and lower bounds on the class probabilities.
-The class probability estimates from terminal nodes can be used not only for classification but also for ranking or probability estimation tasks.
+The class probability estimates from terminal nodes can be used not only for classification but also for ranking and probability estimation. When a terminal node contains few samples, the quality of the probability estimates decreases. It is possible to apply Laplace smoothing as previously described for naive Bayes or to use a regularized estimate, such as the Beta-binomial method from @eq-beta-bin-mean. Alternatively, C5.0 decision trees add the event rate to the numerator count and 1.0 to the denominator. For example, suppose there were two balanced classes and three out of five samples in the terminal node were events. The raw probability is 0.60 for that class, and C5.0 would compute it as $(3 + 0.5) / (5 + 1) = 0.583$. 
 
 ### Pruning {#sec-cls-tree-prune}
 
@@ -579,19 +579,21 @@ Trees grown to maximum depth typically overfit the training data, capturing nois
 
 Unpruned classification trees often exhibit excellent performance on the training data but poor performance on new, unseen data. This discrepancy occurs because the tree has learned not only the underlying patterns in the data but also the random noise present in the training samples. By fitting the noise, the tree becomes overly complex and fails to generalize well.
 
+This highlights an important characteristic of trees trained using greedy optimization: they are _unstable_. This means that if the training data are perturbed (e.g., resampled or individual values slightly changed), the tree structure might be completely different^[This is especially likely if there are correlated predictors in the training set.]. If a particular split variable or value is different, it is highly likely that all subsequent splits would also be different. This, in the context of the variables-bias discussion in @sec-variance-bias, means that trees have high model variance (but low bias). This is a significant disadvantage for trees, but, as we'll see in the next chapter, it makes them ideal for creating ensemble models. 
+
 Pruning aims to identify and remove the parts of the tree that are likely capturing noise rather than true patterns. The goal is to find a subtree of the original tree that minimizes the expected error on new data. This subtree should be complex enough to capture the important patterns in the data but simple enough to avoid fitting the noise.
 
 The pruning process can be viewed as a form of regularization, similar to the penalty terms used in linear models like ridge regression or lasso. By penalizing complexity, pruning encourages the model to focus on the most important patterns in the data and ignore the noise.
 
 #### Cost-Complexity Pruning {#sec-cost-complexity}
 
-Cost-complexity pruning, also known as weakest link pruning, is the pruning method used in the CART methodology. It introduces a complexity parameter ($\alpha$) that penalizes the tree size:
+Cost-complexity pruning, also known as weakest link pruning, is used in the CART methodology. It introduces a complexity parameter ($\alpha$) that penalizes the tree size:
 
 $$
 R_\alpha(T) = R(T) + \alpha|T|
 $$
 
-Where $R(T)$ is the misclassification rate (or another measure of error) on the training data, $|T|$ is the number of terminal nodes in the tree, and $\alpha$ controls the trade-off between accuracy and complexity. Larger values of α result in smaller trees, as the penalty for additional nodes increases.
+Where $R(T)$ is the misclassification rate (or another measure of error) on the training data, $|T|$ is the number of terminal nodes in the tree, and $\alpha$ controls the trade-off between accuracy and complexity. Larger values of $\alpha$ result in smaller trees, as the penalty for additional nodes increases.
 
 The cost-complexity pruning process involves several steps:
 1.	Grow a maximal tree $T_{max}$ that fits the training data as well as possible, subject only to minimum node size constraints.
@@ -601,9 +603,11 @@ The cost-complexity pruning process involves several steps:
 
 The sequence of nested subtrees is constructed by iteratively collapsing the internal node that results in the smallest increase in the training error per node removed. This node is called the "weakest link" because it contributes the least to the tree's performance relative to its complexity.
 
-Cross-validation is used to select the optimal complexity parameter because the training error alone is not a reliable indicator of generalization performance. In $k$-fold cross-validation, the training data is divided into $k$ subsets. For each subset, a maximal tree is grown on the remaining $k-1$ subsets, and a sequence of pruned subtrees is generated as described above. The performance of each subtree is evaluated on the held-out subset. This process is repeated for each of the $k$ subsets, and the results are averaged to estimate the expected error for each complexity parameter value. The complexity parameter that minimizes this expected error is selected.
+An _internal_ cross-validation is used to select the optimal complexity parameter because the training error alone is not a reliable indicator of generalization performance. In _V_-fold cross-validation, the training data is divided into _V_ subsets. For each subset, a maximal tree is grown on the remaining _V_-1 subsets, and a sequence of pruned subtrees is generated as described above. The performance of each subtree is evaluated on the held-out subset. This process is repeated for each of the _V_ folds, and the results are averaged to estimate the expected error for each complexity parameter value. The complexity parameter that minimizes this expected error is selected. This process is the same as previously discussed resampling procedures but occurs _inside_ the CART training routine. 
 
 Some implementations of CART use a "one standard error" rule when selecting the optimal complexity parameter. Instead of choosing the complexity parameter with the minimum cross-validated error, they select the largest complexity parameter (resulting in the smallest tree) whose cross-validated error is within one standard error of the minimum. This rule favors simpler models when the difference in performance is not statistically significant.
+
+This automated selection heuristic can be very effective, but one can also tune the cost-complexity parameter $\alpha$ using the usual (external) resampling procedure of choice. 
 
 #### Pessimistic Pruning (C4.5) {#sec-pessinistic-pruning}
 
@@ -634,7 +638,7 @@ Discarding samples or imputing missing values have drawbacks.  Discarding sample
 
 Classification trees offer an alternative approach that can handle missing values directly, without requiring sample deletion or explicit imputation. This capability stems from the tree's hierarchical structure and the flexibility of the splitting and prediction processes.
 
-#### CART Approach to Missing Data {#sec-surrogate-splits}
+#### Surrogate Splits {#sec-surrogate-splits}
 
 In the CART methodology, missing values are handled differently during tree construction and prediction. During tree construction, CART uses a "surrogate split" approach. When evaluating a potential split on a predictor with missing values, only the samples with non-missing values for that predictor are used to determine the optimal split point and calculate the improvement in the impurity measure. This ensures that the split is based on actual data rather than imputed values.
 
@@ -648,7 +652,7 @@ During prediction, when a sample reaches a node with a split on a predictor for 
 
 This approach allows CART to make predictions for samples with missing values without requiring explicit imputation. It also naturally handles patterns of missingness, as the surrogate splits are chosen based on the relationships observed in the training data.
 
-#### C4.5 Approach to Missing Data {#sec-missing-propagation}
+#### Fractional Accounting {#sec-missing-propagation}
 
 The C4.5 algorithm takes a different approach to handling missing values, based on probabilistic weighting rather than surrogate splits. During tree construction, C4.5 adjusts the information gain calculations to account for missing values. When evaluating a potential split on a predictor with missing values, C4.5 calculates the information gain using only the samples with non-missing values for that predictor, then scales this gain by the fraction of non-missing data. This adjustment ensures that predictors with many missing values are not unfairly penalized or favored.
 
