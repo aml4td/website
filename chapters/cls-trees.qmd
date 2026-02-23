@@ -22,6 +22,7 @@ library(rpart)
 library(partykit)
 library(patchwork)
 library(rpart.plot)
+library(gt)
 
 # ------------------------------------------------------------------------------
 # set options
@@ -34,23 +35,185 @@ daemons(parallel::detectCores())
 # load data 
 
 load("../RData/forested_data.RData")
+
+forest_rows <- 
+  c(653L, 2071L, 3719L, 3687L, 4175L, 2978L, 747L, 3709L, 3693L, 
+    3086L, 652L, 200L)
+
+counties <- c("stevens", "yakima", "okanogan")
+
+small_forest <- 
+  forested_train |> 
+  slice(forest_rows) |> 
+  mutate(county = factor(as.character(county), levels = counties))
+
+r3 <- function(x) unname(round(x, 3))
+
+pr_1 <- mean(small_forest$class == "Yes")
+pr_2 <- mean(small_forest$class == "No")
+
+pr_1_s <- mean(small_forest$class == "Yes" & small_forest$county == "stevens")
+pr_2_s <- mean(small_forest$class == "No"  & small_forest$county == "stevens")
+
+pr_1_y <- mean(small_forest$class == "Yes" & small_forest$county == "yakima")
+pr_2_y <- mean(small_forest$class == "No"  & small_forest$county == "yakima")
+
+pr_1_o <- mean(small_forest$class == "Yes" & small_forest$county == "okanogan")
+pr_2_o <- mean(small_forest$class == "No"  & small_forest$county == "okanogan")
+
+vm_vals <- sort(unique(small_forest$vapor_max))
+vm_split <- 1250
+vm_split_var <- small_forest$vapor_max <=  vm_split
+vm_split_denom <- table(vm_split_var)
+vm_split_left <- table(small_forest$class[vm_split_var])
+vm_split_right <- table(small_forest$class[!vm_split_var])
+
+pr_1_L <- vm_split_left["Yes"] / vm_split_denom["TRUE"]
+pr_2_L <- vm_split_left["No"] / vm_split_denom["TRUE"]
+pr_1_R <- vm_split_right["Yes"] / vm_split_denom["FALSE"]
+pr_2_R <- vm_split_right["No"] / vm_split_denom["FALSE"]
+n_L <- vm_split_denom["TRUE"]
+n_R <- vm_split_denom["TRUE"]
+n_tot <- nrow(small_forest)
+gini_tot <- ((n_L / n_tot) * pr_1_L * pr_2_L) + ((n_R / n_tot) * pr_1_R * pr_2_R)
+ce_tot <- ((n_L / n_tot) * -1 * (pr_1_L * log2(pr_1_L) + pr_2_L * log2(pr_2_L))) + 
+  ((n_R / n_tot) * -1 * (pr_1_R * log2(pr_1_R) + pr_2_R * log2(pr_2_R)))
+ce_par <- -(pr_1 * log2(pr_1) + pr_2 * log2(pr_2))
 ```
 
 Classification trees are a powerful and interpretable approach for classification problems.  Their structure consists of nested if-then statements that partition the predictor space into regions, where each is associated with a specific class. We've already seen them in a few different places:  @fig-reg-tree visualized a regression tree for the food delivery data while @fig-hotels-agent-missing shows a classification tree to understand missingness. 
 
-The two seminal works in this area are @breiman1984classification and @quinlan1993c4. Additionally, @loh2014fifty provides a more recent and comprehensive review of these models
+As a refresher, decision trees are a hierarchical set of splits of predictors that produce two or more nodes^[Some models, such as C5.0, can produce more than two groups, and these will be discussed on a case-by-case basis.]. The split conditions (or rules) are logical statements based on the predictor values. We've seen rules such as `hour < 14.769` and `day in {Fri, Sat}`. As decision trees are trained, the child nodes produced by each split are split further until a predefined stopping rule is triggered. At the end of the tree are the _terminal nodes_, and the training data that fall into these nodes are used to estimate the model predictions. The terminal nodes are defined by a complete set of mutually exclusive rules that contain all of the split conditions from each stage of splitting.    
 
-This chapter has two goals. First, we discuss the major components of classification trees, including the elements used to create or predict a tree model. The second part of the chapter describes several tree-based models, each using a different set of these elements. 
+The two seminal works in this area are @breiman1984classification and @quinlan1993c4. Additionally, @loh2014fifty provides a more recent and comprehensive review. 
 
-## Elements of Trees  {#sec-cls-tree-elements}
+To describe the myriad aspects of tree-based models, we'll start from the smallest computations first, the tools used to choose a split point for the local statement inside the rule. After this, we'll describe how missing values can be handled algorithmically when making splits. After these discussions, specific types of single tree-based models are described, such as CART, C5.0, and so on.
 
-The fundamental elements of classification trees are splitting, growing, pruning, and handling of missing data.  These concepts are essential for effectively implementing and interpreting these models. This section explores these elements in depth, providing a overview and understanding of how classification trees are constructed, optimized, and applied.
+Finally, the chapter ends with discussions on the stability of trees and how rule-based models can be created.
 
-### Splitting {#sec-cls-tree-split}
+As with previous chapters, we'll use the forestation data to illustrate how these methods work. 
+
+## Creating Splits {#sec-cls-tree-split}
 
 Splitting or recursively partitioning the data is the foundation of classification tree construction.  Unlike regression trees that aim to minimize variance, classification trees focus on creating nodes with high purity, that is, nodes that contain a higher proportion of samples from a single class.  The effectiveness of a classification tree largely depends on how well the method partitions the predictor space into regions that separate the classes.
 
-#### Splitting Criteria  {#sec-tree-splitting}
+To more easily conceptualize splitting methods, we'll use the small subset of training data shown in @tbl-small-forest. From these data ($n = `r nrow(small_forest)`$), the raw probabilities for each class are $\widehat{p}_1 = `r r3(pr_1)`$ (forested) and $\widehat{p}_2 = `r r3(pr_2)`$ (unforested). 
+
+```{r}
+#| label: tbl-small-forest
+#| tbl-cap: "A small sample of the forestation data that will be used to illustrate splitting methods."
+#| echo: false
+
+small_forest |> 
+  select(class, county, vapor_max) |> 
+  arrange(class, county) |> 
+  gt() |> 
+  fmt_number(vapor_max, decimals = 0) |> 
+  cols_label(
+    vapor_max = "Maximum Vapor",
+    class = "Forested?",
+    county = "County"
+  )
+```
+
+
+### Types of Splits  {#sec-split-types}
+
+
+:::: {.columns}
+
+::: {.column width="20%"}
+:::
+
+::: {.column width="60%"}
+
+::: {#tbl-split-2-x-2}
+```{r}
+#| label: split-2-x-2
+#| echo: false
+
+split_df <- tibble(
+  row_label = c("$\\leq$ split", "$>$ split", ""),
+  class_1 = c("$n_{11}$", "$n_{21}$", "$n_{1+}$"),
+  class_2 = c("$n_{12}$", "$n_{22}$", "$n_{2+}$"),
+  total = c("$n_{+1}$", "$n_{+2}$", "$n$")
+)
+
+# Create the gt table
+split_df |>
+  gt() |>
+  cols_label(
+    row_label = "",
+    class_1 = "Class 1",
+    class_2 = "Class 2",
+    total = ""
+  ) |>
+  cols_align(align = "right", columns = row_label) |>
+  cols_align(align = "center", columns = c(class_1, class_2)) |>
+  cols_align(align = "right", columns = total) |>
+  fmt_markdown(columns = everything()) |>
+  # Box around the four interior cells with internal dividers
+  tab_style(
+    style = cell_borders(
+      sides = c("top", "left", "bottom", "right"),
+      weight = px(1),
+      color = "black"
+    ),
+    locations = cells_body(columns = class_1, rows = 1)
+  ) |>
+  tab_style(
+    style = cell_borders(
+      sides = c("top", "bottom", "right"),
+      weight = px(1),
+      color = "black"
+    ),
+    locations = cells_body(columns = class_2, rows = 1)
+  ) |>
+  tab_style(
+    style = cell_borders(
+      sides = c("top", "left", "bottom", "right"),
+      weight = px(1),
+      color = "black"
+    ),
+    locations = cells_body(columns = class_1, rows = 2)
+  ) |>
+  tab_style(
+    style = cell_borders(
+      sides = c("top", "bottom", "right"),
+      weight = px(1),
+      color = "black"
+    ),
+    locations = cells_body(columns = class_2, rows = 2)
+  ) |>
+  # Remove all default lines
+  tab_options(
+    table.border.top.style = "none",
+    table.border.bottom.style = "none",
+    table.border.left.style = "none",
+    table.border.right.style = "none",
+    table_body.hlines.style = "none",
+    table_body.vlines.style = "none",
+    table_body.border.top.style = "none",
+    table_body.border.bottom.style = "none",
+    column_labels.border.top.style = "none",
+    column_labels.border.bottom.style = "none"
+  ) |> 
+  opt_row_striping(row_striping = FALSE)
+```
+
+Example notation for a binary split of an outcome with two class levels. 
+
+:::
+
+:::
+
+::: {.column width="20%"}
+:::
+
+:::: 
+
+
+### Splitting Criteria  {#sec-tree-splitting}
 
 The choice of splitting criterion is a critical decision in tree construction, because this determines how the algorithm evaluates potential splits.  Several metrics exist to evaluate the quality of potential splits, each with its own theoretical foundation and practical implications.
 
@@ -62,23 +225,158 @@ $$
 
 where $p_1$ and $p_2$ are the class probabilities in the node.  The Gini index can be interpreted as a measure of node impurity. It reaches its minimum value of zero when a node contains only one class (perfect purity) and its maximum value of 0.5 when classes are evenly distributed (maximum impurity).  When evaluating a potential split, the algorithm calculates the weighted average of the Gini indices for the resulting child nodes, with weights proportional to the number of samples in each node. The split that minimizes this weighted average is selected.
 
-For example, consider a node with 100 samples, 60 from Class 1 and 40 from Class 2. The Gini index for this node would be $2 \times 0.6 \times 0.4 = 0.48$. Now suppose a split creates two child nodes: the first with 50 samples (45 from Class 1 and 5 from Class 2) and the second with 50 samples (15 from Class 1 and 35 from Class 2). The Gini indices for these nodes would be $2 \times 0.9 \times 0.1 = 0.18$ and $2 \times 0.3 \times 0.7 = 0.42$, respectively. The weighted average would be $0.5 \times 0.18 + 0.5 \times 0.42 = 0.30$, representing a reduction in impurity from 0.48 to 0.30.
+For the data in @tbl-small-forest, The Gini index for this node would be $2 \times `r round(pr_1, 3)` \times `r round(pr_2, 3)` = `r round(pr_1 * pr_2, 3)`$. Now suppose a split value for maximum vapor of `r vm_split` creates two child nodes: 
 
-Another common splitting criterion is based on information theory and is often referred to as information gain or entropy. This approach measures the reduction in uncertainty achieved by a split. The information content (or entropy) of a node is defined as:
+:::: {.columns}
+
+::: {.column width="20%"}
+:::
+
+::: {.column width="60%"}
+
+```{r}
+#| label: split-vapor
+#| echo: false
+
+make_split_df <- function(left, lbs) {
+  rule <- rlang::enexpr(left)
+  small_forest$left <- rlang::eval_tidy(rule, small_forest)
+  xtab <- 
+    small_forest |> 
+    count(left, class) |> 
+    pivot_wider(id_cols = c(left), names_from = class, values_from = n)
+  class_marginal <- 
+    small_forest |> 
+    count(class) |> 
+    pivot_wider(names_from = class, values_from = n) |> 
+    mutate(left = NA)
+  res <- 
+    bind_rows(xtab, class_marginal) |> 
+    rowwise() |> 
+    mutate(total = sum(c_across(-left))) |> 
+    arrange(desc(left))
+  res$left <- lbs
+  res
+}
+make_split_df(vapor_max <= vm_split, c("Max. Vapor $\\le$ 1250", "Max. Vapor $>$ 1250", "")) |>
+  gt() |>
+  cols_label(
+    left = "",
+    total = ""
+  ) |>
+  cols_align(align = "right", columns = left) |>
+  cols_align(align = "center", columns = c(-left)) |>
+  cols_align(align = "right", columns = total) |>
+  cols_width(
+    Yes ~ px(50),
+    No ~ px(50)
+  ) |> 
+  fmt_markdown(columns = everything()) |>
+  # Box around the four interior cells with internal dividers
+  tab_style(
+    style = cell_borders(
+      sides = c("top", "left", "bottom", "right"),
+      weight = px(1),
+      color = "black"
+    ),
+    locations = cells_body(columns = Yes, rows = 1)
+  ) |>
+  tab_style(
+    style = cell_borders(
+      sides = c("top", "bottom", "right"),
+      weight = px(1),
+      color = "black"
+    ),
+    locations = cells_body(columns = No, rows = 1)
+  ) |>
+  tab_style(
+    style = cell_borders(
+      sides = c("top", "left", "bottom", "right"),
+      weight = px(1),
+      color = "black"
+    ),
+    locations = cells_body(columns = Yes, rows = 2)
+  ) |>
+  tab_style(
+    style = cell_borders(
+      sides = c("top", "bottom", "right"),
+      weight = px(1),
+      color = "black"
+    ),
+    locations = cells_body(columns = No, rows = 2)
+  ) |>
+  # Remove all default lines
+  tab_options(
+    table.border.top.style = "none",
+    table.border.bottom.style = "none",
+    table.border.left.style = "none",
+    table.border.right.style = "none",
+    table_body.hlines.style = "none",
+    table_body.vlines.style = "none",
+    table_body.border.top.style = "none",
+    table_body.border.bottom.style = "none",
+    column_labels.border.top.style = "none",
+    column_labels.border.bottom.style = "none"
+  ) |> 
+  opt_row_striping(row_striping = FALSE)
+```
+
+:::
+
+::: {.column width="20%"}
+:::
+
+:::: 
+
+Using these counts, we can compute the Gini statistic for each rule and then their weighted average:
 
 $$
-\text{info} = -[p \log_2p + (1-p) \log_2(1-p)]
+\begin{align}
+\text{Left} &= 2 \times \frac{`r vm_split_left["Yes"]`}{`r vm_split_denom["TRUE"]`} \times \frac{`r vm_split_left["No"]`}{`r vm_split_denom["TRUE"]`} = `r r3(pr_1_L * pr_2_L)` \notag \\
+\text{Right} &= 2 \times \frac{`r vm_split_right["Yes"]`}{`r vm_split_denom["FALSE"]`} \times \frac{`r vm_split_right["No"]`}{`r vm_split_denom["FALSE"]`} = `r r3(pr_1_R * pr_2_R)` \notag \\
+\text{Total} &= \frac{`r n_L`}{`r n_tot`} `r r3(pr_1_L * pr_2_L)` + \frac{`r n_R`}{`r n_tot`} `r r3(pr_1_R * pr_2_R)` = `r r3(gini_tot)` \notag
+\end{align}
 $$
 
-for a two-class problem, where $p$ is the proportion of samples in the first class. The information gain is then calculated as the difference between the information content before and after the split:
+The Gini value for this split is smaller than the corresponding value from the parent node and this indicates a reduction in impurity.
+
+When there are $C > 2$ classes, the more general form of the statistic is: 
 
 $$
-\text{gain(split)} = \text{info(prior to split)} - \text{info(after split)}
+Gini = \sum _{c=1}^{C}\left(p_{c}\sum _{c'\neq c}^Cp_{c'}\right)
+$$
+
+
+Another common splitting criterion based on information theory is the cross-entropy statistic from @eq-cross-entropy, otherwise known as the information statistic, which also measure the reduction in uncertainty achieved by a split. In our current context, the statistic is: 
+
+$$
+CE = -\sum_{c = 1}^C p_c \log_2p_c
+$$
+
+The _information gain_ from applying a split can be calculated as the difference between the information content before and after the split:
+
+$$
+\text{gain(split)} = \text{CE(parent)} - \text{CE(split)}
 $$
 
 The information content is measured in bits and can be interpreted as the average number of bits needed to encode the class of a randomly selected sample from the node. A node with perfect purity (all samples belonging to the same class) has an information content of zero, while a node with maximum impurity (equal distribution of classes) has the highest information content. Splits with larger information gains are preferred as they create more homogeneous nodes.
 
-Using the same example as before, the information content of the original node would be $-[0.6 \log_2(0.6) + 0.4 \log_2(0.4)] = 0.97$ bits. After the split, the information content of the first child node would be $-[0.9 \log_2(0.9) + 0.1 \log_2(0.1)] = 0.47$ bits, and for the second child node, it would be $-[0.3 \log_2(0.3) + 0.7 \log_2(0.7)] = 0.88$ bits. The weighted average would be $0.5 \times 0.47 + 0.5 \times 0.88 = 0.68$ bits, resulting in an information gain of $0.97 - 0.68 = 0.29$ bits.
+Using the same example as before, the information content of the original node would be:
+
+$$
+CE = - \left[`r r3(pr_1)`\; \log_2\left(`r r3(pr_1)`\right) + `r r3(pr_2)`\; \log_2\left(`r r3(pr_2)`\right)\right] = `r r3(ce_par)`\; \text{bits}
+$$
+
+Breaking out the calculations for each side and weighting them shows that there is a non-zero gain for this split:
+
+$$
+\begin{align}
+\text{Left} &= -\left[ \frac{`r vm_split_left["Yes"]`}{`r vm_split_denom["TRUE"]`}\; \log_2\left(\frac{`r vm_split_left["Yes"]`}{`r vm_split_denom["TRUE"]`}\right) +  \frac{`r vm_split_left["No"]`}{`r vm_split_denom["TRUE"]`}\; \log_2\left(\frac{`r vm_split_left["No"]`}{`r vm_split_denom["TRUE"]`}\right)\right]  = `r r3(-(pr_1_L * log2(pr_1_L) + pr_2_L * log2(pr_2_L)))` \notag \\
+\text{Right} &= -\left[ \frac{`r vm_split_right["Yes"]`}{`r vm_split_denom["FALSE"]`}\; \log_2\left(\frac{`r vm_split_right["Yes"]`}{`r vm_split_denom["FALSE"]`}\right) +  \frac{`r vm_split_right["No"]`}{`r vm_split_denom["FALSE"]`}\; \log_2\left(\frac{`r vm_split_right["No"]`}{`r vm_split_denom["FALSE"]`}\right)\right]  = `r r3(-(pr_1_R * log2(pr_1_R) + pr_2_R * log2(pr_2_R)))` \notag \\
+\text{Total} &= \frac{`r n_L`}{`r n_tot`} `r r3(-(pr_1_L * log2(pr_1_L) + pr_2_L * log2(pr_2_L)))` + \frac{`r n_R`}{`r n_tot`} `r r3(-(pr_1_R * log2(pr_1_R) + pr_2_R * log2(pr_2_R)))` = `r r3(ce_tot)` \; \text{bits}\notag \\
+\text{Gain} &= `r r3(ce_par)` - `r r3(ce_tot)` = `r r3(ce_par - ce_tot)`\; \text{bits} \notag
+\end{align}
+$$
 
 A limitation of information gain is its bias toward predictors with many possible values, particularly categorical predictors with numerous categories. To address this issue, Quinlan introduced the gain ratio in the C4.5 algorithm. The gain ratio is calculated by dividing the information gain by the intrinsic information of the split, which measures the potential information generated by dividing the samples according to the predictor:
 
@@ -94,7 +392,7 @@ $$
 
 Where $|S|$ is the number of samples in the parent node, $|S_i|$ is the number of samples in the $i$-th child node, and $n$ is the number of child nodes. The gain ratio penalizes splits that create many small partitions, thus addressing the bias of information gain toward predictors with many values.
 
-#### The Splitting Process for Continuous and Categorical Predictors {#sec-tree-splits-other}
+### The Splitting Process for Continuous and Categorical Predictors {#sec-tree-splits-other}
 
 ```{r}
 # Example to illustrate how split points are determined using
@@ -428,7 +726,70 @@ An important consideration in split selection is the understanding the potential
 
 This bias can lead to overfitting and poor generalization performance. Various techniques have been proposed to address this issue, including the gain ratio mentioned earlier and statistical approaches like conditional inference trees, which use statistical tests to select splits in an unbiased manner.
 
-### Growing {#sec-cls-tree-grow}
+## Missing Data Handling {#sec-cls-missing-data}
+
+Classification trees have built-in mechanisms for handling missing predictor values, which provides a significant advantage over many other modeling techniques. Instead of requiring imputation or discarding samples with missing values, trees can work directly with incomplete data, both during training and prediction.
+
+Missing data is a common issue in many datasets and can arise for various reasons, such as measurement errors, non-response, or data integration problems.  Traditional predictive modeling methods often require complete data, forcing the user to either discard incomplete samples or impute missing values.
+
+Discarding samples or imputing missing values have drawbacks.  Discarding samples with missing values can lead to biased results, especially when the missingness is due to a specific underlying cause.  On the other hand, imputation can introduce assumptions about the missing values and, if there is a sufficient amount of missingness, may distort the relationships in the data.
+
+Classification trees offer an alternative approach that can handle missing values directly, without requiring sample deletion or explicit imputation. This capability stems from the tree's hierarchical structure and the flexibility of the splitting and prediction processes.
+
+### Surrogate Splits {#sec-surrogate-splits}
+
+In the CART methodology, missing values are handled differently during tree construction and prediction. During tree construction, CART uses a "surrogate split" approach. When evaluating a potential split on a predictor with missing values, only the samples with non-missing values for that predictor are used to determine the optimal split point and calculate the improvement in the impurity measure. This ensures that the split is based on actual data rather than imputed values.
+
+Once a split has been selected, CART identifies surrogate splits that can be used when the primary split variable is missing. A surrogate split is an alternative split on a different predictor that mimics the primary split as closely as possible. Specifically, CART looks for splits that send samples to the same child nodes as the primary split would.
+
+For example, the first split in @fig-split-adjacent-tree is based on the maximum vapor predictor.  The first surrogate for this split is `r rownames(data.frame(adjacent_split_model$splits)[2,])`  There are no missing values for the forestation data set.  However, if a sample had a missing value for the maximum vapor predictor, then the model would use the `r rownames(data.frame(adjacent_split_model$splits)[2,])` at this point in the tree to send direct the sample to a terminal node (provided the sample did not have a missing value for this predictor).
+
+CART ranks surrogate splits based on their predictive association with the primary split, measured by how well they mimic the primary split on the training data. Multiple surrogate splits can be identified for each primary split, creating a hierarchy of alternatives to use when various predictors have missing values.
+
+During prediction, when a sample reaches a node with a split on a predictor for which the sample has a missing value, CART uses the best available surrogate split to determine which child node the sample should go to. If all potential surrogate splits also involve predictors with missing values for that sample, CART sends the sample in the direction of the majority of training samples.
+
+This approach allows CART to make predictions for samples with missing values without requiring explicit imputation. It also naturally handles patterns of missingness, as the surrogate splits are chosen based on the relationships observed in the training data.
+
+### Fractional Accounting {#sec-missing-propagation}
+
+The C4.5 algorithm takes a different approach to handling missing values, based on probabilistic weighting rather than surrogate splits. During tree construction, C4.5 adjusts the information gain calculations to account for missing values. When evaluating a potential split on a predictor with missing values, C4.5 calculates the information gain using only the samples with non-missing values for that predictor, then scales this gain by the fraction of non-missing data. This adjustment ensures that predictors with many missing values are not unfairly penalized or favored.
+
+C4.5 also modifies how it handles categorical predictors with missing values. When calculating the information value for a categorical predictor (used in the gain ratio calculation), C4.5 treats missing values as a separate category. This increases the number of branches in the split and affects the penalty applied to the information gain.
+
+A distinctive aspect of C4.5's approach is how it handles missing values when determining the class distribution in the resulting splits. Instead of assigning samples with missing values to a specific child node, C4.5 allows these samples to contribute fractionally to all child nodes. The fractional contribution is based on the distribution of non-missing values among the child nodes.
+
+For example, if 70% of samples with non-missing values go to the left child and 30% go to the right child, a sample with a missing value would contribute 0.7 of a sample to the left child and 0.3 of a sample to the right child. This fractional accounting means that the class frequency distribution in each node may not contain whole numbers, and the number of errors in a terminal node can also be fractional.
+
+During prediction, C4.5 uses a similar fractional approach. When a sample with missing values reaches a node with a split on a predictor for which the sample has a missing value, the sample is sent down all possible paths, with weights proportional to the distribution of non-missing values in the training data. The final prediction is based on a weighted vote from all relevant terminal nodes.
+
+This approach allows C4.5 to make use of all available information in a sample, even when some predictors have missing values. It also provides a natural way to incorporate uncertainty due to missing values into the prediction process.
+
+#### Comparison of Approaches {#sec-tree-missing-comparison}
+
+Both the CART and C4.5 approaches to handling missing data have their strengths and weaknesses. The CART approach with surrogate splits is more deterministic, as each sample follows a single path through the tree. This can make the prediction process easier to interpret and explain. Surrogate splits also explicitly model relationships between predictors, which can provide additional insights into the data. However, identifying and storing surrogate splits increases the computational complexity and memory requirements of the model.
+
+The C4.5 approach with fractional samples is more probabilistic and can better represent the uncertainty introduced by missing values. By allowing samples to contribute to multiple nodes, it makes use of all available information in the tree. This approach can be particularly effective when missingness is informative or when there are complex patterns of missingness in the data. However, the fractional accounting can make the model more difficult to interpret, and the prediction process is more complex.
+
+Both approaches have been shown to perform well in practice, and the choice between them often depends on the specific requirements of the application, such as the need for interpretability, the patterns of missingness in the data, and the computational resources available.
+
+### Handling Missing Values in Rule-Based Models {#sec-missing-rules}
+
+Rule-based models, which can be derived from classification trees, also need mechanisms for handling missing values. In C4.5Rules, which converts C4.5 trees into rule sets, the handling of missing values is integrated into the rule evaluation process. When evaluating whether a rule applies to a sample with missing values, C4.5Rules considers the rule to be partially satisfied, with the degree of satisfaction depending on the distribution of non-missing values in the training data. This partial satisfaction contributes to the overall confidence in the rule's prediction.
+
+During prediction, multiple rules may be partially satisfied due to missing values. C4.5Rules aggregates the confidence values from all relevant rules to make the final prediction, similar to the weighted voting approach used in C4.5 trees.
+This approach allows rule-based models to handle missing values without requiring explicit imputation, maintaining the flexibility and robustness of the original tree model.
+
+### Practical Considerations for Missing Data {#sec-tree-missing-considerations}
+
+While classification trees can handle missing values directly, there are still practical considerations to keep in mind when working with incomplete data.
+
+First, the effectiveness of the missing value handling mechanisms depends on the patterns of missingness in the data. If values are missing completely at random (MCAR), both the CART and C4.5 approaches should work well. If values are missing at random (MAR) or missing not at random (MNAR), the performance may depend on whether the tree can capture the relationships between the missingness and other predictors or the response variable.
+
+Second, very high rates of missingness can still be problematic, even with these sophisticated handling mechanisms. If a predictor has too many missing values, it may not be selected as a split variable, even if it would be highly informative when available. In such cases, imputation might still be beneficial as a preprocessing step.
+
+Third, the handling of missing values can interact with other aspects of the tree-building process, such as pruning. For example, in C4.5, the fractional accounting for missing values affects the calculation of the pessimistic error rate used for pruning. This interaction should be considered when tuning the model.
+
+## Growing Trees {#sec-cls-tree-grow}
 
 Growing a classification tree involves recursively applying the splitting process described above until a stopping criterion is met. The continual partitioning of the data, also referred to as recursive partitioning, creates a hierarchical or tree structure that can capture complex relationships between predictors and the response variable. The tree-growing process is a critical phase in tree construction, as it determines the relationships that will later be refined through pruning.
 
@@ -573,7 +934,7 @@ For a new sample, the predicted class probabilities are determined by the termin
 Some tree implementations also provide confidence intervals or other measures of uncertainty for these probability estimates. For example, C4.5 uses a pessimistic estimate of the error rate to provide upper and lower bounds on the class probabilities.
 The class probability estimates from terminal nodes can be used not only for classification but also for ranking and probability estimation. When a terminal node contains few samples, the quality of the probability estimates decreases. It is possible to apply Laplace smoothing as previously described for naive Bayes or to use a regularized estimate, such as the Beta-binomial method from @eq-beta-bin-mean. Alternatively, C5.0 decision trees add the event rate to the numerator count and 1.0 to the denominator. For example, suppose there were two balanced classes and three out of five samples in the terminal node were events. The raw probability is 0.60 for that class, and C5.0 would compute it as $(3 + 0.5) / (5 + 1) = 0.583$. 
 
-### Pruning {#sec-cls-tree-prune}
+## Pruning Trees {#sec-cls-tree-prune}
 
 Trees grown to maximum depth typically overfit the training data, capturing noise rather than underlying predictive patterns. Pruning addresses this issue by simplifying an overgrown tree, removing branches that do not contribute significantly to the model's predictive performance. Pruning is a critical step in tree construction, as it helps balance the trade-off between model complexity and predictive performance.
 
@@ -628,80 +989,16 @@ C4.5 also considers a more complex operation called "subtree raising," where a s
 
 While pessimistic pruning lacks the theoretical foundation of cost-complexity pruning, it is computationally efficient and often works well in practice. The confidence level parameter allows some control over the aggressiveness of pruning, with higher confidence levels resulting in more aggressive pruning.
 
-### Missing Data Handling {#sec-cls-missing-data}
 
-Classification trees have built-in mechanisms for handling missing predictor values, which provides a significant advantage over many other modeling techniques. Instead of requiring imputation or discarding samples with missing values, trees can work directly with incomplete data, both during training and prediction.
+## CART {#sec-cls-cart}
 
-Missing data is a common issue in many datasets and can arise for various reasons, such as measurement errors, non-response, or data integration problems.  Traditional predictive modeling methods often require complete data, forcing the user to either discard incomplete samples or impute missing values.
+## C5.0 {#sec-cls-c50}
 
-Discarding samples or imputing missing values have drawbacks.  Discarding samples with missing values can lead to biased results, especially when the missingness is due to a specific underlying cause.  On the other hand, imputation can introduce assumptions about the missing values and, if there is a sufficient amount of missingness, may distort the relationships in the data.
+## Conditional Inference Trees {#sec-cls-cit}
 
-Classification trees offer an alternative approach that can handle missing values directly, without requiring sample deletion or explicit imputation. This capability stems from the tree's hierarchical structure and the flexibility of the splitting and prediction processes.
+## Oblique Trees {#sec-cls-oblique}
 
-#### Surrogate Splits {#sec-surrogate-splits}
-
-In the CART methodology, missing values are handled differently during tree construction and prediction. During tree construction, CART uses a "surrogate split" approach. When evaluating a potential split on a predictor with missing values, only the samples with non-missing values for that predictor are used to determine the optimal split point and calculate the improvement in the impurity measure. This ensures that the split is based on actual data rather than imputed values.
-
-Once a split has been selected, CART identifies surrogate splits that can be used when the primary split variable is missing. A surrogate split is an alternative split on a different predictor that mimics the primary split as closely as possible. Specifically, CART looks for splits that send samples to the same child nodes as the primary split would.
-
-For example, the first split in @fig-split-adjacent-tree is based on the maximum vapor predictor.  The first surrogate for this split is `r rownames(data.frame(adjacent_split_model$splits)[2,])`  There are no missing values for the forestation data set.  However, if a sample had a missing value for the maximum vapor predictor, then the model would use the `r rownames(data.frame(adjacent_split_model$splits)[2,])` at this point in the tree to send direct the sample to a terminal node (provided the sample did not have a missing value for this predictor).
-
-CART ranks surrogate splits based on their predictive association with the primary split, measured by how well they mimic the primary split on the training data. Multiple surrogate splits can be identified for each primary split, creating a hierarchy of alternatives to use when various predictors have missing values.
-
-During prediction, when a sample reaches a node with a split on a predictor for which the sample has a missing value, CART uses the best available surrogate split to determine which child node the sample should go to. If all potential surrogate splits also involve predictors with missing values for that sample, CART sends the sample in the direction of the majority of training samples.
-
-This approach allows CART to make predictions for samples with missing values without requiring explicit imputation. It also naturally handles patterns of missingness, as the surrogate splits are chosen based on the relationships observed in the training data.
-
-#### Fractional Accounting {#sec-missing-propagation}
-
-The C4.5 algorithm takes a different approach to handling missing values, based on probabilistic weighting rather than surrogate splits. During tree construction, C4.5 adjusts the information gain calculations to account for missing values. When evaluating a potential split on a predictor with missing values, C4.5 calculates the information gain using only the samples with non-missing values for that predictor, then scales this gain by the fraction of non-missing data. This adjustment ensures that predictors with many missing values are not unfairly penalized or favored.
-
-C4.5 also modifies how it handles categorical predictors with missing values. When calculating the information value for a categorical predictor (used in the gain ratio calculation), C4.5 treats missing values as a separate category. This increases the number of branches in the split and affects the penalty applied to the information gain.
-
-A distinctive aspect of C4.5's approach is how it handles missing values when determining the class distribution in the resulting splits. Instead of assigning samples with missing values to a specific child node, C4.5 allows these samples to contribute fractionally to all child nodes. The fractional contribution is based on the distribution of non-missing values among the child nodes.
-
-For example, if 70% of samples with non-missing values go to the left child and 30% go to the right child, a sample with a missing value would contribute 0.7 of a sample to the left child and 0.3 of a sample to the right child. This fractional accounting means that the class frequency distribution in each node may not contain whole numbers, and the number of errors in a terminal node can also be fractional.
-
-During prediction, C4.5 uses a similar fractional approach. When a sample with missing values reaches a node with a split on a predictor for which the sample has a missing value, the sample is sent down all possible paths, with weights proportional to the distribution of non-missing values in the training data. The final prediction is based on a weighted vote from all relevant terminal nodes.
-
-This approach allows C4.5 to make use of all available information in a sample, even when some predictors have missing values. It also provides a natural way to incorporate uncertainty due to missing values into the prediction process.
-
-#### Comparison of Approaches {#sec-tree-missing-comparison}
-
-Both the CART and C4.5 approaches to handling missing data have their strengths and weaknesses. The CART approach with surrogate splits is more deterministic, as each sample follows a single path through the tree. This can make the prediction process easier to interpret and explain. Surrogate splits also explicitly model relationships between predictors, which can provide additional insights into the data. However, identifying and storing surrogate splits increases the computational complexity and memory requirements of the model.
-
-The C4.5 approach with fractional samples is more probabilistic and can better represent the uncertainty introduced by missing values. By allowing samples to contribute to multiple nodes, it makes use of all available information in the tree. This approach can be particularly effective when missingness is informative or when there are complex patterns of missingness in the data. However, the fractional accounting can make the model more difficult to interpret, and the prediction process is more complex.
-
-Both approaches have been shown to perform well in practice, and the choice between them often depends on the specific requirements of the application, such as the need for interpretability, the patterns of missingness in the data, and the computational resources available.
-
-#### Handling Missing Values in Rule-Based Models {#sec-missing-rules}
-
-Rule-based models, which can be derived from classification trees, also need mechanisms for handling missing values. In C4.5Rules, which converts C4.5 trees into rule sets, the handling of missing values is integrated into the rule evaluation process. When evaluating whether a rule applies to a sample with missing values, C4.5Rules considers the rule to be partially satisfied, with the degree of satisfaction depending on the distribution of non-missing values in the training data. This partial satisfaction contributes to the overall confidence in the rule's prediction.
-
-During prediction, multiple rules may be partially satisfied due to missing values. C4.5Rules aggregates the confidence values from all relevant rules to make the final prediction, similar to the weighted voting approach used in C4.5 trees.
-This approach allows rule-based models to handle missing values without requiring explicit imputation, maintaining the flexibility and robustness of the original tree model.
-
-#### Practical Considerations for Missing Data {#sec-tree-missing-considerations}
-
-While classification trees can handle missing values directly, there are still practical considerations to keep in mind when working with incomplete data.
-
-First, the effectiveness of the missing value handling mechanisms depends on the patterns of missingness in the data. If values are missing completely at random (MCAR), both the CART and C4.5 approaches should work well. If values are missing at random (MAR) or missing not at random (MNAR), the performance may depend on whether the tree can capture the relationships between the missingness and other predictors or the response variable.
-
-Second, very high rates of missingness can still be problematic, even with these sophisticated handling mechanisms. If a predictor has too many missing values, it may not be selected as a split variable, even if it would be highly informative when available. In such cases, imputation might still be beneficial as a preprocessing step.
-
-Third, the handling of missing values can interact with other aspects of the tree-building process, such as pruning. For example, in C4.5, the fractional accounting for missing values affects the calculation of the pessimistic error rate used for pruning. This interaction should be considered when tuning the model.
-
-## Single Trees {#sec-cls-single-tree}
-
-### CART {#sec-cls-cart}
-
-### C5.0 {#sec-cls-c50}
-
-### Conditional Inference Trees {#sec-cls-cit}
-
-### Oblique Trees {#sec-cls-oblique}
-
-### Bayesian Trees {#sec-cls-tree-bayes}
+## Bayesian Trees {#sec-cls-tree-bayes}
 
 ## The Instability of Trees {#sec-cls-tree-unstable}
 
