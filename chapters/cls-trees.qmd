@@ -95,7 +95,9 @@ As with previous chapters, we'll use the forestation data to illustrate how thes
 
 ## Creating Splits {#sec-cls-tree-split}
 
-Splitting or recursively partitioning the data is the foundation of classification tree construction.  Unlike regression trees that aim to minimize variance, classification trees focus on creating nodes with high purity, that is, nodes that contain a higher proportion of samples from a single class.  The effectiveness of a classification tree largely depends on how well the method partitions the predictor space into regions that separate the classes.
+Splitting or recursively partitioning the data is the foundation of classification tree construction. The effectiveness of a classification tree largely depends on how well the method partitions the predictor space into regions that separate the classes.
+
+In this section, we'll discuss the tactics of splitting qualitative and quantitative predictors using various methods. Our goal is to understand and elucidate the possible objective functions that could be optimized when evaluating a specific predictor. Recall that splitting occurs recursively. We can explain the process independent of the current splitting level. 
 
 To more easily conceptualize splitting methods, we'll use the small subset of training data shown in @tbl-small-forest. From these data ($n = `r nrow(small_forest)`$), the raw probabilities for each class are $\widehat{p}_1 = `r r3(pr_1)`$ (forested) and $\widehat{p}_2 = `r r3(pr_2)`$ (unforested). 
 
@@ -115,9 +117,6 @@ small_forest |>
     county = "County"
   )
 ```
-
-
-### Types of Splits  {#sec-split-types}
 
 Let's assume that the splits in our trees are _binary_; they produce two partitions of the data. This can be via thresholding a continuous predictor or by assigning levels of categorical predictors to two groups (e.g., `{A, B}` vs `{C}`). In this case, a proposed split can be represented by a 2 $\times$ 2 table as seen in @tbl-split-2-x-2.  
 
@@ -230,7 +229,9 @@ $$
 \text{Gini} = p_1(1-p_1) + p_2(1-p_2) = 2p_1p_2
 $$
 
-where $p_1$ and $p_2$ are the class probabilities in the node.  The Gini index can be interpreted as a measure of node impurity. It reaches its minimum value of zero when a node contains only one class (perfect purity) and its maximum value of 0.5 when classes are evenly distributed (maximum impurity).  When evaluating a potential split, the algorithm calculates the weighted average of the Gini indices for the resulting child nodes, with weights proportional to the number of samples in each node. The split that minimizes this weighted average is selected.
+where $p_1$ and $p_2$ are the class probabilities in the node.  The Gini index can be interpreted as a measure of node impurity. It reaches its minimum value of zero when a node contains only one class (perfect purity) and its maximum value of 0.5 when classes are evenly distributed (maximum impurity).  
+
+When evaluating a potential split, the algorithm calculates the weighted average of the Gini indices for the resulting child nodes, with weights proportional to the number of samples in each node. The split that minimizes this weighted average is selected.
 
 For the data in @tbl-small-forest, The Gini index for this node would be $2 \times `r round(pr_1, 3)` \times `r round(pr_2, 3)` = `r round(pr_1 * pr_2, 3)`$. Now suppose a split value for maximum vapor of `r vm_split` creates two child nodes: 
 
@@ -345,7 +346,17 @@ $$
 \end{align}
 $$
 
-The Gini value for this split is smaller than the corresponding value from the parent node and this indicates a reduction in impurity. Note that a number of tree-based models include a tuning parameter that specifies _how much of a gain_ occurs in order to make the split. 
+The Gini value for this split is smaller than the corresponding value from the parent node and this indicates a reduction in impurity. We often formulate the importance of a split in terms of its _gain_ over the current situation. Following the notation from , our objective function is denoted as $\psi$ and the gain is computed as:
+
+$$
+\psi_{gain} = 
+\begin{cases}
+\psi_L + \psi_R - \psi_P & \text{if maximize } \psi \notag \\
+\psi_P - \psi_L - \psi_R & \text{if minimize } \psi
+\end{cases}
+$$
+
+where _L_, _R_, and _P_ represent the statistics from the left split, the right split, and the parent (i.e., prior to splitting). For the Gini statistic, the gain is `r round(pr_1 * pr_2, 3)` - `r r3(gini_tot)` = `r round(pr_1 * pr_2 - gini_tot, 3)`. During training, we can also impose a condition that a split can only be made if the expected gain exceeds a minimum threshold and/or if there are at least $n_{min}$ data points in the leaf. One or both of these can be treated as tuning parameters to discourage excessively deep trees, which may overfit.
 
 When there are $C > 2$ classes, the more general form of the statistic is: 
 
@@ -358,12 +369,6 @@ Another common splitting criterion based on information theory is the cross-entr
 
 $$
 CE = -\sum_{k = 1}^C p_k \log_2p_k
-$$
-
-The _information gain_ from applying a split can be calculated as the difference between the information content before and after the split:
-
-$$
-\text{gain(split)} = \text{CE(parent)} - \text{CE(split)}
 $$
 
 The information content is measured in bits and can be interpreted as the average number of bits needed to encode the class of a randomly selected sample from the node. A node with perfect purity (all samples belonging to the same class) has an information content of zero, while a node with maximum impurity (equal distribution of classes) has the highest information content. Splits with larger information gains are preferred as they create more homogeneous nodes.
@@ -444,17 +449,9 @@ $$ {#eq-xgboost-l2}
 
 Unlike $\lambda_1$, this penalizes the sum of the current data at the node, which can range from 0 to $n/2$. All things being equal, this will penalize larger data sets more than others. However, very uncertain predictions (values near $\widehat{p}_{ij} = 0.5$) will affect this sum more than others. 
 
-Both regularization methods can be used simultaneously. 
+Both regularization methods can be used simultaneously and can be considered tuning parameters. 
 
-During the search for the optimal split, the XGBoost splitting statistic is computed for both sides of the split so that the gain can be measured:
-
-$$
-\psi_{gain} = \psi_L + \psi_R - \psi_P
-$$
-
-where again, L/R/P signifies the statistic for the left side, the right side, and the parent. 
-
-During training, we can also impose a condition that a split can only be made if the expected gain exceeds a minimum threshold and/or if there are at least $n_{min}$ data points in the leaf. These two conditions, along with the two penalty parameters, can be considered tuning parameters. 
+As with previous statistics, the XGBoost splitting statistic is computed for both sides of the split so that the gain can be measured. 
 
 While LightGBM uses the same statistic as XGBoost, CatBoost uses essentially the same statistic with some slight alterations. First, there is no L<sub>1</sub> regularization applied. Second, the L<sub>2</sub> penalty value is scaled to be: 
 
@@ -686,9 +683,9 @@ max_depth_binary_split_model <-
   max(rpart:::tree.depth(as.integer(row.names(binary_split_model$frame))))
 ```
 
-For continuous predictors, the process of finding the optimal split point involves evaluating all possible binary partitions of the data based on the predictor values. The algorithm first orders the samples according to the predictor values, then evaluates splits between adjacent unique values. For each potential split point, it calculates the chosen impurity metric (described above) and selects the split that optimizes this criteria.
+For continuous predictors, the process of finding the optimal split point involves evaluating all possible binary partitions of the data based on the predictor values. The algorithm first orders the samples according to the predictor values, then evaluates splits between adjacent unique values. For each potential split point, it calculates the chosen split criterion and selects the split that optimizes this criterion
 
-The computational complexity of this process is generally $O(n \log n)$ for each predictor, where $n$ is the number of samples, due to sorting. Once the samples are sorted, evaluating each potential split point is efficient, as the class distributions can be updated incrementally when moving through the sorted list.
+The computational complexity of this process is generally $O(n \log n)$ for each predictor, where $n$ is the number of samples, due to sorting. Once the samples are sorted, evaluating each potential split point can be efficient, as the class distributions can be updated incrementally when moving through the sorted list.
 
 @fig-split-methods illustrates the metrics described in the previous section for the maximum vapor predictor in the forested data.  For this predictor, the information gain and gain ratio metrics identify the same split point for maximum vapor (`r best_ig_split`).  The Gini Index also has a near minimum at the split point.  However, the metric is minimized at a much larger maximum vapor value of `r best_gini_split`.  In this example, choice of metric would have an impact on the samples contained in the resulting nodes and could lead to vastly different models.
 
@@ -790,14 +787,9 @@ rpart.plot(
 
 However, the grouped categories approach can sometimes capture more complex relationships between categories and the response variable. It allows the algorithm to group categories that have similar effects on the response, potentially leading to more accurate and interpretable models. The independent categories approach, on the other hand, treats each category independently, which may miss important interactions between categories but often results in simpler models.
 
-
-
-
-As we'll see in the next chapter, these models often pre-bin numeric predictor data (a.k.a. quantization) to increase computational efficiency. Those techniques are described in @sec-TODO. 
-
 XGBoost and LightGBM take very similar approaches to split selection for categorical predictors. First, observations with missing predictor values are placed in a separate bin. Second, the predictor categories are ordered using some statistic, similar to the CART discussion earlier^[The specific statistics are discussed momentarily.]. If there are "few" category values, a full set of binary indicators is created and treated in the same way as numeric predictors. This would generate a potential set of one-versus-all splits. If there are numerous categories, a two-pass approach is used to limit the total number of possible splits to consider. The forward pass starts with the lowest-ranked categories and sequentially adds them to the left split grouping (all others go to the right). The backward pass does the opposite, sequentially grouping the highest-ranked categories. 
 
-For example, suppose we have a predictor with 26 categories, ranked _A_ to _Z_. If we were to only consider five splits in each pass, we would consider partitions: 
+For example, suppose we have a predictor with 26 categories, ranked _A_ to _Z_. If we were to only consider a maximum of five categories within a split, we would consider partitions: 
 
 :::: {.columns}
 
