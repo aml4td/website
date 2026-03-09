@@ -88,6 +88,10 @@ split_best <-
   forested_split_examples |> 
   slice_max(value, by = metric) |> 
   mutate(split = format(split_value, digits = 3, big.mark = ","))
+
+# ------------------------------------------------------------------------------
+
+load("../RData/oblique_example.RData")
 ```
 
 Classification trees are a powerful and interpretable approach for classification problems.  Their structure consists of nested if-then statements that partition the predictor space into regions, where each is associated with a specific class. We've already seen them in a few different places:  @fig-reg-tree visualized a regression tree for the food delivery data while @fig-hotels-agent-missing shows a classification tree to understand missingness. 
@@ -221,7 +225,6 @@ Example notation for a binary split of an outcome with $C=2$ class levels.
 :::
 
 :::: 
-
 
 In this case, $n$ is the number of training set points available at the time and the plus signs indicate the marginal totals; for example $n_{+1} = n_{11} + n_{21}$. This table is shown for thresholding numeric predictors, but is also valid for categorical splits. When thresholding, we denote the "left split " as being associated with smaller predictor value (i.e., $X\le c$) side and the "right split" as having larger predictor values. 
 
@@ -376,7 +379,6 @@ $$
 Gini = \sum _{k=1}^{C}\left(p_{k}\sum _{k'\neq k}^Cp_{k'}\right)
 $$
 
-
 Another common splitting criterion based on information theory is the cross-entropy statistic from @eq-cross-entropy, otherwise known as the information statistic, which also measure the reduction in uncertainty achieved by a split. In our current context, the statistic is: 
 
 $$
@@ -473,7 +475,7 @@ This mechanism is probably intended to ensure that the regularization effect is 
 
 Third, when computing the final splitting statistic, CatBoost does not subtract the parent value (i.e., $\psi_P$).
 
-### Splitting Quantitiative Predictors {#sec-tree-splits-quantitiative}
+### Quantitiative Predictors {#sec-tree-splits-quantitiative}
 
 ```{r}
 #| label: summy0split-info
@@ -646,10 +648,9 @@ Different splitting criteria for the maximum vapor predictor data from the entir
 
 :::
 
-
 The split curves and optimal values were the same for information gain, the $\chi^2$ statistic, and the three boosting methods. Note that, for the latter, the split-point candidates were not the same. Each boosting method used a binning strategy with 1,273 possible breaks. For 2 $\times$ 2 tables, these statistics are directly proportional to one another and differ by a constant. Their split values ranged from `r split_best$split[split_best$metric == "CatBoost"]` to `r split_best$split[split_best$metric == "Information Gain"]`, mostly due to small numerical differences. The curve for the information gain statistic was slightly shifted to the right, but also produces an optimal split in this region. 
 
-### Splitting Qualitative Predictors {#sec-tree-splits-qualitative}
+### Qualitative Predictors {#sec-tree-splits-qualitative}
 
 Handling categorical predictors in classification trees presents unique challenges as compared to continuous predictors. There are two main approaches to incorporating categorical predictors in tree models.  The first approach allows the algorithm to bin the levels of a predictor into two categories, while the second approach creates new dummy variables for each category (@sec-indicators). [Section 5.7](https://feat.engineering/05-Encoding_Categorical_Predictors.html#sec-categorical-trees) of @fes contains a broad discussion of these two strategies. 
 
@@ -782,9 +783,48 @@ $n_{+j}$ is the number of events in in category $j$ within all of the $n$ rows u
 
 For _ordered_ categories, some algorithms restrict splits to maintain the ordering of categories, only allowing splits that group adjacent categories.
 
-### Ordinal Predictors and Linear Combination Splits {#sec-other-splits}
+### Oblique Splits {#sec-oblique-splits}
 
 Some advanced tree algorithms consider splits based on linear combinations of predictors [@murthy1994system;@wickramarachchi2016hhcart] These oblique trees can capture more complex decision boundaries than traditional trees, which are limited to axis-parallel splits. For example, an oblique tree might use a split like "if $2 \times \text{Predictor A} + 3 \times \text{Predictor B} > 5$ then...". While these splits can lead to more accurate models, they often sacrifice the interpretability.
+
+To demonstrate, a logistic regression model was simulated with linear predictor $\eta = 0.1 + 5.0\, A - 5.0\, B$ where A and B had a bivariate Gaussian distribution with a correlation coefficient of 0.7. This configuration results in slightly overlapping data clouds, as seen in the left-hand panel of @fig-oblique-splits. While this pattern is trivial for a logistic model to estimate, a tree-based model must go to heroic lengths to emulate a diagonal line. The tree fit shown in the middle panel required `r cart_nodes` terminal nodes to produce the blocky step function that does a mediocre job in separating the data. 
+
+::: {#fig-oblique-splits}
+
+::: {.figure-content}
+
+```{r}
+#| label: oblique-splits
+#| echo: false
+#| warning: false
+#| out-width: 85%
+#| fig-width: 7
+#| fig-height: 3
+
+oblique_example |>
+  ggplot(aes(A, B)) +
+  geom_point(data = logit_dat, aes(col = class), alpha = 1 / 2, cex = 3 / 4) +
+  geom_contour(
+    aes(z = .pred_one),
+    breaks = 1 / 2,
+    col = "black",
+    linewidth = 3 / 4
+  ) +
+  coord_fixed() +
+  facet_wrap( ~ split) +
+  labs(x = "Predictor A", y = "Predictor B") +
+  scale_color_manual(values = c("#DF9ED4FF", "#3C4B99FF")) +
+  theme_light() +
+  theme(legend.position = "top")
+```
+
+:::
+
+An example of rectangular and obique splits. The data were simulated using a linear predictor of $\eta = 0.1 + 5.0\, A - 5.0\, B$ and a logit link.
+
+:::
+
+An oblique tree required a single split to produce the class boundary shown in the right-hand panel. Using a training set of $n_{tr} = 500$ data points in the training set, the diagonal split does a remarkable job approximating the underlying pattern; it's split uses the rule $\widehat{\eta} = `r obl_eqn`$.
 
 ## Understanding Bias in Splitting {#sec-tree-bias}
 
@@ -1054,7 +1094,6 @@ C5.0 also considers a more complex operation called "subtree raising," where a s
 
 While pessimistic pruning lacks the theoretical foundation of cost-complexity pruning, it is computationally efficient and often works well in practice. The confidence level parameter allows some control over the aggressiveness of pruning, with higher confidence levels resulting in more aggressive pruning.
 
-
 ## Terminal Node Estimates {#sec-tree-estimates}
 
 After the classification tree is built, each terminal node generates a raw probability for each class based on the training samples that fall into that node. For a binary classification problem, this vector consists of the proportion of samples in each class within the node. For example, in the table shown in @sec-tree-splitting, the left split contains six samples and, based on the split results, the probability estimates would be (5/6, 1/6).
@@ -1078,7 +1117,7 @@ $$ {#eq-xgboost-estimate}
 
 In these equations, $\widehat{\mathcal{F}}_{ik}$ plays a part similar to a linear predictor and can range across the entire real line. The relationship between that value and the probability $\widehat{p}_{ik}$ is a _logistic_ link. We'll see more of this format in the next chapter. 
 
-## Specific Tree-based Models
+## Specific Tree-Based Models {#sec-cls-tree-models}
 
 ### CART {#sec-cls-cart}
 
