@@ -97,7 +97,6 @@ load("../RData/oblique_example.RData")
 Classification trees are a powerful and interpretable approach for classification problems.  Their structure consists of nested if-then statements that partition the predictor space into regions, where each is associated with a specific class. We've already seen them in a few different places:  @fig-reg-tree visualized a regression tree for the food delivery data, while @fig-hotels-agent-missing shows a classification tree to understand missingness. 
 
 As a refresher, decision trees are a hierarchical set of splits of predictors that produce two or more nodes^[Some models, such as C5.0, can produce more than two groups, and these will be discussed on a case-by-case basis.]. The split conditions (or rules) are logical statements based on the predictor values. We've seen rules such as `hour < 14.769` and `day in {Fri, Sat}`. As decision trees are trained, the child nodes produced by each split are split further until a predefined stopping rule is triggered. At the end of the tree are the _terminal nodes_, and the training data that fall into these nodes are used to estimate the model predictions. The terminal nodes are defined by a complete set of mutually exclusive rules that contain all of the split conditions from each stage of splitting.    
-
 The two seminal works in this area are @breiman1984classification and @quinlan1993c4. Additionally, @loh2014fifty provides a more recent and comprehensive review. 
 
 To describe the myriad aspects of tree-based models, we'll start from the smallest computations first, the tools to choose a split point for the logical statement inside the rule. After this, we'll describe how missing values can be handled algorithmically during split selection, tree growth, and pruning, and other relevant details. After these discussions, specific single-tree-based models are described, such as CART, C5.0, and others.
@@ -814,7 +813,7 @@ oblique_example |>
   facet_wrap( ~ split) +
   labs(x = "Predictor A", y = "Predictor B") +
   scale_color_manual(values = c("#DF9ED4FF", "#3C4B99FF")) +
-  theme_light() +
+  theme_bw() +
   theme(legend.position = "top")
 ```
 
@@ -965,7 +964,7 @@ vapor_max_roughness_fig <-
     limits = c(0, 1)
   ) +
   labs(title = "(a)", x = "Maximum Vapor", y = "Roughness") +
-  theme_light() +
+  theme_bw() +
   theme(plot.title = element_text(hjust = 0, size = 14))
 
 vapor_max_northness_model <-
@@ -1011,7 +1010,7 @@ vapor_max_northness_fig <-
     limits = c(0, 1)
   ) +
   labs(title = "(b)", x = "Maximum Vapor", y = "Northness", color = "P(class)") +
-  theme_light() +
+  theme_bw() +
   theme(
     plot.title = element_text(hjust = 0, size = 14),
     legend.position = "bottom"
@@ -1124,6 +1123,161 @@ In these equations, $\widehat{\mathcal{F}}_{ik}$ plays a part similar to a linea
 ### C5.0 {#sec-cls-c50}
 
 ### Conditional Inference Trees {#sec-cls-cit}
+
+Conditional inference trees [@hothorn2006unbiased] take a more statistically motivated approach to building a tree model. When creating a new split, a statistical test is applied to each predictor to determine whether there is a statistical relationship between each predictor and the outcome. If there is a relationship that is statistically significant, the most important predictor is chosen, and an appropriate split is made (usually with the $\chi^2$ test statistic). 
+
+```{r}
+#| label: ctree-example
+#| include: false
+#| cache: true
+
+forested_train_alt <-
+  recipe(class ~ ., data = forested_train) |>
+  step_other(county, threshold = 0.019) |>
+  prep() |>
+  bake(new_data = NULL)
+
+extract_info <- function(x, id) {
+  x$criterion |>
+    as_tibble(rownames = "type") |>
+    pivot_longer(cols = c(-type)) |>
+    pivot_wider(id_cols = c(name), values_from = value, names_from = type) |>
+    mutate(
+      p.value = abs(p.value),
+      log_p = -log10(p.value)
+    ) |>
+    mutate(
+      data_size = x$nobs,
+      chosen = names(x$p.value),
+      chose_p = unname(x$p.value),
+      node_id = id
+    )
+}
+
+cit_fit <- ctree(class ~ ., data = forested_train_alt, control = ctree_control(cores = 10, saveinfo = TRUE))
+node_id <- nodeids(cit_fit)
+cit_info <- nodeapply(cit_fit, node_id, function(node) node$info)
+is_terminal <- map_lgl(cit_info, is.null)
+cit_selection <- map2_dfr(cit_info[!is_terminal], node_id[!is_terminal], extract_info)
+
+cit_first <- 
+  cit_selection |>
+  filter(node_id == 1) |> 
+  left_join(
+    name_key |> rename(name = variable), by = "name"
+  ) |> 
+  mutate(
+    label = factor(ifelse(is.na(text), name, text)),
+    Size = paste("Size =", format(data_size, big.mark = ",")),
+    Size = factor(Size, levels = rev(sort(unique(Size)))),
+    label = reorder(label, statistic)
+  ) 
+
+cit_first_p <- 
+  cit_first$p.value[cit_first$p.value > 0] |> 
+  min() |> 
+  log10() |> 
+  round(0)
+
+small_n_id <- 
+  cit_selection |> 
+  slice_min(data_size) |> 
+  slice(1) |> 
+  pluck("node_id")
+
+cit_small <- 
+  cit_selection |>
+  filter(node_id == small_n_id) |> 
+left_join(
+    name_key |> rename(name = variable), by = "name"
+  ) |> 
+  mutate(
+    label = factor(ifelse(is.na(text), name, text)),
+    Size = paste("Size =", format(data_size, big.mark = ",")),
+    Size = factor(Size, levels = rev(sort(unique(Size)))),
+    label = reorder(label, statistic)
+  ) 
+
+```
+
+There are a few interesting aspects to this process. First, there is no pruning phase. As splitting continues, the amount of data per node decreases, and so does the statistical test's ability to identify a predictor as "significant." To make this judgment, a p-value cutoff is used to determine whether the splitting process should proceed. This stopping criterion can be coupled with the usual threshold for the number of data points required for splitting, the maximum tree depth, and so on. The p-value cutoff can be a tuning parameter. Additionally, to be more conservative, the p-values between predictors can be adjusted for multiple testing using a Bonferroni or similar correction. 
+
+For example, during the first pass of the splitting process, the entire training set is used to evaluate the significance of each predictor (regardless of data type). @fig-cit-screening shows the results for each predictor. These test statistics are very large, and their corresponding p-values can be smaller than 10<sup>`r cit_first_p`</sup>, indicating extremely strong statistical significance. In this case, the `r cit_first$chosen[1]` predictor was chosen for splitting. The same figure shows another pass much later in the splitting process, where only $n = `r cit_small$data_size[1]`$ points are available. The test statistics are much smaller, and their corresponding p-values range from `r round(min(cit_small$p.value), 4)` to `r round(max(cit_small$p.value), 4)`. At this point, the best p-value is no longer significant enough, and the splitting process halts.  
+
+
+```{r}
+#| label: fig-cit-screening
+#| echo: false
+#| warning: false
+#| out-width: 90%
+#| fig-width: 8
+#| fig-height: 4
+#| fig-cap: Two examples of conditional inference tree screening. The left panel is the initial split with a large sample size and test statistics. The right panel shows a node much deeper in the tree with a smaller sample size and no statistically significant predictors. 
+
+p_first <- 
+  cit_first |>
+  ggplot(aes(x = statistic, y = label)) +
+  geom_point() +
+  facet_wrap(~ Size, scales = "free_x") +
+  labs(x = "Test Statistic", y = NULL) +
+  theme_bw()
+
+p_small <- 
+  cit_small |>
+  ggplot(aes(x = statistic, y = label)) +
+  geom_point() +
+  facet_wrap(~ Size, scales = "free_x") +
+  labs(x = "Test Statistic", y = NULL)+
+  theme_bw()
+
+p_first + p_small
+```
+
+What statistical test is used to evaluate the predictors? @StrasserWeber developed mathematical methods for permutation tests of various data types and found a unifying framework. Their method shows that many statistical tests fall under the rubric of _linear statistics_, and that their permutation test statistics can have the same distributions. In essence, we can conduct many different types of statistical tests and still make an "apples-to-apples" comparison (either using the test statistics or their p-values). For classification, @tbl-cit-tests shows different combinations of predictor and outcome types, their corresponding test descriptions, and any connection to existing statistical methods. 
+
+::: {#tbl-cit-tests}
+
+```{r}
+#| label: cit-tests
+
+cit_types <- tribble(
+  ~outcome, ~predictor, ~type, ~refs,
+"Outcome: Quantitative",        "Quantitative", "Correlation test", "Pearson correlation [@pearson1931test]", 
+"Outcome: Quantitative",        "Qualitative", "ANOVA-type test", "Kruskal-Wallis[@kruskal1952use]", 
+"Outcome: Quantitative",        "Ordered Qualitative", "linear-by-linear trend test", "Jonckheere-Terpstra [@jonckheere1954distribution]", 
+"Outcome: Binary", "Quantitative", "Two-sample location test", "Wilcoxon rank-sum [@mann1947test]", 
+"Outcome: Binary", "Qualitative", "Independence test", "Chi-squared", 
+"Outcome: Binary", "Ordered Qualitative", "Trend test", "Cochran-Armitage [@cochran1954some;@armitage1955tests]", 
+"Outcome: Multiclass", "Quantitative", "Multi-sample location test", "Kruskal-Wallis [@kruskal1952use]", 
+"Outcome: Multiclass", "Qualitative", "Independence test", "Chi-squared", 
+"Outcome: Multiclass", "Ordered Qualitative", "Multi-way trend test", "none", 
+"Outcome: Ordered Qualitative", "Quantitative", "Correlation test with scores", "Spearman-type [@fieller1957tests]", 
+"Outcome: Ordered Qualitative", "Qualitative", "Location test on scores", "none",
+"Outcome: Ordered Qualitative", "Ordered Qualitative", "Linear-by-linear test", "[@Agresti2002vi]"
+)
+
+cit_types |> 
+  group_by(outcome) |> 
+  gt() |> 
+  cols_label(
+    predictor = "Predictor Type",
+    type = "Test Type",
+    refs = "Equivalent"
+  ) |> 
+  fmt_markdown(columns = c(outcome, refs)) |>
+  tab_style(
+    style = list(cell_fill(color = "gray95"),cell_text(size = "smaller")),
+    locations = cells_row_groups()
+  )
+```
+
+The permutation test types for different outcome and predictor variables, along with their conventional equivalents. 
+
+:::
+
+For example, when evaluating numeric predictors such as longitude or annual precipitation, we compare the centers of their distributions, similar to comparing the medians per class. For our county predictor, we use the previously discussed $\chi^2$ statistic. For ordered qualita columns (e.g., low, medium, high)
+
+The primary benefit of using this framework for data splitting is that the predictor selection process is completely unbiased. Since permutation statistics have the same distribution across data types and characteristics, these factors do not affect their probability of selection for splitting. It also has the benefit of producing trees that are more stable (i.e., lower model variance) than those from most other models described here.
 
 ### Oblique Trees {#sec-cls-oblique}
 
