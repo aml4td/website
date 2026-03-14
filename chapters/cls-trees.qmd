@@ -22,6 +22,11 @@ library(rpart)
 library(partykit)
 library(patchwork)
 library(rpart.plot)
+library(gt)
+library(tidyr)
+library(tibble)
+library(forcats)
+
 
 # ------------------------------------------------------------------------------
 # set options
@@ -34,6 +39,7 @@ daemons(parallel::detectCores())
 # load data 
 
 load("../RData/forested_data.RData")
+load("../RData/hotel_rates_all.RData")
 ```
 
 Classification trees are a powerful and interpretable approach for classification problems.  Their structure consists of nested if-then statements that partition the predictor space into regions, where each is associated with a specific class. We've already seen them in a few different places:  @fig-reg-tree visualized a regression tree for the food delivery data while @fig-hotels-agent-missing shows a classification tree to understand missingness. 
@@ -54,23 +60,188 @@ Splitting or recursively partitioning the data is the foundation of classificati
 
 The choice of splitting criterion is a critical decision in tree construction, because this determines how the algorithm evaluates potential splits.  Several metrics exist to evaluate the quality of potential splits, each with its own theoretical foundation and practical implications.
 
+To build the framework for explaining splitting criteria, consider the contingency table (@tbl-split-category) which provides the symbolic representation of the number of samples in each cell for each split-point, category combination.  In this table, the $.$ symbol indicates a summation across the counts in either the row or column.
+
+```{r}
+#| label: tbl-split-category
+#| tbl-cap: "The symbolic representation of the number of samples at each split-point, category combination."
+
+split_category_table <-
+  tibble(`Split` = c("< split", "&ge; split", "Total"),
+         `Category 1` = c("<i>n</i><sub>11</sub>", 
+                         "<i>n</i><sub>21</sub>", 
+                         "<i>n</i><sub>.1</sub>"),
+         `Category 2` = c("<i>n</i><sub>12</sub>", 
+                         "<i>n</i><sub>22</sub>", 
+                         "<i>n</i><sub>.2</sub>"),
+         `Total` = c("<i>n</i><sub>1.</sub>", 
+                     "<i>n</i><sub>2.</sub>", 
+                     "<i>n</i>"))
+
+gt(split_category_table) |>
+  fmt_markdown(columns = everything()) |>
+  cols_align(align = "center", columns = everything())
+```
+
 The Gini index [@breiman1984classification] is one of the most widely used splitting criterion in classification trees. For a two-class problem, the Gini index is defined as:
 
 $$
 \text{Gini} = p_1(1-p_1) + p_2(1-p_2) = 2p_1p_2
 $$
 
-where $p_1$ and $p_2$ are the class probabilities in the node.  The Gini index can be interpreted as a measure of node impurity. It reaches its minimum value of zero when a node contains only one class (perfect purity) and its maximum value of 0.5 when classes are evenly distributed (maximum impurity).  When evaluating a potential split, the algorithm calculates the weighted average of the Gini indices for the resulting child nodes, with weights proportional to the number of samples in each node. The split that minimizes this weighted average is selected.
+where $p_1 = \left(\frac{n_{.1}}{n}\right)$ and $p_2 = \left(\frac{n_{.2}}{n}\right)$ are the class probabilities in the node.  The reason that we can simplify the equation to the right hand side is because for a two-class problem $p_1$ + $p_2$ = 1.  The Gini index can be interpreted as a measure of node impurity. It reaches its minimum value of zero when a node contains only one class (perfect purity) and its maximum value of 0.5 when classes are evenly distributed (maximum impurity).  When evaluating a potential split, the algorithm calculates the weighted average of the Gini indices for the resulting child nodes, with weights proportional to the number of samples in each node. The split that minimizes this weighted average is selected.
 
-For example, consider a node with 100 samples, 60 from Class 1 and 40 from Class 2. The Gini index for this node would be $2 \times 0.6 \times 0.4 = 0.48$. Now suppose a split creates two child nodes: the first with 50 samples (45 from Class 1 and 5 from Class 2) and the second with 50 samples (15 from Class 1 and 35 from Class 2). The Gini indices for these nodes would be $2 \times 0.9 \times 0.1 = 0.18$ and $2 \times 0.3 \times 0.7 = 0.42$, respectively. The weighted average would be $0.5 \times 0.18 + 0.5 \times 0.42 = 0.30$, representing a reduction in impurity from 0.48 to 0.30.
+Using the notation of @tbl-split-category, the Gini index at the parent node would be
+
+$$ 
+\text{Gini (parent node)} = 2\left(\frac{n_{.1}}{n}\right)\left(\frac{n_{.2}}{n}\right) 
+$$
+Splitting the data results in two child nodes which have Gini indices of
+
+$$ 
+\text{Gini (< split)} = 2\left(\frac{n_{11}}{n_{1.}}\right)\left(\frac{n_{12}}{n_{1.}}\right) 
+$$
+and
+
+$$ 
+\text{Gini (}\ge \text{split)} = 2\left(\frac{n_{21}}{n_{2.}}\right)\left(\frac{n_{22}}{n_{2.}}\right) 
+$$
+
+These two metrics are combined using a weighted average where the weight for the index for the < split category is $\frac{n_{1.}}{n}$ and the weight for the index $\ge$ split is $\frac{n_{2.}}{n}$.  After simplifying, the Gini index of the combined child nodes is 
+
+$$ 
+\text{Gini (child nodes)} = 
+2\left[\left(\frac{n_{11}}{n}\right)\left(\frac{n_{12}}{n_{1.}}\right) +
+\left(\frac{n_{21}}{n}\right)\left(\frac{n_{22}}{n_{2.}}\right)\right] 
+$$
+
+```{r}
+#| label: tbl-lead-time-split
+#| tbl-cap: "Table of missing and non-missing values based on the split at 0.5 for the lead time predictor of the hotel rate dataset."
+
+hotels_predictors <-
+  hotel_rates_all %>%
+  dplyr::select(-avg_price_per_room)
+
+hotels_for_rpart <-
+  hotels_predictors %>%
+  mutate(
+    across(where(is.factor), as.character),
+    across(where(is.character), tolower),
+    agent = ifelse(is.na(agent), "missing", "not missing"),
+    company = ifelse(is.na(company), "missing", "not missing"),
+    country = ifelse(is.na(country), "Missing", "not missing"),
+    distribution_channel = as.character(distribution_channel),
+    distribution_channel = gsub("ta_to", "TA/TO", distribution_channel),
+    market_segment = gsub("travel_agent", "TA", market_segment),
+    across(where(is.character), ~ gsub("_", " ", .x)),
+    across(where(is.character), as.factor)
+  ) %>%
+  rename_with(~ gsub("_", " ", .))
+
+lead_time_node_subset <-
+  hotels_for_rpart %>% 
+  dplyr::filter(`distribution channel` %in% c("corporate", "direct", "undefined")) %>% 
+  dplyr::filter(company == "missing") %>%
+  mutate(split = ifelse(`lead time` < 0.5, "< 0.5", ">= 0.5"))
+
+lead_time_node_totals <-
+  table(lead_time_node_subset$agent) %>%
+  as.data.frame() %>%
+  pivot_wider(names_from = Var1, values_from=Freq) %>%
+  mutate(Total = missing + `not missing`,
+         Split = "Total")
+
+lead_time_node_table <-
+  table(lead_time_node_subset$split, lead_time_node_subset$agent) %>%
+  as.data.frame.matrix()
+  
+lead_time_node_table <- 
+  rownames_to_column(lead_time_node_table, var = "Split") %>%
+  mutate(Total = missing + `not missing`)
+
+lead_time_node_table <-
+  bind_rows(lead_time_node_table, lead_time_node_totals)
+
+lead_time_node_table$Split[which(lead_time_node_table$Split == ">= 0.5")] <- "&ge; 0.5"
+
+gt(lead_time_node_table) |>
+  fmt_markdown(columns = everything()) |>
+  cols_align(align = "center", columns = everything())
+
+parent_missing_ppn <- 
+  lead_time_node_totals$missing/lead_time_node_totals$Total
+
+parent_not_missing_ppn <-
+  lead_time_node_totals$`not missing`/lead_time_node_totals$Total
+
+gini_lead_time_parent <-
+  2*parent_missing_ppn*parent_not_missing_ppn
+
+lead_time_lt_split <-
+  lead_time_node_table %>%
+  dplyr::filter(Split == "< 0.5")
+
+lead_time_ge_split <-
+  lead_time_node_table %>%
+  dplyr::filter(Split == "&ge; 0.5")
+
+lt_split_missing_ppn <-
+  lead_time_lt_split$missing/lead_time_lt_split$Total
+
+lt_split_not_missing_ppn <-
+  lead_time_lt_split$`not missing`/lead_time_lt_split$Total
+
+gini_lead_time_lt_split <-
+  2*lt_split_missing_ppn*lt_split_not_missing_ppn
+
+ge_split_missing_ppn <-
+  lead_time_ge_split$missing/lead_time_ge_split$Total
+
+ge_split_not_missing_ppn <-
+  lead_time_ge_split$`not missing`/lead_time_ge_split$Total
+
+gini_lead_time_ge_split <-
+  2*ge_split_missing_ppn*ge_split_not_missing_ppn
+
+weight_lt_split <-
+  lead_time_lt_split$Total/lead_time_node_totals$Total
+
+weight_ge_split <- 
+  lead_time_ge_split$Total/lead_time_node_totals$Total
+
+gini_after_split <-
+  weight_lt_split*gini_lead_time_lt_split + weight_ge_split*gini_lead_time_ge_split
+
+entropy_parent <-
+  -(parent_missing_ppn*log2(parent_missing_ppn) +
+    parent_not_missing_ppn*log2(parent_not_missing_ppn))
+
+entropy_lt_split <-
+  -(lt_split_missing_ppn*log2(lt_split_missing_ppn) +
+    lt_split_not_missing_ppn*log2(lt_split_not_missing_ppn))
+
+entropy_ge_split <-
+  -(ge_split_missing_ppn*log2(ge_split_missing_ppn) +
+    ge_split_not_missing_ppn*log2(ge_split_not_missing_ppn))
+
+entropy_after_split <- 
+  weight_lt_split*entropy_lt_split + weight_ge_split*entropy_ge_split
+
+intrinsic_information <-
+  -(weight_lt_split*log2(weight_lt_split) +
+      weight_ge_split*log2(weight_ge_split))
+```
+
+Let's return to @fig-hotels-agent-missing to illustrate the calculation of the Gini index.  In this figure we will focus on node 4 which is the parent node of two terminal nodes (5 and 6).  @tbl-lead-time-split provides the tabular summary of missing and non missing values for the parent and child nodes.  The Gini index for the parent node is `r round(gini_lead_time_parent,3)`.  After splitting the data, the Gini index values for the two child nodes are `r round(gini_lead_time_lt_split,3)` and `r round(gini_lead_time_ge_split,3)` for the split < 0.5 and $\ge$ 0.5, respectively.  These values are then combined based on the proportion of samples in each of the nodes.  The weight for the samples with lead times < 0.5 is `r round(weight_lt_split)` and with lead times $ge$ 0.5 is `r round(weight_ge_split)`.  The Gini index based on this split point would be calculated as `r paste0("(", round(weight_lt_split,3), ")(", round(gini_lead_time_lt_split,3), ") + (", round(weight_ge_split,3), ")(", round(gini_lead_time_ge_split,3),") = ", round(gini_after_split,3))`.  This value is less than the Gini index of the parent node, indicating that there has been an improvement in the purity of the samples in the child nodes as compared to the parent node.  In addition, for this subset of data, the split of lead time at a value of 0.5 has the best Gini index out of all of the predictors and possible split points.
 
 Another common splitting criterion is based on information theory and is often referred to as information gain or entropy. This approach measures the reduction in uncertainty achieved by a split. The information content (or entropy) of a node is defined as:
 
 $$
-\text{info} = -[p \log_2p + (1-p) \log_2(1-p)]
+\text{info} = -[p_1 \log_2p_1 + p_2 \log_2p_2]
 $$
 
-for a two-class problem, where $p$ is the proportion of samples in the first class. The information gain is then calculated as the difference between the information content before and after the split:
+for a two-class problem. The information gain is then calculated as the difference between the information content before and after the split:
 
 $$
 \text{gain(split)} = \text{info(prior to split)} - \text{info(after split)}
@@ -78,7 +249,7 @@ $$
 
 The information content is measured in bits and can be interpreted as the average number of bits needed to encode the class of a randomly selected sample from the node. A node with perfect purity (all samples belonging to the same class) has an information content of zero, while a node with maximum impurity (equal distribution of classes) has the highest information content. Splits with larger information gains are preferred as they create more homogeneous nodes.
 
-Using the same example as before, the information content of the original node would be $-[0.6 \log_2(0.6) + 0.4 \log_2(0.4)] = 0.97$ bits. After the split, the information content of the first child node would be $-[0.9 \log_2(0.9) + 0.1 \log_2(0.1)] = 0.47$ bits, and for the second child node, it would be $-[0.3 \log_2(0.3) + 0.7 \log_2(0.7)] = 0.88$ bits. The weighted average would be $0.5 \times 0.47 + 0.5 \times 0.88 = 0.68$ bits, resulting in an information gain of $0.97 - 0.68 = 0.29$ bits.
+Using the lead time split from @tbl-lead-time-split as before, the information content of the parent node would be `r paste0("-[(", round(parent_missing_ppn, 3), ")")`$\log_2$`r paste0("(", round(parent_missing_ppn, 3), ") + (", round(parent_not_missing_ppn, 3), ")")`$\log_2$`r paste0("(", round(parent_not_missing_ppn, 3), ")] = ", round(entropy_parent, 3))` bits. After the split, the information content of the samples with lead time < 0.5 would be  `r paste0("-[(", round(lt_split_missing_ppn, 3), ")")`$\log_2$`r paste0("(", round(lt_split_missing_ppn, 3), ") + (", round(lt_split_not_missing_ppn, 3), ")")`$\log_2$`r paste0("(", round(lt_split_not_missing_ppn, 3), ")] = ", round(entropy_lt_split, 3))` bits, and the information content of the samples in the other node would be `r paste0("-[(", round(ge_split_missing_ppn, 3), ")")`$\log_2$`r paste0("(", round(ge_split_missing_ppn, 3), ") + (", round(ge_split_not_missing_ppn, 3), ")")`$\log_2$`r paste0("(", round(ge_split_not_missing_ppn, 3), ")] = ", round(entropy_ge_split, 3))` bits.  The information content based on this split point would be calculated as `r paste0("(", round(weight_lt_split,3), ")(", round(entropy_lt_split,3), ") + (", round(weight_ge_split,3), ")(", round(entropy_ge_split,3),") = ", round(entropy_after_split,3))` bits.  The information gain from the parent node would therefore be `r round(entropy_parent - entropy_after_split, 3)` bits.
 
 A limitation of information gain is its bias toward predictors with many possible values, particularly categorical predictors with numerous categories. To address this issue, Quinlan introduced the gain ratio in the C4.5 algorithm. The gain ratio is calculated by dividing the information gain by the intrinsic information of the split, which measures the potential information generated by dividing the samples according to the predictor:
 
@@ -93,6 +264,8 @@ $$
 $$
 
 Where $|S|$ is the number of samples in the parent node, $|S_i|$ is the number of samples in the $i$-th child node, and $n$ is the number of child nodes. The gain ratio penalizes splits that create many small partitions, thus addressing the bias of information gain toward predictors with many values.
+
+When splitting on lead time at 0.5, the intrinsic information value is `r paste0("-(", round(weight_lt_split, 3), ")")`$\log_2$`r paste0("(", round(weight_lt_split, 3), ") + (", round(weight_ge_split, 3), ")")`$\log_2$`r paste0("(", round(weight_ge_split, 3), ")] = ", round(intrinsic_information, 3))`.  The gain ratio based on this split would therefore be `r paste0(round(entropy_parent - entropy_after_split, 3), "/", round(intrinsic_information, 3), " = ", round((entropy_parent - entropy_after_split)/intrinsic_information, 3))`.
 
 #### The Splitting Process for Continuous and Categorical Predictors {#sec-tree-splits-other}
 
@@ -120,9 +293,19 @@ entropy_binary <- function(p) {
   -(p * log2(p) + (1 - p) * log2(1 - p))
 }
 
+gini_impurity <- function(p) {
+  if (is.na(p)) {
+    return(NA_real_)
+  }
+  # Using the formula: 1 - (p² + (1-p)²)
+  # This is equivalent to 2*p*(1-p) for binary classification
+  1 - (p^2 + (1 - p)^2)
+}
+
 # Compute metrics for one split point s:
 compute_split_metrics <- function(x, y_factor, s, positive_class) {
-  left_idx <- x <= s
+  
+  left_idx <- !(x > s)
   right_idx <- !left_idx
 
   nL <- sum(left_idx)
@@ -148,18 +331,22 @@ compute_split_metrics <- function(x, y_factor, s, positive_class) {
   pR <- mean(y_factor[right_idx] == positive_class)
   p0 <- mean(y_factor == positive_class)
 
-  # 1) Gini Index (as specified): pL(1-pL) + pR(1-pR)
-  gini_idx <- pL * (1 - pL) + pR * (1 - pR)
 
-  # 2) Information Gain
+  gini_left <- gini_impurity(pL)
+  gini_right <- gini_impurity(pR)
+  
+  # Weighted Gini Index
+  gini_idx <- (nL / N) * gini_left + (nR / N) * gini_right
+
+  # Information Gain = Entropy(parent) - Weighted_Entropy(children)
   info_before <- entropy_binary(p0)
   info_after <- (nL / N) * entropy_binary(pL) + (nR / N) * entropy_binary(pR)
   info_gain <- info_before - info_after
 
-  # 3) Gain Ratio
-  # Intrinsic information of the split: -sum_i w_i log2(w_i)
+  # Gain Ratio = Information Gain / Intrinsic Information
   wL <- nL / N
   wR <- nR / N
+  
   intrinsic_info <- 0
   if (wL > 0) {
     intrinsic_info <- intrinsic_info - wL * log2(wL)
@@ -170,6 +357,7 @@ compute_split_metrics <- function(x, y_factor, s, positive_class) {
 
   gain_ratio <- if (intrinsic_info > 0) info_gain / intrinsic_info else NA_real_
 
+  # Return results tibble
   tibble(
     split = s,
     n_left = nL,
@@ -267,58 +455,25 @@ p_faceted <-
 ```
 
 ```{r}
-# Example to illustrate how creating k-1 dummy variables leads to 
-# a larger rpart tree
+# Example to illustrate partitioning of a categorical variable
+# Force tree to have a max depth of 2 for illustration
 adjacent_split_model <-
   rpart(
     class ~ .,
     control = rpart.control(
-      minbucket = 3,
-      minsplit = 10,
-      cp = 0.004,
-      xval = 10
+      maxdepth = 2,
+      cp = -1,
+      xval = 0
     ),
     data = forested_train
   )
-
-max_depth_adjacent_split_model <-
-  max(rpart:::tree.depth(as.integer(row.names(adjacent_split_model$frame))))
-
-# Create binary split variables for each county
-binary_rec <-
-  recipe(class ~ ., data = forested_train) %>%
-  step_dummy(all_nominal_predictors(), one_hot = FALSE)
-
-prep_binary_rec <-
-  prep(binary_rec, training = forested_train)
-
-forested_train_encoded <-
-  bake(prep_binary_rec, new_data = NULL)
-
-binary_split_model <-
-  rpart(class ~ ., data = forested_train_encoded)
-
-binary_split_model <-
-  rpart(
-    class ~ .,
-    control = rpart.control(
-      minbucket = 3,
-      minsplit = 10,
-      cp = 0.004,
-      xval = 10
-    ),
-    data = forested_train_encoded
-  )
-
-max_depth_binary_split_model <-
-  max(rpart:::tree.depth(as.integer(row.names(binary_split_model$frame))))
 ```
 
 For continuous predictors, the process of finding the optimal split point involves evaluating all possible binary partitions of the data based on the predictor values. The algorithm first orders the samples according to the predictor values, then evaluates splits between adjacent unique values. For each potential split point, it calculates the chosen impurity metric (described above) and selects the split that optimizes this criteria.
 
 The computational complexity of this process is generally $O(n \log n)$ for each predictor, where $n$ is the number of samples, due to sorting. Once the samples are sorted, evaluating each potential split point is efficient, as the class distributions can be updated incrementally when moving through the sorted list.
 
-@fig-split-methods illustrates the metrics described in the previous section for the maximum vapor predictor in the forested data.  For this predictor, the information gain and gain ratio metrics identify the same split point for maximum vapor (`r best_ig_split`).  The Gini Index also has a near minimum at the split point.  However, the metric is minimized at a much larger maximum vapor value of `r best_gini_split`.  In this example, choice of metric would have an impact on the samples contained in the resulting nodes and could lead to vastly different models.
+@fig-split-methods illustrates the metrics described in the previous section for the maximum vapor predictor in the forested data.  For this predictor, all three metrics identify similar valued split points for maximum vapor, with values of `r best_gini_split` (Gini), `r best_ig_split` (information gain), and `r best_gr_split` (gain ratio).  In this example, choice of metric would likely not have much of an impact on the samples contained in the resulting nodes and could lead to vastly different models.
 
 ```{r}
 #| label: fig-split-methods
@@ -337,17 +492,15 @@ Handling categorical predictors in classification trees presents unique challeng
 
 When using the binning approach, the algorithm must determine how to optimally partition the categories into two groups.   For a predictor with $k$ categories, there are $2^{k-1} - 1$ possible ways to create a binary split. Evaluating all these possibilities becomes computationally infeasible for predictors with many categories. Therefore, algorithms often use heuristics to find good splits without exhaustive search. For example, in the Classification and Regression Trees (CART) methodology [@breiman1984classification], categorical predictors are ordered based on the proportion of samples in a selected class, and then binary splits are evaluated between adjacent categories in this ordering. This approach reduces the computational complexity while still allowing the algorithm to find effective splits.
 
-The second approach creates $k$ binary dummy variables, one for each category (or $k-1$ dummy variables to avoid redundancy). Each dummy variable is then treated as a separate predictor in the tree-building process. This approach, referred to as using independent categories, forces binary splits for the categories and effectively implements a one-versus-all splitting strategy.
-
-The choice between these approaches can impact model complexity and interpretability. Using grouped categories can results in more complex trees, especially when predictors have many categories.  In the forest data, the county variable is the only grouped category predictor and has `r length(unique(forested_train$county))` unique values.  When a recursive partitioning tree was constructed on the original data set, the maximum tree depth was `r paste0(max_depth_adjacent_split_model)` (@fig-split-adjacent-tree).  When dummy variables were created to represent the county variable, the resulting recursive partioning tree had a depth of `r paste0(max_depth_binary_split_model)` and did not include any of the dummy county variables (@fig-split-binary-tree).
+To illustrate the binning approach, consider the partitioning model illustrated in @fig-split-adjacent-tree.  The figure illustrates a tree of a maximum depth of 3 splits.  The first split uses the Gini index criteria to split the maximum vapor predictor at a value of 1248.  Samples with values greater than or equal to 1248 are illustrated on the right side of the tree.  The next split on this side of the tree is the county variable.  The adjacent category methodology creates a split with 7 counties in one group and the remaining counties in the other group.  @fig-split-vapor-max demonstrates why the counties were partitioned into these groups.  The x-axis in (a) and (b) of this figure provides the counties ordered from lowest proportion of forested counties (left) to highest proportion (right).  The top portion of the figure provides the Gini index for the partitioning of the samples at that county and all counties to the left.  The purity is optimized between the counties of Asotin and Okanogan.  At this split point, 7 counties are placed into one group and 13 counties are in the other group as illustrated in @fig-split-adjacent-tree.
 
 ```{r}
 #| label: fig-split-adjacent-tree
 #| echo: false
 #| warning: false
 #| out-width: 90%
-#| fig-width: 14
-#| fig-height: 14
+#| fig-width: 10
+#| fig-height: 7
 #| fig-cap: Recursive partitioning tree when using the county variable in its adjacent category form.  The labels for the split points for the county variable have been simplified to summarize the number of counties included at each split. 
 
 county_split_fun <- function(x, labs, digits, varlen, faclen) {
@@ -390,31 +543,148 @@ rpart.plot(
 ```
 
 ```{r}
-#| label: fig-split-binary-tree
+#| label: fig-split-vapor-max
 #| echo: false
 #| warning: false
 #| out-width: 90%
-#| fig-width: 14
-#| fig-height: 14
-#| fig-cap: Recursive partitioning tree when transforming the county variable into many dummy, binary variables.
+#| fig-width: 6
+#| fig-height: 6
+#| fig-cap: (a) The Gini index index for each partition of the ordered counties for the samples of forestation training data with a value of maximum vapor greater than or equal to 1248.  (b) The proportion of forested samples within each county for this subset of data.
 
-# Create the plot
-rpart.plot(
-  binary_split_model,
-  type = 4,
-  extra = 101,
-  box.palette = "GnBn",
-  split.fun = function(x, labs, digits, varlen, faclen) {
-    sub(" ", "\n", labs)
-  },
-  cex = 0.75,
-  tweak = 1.6,
-  clip.right.labs = FALSE,
-  under = TRUE
-)
+vapor_max_ge_1248 <-
+  forested_train %>%
+  dplyr::filter(vapor_max >= 1248) %>%
+  dplyr::select(class, county) %>%
+  mutate(county = fct_drop(county))
+
+county_proportions <- 
+  vapor_max_ge_1248 %>%
+  group_by(county) %>%
+  summarise(
+    total_count = n(),
+    yes_count = sum(class == "Yes"),
+    no_count = sum(class == "No"),
+    prop_yes = yes_count / total_count,
+    .groups = "drop"
+  ) %>%
+  arrange(prop_yes) %>%
+  mutate(rank = row_number())
+
+calculate_gini <- function(yes_count, no_count) {
+  total <- yes_count + no_count
+  if (total == 0) return(NA)
+  
+  p_yes <- yes_count / total
+  p_no <- no_count / total
+  
+  gini <- 1 - (p_yes^2 + p_no^2)
+  return(gini)
+}
+
+calculate_weighted_gini <- function(left_yes, left_no, right_yes, right_no) {
+  n_total <- left_yes + left_no + right_yes + right_no
+  n_left <- left_yes + left_no
+  n_right <- right_yes + right_no
+  
+  if (n_total == 0) return(NA)
+  
+  gini_left <- calculate_gini(left_yes, left_no)
+  gini_right <- calculate_gini(right_yes, right_no)
+  
+  weighted_gini <- (n_left / n_total) * gini_left + (n_right / n_total) * gini_right
+  
+  return(weighted_gini)
+}
+
+# Evaluate all possible binary splits
+split_evaluations <- tibble()
+
+for (split_point in 1:(nrow(county_proportions) - 1)) {
+  # Left side: counties 1 to split_point
+  left_counties <- county_proportions$county[1:split_point]
+  left_data <- vapor_max_ge_1248 %>%
+    filter(county %in% left_counties)
+  
+  left_yes <- sum(left_data$class == "Yes")
+  left_no <- sum(left_data$class == "No")
+  
+  # Right side: counties split_point+1 to n
+  right_counties <- county_proportions$county[(split_point + 1):nrow(county_proportions)]
+  right_data <- vapor_max_ge_1248 %>%
+    filter(county %in% right_counties)
+  
+  right_yes <- sum(right_data$class == "Yes")
+  right_no <- sum(right_data$class == "No")
+  
+  # Calculate weighted Gini
+  weighted_gini <- calculate_weighted_gini(left_yes, left_no, right_yes, right_no)
+  
+  split_evaluations <- bind_rows(
+    split_evaluations,
+    tibble(
+      split_point = split_point,
+      split_after_county = county_proportions$county[split_point],
+      left_counties_count = split_point,
+      right_counties_count = nrow(county_proportions) - split_point,
+      left_yes = left_yes,
+      left_no = left_no,
+      right_yes = right_yes,
+      right_no = right_no,
+      weighted_gini = weighted_gini
+    )
+  )
+}
+
+split_evaluations <- split_evaluations %>%
+  mutate(
+    rank = split_point,
+    split_label = paste0(split_after_county, "\nvs.\nRest")
+  )
+
+# Find the optimal split (minimum weighted Gini)
+optimal_split <- split_evaluations %>%
+  filter(weighted_gini == min(weighted_gini, na.rm = TRUE))
+
+
+gini_fig <- 
+  ggplot(split_evaluations, aes(x = rank, y = weighted_gini)) +
+  geom_line(color = "grey") +
+  geom_point(aes(color = weighted_gini == min(weighted_gini, na.rm = TRUE)), 
+             size = 3.5, alpha = 1) +
+  scale_color_manual(
+    values = c("FALSE" = "#DE7DC6", "TRUE" = "#218239"),
+    guide = "none"
+  ) +
+  labs(title = "(a)",
+       y = "Weighted Gini Index") +
+  theme(
+    axis.text.y = element_text(angle = 90, hjust = 0.5),
+    axis.text.x = element_blank(),
+    axis.title.x = element_blank()
+  ) +
+  scale_x_continuous(breaks = seq(1, nrow(county_proportions) - 1, 1))
+
+proportion_fig <- 
+  ggplot(county_proportions, aes(x = reorder(county, prop_yes), y = prop_yes)) +
+  geom_col(fill = "#218239", alpha = 0.8, color = "black") +
+  labs(
+    title = "(b)",
+    x = "County (Ordered)",
+    y = "Proportion of 'Yes' Outcomes",
+  ) +
+  theme(
+    axis.text.x = element_text(angle = 45, hjust = 1),
+    axis.text.y = element_text(angle = 90, hjust = 0.5)
+  ) +
+  scale_y_continuous(limits = c(0, 1), breaks = seq(0, 1, 0.2)) +
+  scale_x_discrete(expand = expansion(add = c(1, 1)))
+
+gini_fig / proportion_fig
 ```
 
-However, the grouped categories approach can sometimes capture more complex relationships between categories and the response variable. It allows the algorithm to group categories that have similar effects on the response, potentially leading to more accurate and interpretable models. The independent categories approach, on the other hand, treats each category independently, which may miss important interactions between categories but often results in simpler models.
+The second approach creates $k$ binary dummy variables, one for each category (or $k-1$ dummy variables to avoid redundancy). Each dummy variable is then treated as a separate predictor in the tree-building process. This approach, referred to as using independent categories, forces binary splits for the categories and effectively implements a one-versus-all splitting strategy.  We do not recommend this approach and provide an in-depth discussion in @fes.
+
+The choice between these approaches can impact model complexity and interpretability.  Grouped categories approach can capture more complex relationships between categories and the response variable.  Because the the algorithm groups categories that have similar effects on the response, this often leads to more accurate and interpretable models. The independent categories approach, on the other hand, may not select any categories resulting in simpler, less accurate models.
 
 #### Ordinal Predictors and Linear Combination Splits {#sec-other-splits}
 
@@ -436,21 +706,23 @@ The tree growth process begins with all data in a single root node. The algorith
 
 At each step, the algorithm considers all available predictors and all possible split points for each predictor. This exhaustive search ensures that the selected split is the best possible split according to the chosen criterion. However, it also makes tree growing computationally intensive, especially for large datasets with many predictors.
 
+It is important to realize that the growing of a classification tree is inherently a _greedy_ process. At each node, the algorithm selects the predictor and split point that optimizes the purity metric for that particular partition, without considering any downstream impacts of this choice.  This greedy strategy carries several important limitations.  First, a sequence of optimal splits does not guarantee that the final tree has the optimal predictive performance of all possible trees.  In fact, the final tree produced by the greedy approach will almost always have suboptimal performance compared to alternative tree structures. This suboptimality is partly due to the fact that the choice between competing predictors and split points is often marginal, with multiple candidates exhibiting nearly equivalent purity metrics. Consequently, a predictor and split point with a slightly worse purity metric may ultimately yield better overall predictive performance by enabling more effective partitioning in subsequent nodes. Furthermore, the greedy algorithm cannot evaluate the downstream effects of current splits; it lacks the ability to select a suboptimal split at the current node that would allow better subsequent splits.  Furthermore, the tree building process is unstable.  That is, small perturbations in the data may lead to substantially different tree structures due to the slight differences between competing splits.
+
 The recursive nature of tree growing means that each split is conditional on the previous splits. This allows trees to capture interactions between predictors automatically, without the need for explicit interaction terms. For example, in @fig-split-adjacent-tree, the first partition on the left side used the maximum vapor variable.  This split was followed by a split using the roughness variable. This structure implicitly models an interaction between maximum vapor and roughness.
 
 To further illustrate how recursive partitioning across predictors serves as an implicit surrogate for predictor interactions, consider @fig-split-interactions, which displays heatmaps of the predicted probability of forestation for two different pairs of variables from the forestation data set.
 
 The left panel was constructed using a logistic regression model with maximum vapor, roughness, and their two-way interaction as predictors. The predicted probability of forestation is represented by color, where green indicates high probability of forestation and brown indicates high probability of non-forestation. The probability surface exhibits notable curvature, with the probability of forestation changing substantially across values of maximum vapor conditional on the value of roughness. This non-linear relationship between the predictors and the outcome is the hallmark of a statistical interaction: accurate prediction requires knowledge of both predictor values simultaneously, as neither predictor's effect can be understood in isolation.
 
-In contrast, the right panel displays results from a logistic regression model using maximum vapor, northness, and their two-way interaction term as predictors. Here, the probability surface shows no curvature, with the probability of forestation remaining relatively constant across values of northness for any given value of maximum vapor. The straight contours indicate the absence of a meaningful statistical interaction between these predictors. In this case, the predictors contribute additively to the probability of forestation, and each predictor's effect can be interpreted independently of the other's value.
+In contrast, the right panel displays results from a logistic regression model using maximum vapor, northness, and their two-way interaction term as predictors. Here, the probability surface shows no curvature, with the probability of forestation remaining relatively constant across values of northness for any given value of maximum vapor. The straight contours indicate the absence of a meaningful statistical interaction between these predictors. In this case, the predictors contribute additively to the probability of forestation, and each predictor's effect can be interpreted independently of the others value.
 
 ```{r}
 #| label: fig-split-interactions
 #| echo: false
 #| warning: false
 #| out-width: 90%
-#| fig-width: 10
-#| fig-height: 5
+#| fig-width: 8
+#| fig-height: 4
 #| fig-cap: (a) Heat map of predicted probabilities of forestation from a model of maximum vapor, roughness and their two-way interaction.  (b) Heat map of predicted probabilities of forestation from a model of northness, maximum vapor and their two-way interaction. 
 vapor_max_roughness_model <-
   glm(
@@ -494,7 +766,7 @@ vapor_max_roughness_fig <-
     midpoint = 0.5,
     limits = c(0, 1)
   ) +
-  labs(title = "(a)", x = "Maximum Vapor", y = "Roughness") +
+  labs(title = "(a)") +
   theme_light() +
   theme(plot.title = element_text(hjust = 0, size = 14))
 
@@ -630,11 +902,7 @@ While pessimistic pruning lacks the theoretical foundation of cost-complexity pr
 
 ### Missing Data Handling {#sec-cls-missing-data}
 
-Classification trees have built-in mechanisms for handling missing predictor values, which provides a significant advantage over many other modeling techniques. Instead of requiring imputation or discarding samples with missing values, trees can work directly with incomplete data, both during training and prediction.
-
-Missing data is a common issue in many datasets and can arise for various reasons, such as measurement errors, non-response, or data integration problems.  Traditional predictive modeling methods often require complete data, forcing the user to either discard incomplete samples or impute missing values.
-
-Discarding samples or imputing missing values have drawbacks.  Discarding samples with missing values can lead to biased results, especially when the missingness is due to a specific underlying cause.  On the other hand, imputation can introduce assumptions about the missing values and, if there is a sufficient amount of missingness, may distort the relationships in the data.
+In @sec-missing-data we provided an overview of missing data its causes and approaches for handling missing values.  Some modeling techniques, such as classification trees, have built-in mechanisms for handling missing predictor values which provides a significant advantage over many other modeling techniques. Instead of requiring imputation or discarding samples with missing values, trees can work directly with incomplete data, both during training and prediction.
 
 Classification trees offer an alternative approach that can handle missing values directly, without requiring sample deletion or explicit imputation. This capability stems from the tree's hierarchical structure and the flexibility of the splitting and prediction processes.
 
