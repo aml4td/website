@@ -407,7 +407,7 @@ A limitation of information gain is its bias toward predictors with many possibl
 
 $$
 \text{gain ratio(split)} = \frac{\text{gain(split)}}{\text{intrinsic information(split)}}
-$$
+$$  {#eq-gain-ratio}
 
 The intrinsic information is calculated as:
 
@@ -775,6 +775,23 @@ $$
 
 $n_{+j}$ is the number of events in in category $j$ within all of the $n$ rows under consideration. CatBoost uses $\beta = 1$ and calls $\alpha$ the "prior" parameter, which can be used for tuning. Once all of the $j$ values of $\widehat{p}_j$ are computed, the split determination treats the predictor as if it were quantitative from the start. CatBoost's algorithm, which uses the CTR values to determine the best predictor (and value) to split on, is fairly complex and is detailed in the next chapter. 
 
+So far, we've constrained our splits to be binary. C5.0 can create multiway splits for categorical predictors. For example, with categories `A`-`F`, a split might contain three groups such as `{A, B, C}`, `{D}`, and `{E, F}`. To do this, C5.0 uses a greedy, hill-climbing algorithm. When a specific split candidate is evaluated, it is rated using a penalized gain ratio. The gain is the improvement of the information statistic before and after combining categories. The penalty is based on the Minimum Description Length (MDL) principle and uses the logarithm of the number ways to partition $C$ categories into $k$ groups (a.k.a. a Bell number) divided by the number of data points. 
+
+We start with $k = C$ groups and immediately combine categories that have the same frequency distributions (since they are identical results). If we start with $k$-way splits, the first iteration loops through the $k$ splits and merges one additional category. Again, with categories `A`-`F`, the first round of candidates are
+
+```
+{A,B}  {C}   {D}   {E}    {F}  
+{A,C}  {B}   {D}   {E}    {F}  
+{A,D}  {B}   {C}   {E}    {F}  
+{A,E}  {B}   {C}   {D}    {F}  
+{A,F}  {B}   {C}   {D}    {E}  
+{A}   {B,C}  {D}   {E}    {F}  
+ :     :      :     :      :
+{A}   {B}    {C}   {D}   {E,F}
+```
+
+If there is no pair that improves the penalized gain, the algorithm, stops with the current configuration. Otherwise, the combination with the best gain is used. This process continues until there are no more improvements or if there two categories. 
+
 For _ordered_ categories, some algorithms restrict splits to maintain the ordering, allowing only those that group adjacent categories.
 
 ### Oblique Splits {#sec-oblique-splits}
@@ -857,7 +874,7 @@ C5.0 also modifies how it handles categorical predictors with missing values. Wh
 
 A distinctive aspect of C5.0's approach is how it handles missing values when determining the class distribution in the resulting splits. Instead of assigning samples with missing values to a specific child node, C5.0 allows these samples to contribute fractionally to all child nodes. The fractional contribution is based on the distribution of non-missing values among the child nodes.
 
-For example, if 70% of samples with non-missing values go to the left child and 30% go to the right child, a sample with a missing value would contribute 0.7 of a sample to the left child and 0.3 of a sample to the right child. This fractional accounting means that the class frequency distribution in each node may not contain whole numbers, and the number of errors in a terminal node can also be fractional.
+For example, if 70% of samples with non-missing values go to the left child and 30% go to the right child, a sample with a missing value would contribute 0.7 of a sample to the left child and 0.3 of a sample to the right child. This fractional accounting means that the class frequency distribution in each node may not contain whole numbers, and the number of errors^[It is rare that this number is a whole number. During training, we can round it to the nearest integer.] in a terminal node can also be fractional.
 
 During prediction, C5.0 uses a similar fractional approach. When a sample with missing values reaches a node with a split on a predictor for which the sample is missing, the sample is sent down all possible paths, with weights proportional to the distribution of non-missing values in the training data. The final prediction is based on a weighted vote from all relevant terminal nodes.
 
@@ -1083,11 +1100,11 @@ Pessimistic pruning, used in the C5.0 algorithm, differs from cost-complexity pr
 
 The key insight of pessimistic pruning is that the apparent error rate on the training data is an optimistic estimate of the true error rate on new data. To correct for this optimism, C5.0 computes an upper confidence bound on the error rate, serving as a pessimistic estimate of the true error rate.
 
-For a node with $n$ training samples and $n_e$ misclassifications, the apparent error rate is $E/n$. The pessimistic error rate is calculated using the upper bound of a confidence interval for this proportion:
+For a node with $n$ training samples and $\mathcal{E}$ misclassifications, the apparent error rate is $\mathcal{E}/n$. The pessimistic error rate is calculated using the upper bound of a confidence interval for this proportion:
 
 $$
-\text{pessimistic error rate} = \frac{n_e + z_{\alpha/2} \sqrt{\frac{n_e(n-n_e)}{n}}}{n}
-$$
+\text{pessimistic error rate} = \frac{\mathcal{E} + 0.5 + \frac{z^2}{2} + \sqrt{z^2 \left[ (\mathcal{E} + 0.5)\left(1 - \frac{\mathcal{E} + 0.5}{n}\right) + \frac{z^2}{4} \right]}}{n + z^2}
+$$ {#eq-pessinistic-error}
 
 Where $z_{\alpha/2}$ is the critical value from the standard normal distribution for the desired confidence level. C5.0 uses a default confidence level of 75% (corresponding to $z_{\alpha/2} = 0.69$), but this can be adjusted as a tuning parameter.
 
@@ -1125,6 +1142,38 @@ In these equations, $\widehat{\mathcal{F}}_{ik}$ plays a part similar to a linea
 ### CART {#sec-cls-cart}
 
 ### C5.0 {#sec-cls-c50}
+
+C4.5 is an incredibly popular tree-based machine learning model, described in detail by @quinlan1993c4. C5.0 is its successor that was developed as a closed-source product but was released around 2010 as open-source and first described in @apm. Many attributes of these two models are the same. For example, we've previously described a few aspects of how this model creates trees: 
+
+- information gain ratio (@eq-gain-ratio)
+- pessimistic pruning
+- multiway splits for qualitative predictors
+- small adjustments to the terminal node estimates
+
+Differences between the two are largely related to the addition of a boosting algorithm that will be described in SECTION. One change between the two versions is that C5.0 has an option to conduct a _global_ pruning phase at the end of tree construction. This uses a form of the one standard error rule from CART. Pessimistic pruning occurs locally, seeking to trim the tree at a specific node. The global process considers the entire tree at once. 
+
+_The process is to "prune minimum cost complexity subtrees until the 'error' increases by one standard error"._
+
+To start, we must compute what our "error budget." This is the number of errors in the tree that is allowable using the one standard error rule. To compute this, C5.0 determines the number of errors ($\mathcal{E}$) out of $n$ training set samples. Based on the equation for the Binomial variance, the standard errors for the number of errors is:
+
+$$
+\sigma_{\mathcal{E}} = \sqrt{\mathcal{E}\left(1 - \frac{\mathcal{E}}{n}\right)}
+$$  {#eq-c5-error-stde}
+
+If tree has $n=100$ training set points and $\mathcal{E} = 10$ misclassified samples, $\sigma_{\mathcal{E}} = `r sqrt(10 * (1 - (10/100)))`$. This is the number of errors that would be acceptable if we were to choose a tree with one additional standard error or misclassified points. Note that C5.0 uses the resubsitution error rate; unlike CART there is no internal cross-validation to determine a better statistical estimate. 
+
+One we have our budget of $\sigma_{\mathcal{E}}$ errors, we traverse the tree from top to bottom and search for a subtree that, when removed, we add fewer errors than the error budget. 
+
+For example, if we have a tree on the left size of FIGURE, there are four terminal nodes after local pessimistic pruning. Without any splits, using the most frequent class as the prediction, there are $\mathcal{E} = 10$ errors out of $n = 100$. On the left-hand side, another split (A) is used to generate terminal nodes B and C. If we had not split A into B and C, there are $\mathcal{E} = 4$. After the split, each terminal node has $\mathcal{E} = 2$ errors each. The difference in errors between the parent node (A) and the two child nodes is 4-4=0. Since this different is less than our error budget of `r sqrt(10 * (1 - (10/100)))`, we can prune the two child nodes. The tree on the right-hand side of FIGURE shows the results. 
+
+Can we prune the last two terminal nodes (A' and D)? 
+
+Common tuning parameters are: 
+
+- Confidence value: Affects the pessimistic pruning with larger values producing smaller trees.
+- $n_{min}$: The number of data points required to enact an additional split within a node. This curtails the depth of the tree in the growing phase. 
+
+Of these two, $n_{min}$ tends to have the largest effect. 
 
 ### Conditional Inference Trees {#sec-cls-cit}
 
@@ -1289,7 +1338,43 @@ The primary benefit of using this framework for data splitting is that the predi
 
 ### Oblique Trees {#sec-cls-oblique}
 
-### Bayesian Trees {#sec-cls-tree-bayes}
+### Globally Estimated Trees {#sec-cls-tree-global}
+
+So far we've used greedy methods for constructing trees. At each stage in splitting, the models makes the _locally_ optimal decisions and does not reevaluate any previous splits to ensure that the overall model is optimal. Although @murthy1995decision found that greedy optimization worked well at finding optimal trees in their experiments, it is worth considering alternatives.  
+
+There are also global tree construction methods. One will be discussed in the next chapter (@sec-cls-bart) that uses Bayesian estimation. Another approach is to use evolutionary optimization methods, such as genetic algorithms, to simultaneously configure all of the splits in the tree. 
+
+How do we encode the tree in a manner than such optimization tools can be used? One approach is to specify the largest size tree that we are interested in as a placeholder. Specifying a maximum depth $d_{max}$ for binary splits indicates that there will be, at most, $2^{d_{max}}-1$, internal nodes. A vector-based structure to contain the tree details (a.k.a. the chromosome in GAs) would bind together for the split variable index, the split values, and possible the rule (i.e., $\le$, $>$, $=$, or $\in$). 
+
+A basic genetic algorithm can be used to make new trees via reproduction (i.e, cross-over, mutation, etc). However, it is very possible that generic genetic operations can results in nonsensical or infeasible tree structures. 
+
+Alternatively, @chipman1998bayesian describe sets of operations to modify tree structures. @fig-tree-mutation shows examples of how a binary tree with two splits and three terminal nodes might be refactored. The first is _growth_ where a terminal node is picked at random and a new split is created. _Pruning_ removes a randomly chosen split. We can also _change_ a randomly chosen but modifying the split variable and/or its split value. Finally, it might be helpful during the search process to _swap_ adjacent modes in a tree. 
+
+```{r}
+#| label: fig-tree-mutation
+#| echo: false
+#| out-width: 100%
+#| fig-width: 4
+#| fig-height: 5
+#| fig-cap: "Methods of mutating trees: growing, pruning, mutating, and swapping nodes. Orange nodes represent the portions of the tree affected by the changes."
+knitr::include_graphics("../premade/tree_operations_swap.svg")
+```
+
+For example, @JSSv061i01 describes a specific genetic algorithm called _evtree_ using these operators^[However, it does use the swapping operation and considers switching the split predictors and split values separate operations.] to evolve a tree where the objective/fitness function is a penalized misclassification cost metric. The penalty is
+
+$$
+\mathcal{P}(T;\alpha) = \alpha\; (d_{max} + 1)\; log(n)
+$$ 
+
+where $T$ is the tree and $\alpha$ is a tuning parameter. Decreasing $\alpha$ should increase the depth of the final tree. By default the algorithm uses 100 individuals in the population, 10,000 generations, and the following probabilities for operators: 
+
+- Growing: 20%
+- Pruning: 20%,
+- Cross-over: 20%
+- Change split variable _and_ point: 20%
+- Change split point: 20%
+
+There are a variety of similar eevolutionary algorithms that can be used. See @papagelis2001breeding, @delisle2004induction, and @barros2011survey.
 
 ## The Instability of Trees {#sec-cls-tree-unstable}
 
