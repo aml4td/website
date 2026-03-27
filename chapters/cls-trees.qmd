@@ -9,9 +9,14 @@ knitr:
 ```{r}
 #| label: cls-trees-setup
 #| include: false
+
 source("../R/_common.R")
+source("../R/_themes.R")
+source("../R/_themes_ggplot.R")
+source("../R/_themes_gt.R")
 
 # ------------------------------------------------------------------------------
+# Required packages
 
 library(tidymodels)
 library(mirai)
@@ -22,6 +27,8 @@ library(partykit)
 library(patchwork)
 library(rpart.plot)
 library(gt)
+library(lorax)
+library(bonsai)
 
 # ------------------------------------------------------------------------------
 # set options
@@ -29,6 +36,7 @@ library(gt)
 tidymodels_prefer()
 set_options()
 daemons(parallel::detectCores())
+theme_set(thm_lt)
 
 # ------------------------------------------------------------------------------
 # load data
@@ -95,6 +103,10 @@ split_best <-
 # ------------------------------------------------------------------------------
 
 load("../RData/oblique_example.RData")
+
+# ------------------------------------------------------------------------------
+
+cls_mtr <- metric_set(brier_class, roc_auc, pr_auc, mn_log_loss)
 ```
 
 Classification trees are a powerful and interpretable approach for classification problems.  Their structure consists of nested if-then statements that partition the predictor space into regions, where each is associated with a specific class. We've already seen them in a few different places:  @fig-reg-tree visualized a regression tree for the food delivery data, while @fig-hotels-agent-missing shows a classification tree to understand missingness. 
@@ -431,7 +443,7 @@ $$ {#eq-chi2}
 
 Since this statistic measures the difference between our model and an uninformative state, we want to maximize its value. This $\chi^2$ statistic is often used in _conditional inference trees_ [@hothorn2006unbiased]. In @sec-cls-cit, we'll describe the strategic advantages of minimizing the associated p-value of this value rather than maximizing the statistic itself. 
 
-As we'll see in the next chapter, modern boosting models often use splitting criteria based on the log-likelihood. The rationales for the methods discussed in this chapter are described in that chapter. Also, for simplicity, we'll assume that the outcome has $C = 2$ classes. We'll focus on the three most popular models: XGBoost [@xgb16], LightGBM [@lgb17], and CatBoost [@cat18].
+As we'll see in the next chapter, modern boosting models often use splitting criteria based on the log-likelihood. The rationales for the methods discussed in this chapter are described @sec-cls-modern-boost. Also, for simplicity, we'll assume that the outcome has $C = 2$ classes. We'll focus on the three most popular models: XGBoost [@xgb16], LightGBM [@lgb17], and CatBoost [@cat18].
 
 These tools often minimize the sum of the Pearson residuals (previously seen in @sec-logistic-diagnostic):
 
@@ -773,7 +785,7 @@ $$
 \widehat{p}_j = \frac{n_{+j} + \alpha}{n + \alpha + \beta}
 $$
 
-$n_{+j}$ is the number of events in in category $j$ within all of the $n$ rows under consideration. CatBoost uses $\beta = 1$ and calls $\alpha$ the "prior" parameter, which can be used for tuning. Once all of the $j$ values of $\widehat{p}_j$ are computed, the split determination treats the predictor as if it were quantitative from the start. CatBoost's algorithm, which uses the CTR values to determine the best predictor (and value) to split on, is fairly complex and is detailed in the next chapter. 
+$n_{+j}$ is the number of events in in category $j$ within all of the $n$ rows under consideration. CatBoost uses $\beta = 1$ and calls $\alpha$ the "prior" parameter, which can be used for tuning. Once all of the $j$ values of $\widehat{p}_j$ are computed, the split determination treats the predictor as if it were quantitative from the start. CatBoost's algorithm, which uses the CTR values to determine the best predictor (and value) to split on, is fairly complex and is detailed in @sec-cls-modern-boost. 
 
 So far, we've constrained our splits to be binary. C5.0 can create multiway splits for categorical predictors. For example, with categories `A`-`F`, a split might contain three groups such as `{A, B, C}`, `{D}`, and `{E, F}`. To do this, C5.0 uses a greedy, hill-climbing algorithm. When a specific split candidate is evaluated, it is rated using a penalized gain ratio. The gain is the improvement of the information statistic before and after combining categories. The penalty is based on the Minimum Description Length (MDL) principle and uses the logarithm of the number ways to partition $C$ categories into $k$ groups (a.k.a. a Bell number) divided by the number of data points. 
 
@@ -796,7 +808,9 @@ For _ordered_ categories, some algorithms restrict splits to maintain the orderi
 
 ### Oblique Splits {#sec-oblique-splits}
 
-Some advanced tree algorithms consider splits based on linear combinations of predictors [@murthy1994system;@wickramarachchi2016hhcart]. These oblique trees can capture more complex decision boundaries than traditional trees, which are limited to axis-parallel splits. For example, an oblique tree might use a split like "if $2 \times \text{Predictor A} + 3 \times \text{Predictor B} > 5$ then...". While these splits can lead to more accurate models, they often sacrifice interpretability.
+The trees structure that we have discussed split on a single predictor at a time. This partitions the predictor space into a collection of (hyper)rectangles. For this reason, these splits are called "rectangular" or "axis-parallel". 
+
+It is possible for trees to create class boundaries that do not result in rectangular partitions and these occur when more than one predictor are used in a single rule. Some advanced tree algorithms consider splits based on linear combinations of predictors [@murthy1994system;@wickramarachchi2016hhcart]. These _oblique trees_^[Historically called _multivariate trees_ or _linear machines_.] can capture more complex decision boundaries than traditional trees, which are limited to axis-parallel splits. For example, an oblique tree might use a split like "if $2 \times \text{Predictor A} + 3 \times \text{Predictor B} > 5$ then...". While these splits can lead to more accurate models, they often sacrifice interpretability.
 
 To demonstrate, a logistic regression model was simulated with linear predictor $\eta = 0.1 + 5.0\, A - 5.0\, B$ where A and B had a bivariate Gaussian distribution with a correlation coefficient of 0.7. This configuration results in slightly overlapping data clouds, as seen in the left-hand panel of @fig-oblique-splits. While this pattern is trivial for a logistic model to estimate, a tree-based model must go to heroic lengths to emulate a diagonal line. The tree fit shown in the middle panel required `r cart_nodes` terminal nodes to produce the blocky step function that does a mediocre job in separating the data. 
 
@@ -833,6 +847,8 @@ An example of rectangular and oblique splits. The data were simulated using a li
 :::
 
 An oblique tree required a single split to produce the class boundary shown in the right-hand panel. Using a training set of $n_{tr} = 500$ data points in the training set, the diagonal split does a remarkable job approximating the underlying pattern; it's split uses the rule $\widehat{\eta} = `r obl_eqn`$.
+
+We'll discuss a specific technique for creating oblique trees in @sec-cls-oblique.
 
 ## Understanding Bias in Splitting {#sec-tree-bias}
 
@@ -1141,6 +1157,133 @@ In these equations, $\widehat{\mathcal{F}}_{ik}$ plays a part similar to a linea
 
 ### CART {#sec-cls-cart}
 
+
+```{r}
+#| label: forest-cart
+#| include: false
+#| cache: true
+
+cart_spec <- 
+  decision_tree(cost_complexity = tune(), tree_depth = tune(), min_n = tune()) |> 
+  set_mode("classification")
+
+cart_wflow <- workflow(class ~ ., cart_spec)
+
+cart_param <- 
+  cart_wflow |> 
+  extract_parameter_set_dials() |> 
+  update(tree_depth = tree_depth(c(1, 30)))
+
+cart_extract <- function(x) {
+  require(tidymodels)
+  require(lorax)
+  fit <- extract_fit_engine(x)
+  preds <- active_predictors(fit) |> 
+    dplyr::mutate(
+      .estimate = purrr::map_int(active_predictors, length),
+      .estimator = "none",
+      .metric = "# Active Predictors") |> 
+    select(-active_predictors)
+  rules <- 
+    fit |> 
+    extract_rules() |> 
+    dplyr::mutate(
+      terms = purrr::map_chr(rules, rlang::expr_deparse, width = 10^4),
+      terms = strsplit(terms, split = "&"),
+      num_terms = purrr::map_int(terms, length)
+    ) |> 
+    dplyr::summarize(
+      `Mean Rule Size` = mean(num_terms),
+      `# Terminal Nodes` = length(num_terms)
+    ) |> 
+    tidyr::pivot_longer(
+      c(`Mean Rule Size`, `# Terminal Nodes`),
+      names_to = ".metric",
+      values_to = ".estimate"
+    ) |> 
+    dplyr::mutate(.estimator = "none")
+  dplyr::bind_rows(preds, rules)
+}
+
+forest_cart_res <-
+  cart_wflow |>
+  tune_grid(
+    resamples = forested_rs,
+    grid = 25,
+    param_info = cart_param,
+    control = control_grid(
+      save_pred = TRUE,
+      save_workflow = TRUE,
+      extract = cart_extract,
+      pkgs = "lorax"
+    ),
+    metrics = cls_mtr
+  )
+
+forest_cart_best <- select_best(forest_cart_res, metric = "brier_class")
+
+forest_cart_pred <-
+  forest_cart_res |>
+  collect_predictions(parameters = forest_cart_best) |>
+  mutate(wflow_id = "CART") |>
+  relocate(wflow_id)
+
+forest_cart_mtr_ex <-
+  forest_cart_pred |>
+  cls_mtr(class, estimate = .pred_class, .pred_Yes)
+```
+
+
+
+```{r}
+#| label: fig-forest-cart
+#| echo: false
+#| out-width: 100%
+#| fig-width: 9
+#| fig-height: 2.5
+#| fig-cap: "Tuning results for the CART model showing how the tree tuning parameters (cost-complexity, $n_{min}$, and tree depth) relate to the Brier score. There are three other characteristics computed each tree that reflext the average complexity of the trees created during resampling."
+
+cart_lvls <- c("Cost Complexity (log)", "Minimal Node Size", "Tree Depth",
+               "# Active Predictors", "Mean Rule Size", "# Terminal Nodes")
+
+forest_cart_res |> 
+  collect_extracts() |> 
+  unnest(.extracts) |> 
+  summarize(
+    value = mean(.estimate), 
+    .by = c(.metric, .config)
+  ) |>
+  rename(parameter = .metric) |> 
+  full_join(
+    forest_cart_res |> 
+      collect_metrics(type = "wide") |> 
+      select(.config, brier_class, roc_auc),
+    by = ".config"
+  ) |> 
+  bind_rows(
+    forest_cart_res |> 
+      collect_metrics(type = "wide") |> 
+      mutate(
+        cost_complexity = log10(cost_complexity)
+      )  |> 
+      rename(
+        `Cost Complexity (log)` = cost_complexity,
+        `Minimal Node Size` = min_n,
+        `Tree Depth` = tree_depth
+      ) |> 
+      pivot_longer(
+        c(`Cost Complexity (log)`, `Minimal Node Size`, `Tree Depth`),
+        names_to = "parameter",
+        values_to = "value"
+      ) 
+  ) |> 
+  mutate(parameter = factor(parameter, levels = cart_lvls)) |> 
+  ggplot(aes(value, brier_class)) + 
+  geom_point(alpha = 2 / 4, cex = 2) + 
+  facet_wrap(~ parameter, scales = "free_x", nrow = 1) +
+  labs(y = "Brier Score", x = NULL)  
+```
+
 ### C5.0 {#sec-cls-c50}
 
 C4.5 is an incredibly popular tree-based machine learning model, described in detail by @quinlan1993c4. C5.0 is its successor that was developed as a closed-source product but was released around 2010 as open-source and first described in @apm. Many attributes of these two models are the same. For example, we've previously described a few aspects of how this model creates trees: 
@@ -1150,7 +1293,7 @@ C4.5 is an incredibly popular tree-based machine learning model, described in de
 - multiway splits for qualitative predictors
 - small adjustments to the terminal node estimates
 
-Differences between the two are largely related to the addition of a boosting algorithm that will be described in SECTION. One change between the two versions is that C5.0 has an option to conduct a _global_ pruning phase at the end of tree construction. This uses a form of the one standard error rule from CART. Pessimistic pruning occurs locally, seeking to trim the tree at a specific node. The global process considers the entire tree at once. 
+Differences between the two are largely related to the addition of a boosting algorithm that will be described in @sec-cls-modern-boost One change between the two versions is that C5.0 has an option to conduct a _global_ pruning phase at the end of tree construction. This uses a form of the one standard error rule from CART. Pessimistic pruning occurs locally, seeking to trim the tree at a specific node. The global process considers the entire tree at once. 
 
 _The process is to "prune minimum cost complexity subtrees until the 'error' increases by one standard error"._
 
@@ -1174,6 +1317,130 @@ Common tuning parameters are:
 - $n_{min}$: The number of data points required to enact an additional split within a node. This curtails the depth of the tree in the growing phase. 
 
 Of these two, $n_{min}$ tends to have the largest effect. 
+
+
+```{r}
+#| label: forest-c5
+#| include: false
+#| cache: true
+
+c5_spec <- 
+  decision_tree(min_n = tune()) |> 
+  set_engine("C5.0", CF = tune()) |> 
+  set_mode("classification")
+
+c5_wflow <- workflow(class ~ ., c5_spec)
+
+c5_extract <- function(x) {
+  require(tidymodels)
+  require(lorax)
+  mold <- x$pre$mold
+  train_data <- dplyr::bind_cols(mold$outcomes, mold$predictors)
+  fit <- extract_fit_engine(x)
+  fit <- lorax:::as.party.C5.0(fit, data = train_data)
+  preds <- active_predictors(fit) |> 
+    dplyr::mutate(
+      .estimate = purrr::map_int(active_predictors, length),
+      .estimator = "none",
+      .metric = "# Active Predictors") |> 
+    select(-active_predictors)
+  rules <- 
+    fit |> 
+    extract_rules() |> 
+    dplyr::mutate(
+      terms = purrr::map_chr(rules, rlang::expr_deparse, width = 10^4),
+      terms = strsplit(terms, split = "&"),
+      num_terms = purrr::map_int(terms, length)
+    ) |> 
+    dplyr::summarize(
+      `Mean Rule Size` = mean(num_terms),
+      `# Terminal Nodes` = length(num_terms)
+    ) |> 
+    tidyr::pivot_longer(
+      c(`Mean Rule Size`, `# Terminal Nodes`),
+      names_to = ".metric",
+      values_to = ".estimate"
+    ) |> 
+    dplyr::mutate(.estimator = "none")
+  dplyr::bind_rows(preds, rules)
+}
+
+
+forest_c5_res <-
+  c5_wflow |>
+  tune_grid(
+    resamples = forested_rs,
+    grid = 25,
+    control = control_grid(
+      save_pred = TRUE,
+      save_workflow = TRUE,
+      extract = c5_extract,
+      pkgs = "lorax"
+    ),
+    metrics = cls_mtr
+  )
+
+forest_c5_best <- select_best(forest_c5_res, metric = "brier_class")
+
+forest_c5_pred <-
+  forest_c5_res |>
+  collect_predictions(parameters = forest_c5_best) |>
+  mutate(wflow_id = "C5.0") |>
+  relocate(wflow_id)
+
+forest_c5_mtr_ex <-
+  forest_c5_pred |>
+  cls_mtr(class, estimate = .pred_class, .pred_Yes)
+```
+
+```{r}
+#| label: fig-forest-c5
+#| echo: false
+#| out-width: 100%
+#| fig-width: 9
+#| fig-height: 2.5
+#| fig-cap: "Tuning results for the C5.0 model showing how the tree tuning parameters ($n_{min}$ and and the confidence factor) relate to the Brier score. There are three other characteristics computed each tree that reflext the average complexity of the trees created during resampling."
+
+c5_lvls <- c("Minimal Node Size", "Confidence Factor log", 
+             "# Active Predictors", "Mean Rule Size", "# Terminal Nodes")
+
+forest_c5_res |> 
+  collect_extracts() |> 
+  unnest(.extracts) |> 
+  summarize(
+    value = mean(.estimate), 
+    .by = c(.metric, .config)
+  ) |>
+  rename(parameter = .metric) |> 
+  full_join(
+    forest_c5_res |> 
+      collect_metrics(type = "wide") |> 
+      select(.config, brier_class, roc_auc),
+    by = ".config"
+  ) |> 
+  bind_rows(
+    forest_c5_res |> 
+      collect_metrics(type = "wide") |> 
+      mutate(
+        CF = log10(CF)
+      )  |> 
+      rename(
+        `Confidence Factor log` = CF,
+        `Minimal Node Size` = min_n
+      ) |> 
+      pivot_longer(
+        c(`Confidence Factor log`, `Minimal Node Size`),
+        names_to = "parameter",
+        values_to = "value"
+      ) 
+  ) |> 
+  mutate(parameter = factor(parameter, levels = c5_lvls)) |> 
+  ggplot(aes(value, brier_class)) + 
+  geom_point(alpha = 2 / 4, cex = 2) + 
+  facet_wrap(~ parameter, scales = "free_x", nrow = 1) +
+  labs(y = "Brier Score", x = NULL)  
+```
+
 
 ### Conditional Inference Trees {#sec-cls-cit}
 
@@ -1336,7 +1603,288 @@ For example, when evaluating numeric predictors such as longitude or annual prec
 
 The primary benefit of using this framework for data splitting is that the predictor selection process is completely unbiased. Since permutation statistics have the same distribution across data types and characteristics, these factors do not affect their probability of selection for splitting. It also has the benefit of producing trees that are more stable (i.e., lower model variance) than those from most other models described here.
 
+
+
+```{r}
+#| label: forest-cit
+#| include: false
+#| cache: true
+
+cit_spec <- 
+  decision_tree(min_n = tune(), tree_depth = tune()) |> 
+  set_engine("partykit", mincriterion = tune()) |> 
+  set_mode("classification")
+
+forested_train |> 
+  count(county) |> 
+  mutate( percent = n / nrow(forested_train)) |> 
+  arrange(desc(percent)) |> 
+  add_rowindex() |> 
+  arrange(percent) |>
+  mutate(cumulative = cumsum(percent)) |> 
+  filter(.row <= 30)
+
+cit_rec <- 
+  recipe(class ~ ., data = forested_train) |> 
+  step_other(county, threshold = 0.14)
+
+cit_wflow <- workflow(cit_rec, cit_spec)
+
+cit_param <-
+  cit_wflow |>
+  extract_parameter_set_dials() |>
+  update(
+    mincriterion = conditional_min_criterion(c(0.05, .99), trans = NULL)
+  )
+
+cit_extract <- function(x) {
+  require(tidymodels)
+  require(lorax)
+  mold <- x$pre$mold
+  train_data <- dplyr::bind_cols(mold$outcomes, mold$predictors)
+  fit <- extract_fit_engine(x)
+  preds <- active_predictors(fit) |> 
+    dplyr::mutate(
+      .estimate = purrr::map_int(active_predictors, length),
+      .estimator = "none",
+      .metric = "# Active Predictors") |> 
+    select(-active_predictors)
+  rules <- 
+    fit |> 
+    extract_rules() |> 
+    dplyr::mutate(
+      terms = purrr::map_chr(rules, rlang::expr_deparse, width = 10^4),
+      terms = strsplit(terms, split = "&"),
+      num_terms = purrr::map_int(terms, length)
+    ) |> 
+    dplyr::summarize(
+      `Mean Rule Size` = mean(num_terms),
+      `# Terminal Nodes` = length(num_terms)
+    ) |> 
+    tidyr::pivot_longer(
+      c(`Mean Rule Size`, `# Terminal Nodes`),
+      names_to = ".metric",
+      values_to = ".estimate"
+    ) |> 
+    dplyr::mutate(.estimator = "none")
+  dplyr::bind_rows(preds, rules)
+}
+
+
+forest_cit_res <-
+  cit_wflow |>
+  tune_grid(
+    resamples = forested_rs,
+    param_info = cit_param,
+    grid = 25,
+    control = control_grid(
+      save_pred = TRUE,
+      save_workflow = TRUE,
+      extract = cit_extract,
+      pkgs = "lorax"
+    ),
+    metrics = cls_mtr
+  )
+
+forest_cit_best <- select_best(forest_cit_res, metric = "brier_class")
+
+forest_cit_pred <-
+  forest_cit_res |>
+  collect_predictions(parameters = forest_cit_best) |>
+  mutate(wflow_id = "CIT") |>
+  relocate(wflow_id)
+
+forest_cit_mtr_ex <-
+  forest_cit_pred |>
+  cls_mtr(class, estimate = .pred_class, .pred_Yes)
+```
+
+
+
+```{r}
+#| label: fig-forest-cit
+#| echo: false
+#| out-width: 100%
+#| fig-width: 9
+#| fig-height: 2.5
+#| fig-cap: "Tuning results for conditional inference trees  showing how the tree tuning parameters (p-value threshold, $n_{min}$, and tree depth) relate to the Brier score. There are three other characteristics computed each tree that reflext the average complexity of the trees created during resampling."
+
+cit_lvls <- c("Minimal Node Size", "Tree Depth", "p-value Threshold",
+             "# Active Predictors", "Mean Rule Size", "# Terminal Nodes")
+
+forest_cit_res |> 
+  collect_extracts() |> 
+  unnest(.extracts) |> 
+  summarize(
+    value = mean(.estimate), 
+    .by = c(.metric, .config)
+  ) |>
+  rename(parameter = .metric) |> 
+  full_join(
+    forest_cit_res |> 
+      collect_metrics(type = "wide") |> 
+      select(.config, brier_class, roc_auc),
+    by = ".config"
+  ) |> 
+  bind_rows(
+    forest_cit_res |> 
+      collect_metrics(type = "wide") |> 
+      rename(
+        `Tree Depth` = tree_depth,
+        `Minimal Node Size` = min_n,
+        `p-value Threshold` = mincriterion
+      ) |> 
+      # mutate(`p-value Threshold` = log10(`p-value Threshold`)) |> 
+      pivot_longer(
+        c(`Tree Depth`, `Minimal Node Size`, `p-value Threshold`),
+        names_to = "parameter",
+        values_to = "value"
+      ) 
+  ) |> 
+  mutate(parameter = factor(parameter, levels = cit_lvls)) |> 
+  ggplot(aes(value, brier_class)) + 
+  geom_point(alpha = 2 / 4, cex = 2) + 
+  facet_wrap(~ parameter, scales = "free_x", nrow = 1) +
+  labs(y = "Brier Score", x = NULL)  
+```
+
+
 ### Oblique Trees {#sec-cls-oblique}
+
+Recall that oblique trees create non-rectangular splits of the data by using rules that involve more than one predictors at a time. 
+
+Many oblique CART trees deterministically compute predictor coefficients and, given these values, conduct a search to optimize the threshold parameter to minimize model impurity within each node. An early technique was OC1 [@murthy1994system]. 
+
+OC1 begins with a standard parallel-axis tree and uses its impurity estimate as a baseline value for the splitting statistic. It initializes the first oblique split coefficients with these split values. Over a course of iterations, the coefficients are perturbed. If the newly perturbed coefficient set shows better results, then accept those values and move to the next split. This results in a basic hill-climbing approach to constructing trees. 
+
+More recently, @jaeger2022aorsf extended the work in @jaeger2019oblique to create a framework for oblique classification trees. Although this work is designed to produce ensembles, it can also be used to generate single oblique trees.  
+
+The tree construction is fairly similar to the process used by CART; the Gini statistic is the default statistic used to determine the best fit using a greedy search. However, at each node, the model fits a logistic regression model to determine the linear combination that defines the oblique split. The training process might use an abbreviated number of optimization rounds used to estimate the logistic model -- perhaps a single step. Alternatively, a Lasso model can be used to estimate a spares linear combination that uses a heuristic to determine the best penalty value^[@truong2009fast also suggested using penalized logistic regression to find the best coefficients.]. At the end of this stage, we have the left-hand side of the rule. For example, we might estimate the linear combination to be `2A - 7B + C` but the rule needs to be finalized by completing the inequality `2A - 7B + C > threshold`. 
+
+After the logistic model, a secondary step is executed to perform a small grid search over threshold values for the right-hand side of the rule. The threshold value associated with the best Gini statistic is used to finalize the rule. This implementation does not consider the gain relative to the parent node; it only looks at child purity, ignoring parent impurity.
+
+For subsequent splits, predefined termination criteria are used to halt the growing process: 
+
+ - The number of data points in the current node must be greater than $n_{min}$ (where 10 samples is the default). 
+ - The child nodes multiple have at least $n^*_{min}$ samples in the leaves.
+ - The improvement in the Gini statistic should be greater than a preset threshold (defaulted to zero). 
+
+Each of these criteria can be optimized as tuning parameters. 
+
+This implementation does not prune the trees. 
+
+Logistic regression models are specific to classes with two possible values. For $C > 2$ outcome classes, the model creates a set of one-against-all models. It identified the outcome class that is determined to be most "splittable" (i.e., has sufficient events and non-events). Based on this, it fits a logistic regression for the favored class versus the others. 
+
+
+```{r}
+#| label: forest-oblique-tree
+#| include: false
+#| cache: true
+
+obl_spec <- 
+  rand_forest(min_n = tune(), mtry = 100, trees = 1) |> 
+  set_engine("aorsf") |> 
+  set_mode("classification")
+
+obl_wflow <- workflow(class ~ ., obl_spec)
+
+obl_extract <- function(x) {
+  require(tidymodels)
+  require(lorax)
+  mold <- x$pre$mold
+  train_data <- dplyr::bind_cols(mold$outcomes, mold$predictors)
+  fit <- extract_fit_engine(x)
+  preds <- active_predictors(fit) |> 
+    dplyr::mutate(
+      .estimate = purrr::map_int(active_predictors, length),
+      .estimator = "none",
+      .metric = "# Active Predictors") |> 
+    select(-active_predictors)
+  rules <- 
+    fit |> 
+    extract_rules() |> 
+    nrow()
+  rules <- tibble::tibble(.estimate = rules,
+                          .estimator = "none",
+                          .metric = "# Terminal Nodes", 
+                          tree = 1)
+  dplyr::bind_rows(preds, rules)
+}
+
+
+forest_obl_res <-
+  obl_wflow |>
+  tune_grid(
+    resamples = forested_rs,
+    grid = 25,
+    control = control_grid(
+      save_pred = TRUE,
+      save_workflow = TRUE,
+      extract = obl_extract,
+      pkgs = "lorax"
+    ),
+    metrics = cls_mtr
+  )
+
+forest_obl_best <- select_best(forest_obl_res, metric = "brier_class")
+
+forest_obl_pred <-
+  forest_obl_res |>
+  collect_predictions(parameters = forest_obl_best) |>
+  mutate(wflow_id = "Oblique Trees") |>
+  relocate(wflow_id)
+
+forest_obl_mtr_ex <-
+  forest_obl_pred |>
+  cls_mtr(class, estimate = .pred_class, .pred_Yes)
+```
+
+
+
+```{r}
+#| label: fig-forest-oblique-tree
+#| echo: false
+#| out-width: 60%
+#| fig-width: 6
+#| fig-height: 3.75
+#| fig-cap: "Tuning results for the oblqiue tree models showing how $n_{min}$ relates to the Brier score." 
+
+obl_lvls <- c("Minimal Node Size",  "# Active Predictors", "# Terminal Nodes")
+
+forest_obl_res |> 
+  collect_extracts() |> 
+  unnest(.extracts) |> 
+  summarize(
+    value = mean(.estimate), 
+    .by = c(.metric, .config)
+  ) |>
+  rename(parameter = .metric) |> 
+  full_join(
+    forest_obl_res |> 
+      collect_metrics(type = "wide") |> 
+      select(.config, brier_class, roc_auc),
+    by = ".config"
+  ) |> 
+  bind_rows(
+    forest_obl_res |> 
+      collect_metrics(type = "wide") |> 
+      rename(
+        `Minimal Node Size` = min_n,
+      ) |> 
+      pivot_longer(
+        c(`Minimal Node Size`),
+        names_to = "parameter",
+        values_to = "value"
+      ) 
+  ) |> 
+  mutate(parameter = factor(parameter, levels = obl_lvls)) |> 
+  filter(parameter != "# Active Predictors") |> 
+  ggplot(aes(value, brier_class)) + 
+  geom_point(alpha = 2 / 4, cex = 2) + 
+  facet_wrap(~ parameter, scales = "free_x", nrow = 1) +
+  labs(y = "Brier Score", x = NULL) 
+```
+
 
 ### Globally Estimated Trees {#sec-cls-tree-global}
 
