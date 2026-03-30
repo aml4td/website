@@ -27,6 +27,7 @@ library(partykit)
 library(patchwork)
 library(rpart.plot)
 library(gt)
+library(gtExtras)
 library(lorax)
 library(bonsai)
 
@@ -1157,7 +1158,6 @@ In these equations, $\widehat{\mathcal{F}}_{ik}$ plays a part similar to a linea
 
 ### CART {#sec-cls-cart}
 
-
 ```{r}
 #| label: forest-cart
 #| include: false
@@ -1232,92 +1232,6 @@ forest_cart_mtr_ex <-
   forest_cart_pred |>
   cls_mtr(class, estimate = .pred_class, .pred_Yes)
 ```
-
-
-
-```{r}
-#| label: fig-forest-cart
-#| echo: false
-#| out-width: 100%
-#| fig-width: 9
-#| fig-height: 2.5
-#| fig-cap: "Tuning results for the CART model showing how the tree tuning parameters (cost-complexity, $n_{min}$, and tree depth) relate to the Brier score. There are three other characteristics computed each tree that reflext the average complexity of the trees created during resampling."
-
-cart_lvls <- c("Cost Complexity (log)", "Minimal Node Size", "Tree Depth",
-               "# Active Predictors", "Mean Rule Size", "# Terminal Nodes")
-
-forest_cart_res |> 
-  collect_extracts() |> 
-  unnest(.extracts) |> 
-  summarize(
-    value = mean(.estimate), 
-    .by = c(.metric, .config)
-  ) |>
-  rename(parameter = .metric) |> 
-  full_join(
-    forest_cart_res |> 
-      collect_metrics(type = "wide") |> 
-      select(.config, brier_class, roc_auc),
-    by = ".config"
-  ) |> 
-  bind_rows(
-    forest_cart_res |> 
-      collect_metrics(type = "wide") |> 
-      mutate(
-        cost_complexity = log10(cost_complexity)
-      )  |> 
-      rename(
-        `Cost Complexity (log)` = cost_complexity,
-        `Minimal Node Size` = min_n,
-        `Tree Depth` = tree_depth
-      ) |> 
-      pivot_longer(
-        c(`Cost Complexity (log)`, `Minimal Node Size`, `Tree Depth`),
-        names_to = "parameter",
-        values_to = "value"
-      ) 
-  ) |> 
-  mutate(parameter = factor(parameter, levels = cart_lvls)) |> 
-  ggplot(aes(value, brier_class)) + 
-  geom_point(alpha = 2 / 4, cex = 2) + 
-  facet_wrap(~ parameter, scales = "free_x", nrow = 1) +
-  labs(y = "Brier Score", x = NULL)  
-```
-
-### C5.0 {#sec-cls-c50}
-
-C4.5 is an incredibly popular tree-based machine learning model, described in detail by @quinlan1993c4. C5.0 is its successor that was developed as a closed-source product but was released around 2010 as open-source and first described in @apm. Many attributes of these two models are the same. For example, we've previously described a few aspects of how this model creates trees: 
-
-- information gain ratio (@eq-gain-ratio)
-- pessimistic pruning
-- multiway splits for qualitative predictors
-- small adjustments to the terminal node estimates
-
-Differences between the two are largely related to the addition of a boosting algorithm that will be described in @sec-cls-modern-boost One change between the two versions is that C5.0 has an option to conduct a _global_ pruning phase at the end of tree construction. This uses a form of the one standard error rule from CART. Pessimistic pruning occurs locally, seeking to trim the tree at a specific node. The global process considers the entire tree at once. 
-
-_The process is to "prune minimum cost complexity subtrees until the 'error' increases by one standard error"._
-
-To start, we must compute what our "error budget." This is the number of errors in the tree that is allowable using the one standard error rule. To compute this, C5.0 determines the number of errors ($\mathcal{E}$) out of $n$ training set samples. Based on the equation for the Binomial variance, the standard errors for the number of errors is:
-
-$$
-\sigma_{\mathcal{E}} = \sqrt{\mathcal{E}\left(1 - \frac{\mathcal{E}}{n}\right)}
-$$  {#eq-c5-error-stde}
-
-If tree has $n=100$ training set points and $\mathcal{E} = 10$ misclassified samples, $\sigma_{\mathcal{E}} = `r sqrt(10 * (1 - (10/100)))`$. This is the number of errors that would be acceptable if we were to choose a tree with one additional standard error or misclassified points. Note that C5.0 uses the resubsitution error rate; unlike CART there is no internal cross-validation to determine a better statistical estimate. 
-
-One we have our budget of $\sigma_{\mathcal{E}}$ errors, we traverse the tree from top to bottom and search for a subtree that, when removed, we add fewer errors than the error budget. 
-
-For example, if we have a tree on the left size of FIGURE, there are four terminal nodes after local pessimistic pruning. Without any splits, using the most frequent class as the prediction, there are $\mathcal{E} = 10$ errors out of $n = 100$. On the left-hand side, another split (A) is used to generate terminal nodes B and C. If we had not split A into B and C, there are $\mathcal{E} = 4$. After the split, each terminal node has $\mathcal{E} = 2$ errors each. The difference in errors between the parent node (A) and the two child nodes is 4-4=0. Since this different is less than our error budget of `r sqrt(10 * (1 - (10/100)))`, we can prune the two child nodes. The tree on the right-hand side of FIGURE shows the results. 
-
-Can we prune the last two terminal nodes (A' and D)? 
-
-Common tuning parameters are: 
-
-- Confidence value: Affects the pessimistic pruning with larger values producing smaller trees.
-- $n_{min}$: The number of data points required to enact an additional split within a node. This curtails the depth of the tree in the growing phase. 
-
-Of these two, $n_{min}$ tends to have the largest effect. 
-
 
 ```{r}
 #| label: forest-c5
@@ -1394,6 +1308,435 @@ forest_c5_mtr_ex <-
 ```
 
 ```{r}
+#| label: forest-cit
+#| include: false
+#| cache: true
+
+cit_spec <- 
+  decision_tree(min_n = tune(), tree_depth = tune()) |> 
+  set_engine("partykit", mincriterion = tune(), testtype = tune()) |> 
+  set_mode("classification")
+
+forested_train |> 
+  count(county) |> 
+  mutate( percent = n / nrow(forested_train)) |> 
+  arrange(desc(percent)) |> 
+  add_rowindex() |> 
+  arrange(percent) |>
+  mutate(cumulative = cumsum(percent)) |> 
+  filter(.row <= 30)
+
+cit_rec <- 
+  recipe(class ~ ., data = forested_train) |> 
+  step_other(county, threshold = 0.14)
+
+cit_wflow <- workflow(cit_rec, cit_spec)
+
+cit_param <-
+  cit_wflow |>
+  extract_parameter_set_dials() |>
+  update(
+    mincriterion = conditional_min_criterion(c(0.80, .99), trans = NULL),
+    testtype = conditional_test_type(c("Univariate", "Bonferroni"))
+  )
+
+cit_extract <- function(x) {
+  require(tidymodels)
+  require(lorax)
+  mold <- x$pre$mold
+  train_data <- dplyr::bind_cols(mold$outcomes, mold$predictors)
+  fit <- extract_fit_engine(x)
+  preds <- active_predictors(fit) |> 
+    dplyr::mutate(
+      .estimate = purrr::map_int(active_predictors, length),
+      .estimator = "none",
+      .metric = "# Active Predictors") |> 
+    select(-active_predictors)
+  rules <- 
+    fit |> 
+    extract_rules() |> 
+    dplyr::mutate(
+      terms = purrr::map_chr(rules, rlang::expr_deparse, width = 10^4),
+      terms = strsplit(terms, split = "&"),
+      num_terms = purrr::map_int(terms, length)
+    ) |> 
+    dplyr::summarize(
+      `Mean Rule Size` = mean(num_terms),
+      `# Terminal Nodes` = length(num_terms)
+    ) |> 
+    tidyr::pivot_longer(
+      c(`Mean Rule Size`, `# Terminal Nodes`),
+      names_to = ".metric",
+      values_to = ".estimate"
+    ) |> 
+    dplyr::mutate(.estimator = "none")
+  dplyr::bind_rows(preds, rules)
+}
+
+
+forest_cit_res <-
+  cit_wflow |>
+  tune_grid(
+    resamples = forested_rs,
+    param_info = cit_param,
+    grid = 25,
+    control = control_grid(
+      save_pred = TRUE,
+      save_workflow = TRUE,
+      extract = cit_extract,
+      pkgs = "lorax"
+    ),
+    metrics = cls_mtr
+  )
+
+forest_cit_best <- select_best(forest_cit_res, metric = "brier_class")
+
+forest_cit_pred <-
+  forest_cit_res |>
+  collect_predictions(parameters = forest_cit_best) |>
+  mutate(wflow_id = "CIT") |>
+  relocate(wflow_id)
+
+forest_cit_mtr_ex <-
+  forest_cit_pred |>
+  cls_mtr(class, estimate = .pred_class, .pred_Yes)
+```
+
+```{r}
+#| label: forest-oblique-tree
+#| include: false
+#| cache: true
+
+obl_spec <- 
+  rand_forest(min_n = tune(), mtry = 100, trees = 1) |> 
+  set_engine("aorsf") |> 
+  set_mode("classification")
+
+obl_wflow <- workflow(class ~ ., obl_spec)
+
+obl_extract <- function(x) {
+  require(tidymodels)
+  require(lorax)
+  mold <- x$pre$mold
+  train_data <- dplyr::bind_cols(mold$outcomes, mold$predictors)
+  fit <- extract_fit_engine(x)
+  preds <- active_predictors(fit) |> 
+    dplyr::mutate(
+      .estimate = purrr::map_int(active_predictors, length),
+      .estimator = "none",
+      .metric = "# Active Predictors") |> 
+    select(-active_predictors)
+  rules <- 
+    fit |> 
+    extract_rules() |> 
+    nrow()
+  rules <- tibble::tibble(.estimate = rules,
+                          .estimator = "none",
+                          .metric = "# Terminal Nodes", 
+                          tree = 1)
+  dplyr::bind_rows(preds, rules)
+}
+
+
+forest_obl_res <-
+  obl_wflow |>
+  tune_grid(
+    resamples = forested_rs,
+    grid = 25,
+    control = control_grid(
+      save_pred = TRUE,
+      save_workflow = TRUE,
+      extract = obl_extract,
+      pkgs = "lorax"
+    ),
+    metrics = cls_mtr
+  )
+
+forest_obl_best <- select_best(forest_obl_res, metric = "brier_class")
+
+forest_obl_pred <-
+  forest_obl_res |>
+  collect_predictions(parameters = forest_obl_best) |>
+  mutate(wflow_id = "Oblique Trees") |>
+  relocate(wflow_id)
+
+forest_obl_mtr_ex <-
+  forest_obl_pred |>
+  cls_mtr(class, estimate = .pred_class, .pred_Yes)
+```
+
+```{r}
+#| label: tree-statistics-calc
+#| echo: false
+#| cache: true
+
+set.seed(4932)
+forest_cart_bt <-
+  forest_cart_res |>
+  int_pctl(
+    alpha = 0.1,
+    metrics = cls_mtr,
+    parameters = forest_cart_best,
+    times = 5000,
+    keep_replicates = TRUE
+  ) |>
+  select(.metric, .values) |>
+  unnest(.values) |>
+  filter(.metric %in% c("brier_class", "roc_auc")) |>
+  mutate(Model = "CART") |>
+  select(Model, .metric, estimate)
+
+set.seed(4932)
+forest_c5_bt <-
+  forest_c5_res |>
+  int_pctl(
+    alpha = 0.1,
+    metrics = cls_mtr,
+    parameters = forest_c5_best,
+    times = 5000,
+    keep_replicates = TRUE
+  ) |>
+  select(.metric, .values) |>
+  unnest(.values) |>
+  filter(.metric %in% c("brier_class", "roc_auc")) |>
+  mutate(Model = "C5.0") |>
+  select(Model, .metric, estimate)
+
+set.seed(4932)
+forest_cit_bt <-
+  forest_cit_res |>
+  int_pctl(
+    alpha = 0.1,
+    metrics = cls_mtr,
+    parameters = forest_cit_best,
+    times = 5000,
+    keep_replicates = TRUE
+  ) |>
+  select(.metric, .values) |>
+  unnest(.values) |>
+  filter(.metric %in% c("brier_class", "roc_auc")) |>
+  mutate(Model = "Conditional Inference") |>
+  select(Model, .metric, estimate)
+
+set.seed(4932)
+forest_obl_bt <-
+  forest_obl_res |>
+  int_pctl(
+    alpha = 0.1,
+    metrics = cls_mtr,
+    parameters = forest_obl_best,
+    times = 5000,
+    keep_replicates = TRUE
+  ) |>
+  select(.metric, .values) |>
+  unnest(.values) |>
+  filter(.metric %in% c("brier_class", "roc_auc")) |>
+  mutate(Model = "Oblique") |>
+  select(Model, .metric, estimate)
+
+tree_bt <- bind_rows(forest_cart_bt, forest_c5_bt, forest_cit_bt, forest_obl_bt)
+
+tree_bt_stats <-
+  tree_bt |>
+  group_by(.metric, Model) |>
+  summarize(
+    data = list(estimate),
+    # Column must be a list of values
+    Estimate = mean(estimate),
+    Lower = quantile(estimate, 0.05),
+    Upper = quantile(estimate, 0.95),
+    .groups = 'drop'
+  ) |>
+  pivot_wider(
+    id_cols = c(Model),
+    names_from = .metric,
+    values_from = c(Estimate, Lower, Upper, data)
+  )
+```
+
+```{r}
+#| label: forested-cart-stats
+#| include: false
+
+forest_cart_mtr <- collect_metrics(forest_cart_res)
+forest_cart_rng <- 
+  forest_cart_mtr |> 
+  dplyr::select(cost_complexity, tree_depth, min_n) |>
+  map(range)
+
+cart_fit <-
+  cart_wflow |>
+  finalize_workflow(forest_cart_best) |>
+  fit(forested_train)
+
+cart_fit_stat <- cart_fit |> cart_extract()
+```
+
+To demonstrate with the forestation data, a CART model was tuned over cost-complexity (10<sup>`r log10(forest_cart_rng[[1]][1])`</sup> to 10<sup>`r log10(forest_cart_rng[[1]][2])`</sup>), the tree-depth (`r forest_cart_rng[[2]][1]` to `r forest_cart_rng[[2]][2]`), and $n_{min}$  (`r forest_cart_rng[[3]][1]` to `r forest_cart_rng[[3]][2]`) using a space-filling design with 25 candidates. @fig-forest-cart shows the results
+based on minimizing the Brier score. The figure also computes several different aspects of the fitted trees: the number of terminal nodes, how many predictors  (or of `r ncol(forested_train) - 1`) where used in a split, and the average number of predictors in the rules. Like the Brier score values, the points in the visualization are averages of the trees fitted within each fold.
+
+```{r}
+#| label: fig-forest-cart
+#| echo: false
+#| out-width: 100%
+#| fig-width: 9
+#| fig-height: 2.5
+#| fig-cap: "Tuning results for the CART model showing how the tree tuning parameters (cost-complexity, $n_{min}$, and tree depth) relate to the Brier score. There are three other characteristics computed each tree that reflext the average complexity of the trees created during resampling."
+
+cart_lvls <- c("Cost Complexity (log)", "Minimal Node Size", "Tree Depth",
+               "# Active Predictors", "Mean Rule Size", "# Terminal Nodes")
+
+forest_cart_res |> 
+  collect_extracts() |> 
+  unnest(.extracts) |> 
+  summarize(
+    value = mean(.estimate), 
+    .by = c(.metric, .config)
+  ) |>
+  rename(parameter = .metric) |> 
+  full_join(
+    forest_cart_res |> 
+      collect_metrics(type = "wide") |> 
+      select(.config, brier_class, roc_auc),
+    by = ".config"
+  ) |> 
+  bind_rows(
+    forest_cart_res |> 
+      collect_metrics(type = "wide") |> 
+      mutate(
+        cost_complexity = log10(cost_complexity)
+      )  |> 
+      rename(
+        `Cost Complexity (log)` = cost_complexity,
+        `Minimal Node Size` = min_n,
+        `Tree Depth` = tree_depth
+      ) |> 
+      pivot_longer(
+        c(`Cost Complexity (log)`, `Minimal Node Size`, `Tree Depth`),
+        names_to = "parameter",
+        values_to = "value"
+      ) 
+  ) |> 
+  mutate(parameter = factor(parameter, levels = cart_lvls)) |> 
+  ggplot(aes(value, brier_class)) + 
+  geom_point(alpha = 2 / 4, cex = 2) + 
+  facet_wrap(~ parameter, scales = "free_x", nrow = 1) +
+  labs(y = "Brier Score", x = NULL)  
+```
+
+We can see that the cost-complexity parameter does influence performance but trend is somewhat muddled so it is not the most important parameter. In general though, smaller values have better Brier scores; the data set favors deep CART trees. The panel for the tree depth has the same interpretation. For $n_{min}$, smaller Brier scores are mostly likely to occur with values greater than $n_{min} \approx$ 18.
+
+The three panels to the right measure the complexity of the tree. We see that  there is a definitive quadratic trend for the mean rule size and the number of terminal nodes. This indicates that there is a clear indication that the trees can under- and over-fit across these values. Tuning parameter combinations that produce around 25 to 60 terminal nodes have the best Brier scores. We can also see from the panel measuring how many "active parameters" in the tree (i.e., used in at least one split), models that used the entire feature set did poorly. However, they can also have poor performance if less than 12 predictors were used by the tree. These values are also related to the model's complexity.
+
+The numerically best tree used a cost-complexity value of 10<sup>`r round(log10(forest_cart_best$cost_complexity), 2)`</sup>, a depth of `r forest_cart_best$tree_depth`, and $n_{min}$ = `r forest_cart_best$min_n` training set samples. The performance statistics for the model are shown in @tbl-tree-statistics.
+
+::: columns
+::::: {.column width="10%"}
+:::::
+
+::::: {.column width="80%"}
+::::::: {#tbl-tree-statistics}
+```{r}
+#| label: tree-statistics
+#| echo: false
+theme_set(theme_bw())
+tree_bt_stats |>
+  dplyr::select(
+    Model, 
+    Estimate_brier_class, Lower_brier_class, Upper_brier_class, data_brier_class, 
+    Estimate_roc_auc, , Lower_roc_auc, Upper_roc_auc, data_roc_auc
+  ) |>
+  gt() |> 
+  gt_plt_dist(
+    column = data_brier_class,
+    type = "density",
+    fill_color = "#B2DF8A",
+    line_color = "#33A02C",
+    fig_dim = c(5, 30)       
+  ) |>
+  gt_plt_dist(
+    column = data_roc_auc,
+    type = "density",
+    fill_color = "#CAB2D6",
+    line_color = "#6A3D9A",
+    fig_dim = c(5, 30)         
+  ) |>
+  fmt_number(columns = c(-Model, starts_with("data")), decimals = 3) |> 
+  cols_label(
+    starts_with("Lower") ~ "Lower CI",
+    starts_with("Upper") ~ "Upper CI",
+    starts_with("Estimate") ~ "Estimate",
+    starts_with("data") ~ "Distribution"
+  ) |> 
+  tab_spanner(label = "Brier Score", columns = c(contains("brier"))) |>
+  tab_spanner(label = "ROC AUC", columns = c(contains("roc_"))) |> 
+  tab_options(
+    table.background.color = "transparent"
+  )
+```
+
+Performance statistics for the best candidates of each tree model. The limits are 90% confidence intervals. The distribution columns show density estimates of the bootstrap sampling distributions of the performance metrics. 
+
+:::::::
+:::::
+
+::::: {.column width="10%"}
+:::::
+:::
+
+final fit, variable importance, etc.
+
+### C5.0 {#sec-cls-c50}
+
+C4.5 is a popular tree-based machine learning model, described in detail by @quinlan1993c4. C5.0 is its successor that was developed as a closed-source  product but was released around 2010 as open-source and first described in @apm.  Many attributes of these two models are the same. For example, we've previously described a few aspects of how this model creates trees:
+
+- information gain ratio (@eq-gain-ratio)
+- pessimistic pruning
+- multiway splits for qualitative predictors
+- small adjustments to the terminal node estimates
+
+Differences between the two are largely related to the addition of a boosting algorithm that will be described in @sec-cls-modern-boost One change between the two versions is that C5.0 has an option to conduct a *global* pruning phase at the end of tree construction. This uses a form of the one standard error rule from CART. Pessimistic pruning occurs locally, seeking to trim the tree at a specific node. The global process considers the entire tree at once.
+
+To start, we must compute what our "error budget." This is the number of errors in the tree that is allowable using the one standard error rule. To compute this, C5.0 determines the number of errors ($\mathcal{E}$) out of $n$ training set samples. Based on the equation for the Binomial variance, the standard errors for the number of errors is:
+
+$$
+\sigma_{\mathcal{E}} = \sqrt{\mathcal{E}\left(1 - \frac{\mathcal{E}}{n}\right)}
+$$ {#eq-c5-error-stde}
+
+If tree has $n=100$ training set points and $\mathcal{E} = 10$ misclassified samples, $\sigma_{\mathcal{E}} = `r sqrt(10 * (1 - (10/100)))`$. This is the number of errors that would be acceptable if we were to choose a tree with one additional standard error or misclassified points. Note that C5.0 uses the resubsitution error rate; unlike CART there is no internal cross-validation to determine a better statistical estimate.
+
+One we have our budget of $\sigma_{\mathcal{E}}$ errors, we traverse the tree from top to bottom and search for a subtree that, when removed, we add fewer errors than the error budget.
+
+For example, if we have a tree on the left size of FIGURE, there are four  terminal nodes after local pessimistic pruning. Without any splits, using the most frequent class as the prediction, there are $\mathcal{E} = 10$ errors out of $n = 100$. On the left-hand side, another split (A) is used to generate terminal nodes B and C. If we had not split A into B and C, there are $\mathcal{E} = 4$. After the split, each terminal node has $\mathcal{E} = 2$ errors each. The difference in errors between the parent node (A) and the two child nodes is 4-4=0. Since this different is less than our error budget of `r sqrt(10 * (1 - (10/100)))`, we can prune the two child nodes. The tree on the right-hand side of FIGURE shows the results.
+
+Can we prune the last two terminal nodes (A' and D)?
+
+Common tuning parameters are:
+
+- Confidence value: Affects the pessimistic pruning with larger values producing smaller trees.
+- $n_{min}$: The number of data points required to enact an additional split within a node. This curtails the depth of the tree in the growing phase.
+
+```{r}
+#| label: forested-c5-stats
+#| include: false
+
+forest_c5_mtr <- collect_metrics(forest_c5_res)
+forest_c5_rng <- 
+  forest_c5_mtr |> 
+  dplyr::select(CF, min_n) |>
+  map(range)
+
+c5_fit <-
+  c5_wflow |>
+  finalize_workflow(forest_c5_best) |>
+  fit(forested_train)
+
+c5_fit_stat <- c5_fit |> c5_extract()
+```
+
+Of these two, $n_{min}$ tends to have the largest effect. To demonstrate, C5.0 was tuned on the example data using 25 candidates for $n_{min}$ ranging from `r forest_c5_rng[[2]][1]` to `r forest_c5_rng[[2]][2]` and confidence factors from the tree-depth `r round(forest_c5_rng[[1]][1], 3)` to  `r round(forest_c5_rng[[1]][2], 3)`. @fig-forest-c5 shows a plot of the results  that is similar to the CART analysis.
+
+```{r}
 #| label: fig-forest-c5
 #| echo: false
 #| out-width: 100%
@@ -1441,10 +1784,11 @@ forest_c5_res |>
   labs(y = "Brier Score", x = NULL)  
 ```
 
+In this case, there is a definitive trend between $n_{min}$ and the Brier score. These data preferred C5.0 to make as many splits as possible by lowering the threshold for how many training set samples are required to keep splitting the data. The confidence factor had almost no affect on the results. The other panels in the plot indicate that the data preferred to use as many predictors as possible but still used fewer than the CART tree. Also, the number of predictors in the rule was associated with small Brier scores, as was a larger number of terminal nodes. However, the number of terminal nodes produced by C5.0 was much smaller than CART. The final model was fit using a threshold of $n_{min}$ = `r forest_c5_best$min_n` samples to continue splitting. The resampled performance of this configuration is shown in @tbl-tree-statistics and is very similar to CART. 
 
 ### Conditional Inference Trees {#sec-cls-cit}
 
-Conditional inference trees [@hothorn2006unbiased] take a more statistically motivated approach to building a tree model. When creating a new split, a statistical test is applied to each predictor to determine whether there is a statistical relationship between each predictor and the outcome. If there is a relationship that is statistically significant, the most important predictor is chosen, and an appropriate split is made (usually with the $\chi^2$ test statistic). 
+Conditional inference trees [@hothorn2006unbiased] take a more statistically motivated approach to building a tree model. When creating a new split, a statistical test is applied to each predictor to determine whether there is a  statistical relationship between each predictor and the outcome. If there is a  relationship that is statistically significant, the most important predictor is chosen, and an appropriate split is made (usually with the $\chi^2$ test statistic).
 
 ```{r}
 #| label: ctree-example
@@ -1528,9 +1872,9 @@ cit_small <-
   )
 ```
 
-There are a few interesting aspects to this process. First, there is no pruning phase. As splitting continues, the amount of data per node decreases, and so does the statistical test's ability to identify a predictor as "significant." To make this judgment, a p-value cutoff is used to determine whether the splitting process should proceed. This stopping criterion can be coupled with the usual threshold for the number of data points required for splitting, the maximum tree depth, and so on. The p-value cutoff can be a tuning parameter. Additionally, to be more conservative, the p-values between predictors can be adjusted for multiple testing using a Bonferroni or similar correction. 
+There are a few interesting aspects to this process. First, there is no pruning phase. As splitting continues, the amount of data per node decreases, and so does the statistical test's ability to identify a predictor as "significant." To make this judgment, a p-value cutoff is used to determine whether the splitting process should proceed. This stopping criterion can be coupled with the usual threshold for the number of data points required for splitting, the maximum tree depth, and so on. The p-value cutoff can be a tuning parameter. Additionally, to be more conservative, the p-values between predictors can be adjusted for multiple testing using a Bonferroni or similar correction.
 
-For example, during the first pass of the splitting process, the entire training set is used to evaluate the significance of each predictor (regardless of data type). @fig-cit-screening shows the results for each predictor. These test statistics are very large, and their corresponding p-values can be smaller than 10<sup>`r cit_first_p`</sup>, indicating extremely strong statistical significance. In this case, the `r cit_first$chosen[1]` predictor was chosen for splitting. The same figure shows another pass much later in the splitting process, where only $n = `r cit_small$data_size[1]`$ points are available. The test statistics are much smaller, and their corresponding p-values range from `r round(min(cit_small$p.value), 4)` to `r round(max(cit_small$p.value), 4)`. At this point, the best p-value is no longer significant enough, and the splitting process halts.  
+For example, during the first pass of the splitting process, the entire training set is used to evaluate the significance of each predictor (regardless of data type). @fig-cit-screening shows the results for each predictor. These test statistics are very large, and their corresponding p-values can be smaller than 10<sup>`r cit_first_p`</sup>, indicating extremely strong statistical significance. In this case, the `r cit_first$chosen[1]` predictor was chosen for splitting. The same figure shows another pass much later in the splitting process, where only $n = `r cit_small$data_size[1]`$ points are available. The test statistics are much smaller, and their corresponding p-values range from`r round(min(cit_small$p.value), 4)` to `r round(max(cit_small$p.value), 4)`. At this point, the best p-value is no longer significant enough, and the splitting process halts.\
 
 ```{r}
 #| label: fig-cit-screening
@@ -1539,7 +1883,10 @@ For example, during the first pass of the splitting process, the entire training
 #| out-width: 90%
 #| fig-width: 8
 #| fig-height: 4
-#| fig-cap: Two examples of conditional inference tree screening. The left panel is the initial split with a large sample size and test statistics. The right panel shows a node much deeper in the tree with a smaller sample size and no statistically significant predictors. 
+#| fig-cap: Two examples of conditional inference tree screening. The left panel
+#|   is the initial split with a large sample size and test statistics. The
+#|   right panel shows a node much deeper in the tree with a smaller sample size
+#|   and no statistically significant predictors.
 p_first <-
   cit_first |>
   ggplot(aes(x = statistic, y = label)) +
@@ -1559,7 +1906,7 @@ p_small <-
 p_first + p_small
 ```
 
-What statistical test is used to evaluate the predictors? @StrasserWeber developed mathematical methods for permutation tests of various data types and found a unifying framework. Their method shows that many statistical tests fall under the framework of _linear statistics_, and that their permutation test statistics can have the same distributions. In essence, we can conduct many different types of statistical tests and still make an "apples-to-apples" comparison (either using the test statistics or their p-values). For classification, @tbl-cit-tests shows different combinations of predictor and outcome types, their corresponding test descriptions, and any connection to existing statistical methods. 
+What statistical test is used to evaluate the predictors? @StrasserWeber developed mathematical methods for permutation tests of various data types and found a unifying framework. Their method shows that many statistical tests fall under the framework of *linear statistics*, and that their permutation test statistics can have the same distributions. In essence, we can conduct many different types of statistical tests and still make an "apples-to-apples" comparison (either using the test statistics or their p-values). For  classification, @tbl-cit-tests shows different combinations of predictor and  outcome types, their corresponding test descriptions, and any connection to existing statistical methods.
 
 ::: {#tbl-cit-tests}
 ```{r}
@@ -1595,111 +1942,43 @@ cit_types |>
   )
 ```
 
-The permutation test types for different outcome and predictor variables, along with their conventional analogs. 
+The permutation test types for different outcome and predictor variables, along with their conventional analogs.
 
 :::
 
-For example, when evaluating numeric predictors such as longitude or annual precipitation, we compare the centers of their distributions, similar to comparing the medians per class. For our county predictor, we use the previously discussed $\chi^2$ statistic. For ordered qualitative columns (e.g., low, medium, high), the categoies are converted to rank "scores" and treated as numeric. 
+For example, when evaluating numeric predictors such as longitude or annual  precipitation, we compare the centers of their distributions, similar to  comparing the medians per class. For our county predictor, we use the previously discussed $\chi^2$ statistic. For ordered qualitative columns (e.g., low, medium, high), the categoies are converted to rank "scores" and treated as numeric.
 
-The primary benefit of using this framework for data splitting is that the predictor selection process is completely unbiased. Since permutation statistics have the same distribution across data types and characteristics, these factors do not affect their probability of selection for splitting. It also has the benefit of producing trees that are more stable (i.e., lower model variance) than those from most other models described here.
-
-
+The primary benefit of using this framework for data splitting is that the predictor selection process is completely unbiased. Since permutation statistics have the same distribution across data types and characteristics, these factors do not affect their probability of selection for splitting. It also has the  benefit of producing trees that are more stable (i.e., lower model variance)  than those from most other models described here.
 
 ```{r}
-#| label: forest-cit
+#| label: forested-cit-stats
 #| include: false
-#| cache: true
 
-cit_spec <- 
-  decision_tree(min_n = tune(), tree_depth = tune()) |> 
-  set_engine("partykit", mincriterion = tune()) |> 
-  set_mode("classification")
+forest_cit_mtr <- collect_metrics(forest_cit_res)
+forest_cit_rng <- 
+  forest_cit_mtr |> 
+  dplyr::select(min_n, tree_depth, mincriterion) |>
+  mutate(mincriterion = 1 - mincriterion) |> 
+  map(range)
 
-forested_train |> 
-  count(county) |> 
-  mutate( percent = n / nrow(forested_train)) |> 
-  arrange(desc(percent)) |> 
-  add_rowindex() |> 
-  arrange(percent) |>
-  mutate(cumulative = cumsum(percent)) |> 
-  filter(.row <= 30)
-
-cit_rec <- 
-  recipe(class ~ ., data = forested_train) |> 
-  step_other(county, threshold = 0.14)
-
-cit_wflow <- workflow(cit_rec, cit_spec)
-
-cit_param <-
+cit_fit <-
   cit_wflow |>
-  extract_parameter_set_dials() |>
-  update(
-    mincriterion = conditional_min_criterion(c(0.05, .99), trans = NULL)
-  )
+  finalize_workflow(forest_cit_best) |>
+  fit(forested_train)
 
-cit_extract <- function(x) {
-  require(tidymodels)
-  require(lorax)
-  mold <- x$pre$mold
-  train_data <- dplyr::bind_cols(mold$outcomes, mold$predictors)
-  fit <- extract_fit_engine(x)
-  preds <- active_predictors(fit) |> 
-    dplyr::mutate(
-      .estimate = purrr::map_int(active_predictors, length),
-      .estimator = "none",
-      .metric = "# Active Predictors") |> 
-    select(-active_predictors)
-  rules <- 
-    fit |> 
-    extract_rules() |> 
-    dplyr::mutate(
-      terms = purrr::map_chr(rules, rlang::expr_deparse, width = 10^4),
-      terms = strsplit(terms, split = "&"),
-      num_terms = purrr::map_int(terms, length)
-    ) |> 
-    dplyr::summarize(
-      `Mean Rule Size` = mean(num_terms),
-      `# Terminal Nodes` = length(num_terms)
-    ) |> 
-    tidyr::pivot_longer(
-      c(`Mean Rule Size`, `# Terminal Nodes`),
-      names_to = ".metric",
-      values_to = ".estimate"
-    ) |> 
-    dplyr::mutate(.estimator = "none")
-  dplyr::bind_rows(preds, rules)
-}
-
-
-forest_cit_res <-
-  cit_wflow |>
-  tune_grid(
-    resamples = forested_rs,
-    param_info = cit_param,
-    grid = 25,
-    control = control_grid(
-      save_pred = TRUE,
-      save_workflow = TRUE,
-      extract = cit_extract,
-      pkgs = "lorax"
-    ),
-    metrics = cls_mtr
-  )
-
-forest_cit_best <- select_best(forest_cit_res, metric = "brier_class")
-
-forest_cit_pred <-
-  forest_cit_res |>
-  collect_predictions(parameters = forest_cit_best) |>
-  mutate(wflow_id = "CIT") |>
-  relocate(wflow_id)
-
-forest_cit_mtr_ex <-
-  forest_cit_pred |>
-  cls_mtr(class, estimate = .pred_class, .pred_Yes)
+cit_fit_stat <- cit_fit |> cit_extract()
 ```
 
+Using the forestation data, conditional inference trees were tuned over:
 
+- $n_{min}$: `r forest_cit_rng$min_n[1]` to `r forest_cit_rng$min_n[2]`.
+- tree depth: `r forest_cit_rng$tree_depth[1]` to `r forest_cit_rng$tree_depth[2]`.
+- The p-value threshold to continue splitting: `r forest_cit_rng$mincriterion[1]` to `r forest_cit_rng$mincriterion[2]`.
+- Whether to use a Bonferroni p-value correction or not.
+
+The primary implementation is constrained to using qualitative predictors with less than 31 possible values. For the county predictor, we used an "othering" approach that limits the number of counties to fit this constraint. That process was not tuned but resampled along with the rest of the tuning parameters.
+
+Performance statistics for 25 candidate parameters are shown in @fig-forest-cit. For this model, the tree depth is the strongest tuning parameter for these data. The p-value correction and $n_{min}$ do not seem to make a significant difference to the results. The choice on whether or not to correct the p-values ostensibly does not affect the Brier score in a meaningful way. However, using the correction definitely does stop the model from overfitting by reducing the number of predictors used and the number of terminal node. When the correction is not used, we see a trend of poor performance begin when the model is becoming excessively complex.
 
 ```{r}
 #| label: fig-forest-cit
@@ -1707,7 +1986,7 @@ forest_cit_mtr_ex <-
 #| out-width: 100%
 #| fig-width: 9
 #| fig-height: 2.5
-#| fig-cap: "Tuning results for conditional inference trees  showing how the tree tuning parameters (p-value threshold, $n_{min}$, and tree depth) relate to the Brier score. There are three other characteristics computed each tree that reflext the average complexity of the trees created during resampling."
+#| fig-cap: "Tuning results for conditional inference trees  showing how the tree tuning parameters (p-value threshold, p-value correction,  $n_{min}$, and tree depth) relate to the Brier score. There are three other characteristics computed each tree that reflext the average complexity of the trees created during resampling."
 
 cit_lvls <- c("Minimal Node Size", "Tree Depth", "p-value Threshold",
              "# Active Predictors", "Mean Rule Size", "# Terminal Nodes")
@@ -1723,7 +2002,7 @@ forest_cit_res |>
   full_join(
     forest_cit_res |> 
       collect_metrics(type = "wide") |> 
-      select(.config, brier_class, roc_auc),
+      select(.config, testtype, brier_class, roc_auc),
     by = ".config"
   ) |> 
   bind_rows(
@@ -1734,112 +2013,85 @@ forest_cit_res |>
         `Minimal Node Size` = min_n,
         `p-value Threshold` = mincriterion
       ) |> 
-      # mutate(`p-value Threshold` = log10(`p-value Threshold`)) |> 
+      mutate(
+        `p-value Threshold` = 1 - `p-value Threshold`
+      ) |>
       pivot_longer(
         c(`Tree Depth`, `Minimal Node Size`, `p-value Threshold`),
         names_to = "parameter",
         values_to = "value"
       ) 
   ) |> 
-  mutate(parameter = factor(parameter, levels = cit_lvls)) |> 
-  ggplot(aes(value, brier_class)) + 
-  geom_point(alpha = 2 / 4, cex = 2) + 
+  mutate(
+    parameter = factor(parameter, levels = cit_lvls),
+    Bonferroni = ifelse(testtype == "Bonferroni", "yes", "no")
+  ) |> 
+  ggplot(aes(value, brier_class, col = Bonferroni, pch = Bonferroni)) + 
+  geom_point(alpha = 0.65, cex = 2) + 
   facet_wrap(~ parameter, scales = "free_x", nrow = 1) +
-  labs(y = "Brier Score", x = NULL)  
+  labs(y = "Brier Score", x = NULL) + 
+  theme(legend.position = "top")
 ```
 
+The conditional inference tree has equivalent performance to the previous trees but with reduced complexity and uses fewer predictors.
 
 ### Oblique Trees {#sec-cls-oblique}
 
-Recall that oblique trees create non-rectangular splits of the data by using rules that involve more than one predictors at a time. 
+Recall that oblique trees create non-rectangular splits of the data by using rules that involve more than one predictors at a time.
 
-Many oblique CART trees deterministically compute predictor coefficients and, given these values, conduct a search to optimize the threshold parameter to minimize model impurity within each node. An early technique was OC1 [@murthy1994system]. 
+Many oblique CART trees deterministically compute predictor coefficients and, given these values, conduct a search to optimize the threshold parameter to minimize model impurity within each node. An early technique was OC1 [@murthy1994system].
 
-OC1 begins with a standard parallel-axis tree and uses its impurity estimate as a baseline value for the splitting statistic. It initializes the first oblique split coefficients with these split values. Over a course of iterations, the coefficients are perturbed. If the newly perturbed coefficient set shows better results, then accept those values and move to the next split. This results in a basic hill-climbing approach to constructing trees. 
+OC1 begins with a standard parallel-axis tree and uses its impurity estimate as a baseline value for the splitting statistic. It initializes the first oblique split coefficients with these split values. Over a course of iterations, the coefficients are perturbed. If the newly perturbed coefficient set shows better  results, then accept those values and move to the next split. This results in a  basic hill-climbing approach to constructing trees.
 
-More recently, @jaeger2022aorsf extended the work in @jaeger2019oblique to create a framework for oblique classification trees. Although this work is designed to produce ensembles, it can also be used to generate single oblique trees.  
+More recently, @jaeger2022aorsf extended the work in @jaeger2019oblique to create a framework for oblique classification trees. Although this work is designed to produce ensembles, it can also be used to generate single oblique trees.\
 
-The tree construction is fairly similar to the process used by CART; the Gini statistic is the default statistic used to determine the best fit using a greedy search. However, at each node, the model fits a logistic regression model to determine the linear combination that defines the oblique split. The training process might use an abbreviated number of optimization rounds used to estimate the logistic model -- perhaps a single step. Alternatively, a Lasso model can be used to estimate a spares linear combination that uses a heuristic to determine the best penalty value^[@truong2009fast also suggested using penalized logistic regression to find the best coefficients.]. At the end of this stage, we have the left-hand side of the rule. For example, we might estimate the linear combination to be `2A - 7B + C` but the rule needs to be finalized by completing the inequality `2A - 7B + C > threshold`. 
+The tree construction is fairly similar to the process used by CART; the Gini  statistic is the default statistic used to determine the best fit using a greedy  search. However, at each node, the model fits a logistic regression model to  determine the linear combination that defines the oblique split. The training process might use an abbreviated number of optimization rounds used to estimate the logistic model -- perhaps a single step. Alternatively, a Lasso model can be  used to estimate a spares linear combination that uses a heuristic to determine  the best penalty value^[@truong2009fast also suggested using penalized logistic regression to find the best coefficients.]. At the end of this stage, we have the left-hand side of the rule. For example, we might estimate the linear combination to be `2A - 7B + C` but the rule needs to be finalized by completing the inequality `2A - 7B + C > threshold`.
 
 After the logistic model, a secondary step is executed to perform a small grid search over threshold values for the right-hand side of the rule. The threshold value associated with the best Gini statistic is used to finalize the rule. This implementation does not consider the gain relative to the parent node; it only looks at child purity, ignoring parent impurity.
 
-For subsequent splits, predefined termination criteria are used to halt the growing process: 
+For subsequent splits, predefined termination criteria are used to halt the growing process:
 
- - The number of data points in the current node must be greater than $n_{min}$ (where 10 samples is the default). 
- - The child nodes multiple have at least $n^*_{min}$ samples in the leaves.
- - The improvement in the Gini statistic should be greater than a preset threshold (defaulted to zero). 
+- The number of data points in the current node must be greater than $n_{min}$ (where 10 samples is the default).
+- The child nodes multiple have at least $n^*_{min}$ samples in the leaves.
+- The improvement in the Gini statistic should be greater than a preset threshold (defaulted to zero).
 
-Each of these criteria can be optimized as tuning parameters. 
+Each of these criteria can be optimized as tuning parameters.
 
-This implementation does not prune the trees. 
+This implementation does not prune the trees.
 
-Logistic regression models are specific to classes with two possible values. For $C > 2$ outcome classes, the model creates a set of one-against-all models. It identified the outcome class that is determined to be most "splittable" (i.e., has sufficient events and non-events). Based on this, it fits a logistic regression for the favored class versus the others. 
+Logistic regression models are specific to classes with two possible values. For $C > 2$ outcome classes, the model creates a set of one-against-all models. It identified the outcome class that is determined to be most "splittable" (i.e., has sufficient events and non-events). Based on this, it fits a logistic regression for the favored class versus the others.
 
 
 ```{r}
-#| label: forest-oblique-tree
+#| label: forested-obl-stats
 #| include: false
-#| cache: true
 
-obl_spec <- 
-  rand_forest(min_n = tune(), mtry = 100, trees = 1) |> 
-  set_engine("aorsf") |> 
-  set_mode("classification")
+forest_obl_mtr <- collect_metrics(forest_obl_res)
+forest_obl_rng <- 
+  forest_obl_mtr |> 
+  dplyr::select(min_n) |>
+  map(range)
 
-obl_wflow <- workflow(class ~ ., obl_spec)
-
-obl_extract <- function(x) {
-  require(tidymodels)
-  require(lorax)
-  mold <- x$pre$mold
-  train_data <- dplyr::bind_cols(mold$outcomes, mold$predictors)
-  fit <- extract_fit_engine(x)
-  preds <- active_predictors(fit) |> 
-    dplyr::mutate(
-      .estimate = purrr::map_int(active_predictors, length),
-      .estimator = "none",
-      .metric = "# Active Predictors") |> 
-    select(-active_predictors)
-  rules <- 
-    fit |> 
-    extract_rules() |> 
-    nrow()
-  rules <- tibble::tibble(.estimate = rules,
-                          .estimator = "none",
-                          .metric = "# Terminal Nodes", 
-                          tree = 1)
-  dplyr::bind_rows(preds, rules)
-}
-
-
-forest_obl_res <-
+obl_fit <-
   obl_wflow |>
-  tune_grid(
-    resamples = forested_rs,
-    grid = 25,
-    control = control_grid(
-      save_pred = TRUE,
-      save_workflow = TRUE,
-      extract = obl_extract,
-      pkgs = "lorax"
-    ),
-    metrics = cls_mtr
-  )
+  finalize_workflow(forest_obl_best) |>
+  fit(forested_train)
 
-forest_obl_best <- select_best(forest_obl_res, metric = "brier_class")
+# obl_fit |> 
+#   extract_fit_engine() |> 
+#   extract_rules() |> 
+#   slice(1) |> 
+#   pluck("rules") |> 
+#   pluck(1) |> 
+#   rule_text(digits = 2) |> 
+#   gsub("county == ", "", x = _) |> 
+#   gsub("(", "", x = _, fixed = TRUE) |>  
+#   gsub(")", "", x = _, fixed = TRUE) |> 
+#   gsub("\"", "", x = _, fixed = TRUE) |>  
+#   gsub("*", "", x = _, fixed = TRUE)
 
-forest_obl_pred <-
-  forest_obl_res |>
-  collect_predictions(parameters = forest_obl_best) |>
-  mutate(wflow_id = "Oblique Trees") |>
-  relocate(wflow_id)
-
-forest_obl_mtr_ex <-
-  forest_obl_pred |>
-  cls_mtr(class, estimate = .pred_class, .pred_Yes)
+obl_fit_stat <- obl_fit |> obl_extract()
 ```
-
-
 
 ```{r}
 #| label: fig-forest-oblique-tree
@@ -1847,7 +2099,7 @@ forest_obl_mtr_ex <-
 #| out-width: 60%
 #| fig-width: 6
 #| fig-height: 3.75
-#| fig-cap: "Tuning results for the oblqiue tree models showing how $n_{min}$ relates to the Brier score." 
+#| fig-cap: "Tuning results for the oblqiue tree models showing how $n_{min}$ relates to the Brier score."
 
 obl_lvls <- c("Minimal Node Size",  "# Active Predictors", "# Terminal Nodes")
 
@@ -1885,18 +2137,17 @@ forest_obl_res |>
   labs(y = "Brier Score", x = NULL) 
 ```
 
-
 ### Globally Estimated Trees {#sec-cls-tree-global}
 
-So far we've used greedy methods for constructing trees. At each stage in splitting, the models makes the _locally_ optimal decisions and does not reevaluate any previous splits to ensure that the overall model is optimal. Although @murthy1995decision found that greedy optimization worked well at finding optimal trees in their experiments, it is worth considering alternatives.  
+So far we've used greedy methods for constructing trees. At each stage in splitting, the models makes the *locally* optimal decisions and does not reevaluate any previous splits to ensure that the overall model is optimal. Although @murthy1995decision found that greedy optimization worked well at finding optimal trees in their experiments, it is worth considering alternatives.\
 
-There are also global tree construction methods. One will be discussed in the next chapter (@sec-cls-bart) that uses Bayesian estimation. Another approach is to use evolutionary optimization methods, such as genetic algorithms, to simultaneously configure all of the splits in the tree. 
+There are also global tree construction methods. One will be discussed in the next chapter (@sec-cls-bart) that uses Bayesian estimation. Another approach is to use evolutionary optimization methods, such as genetic algorithms, to simultaneously configure all of the splits in the tree.
 
-How do we encode the tree in a manner than such optimization tools can be used? One approach is to specify the largest size tree that we are interested in as a placeholder. Specifying a maximum depth $d_{max}$ for binary splits indicates that there will be, at most, $2^{d_{max}}-1$, internal nodes. A vector-based structure to contain the tree details (a.k.a. the chromosome in GAs) would bind together for the split variable index, the split values, and possible the rule (i.e., $\le$, $>$, $=$, or $\in$). 
+How do we encode the tree in a manner than such optimization tools can be used? One approach is to specify the largest size tree that we are interested in as a placeholder. Specifying a maximum depth $d_{max}$ for binary splits indicates that there will be, at most, $2^{d_{max}}-1$, internal nodes. A vector-based structure to contain the tree details (a.k.a. the chromosome in GAs) would bind  together for the split variable index, the split values, and possible the rule (i.e., $\le$, $>$, $=$, or $\in$).
 
-A basic genetic algorithm can be used to make new trees via reproduction (i.e, cross-over, mutation, etc). However, it is very possible that generic genetic operations can results in nonsensical or infeasible tree structures. 
+A basic genetic algorithm can be used to make new trees via reproduction (i.e, cross-over, mutation, etc). However, it is very possible that generic genetic operations can results in nonsensical or infeasible tree structures.
 
-Alternatively, @chipman1998bayesian describe sets of operations to modify tree structures. @fig-tree-mutation shows examples of how a binary tree with two splits and three terminal nodes might be refactored. The first is _growth_ where a terminal node is picked at random and a new split is created. _Pruning_ removes a randomly chosen split. We can also _change_ a randomly chosen but modifying the split variable and/or its split value. Finally, it might be helpful during the search process to _swap_ adjacent modes in a tree. 
+Alternatively, @chipman1998bayesian describe sets of operations to modify tree structures. @fig-tree-mutation shows examples of how a binary tree with two  splits and three terminal nodes might be refactored. The first is *growth* where  a terminal node is picked at random and a new split is created. *Pruning*  removes a randomly chosen split. We can also *change* a randomly chosen but  modifying the split variable and/or its split value. Finally, it might be  helpful during the search process to *swap* adjacent modes in a tree.
 
 ```{r}
 #| label: fig-tree-mutation
@@ -1908,18 +2159,18 @@ Alternatively, @chipman1998bayesian describe sets of operations to modify tree s
 knitr::include_graphics("../premade/tree_operations_swap.svg")
 ```
 
-For example, @JSSv061i01 describes a specific genetic algorithm called _evtree_ using these operators^[However, it does use the swapping operation and considers switching the split predictors and split values separate operations.] to evolve a tree where the objective/fitness function is a penalized misclassification cost metric. The penalty is
+For example, @JSSv061i01 describes a specific genetic algorithm called *evtree* using these operators^[However, it does use the swapping operation and considers switching the split predictors and split values separate operations.]  to evolve a tree where the objective/fitness function is a penalized misclassification cost metric. The penalty is
 
 $$
 \mathcal{P}(T;\alpha) = \alpha\; (d_{max} + 1)\; log(n)
-$$ 
+$$
 
-where $T$ is the tree and $\alpha$ is a tuning parameter. Decreasing $\alpha$ should increase the depth of the final tree. By default the algorithm uses 100 individuals in the population, 10,000 generations, and the following probabilities for operators: 
+where $T$ is the tree and $\alpha$ is a tuning parameter. Decreasing $\alpha$ should increase the depth of the final tree. By default the algorithm uses 100 individuals in the population, 10,000 generations, and the following probabilities for operators:
 
 - Growing: 20%
 - Pruning: 20%,
 - Cross-over: 20%
-- Change split variable _and_ point: 20%
+- Change split variable *and* point: 20%
 - Change split point: 20%
 
 There are a variety of similar eevolutionary algorithms that can be used. See @papagelis2001breeding, @delisle2004induction, and @barros2011survey.
