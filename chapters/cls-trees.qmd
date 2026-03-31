@@ -30,6 +30,7 @@ library(gt)
 library(gtExtras)
 library(lorax)
 library(bonsai)
+library(probably)
 
 # ------------------------------------------------------------------------------
 # set options
@@ -1564,12 +1565,29 @@ forest_cart_rng <-
   dplyr::select(cost_complexity, tree_depth, min_n) |>
   map(range)
 
+# We re-do the model fit with no surrogate or competitor splits to get a better
+# assessment of the variable importance
+cart_alt <- 
+  cart_spec |> 
+  finalize_model(forest_cart_best) |> 
+  set_engine("rpart", maxcompete = 0, maxsurrogate = 0)
+
 cart_fit <-
   cart_wflow |>
-  finalize_workflow(forest_cart_best) |>
+  update_model(cart_alt) |>
   fit(forested_train)
 
 cart_fit_stat <- cart_fit |> cart_extract()
+cart_fit_vars <- 
+  cart_fit |> 
+  extract_fit_engine() |> 
+  active_predictors() |> 
+  unnest(active_predictors) |> 
+  select(variable = active_predictors) |> 
+  left_join(name_key, by = "variable") |> 
+  mutate(text = ifelse(is.na(text), variable, text))
+cart_fit_vars_num <- nrow(cart_fit_vars)
+cart_fit_var_list <- cli::format_inline("{cart_fit_vars$text}")
 ```
 
 To demonstrate with the forestation data, a CART model was tuned over cost-complexity (10<sup>`r log10(forest_cart_rng[[1]][1])`</sup> to 10<sup>`r log10(forest_cart_rng[[1]][2])`</sup>), the tree-depth (`r forest_cart_rng[[2]][1]` to `r forest_cart_rng[[2]][2]`), and $n_{min}$  (`r forest_cart_rng[[3]][1]` to `r forest_cart_rng[[3]][2]`) using a space-filling design with 25 candidates. @fig-forest-cart shows the results
@@ -1685,6 +1703,56 @@ Performance statistics for the best candidates of each tree model. The limits ar
 :::
 
 final fit, variable importance, etc.
+
+When trained on the entire data set with the optimal parameters, the tree had `r cart_fit_stat$.estimate[cart_fit_stat$.metric == "# Terminal Nodes"]` terminal nodes. Of the `r ncol(forested_train) - 1` predictors, `r cart_fit_stat$.estimate[cart_fit_stat$.metric == "# Active Predictors"]` were actually used in the model: `r cart_fit_var_list`. Across the different paths to the terminal nodes, the average number of predictors used in the rules was `r round(cart_fit_stat$.estimate[cart_fit_stat$.metric == "Mean Rule Size"], 2)`. 
+
+@fig-forest-cart-diag visualizes a few aspects of the model. While we know the resampled estimates of the Brier score and area under the ROC curve, panels (a) and (b) visualizes the calibration and ROC curves, respectively. Both appear acceptable.
+
+```{r}
+#| label: fig-forest-cart-diag
+#| echo: false
+#| out-width: 60%
+#| fig-width: 6
+#| fig-height: 6
+#| fig-cap: "Aspects of the final CART model: (a) calibration assessment, (b) the ROC curce, and (c) variable importance scores. The first two plots are created fron the pooled out-of-sample predictions."
+
+
+forest_cart_cal <-
+  forest_cart_pred |>
+  cal_plot_windowed(class,
+                    .pred_Yes,
+                    window_size = 0.2,
+                    step_size = 0.025) +
+  labs(title = "(a)")
+forest_cart_roc <-
+  forest_cart_pred |>
+  roc_curve(class, .pred_Yes) |>
+  autoplot() +
+  labs(title = "(b)")
+forest_cart_vip <-
+  cart_fit |>
+  extract_fit_engine() |>
+  var_imp() |>
+  rename(variable = term) |>
+  mutate(used = TRUE) |>
+  full_join(name_key, by = "variable") |>
+  mutate(
+    text = ifelse(is.na(text), variable, text),
+    text = factor(text),
+    text = reorder(text, estimate)
+  ) |>
+  arrange(desc(estimate))
+
+forest_cart_vip_plot <-
+  forest_cart_vip |>
+  ggplot(aes(estimate, text)) +
+  geom_bar(stat = "identity") +
+  labs(x = "Importance", y = NULL, title = "(c)")
+
+(forest_cart_cal + forest_cart_roc) / forest_cart_vip_plot
+```
+
+Panel (c) shows the variable importance scores for the model. As CART splits the data in an effort to reduce impurity, it tracks the improvement in the Gini statistics for each predictor. This plot shows the cumulative effect of each predictor on the model. Three predictors have the largest contribution: `r cli::format_inline("{forest_cart_vip$text[1:3]}")`. Almost half of the predictors had little to no affect on the model. 
 
 ### C5.0 {#sec-cls-c50}
 
@@ -2057,10 +2125,11 @@ For subsequent splits, predefined termination criteria are used to halt the grow
 
 Each of these criteria can be optimized as tuning parameters.
 
-This implementation does not prune the trees.
+This implementation does not prune the trees. Also, the quantitative predictors are centered and scaled by default and a reference cell encoding method is applied to qualitative predictors. 
 
 Logistic regression models are specific to classes with two possible values. For $C > 2$ outcome classes, the model creates a set of one-against-all models. It identified the outcome class that is determined to be most "splittable" (i.e., has sufficient events and non-events). Based on this, it fits a logistic regression for the favored class versus the others.
 
+To demonstrate using the forestation data, the model was tuned over $n_{min}$ and also by the logistic regression method. A regular grid was used combining 50 values of $n_{min}$ with four model configurations: standard logistic regression and glmnet models with $\alpha \in {0.0, 0.5, 1.0}$. An internal cross-validation is used to automatically select the penalty value (REF). 
 
 ```{r}
 #| label: forested-obl-stats
@@ -2077,18 +2146,18 @@ obl_fit <-
   finalize_workflow(forest_obl_best) |>
   fit(forested_train)
 
-# obl_fit |> 
-#   extract_fit_engine() |> 
-#   extract_rules() |> 
-#   slice(1) |> 
-#   pluck("rules") |> 
-#   pluck(1) |> 
-#   rule_text(digits = 2) |> 
-#   gsub("county == ", "", x = _) |> 
-#   gsub("(", "", x = _, fixed = TRUE) |>  
-#   gsub(")", "", x = _, fixed = TRUE) |> 
-#   gsub("\"", "", x = _, fixed = TRUE) |>  
-#   gsub("*", "", x = _, fixed = TRUE)
+obl_fit |>
+  extract_fit_engine() |>
+  extract_rules() |>
+  slice(1) |>
+  pluck("rules") |>
+  pluck(1) |>
+  rule_text(digits = 2) |>
+  gsub("county == ", "", x = _) |>
+  gsub("(", "", x = _, fixed = TRUE) |>
+  gsub(")", "", x = _, fixed = TRUE) |>
+  gsub("\"", "", x = _, fixed = TRUE) |>
+  gsub("*", "", x = _, fixed = TRUE)
 
 obl_fit_stat <- obl_fit |> obl_extract()
 ```
