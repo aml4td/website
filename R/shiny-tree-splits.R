@@ -26,9 +26,9 @@ ui <- page_fillable(
 )
 
 server <- function(input, output) {
-  # load(url(
-  #   "https://raw.githubusercontent.com/aml4td/website/main/RData/barley_linear_embeddings.RData"
-  # ))
+  load(url(
+    "https://raw.githubusercontent.com/aml4td/website/main/RData/forested_split_examples.RData"
+  ))
 
   output$scores <-
     renderPlot(
@@ -55,19 +55,24 @@ server <- function(input, output) {
           others %>%
           ggplot(aes(split_value)) +
           geom_line(
-            aes(y = unit_value, group = metric),
-            col = "black",
-            alpha = 0.1,
+            aes(y = unit_value, group = metric, colour = metric),
+            alpha = 0.3,
             show.legend = FALSE
           ) +
-          geom_line(data = chosen, aes(y = unit_value), col = "blue") +
+          geom_line(
+            data = chosen,
+            aes(y = unit_value),
+            col = "black",
+            linewidth = 0.75,
+            alpha = 0.6
+          ) +
           geom_rug(
             data = chosen,
             aes(x = split_value),
-            col = "blue",
+            col = "black",
             alpha = 0.1
           ) +
-          geom_vline(xintercept = best$split_value, lty = 2) +
+          geom_vline(xintercept = best$split_value, col = "black", lty = 2) +
           labs(x = "Maximum Vapor", y = "Normalized Statistic") +
           theme_light_bl()
 
