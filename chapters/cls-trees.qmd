@@ -23,6 +23,7 @@ library(partykit)
 library(patchwork)
 library(rpart.plot)
 library(gt)
+library(forcats)
 
 # ------------------------------------------------------------------------------
 # set options
@@ -100,7 +101,7 @@ As a refresher, decision trees are a hierarchical set of splits of predictors th
 
 The two seminal works in this area are @breiman1984classification and @quinlan1993c4. Additionally, @loh2014fifty provides a more recent and comprehensive review. 
 
-To describe the myriad aspects of tree-based models, we'll start from the smallest computations first, the tools to choose a split point for the logical statement inside the rule. After this, we'll describe how missing values can be handled algorithmically during split selection, tree growth, and pruning, and other relevant details. After these discussions, specific single-tree-based models are described, such as CART, C5.0, and others.
+To describe the myriad aspects of tree-based models, we'll start with the fundamental building block:  selecting a split point for the logical statement inside the rule. After this, we'll describe how missing values can be handled algorithmically during split selection, tree growth, and pruning. With these foundational concepts in place, we examine specific single-tree-based models including CART, C5.0, and others.
 
 Finally, the chapter ends with discussions on the stability of trees and how rule-based models can be created.
 
@@ -110,7 +111,7 @@ As with previous chapters, we'll use the forestation data to illustrate how thes
 
 Splitting or recursively partitioning the data is the foundation of classification tree construction. The effectiveness of a classification tree largely depends on how well the method partitions the predictor space into regions that separate the classes.
 
-In this section, we'll discuss the tactics of splitting qualitative and quantitative predictors using various methods. Our goal is to understand and elucidate the possible objective functions that could be optimized when evaluating a specific predictor. Recall that splitting occurs recursively. We can explain the process independent of the current splitting level. 
+In this section, we'll discuss the tactics of splitting qualitative and quantitative predictors using various methods. Our goal is to understand and elucidate the possible objective functions that could be optimized when evaluating a specific predictor. Recall that because splitting occurs recursively, we can explain the process independent of any splitting level. 
 
 To more easily conceptualize splitting methods, we'll use the small training data subset shown in @tbl-small-forest. From these data ($n = `r nrow(small_forest)`$), the raw probabilities for each class are $\widehat{p}_1 = `r r3(pr_1)`$ (forested) and $\widehat{p}_2 = `r r3(pr_2)`$ (unforested). 
 
@@ -430,9 +431,9 @@ $$
 \chi^2 = \frac{n\,(n_{11}\, n_{22} - n_{12}\, n_{21})^2}{n_{1+} \, n_{2+} \, n_{+1} \, n_{+2}}
 $$  {#eq-chi2}
 
-Since this statistic measures the difference between our model and an uninformative state, we want to maximize its value. This $\chi^2$ statistic is often used in _conditional inference trees_ [@hothorn2006unbiased]. In @sec-cls-cit, we'll describe the strategic advantages of minimizing the associated p-value of this value rather than maximizing the statistic itself. 
+Since this statistic measures the difference between our model and an uninformative state, we want to maximize its value. _Conditional inference trees_ often use the $\chi^2$ statistic [@hothorn2006unbiased]. @sec-cls-cit will demonstrate why minimizing the associated p-value provides strategic advantages over direct maximizing. 
 
-As we'll see in the next chapter, modern boosting models often use splitting criteria based on the log-likelihood. The rationales for the methods discussed in this chapter are described in that chapter. Also, for simplicity, we'll assume that the outcome has $C = 2$ classes. We'll focus on the three most popular models: XGBoost [@xgb16], LightGBM [@lgb17], and CatBoost [@cat18].
+Modern boosting algorithms typically construct splits using log-likelihood based criteria, a choice that we will rationalize in the next chapter.  For simplicity, we'll restrict our attention to binary classification problems ($C = 2$ classes) and focus on the three most popular models: XGBoost [@xgb16], LightGBM [@lgb17], and CatBoost [@cat18].
 
 These tools often minimize the sum of the Pearson residuals (previously seen in @sec-logistic-diagnostic):
 
@@ -480,6 +481,18 @@ Third, when computing the final splitting statistic, CatBoost does not subtract 
 ```{r}
 #| label: summy0split-info
 #| include: false
+# Example to illustrate partitioning of a categorical variable
+# Force tree to have a max depth of 2 for illustration
+adjacent_split_model <-
+  rpart(
+    class ~ .,
+    control = rpart.control(
+      maxdepth = 2,
+      cp = -1,
+      xval = 0
+    ),
+    data = forested_train
+  )
 # Example to illustrate how creating k-1 dummy variables leads to 
 # a larger rpart tree
 adjacent_split_model <-
@@ -530,7 +543,7 @@ first_surr <- rownames(data.frame(adjacent_split_model$splits)[2,])
 first_surr <- name_key$text[name_key$variable == first_surr]
 ```
 
-For continuous predictors, the conventional process of finding the optimal split point involves evaluating all possible binary partitions of the data based on the predictor values. The algorithm first orders the samples by predictor values, then evaluates splits between adjacent unique values. For each potential split point, it calculates the chosen split criterion and selects the split that optimizes this criterion
+For continuous predictors, the conventional process of finding the optimal split point involves evaluating all possible binary partitions of the data based on the predictor values. The algorithm first orders the samples by predictor values, then evaluates splits between adjacent unique values. For each potential split point, it calculates the chosen split criterion and selects the split that optimizes this criterion.
 
 The computational complexity of this process is generally $O(n \log n)$ for each predictor, where $n$ is the number of samples, due to sorting. Once the samples are sorted, evaluating each potential split point can be efficient, as class distributions can be updated incrementally as you move through the sorted list.
 
@@ -656,9 +669,12 @@ Handling categorical predictors in classification trees presents unique challeng
 
 When using the binning approach, the algorithm must determine how to optimally partition the categories into two groups.   For a predictor with $k$ categories, there are $2^{k-1} - 1$ possible ways to create a binary split. Evaluating all these possibilities becomes computationally infeasible for predictors with many categories. Therefore, algorithms often use heuristics to find good splits without exhaustive search. For example, in the Classification and Regression Trees (CART) methodology [@breiman1984classification], categorical predictors are ordered by the proportion of samples in each class, and then binary splits are evaluated between adjacent categories in this ordering. This approach, very similar to an effect-encoding strategy and to the process described by @fisher1958grouping, reduces computational complexity while still allowing the algorithm to find effective splits.
 
+To illustrate the binning approach, consider the partitioning model illustrated in @fig-split-adjacent-tree.  The figure illustrates a tree of a maximum depth of 3 splits.  The first split uses the Gini index criteria to split the maximum vapor predictor at a value of 1248.  Samples with values greater than or equal to 1248 are illustrated on the right side of the tree.  The next split on this side of the tree is the county variable.  The adjacent category methodology creates a split with 7 counties in one group and the remaining counties in the other group.  @fig-split-county demonstrates why the counties were partitioned into these groups.  The x-axis in (a) and (b) of this figure provides the counties ordered from lowest proportion of forested counties (left) to highest proportion (right).  The top portion of the figure provides the Gini index for the partitioning of the samples at that county and all counties to the left.  The purity is optimized between the counties of Asotin and Okanogan.  At this split point, 7 counties are placed into one group and 13 counties are in the other group as illustrated in @fig-split-adjacent-tree.
+
+
 The second approach creates $k$ binary dummy variables, one for each category (or $k-1$ dummy variables to avoid redundancy). Each dummy variable is then treated as a separate predictor in the tree-building process. This approach, referred to as using independent categories, forces binary splits for the categories and effectively implements a one-versus-all splitting strategy.
 
-The choice between these approaches can impact model complexity and interpretability. Using grouped categories can result in more complex trees, especially when predictors have many categories.  In the forest data, the county variable is the only grouped category predictor and has `r length(unique(forested_train$county))` unique values.  When a recursive partitioning tree was constructed on the original data set, the maximum tree depth was `r paste0(max_depth_adjacent_split_model)` (@fig-split-adjacent-tree).  When dummy variables were created to represent the county variable, the resulting recursive partitioning tree had a depth of `r paste0(max_depth_binary_split_model)` and did not include any of the dummy county variables (@fig-split-binary-tree).
+The choice between these approaches can impact model complexity and interpretability.  Grouped categories approach can capture more complex relationships between categories and the response variable.  Because the the algorithm groups categories that have similar effects on the response, this often leads to more accurate and interpretable models. The independent categories approach, on the other hand, may not select any categories resulting in simpler, less accurate models.
 
 ```{r}
 #| label: fig-split-adjacent-tree
@@ -776,16 +792,16 @@ where $\epsilon$ is a smoothing value that attempts to provide additional regula
 For categorical predictors, CatBoost uses a target encoding strategy similar to that described in @sec-effect-encodings. Its version of this is called Categorical Target Representation (CTR). They use the same Beta-Binomial estimate for the probability of an event for category $j$: 
 
 $$
-\widehat{p}_j = \frac{n_{+j} + \alpha}{n + \alpha + \beta} 
+\widehat{p}_j = \frac{n_{+j} + \alpha}{n + \alpha + \beta}, 
 $$
 
-$n_{+j}$ is the number of events in in category $j$ within all of the $n$ rows under consideration. CatBoost uses $\beta = 1$ and calls $\alpha$ the "prior" parameter, which can be used for tuning. Once all of the $j$ values of $\widehat{p}_j$ are computed, the split determination treats the predictor as if it were quantitative from the start. CatBoost's algorithm, which uses the CTR values to determine the best predictor (and value) to split on, is fairly complex and is detailed in the next chapter. 
+where $n_{+j}$ is the number of events in in category $j$ within all of the $n$ rows under consideration. CatBoost uses $\beta = 1$ and calls $\alpha$ the "prior" parameter, which can be used for tuning. Once all of the $j$ values of $\widehat{p}_j$ are computed, the split determination treats the predictor as if it were quantitative from the start. CatBoost's algorithm, which uses the CTR values to determine the best predictor (and value) to split on, is fairly complex and is detailed in the next chapter. 
 
 For _ordered_ categories, some algorithms restrict splits to maintain the ordering, allowing only those that group adjacent categories.
 
 ### Oblique Splits {#sec-oblique-splits}
 
-Some advanced tree algorithms consider splits based on linear combinations of predictors [@murthy1994system;@wickramarachchi2016hhcart]. These oblique trees can capture more complex decision boundaries than traditional trees, which are limited to axis-parallel splits. For example, an oblique tree might use a split like "if $2 \times \text{Predictor A} + 3 \times \text{Predictor B} > 5$ then...". While these splits can lead to more accurate models, they often sacrifice interpretability.
+Some advanced tree algorithms use linear combinations of predictors to create oblique splits [@murthy1994system;@wickramarachchi2016hhcart].  Unlike the tree algorithms discussed thus far which are limited to axis-parallel splits, oblique trees can capture more complex decision boundaries--for example "if $2 \times \text{Predictor A} + 3 \times \text{Predictor B} > 5$ then...".  The added complexity of oblique splits can lead to more accurate models, but often sacrifices interpretability.
 
 To demonstrate, a logistic regression model was simulated with linear predictor $\eta = 0.1 + 5.0\, A - 5.0\, B$ where A and B had a bivariate Gaussian distribution with a correlation coefficient of 0.7. This configuration results in slightly overlapping data clouds, as seen in the left-hand panel of @fig-oblique-splits. While this pattern is trivial for a logistic model to estimate, a tree-based model must go to heroic lengths to emulate a diagonal line. The tree fit shown in the middle panel required `r cart_nodes` terminal nodes to produce the blocky step function that does a mediocre job in separating the data. 
 
@@ -824,7 +840,7 @@ An example of rectangular and oblique splits. The data were simulated using a li
 
 :::
 
-An oblique tree required a single split to produce the class boundary shown in the right-hand panel. Using a training set of $n_{tr} = 500$ data points in the training set, the diagonal split does a remarkable job approximating the underlying pattern; it's split uses the rule $\widehat{\eta} = `r obl_eqn`$.
+An oblique tree required just a single split to produce the class boundary shown in the right-hand panel. Using a training set of $n_{tr} = 500$ data points, the diagonal split does a remarkable job approximating the underlying pattern; its split uses the rule $\widehat{\eta} = `r obl_eqn`$.
 
 ## Understanding Bias in Splitting {#sec-tree-bias}
 
@@ -850,9 +866,9 @@ In the CART methodology, missing values are handled differently during tree cons
 
 Once a split has been selected, CART identifies surrogate splits that can be used when the primary split variable is missing. A surrogate split is an alternative split on a different predictor that mimics the primary split as closely as possible. Specifically, CART looks for splits that send samples to the same child nodes as the primary split would.
 
-For example, the first split in @fig-split-adjacent-tree is based on the maximum vapor predictor.  The first surrogate for this split is `r first_surr`. There are no missing values for the forestation data set.  However, if a sample had a missing value for the maximum vapor predictor, then the model would use the `r first_surr` at this point in the tree to send the sample directly to a terminal node (provided the sample did not have a missing value for this predictor).
+For example, the first split in @fig-split-adjacent-tree uses the maximum vapor predictor.  Its first surrogate for this split is `r first_surr`. Although the forestation data set has no missing values, the model would use `r first_surr` at this point in the tree to send the sample directly to a terminal node (provided the sample did not have a missing value for this predictor).
 
-CART ranks surrogate splits based on their predictive association with the primary split, measured by how well they mimic it on the training data. Multiple surrogate splits can be identified for each primary split, creating a hierarchy of alternatives to use when various predictors have missing values.
+CART ranks surrogate splits by how well they replicate the primary split's behavior on the training data. For each primary split, CART identifies multiple surrogate splits in order of performance, creating a hierarchy of alternatives to use when predictors have missing values.
 
 During prediction, when a sample reaches a node with a split on a predictor for which the sample has a missing value, CART uses the best available surrogate split to determine which child node the sample should go to. If all potential surrogate splits also involve predictors with missing values for that sample, CART sends the sample in the direction of the majority of training samples.
 
@@ -901,7 +917,7 @@ Third, the handling of missing values can interact with other aspects of the tre
 
 For some shape and size of a tree, the search space of which predictors and splits to use to create all the data partitions is vast. Traditionally, trees are built from the top down using _greedy optimization_. Growing a classification tree involves recursively applying the splitting process described above until a stopping criterion is met. This will be our main focus, but @sec-cls-tree-bayes will provide a different, non-greedy approach for creating tree models. 
 
-Most growing processes begin with all the training data in a single root node. The algorithm then searches for the best predictor and split point according to the chosen splitting criterion, as described in the previous section.  Once the best split is identified, the data is divided into child nodes according to it. This process is then repeated recursively for each child node until one or more stopping criteria are met.
+Most growing processes begin with all the training data in a single root node. The algorithm then searches for the best predictor and split point according to the chosen splitting criterion, as described in the previous section.  Once identified, the split divides the data into two child nodes. This process repeates recursively for each child node until one or more stopping criteria are met.
 
 At each step, the algorithm considers all available predictors and all possible split points for each predictor. This exhaustive search ensures that the selected split is the best possible split according to the chosen criterion. However, it also makes tree growing computationally intensive, especially for large datasets with many predictors.
 
@@ -1071,7 +1087,9 @@ The cost-complexity pruning process involves several steps:
 
 The sequence of nested subtrees is constructed by iteratively collapsing the internal node that results in the smallest increase in the training error per node removed. This node is called the "weakest link" because it contributes the least to the tree's performance relative to its complexity.
 
-An _internal_ cross-validation is used to select the optimal complexity parameter because the training error alone is not a reliable indicator of generalization performance. The complexity parameter that minimizes this resampled error is selected. This process is the same as previously discussed resampling procedures, but occurs _inside_ the training routine. Some implementations of trees use a "one standard error" rule when selecting the optimal complexity parameter. Instead of choosing the complexity parameter with the minimum cross-validated error, they select the largest complexity parameter (resulting in the smallest tree) whose cross-validated error is within one standard error of the minimum. This rule favors simpler models when the difference in performance is not statistically significant.
+An _internal_ cross-validation is used to select the optimal complexity parameter because the training error alone does not reliably indicate generalization performance. The complexity parameter that minimizes this resampled error is selected. This process is identical to previously discussed resampling procedures, but occurs _inside_ the training routine. 
+
+Some tree implementations use a "one standard error" rule when selecting the optimal complexity parameter. Instead of choosing the complexity parameter with the minimum cross-validated error, they select the largest complexity parameter (resulting in the smallest tree) whose cross-validated error falls within one standard error of the minimum. This rule favors simpler models when the performance differences are not statistically significant.
 
 This automated selection heuristic can be very effective, but one can also tune the cost-complexity parameter $\alpha$ using the usual (external) resampling procedure of choice. 
 
