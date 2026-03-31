@@ -149,9 +149,9 @@ Let's assume that the splits in our trees are _binary_; they produce two partiti
 
 split_df <- tibble(
   row_label = c("Left", "Right", ""),
-  class_1 = c("$n_{11}$", "$n_{21}$", "$n_{1+}$"),
-  class_2 = c("$n_{12}$", "$n_{22}$", "$n_{2+}$"),
-  total = c("$n_{+1}$", "$n_{+2}$", "$n$")
+  class_1 = c("$n_{11}$", "$n_{21}$", "$n_{+1}$"),
+  class_2 = c("$n_{12}$", "$n_{22}$", "$n_{+2}$"),
+  total = c("$n_{1+}$", "$n_{2+}$", "$n$")
 )
 
 # Create the gt table
@@ -229,7 +229,7 @@ Example notation for a binary split of an outcome with $C=2$ class levels.
 
 In this case, $n$ is the number of training set points available at the time, and the plus signs indicate the marginal totals; for example, $n_{+1} = n_{11} + n_{21}$. This table is shown for thresholding numeric predictors, but is also valid for categorical splits. When thresholding, we associate the "left split " with smaller predictor values (i.e., $X\le c$) and the "right split" with larger predictor values. 
 
-Using this table, we can compute various statistics to assess the quality of the split. Many of these statistics seek to minimize the class _purity_ of the resulting partitions. For example, the perfect split for our example data occurs when each partition contains only a single class. 
+Using this table, we can compute various statistics to assess the quality of the split. Many of these statistics seek to maximize the class _purity_ of the resulting partitions. For example, the perfect split for our example data occurs when each partition contains only a single class. 
 
 The next section will describe general statistics that can be produced from this 2 $\times$ 2 table, all of which generalize to $C\ge 3$ classes. 
 
@@ -462,7 +462,7 @@ $$
 \psi_{xgb}(\lambda_1, \lambda_2) = \sum_{i=1}^n\sum_{k=1}^{2}\frac{\tilde{e}_{ik}^2}{\widehat{p}_{i1} \widehat{p}_{i2} + \lambda_2}
 $$ {#eq-xgboost-l2}
 
-Unlike $\lambda_1$, this penalizes the sum of the current data at the node, which can range from 0 to $n/2$. All things being equal, this will penalize larger data sets more than others. However, very uncertain predictions (values near $\widehat{p}_{ij} = 0.5$) will affect this sum more than others. Both regularization methods can be used simultaneously and can be considered tuning parameters. 
+Unlike $\lambda_1$, this penalizes the sum of the current data at the node, which can range from 0 to $n/2$. All things being equal, this will penalize nodes containing a lot of data more than nodes with fewer data points.  However, very uncertain predictions (values near $\widehat{p}_{ij} = 0.5$) will affect this sum more than others. Both regularization methods can be used simultaneously and can be considered tuning parameters. 
 
 As with previous statistics, this splitting statistic is computed for both sides of the split to measure the gain. 
 
@@ -493,23 +493,10 @@ adjacent_split_model <-
     ),
     data = forested_train
   )
-# Example to illustrate how creating k-1 dummy variables leads to 
-# a larger rpart tree
-adjacent_split_model <-
-  rpart(
-    class ~ .,
-    control = rpart.control(
-      minbucket = 3,
-      minsplit = 10,
-      cp = 0.004,
-      xval = 10
-    ),
-    data = forested_train
-  )
+first_surr <- rownames(data.frame(adjacent_split_model$splits)[2,])
+first_surr <- name_key$text[name_key$variable == first_surr]
 
-max_depth_adjacent_split_model <-
-  max(rpart:::tree.depth(as.integer(row.names(adjacent_split_model$frame))))
-
+# Added this back in since we use binary_split_model below
 # Create binary split variables for each county
 binary_rec <-
   recipe(class ~ ., data = forested_train) %>%
@@ -538,9 +525,6 @@ binary_split_model <-
 
 max_depth_binary_split_model <-
   max(rpart:::tree.depth(as.integer(row.names(binary_split_model$frame))))
-
-first_surr <- rownames(data.frame(adjacent_split_model$splits)[2,])
-first_surr <- name_key$text[name_key$variable == first_surr]
 ```
 
 For continuous predictors, the conventional process of finding the optimal split point involves evaluating all possible binary partitions of the data based on the predictor values. The algorithm first orders the samples by predictor values, then evaluates splits between adjacent unique values. For each potential split point, it calculates the chosen split criterion and selects the split that optimizes this criterion.
@@ -682,7 +666,7 @@ The choice between these approaches can impact model complexity and interpretabi
 #| warning: false
 #| out-width: 90%
 #| fig-width: 14
-#| fig-height: 14
+#| fig-height: 6
 #| fig-cap: Recursive partitioning tree when using the county variable in its adjacent category form.  The labels for the split points for the county variable have been simplified to summarize the number of counties included at each split. 
 
 county_split_fun <- function(x, labs, digits, varlen, faclen) {
