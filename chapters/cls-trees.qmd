@@ -1406,13 +1406,6 @@ forest_cit_mtr_ex <-
 #| include: false
 #| cache: true
 
-obl_spec <- 
-  rand_forest(min_n = tune(), mtry = 100, trees = 1) |> 
-  set_engine("aorsf") |> 
-  set_mode("classification")
-
-obl_wflow <- workflow(class ~ ., obl_spec)
-
 obl_extract <- function(x) {
   require(tidymodels)
   require(lorax)
@@ -1436,27 +1429,61 @@ obl_extract <- function(x) {
   dplyr::bind_rows(preds, rules)
 }
 
+obl_spec <- 
+  rand_forest(min_n = tune(), mtry = 16, trees = 1) |> 
+  set_engine("aorsf") |> 
+  set_mode("classification")
 
-forest_obl_res <-
-  obl_wflow |>
-  tune_grid(
+ridge_ctrl <- aorsf::orsf_control_classification(method = "net", net_mix = 0)
+obl_ridge_spec <- 
+  rand_forest(min_n = tune(), mtry = 16, trees = 1) |> 
+  set_engine("aorsf", control = !!ridge_ctrl) |> 
+  set_mode("classification")
+
+glmn_ctrl <- aorsf::orsf_control_classification(method = "net", net_mix = 1/2)
+obl_glmn_spec <- 
+  rand_forest(min_n = tune(), mtry = 16, trees = 1) |> 
+  set_engine("aorsf", control = !!glmn_ctrl) |> 
+  set_mode("classification")
+
+lasso_ctrl <- aorsf::orsf_control_classification(method = "net", net_mix = 1)
+obl_lasso_spec <- 
+  rand_forest(min_n = tune(), mtry = 16, trees = 1) |> 
+  set_engine("aorsf", control = !!lasso_ctrl) |> 
+  set_mode("classification")
+
+obl_set_res <- 
+  workflow_set(
+    preproc = list(basic = class ~ .),
+    models = list(
+      Unpenalized = obl_spec,
+      Ridge = obl_ridge_spec,
+      glmnet = obl_glmn_spec,
+      Lasso = obl_lasso_spec
+    )
+  ) |> 
+  workflow_map(
     resamples = forested_rs,
-    grid = 25,
+    grid = tibble(min_n = (1:50) * 2),
     control = control_grid(
       save_pred = TRUE,
       save_workflow = TRUE,
       extract = obl_extract,
       pkgs = "lorax"
     ),
-    metrics = cls_mtr
+    metrics = cls_mtr,
+    verbose = TRUE,
+    seed = 1287
   )
+
+forest_obl_res <- obl_set_res |> extract_workflow_set_result("basic_Ridge")
 
 forest_obl_best <- select_best(forest_obl_res, metric = "brier_class")
 
 forest_obl_pred <-
   forest_obl_res |>
   collect_predictions(parameters = forest_obl_best) |>
-  mutate(wflow_id = "Oblique Trees") |>
+  mutate(wflow_id = "Oblique (Ridge)") |>
   relocate(wflow_id)
 
 forest_obl_mtr_ex <-
@@ -1530,7 +1557,7 @@ forest_obl_bt <-
   select(.metric, .values) |>
   unnest(.values) |>
   filter(.metric %in% c("brier_class", "roc_auc")) |>
-  mutate(Model = "Oblique") |>
+  mutate(Model = "Oblique (Ridge)") |>
   select(Model, .metric, estimate)
 
 tree_bt <- bind_rows(forest_cart_bt, forest_c5_bt, forest_cit_bt, forest_obl_bt)
@@ -2128,7 +2155,7 @@ This implementation does not prune the trees. Also, the quantitative predictors 
 
 Logistic regression models are specific to classes with two possible values. For $C > 2$ outcome classes, the model creates a set of one-against-all models. It identified the outcome class that is determined to be most "splittable" (i.e., has sufficient events and non-events). Based on this, it fits a logistic regression for the favored class versus the others.
 
-To demonstrate using the forestation data, the model was tuned over $n_{min}$ and also by the logistic regression method. A regular grid was used combining 50 values of $n_{min}$ with four model configurations: standard logistic regression and glmnet models with $\alpha \in {0.0, 0.5, 1.0}$. An internal cross-validation is used to automatically select the penalty value (REF). 
+To demonstrate using the forestation data, the model was tuned over $n_{min}$ and also by the logistic regression method. A regular grid was used combining 50 values of $n_{min}$ with four model configurations: standard logistic regression and glmnet models with $\alpha \in \{0.0, 0.5, 1.0\}$. An internal cross-validation is used to automatically select the penalty value (REF). 
 
 ```{r}
 #| label: forested-obl-stats
@@ -2141,22 +2168,10 @@ forest_obl_rng <-
   map(range)
 
 obl_fit <-
-  obl_wflow |>
+  obl_set_res |> 
+  extract_workflow("basic_Ridge") |>
   finalize_workflow(forest_obl_best) |>
   fit(forested_train)
-
-obl_fit |>
-  extract_fit_engine() |>
-  extract_rules() |>
-  slice(1) |>
-  pluck("rules") |>
-  pluck(1) |>
-  rule_text(digits = 2) |>
-  gsub("county == ", "", x = _) |>
-  gsub("(", "", x = _, fixed = TRUE) |>
-  gsub(")", "", x = _, fixed = TRUE) |>
-  gsub("\"", "", x = _, fixed = TRUE) |>
-  gsub("*", "", x = _, fixed = TRUE)
 
 obl_fit_stat <- obl_fit |> obl_extract()
 ```
@@ -2164,45 +2179,50 @@ obl_fit_stat <- obl_fit |> obl_extract()
 ```{r}
 #| label: fig-forest-oblique-tree
 #| echo: false
+#| warning: false
 #| out-width: 60%
 #| fig-width: 6
 #| fig-height: 3.75
-#| fig-cap: "Tuning results for the oblqiue tree models showing how $n_{min}$ relates to the Brier score."
+#| fig-cap: "Tuning results for the oblqiue tree models showing how $n_{min}$ relates to the Brier score and the number of terminal nodes for each method of estimating the logistic regression model."
 
-obl_lvls <- c("Minimal Node Size",  "# Active Predictors", "# Terminal Nodes")
+obl_set_mtr <- 
+  obl_set_res |> 
+  mutate(res = map(result, collect_metrics, type = "wide")) |> 
+  select(wflow_id, res) |> 
+  unnest(res) 
 
-forest_obl_res |> 
-  collect_extracts() |> 
+obl_set_res |> 
+  mutate(res = map(result, collect_extracts)) |> 
+  select(wflow_id, res) |> 
+  unnest(res) |> 
   unnest(.extracts) |> 
-  summarize(
-    value = mean(.estimate), 
-    .by = c(.metric, .config)
-  ) |>
   rename(parameter = .metric) |> 
+  summarize(
+    value = mean(.estimate),
+    .by = c(wflow_id, .config, parameter)
+  ) |> 
   full_join(
-    forest_obl_res |> 
-      collect_metrics(type = "wide") |> 
-      select(.config, brier_class, roc_auc),
-    by = ".config"
+    obl_set_mtr |> 
+      select(wflow_id, .config, brier_class), 
+    by = c(".config", "wflow_id")
   ) |> 
   bind_rows(
-    forest_obl_res |> 
-      collect_metrics(type = "wide") |> 
-      rename(
-        `Minimal Node Size` = min_n,
-      ) |> 
-      pivot_longer(
-        c(`Minimal Node Size`),
-        names_to = "parameter",
-        values_to = "value"
-      ) 
-  ) |> 
-  mutate(parameter = factor(parameter, levels = obl_lvls)) |> 
+    obl_set_mtr |> 
+      select(wflow_id, .config, brier_class, value = min_n) |> 
+      mutate(parameter = "Minimal Node Size")
+  ) |>
   filter(parameter != "# Active Predictors") |> 
-  ggplot(aes(value, brier_class)) + 
-  geom_point(alpha = 2 / 4, cex = 2) + 
-  facet_wrap(~ parameter, scales = "free_x", nrow = 1) +
-  labs(y = "Brier Score", x = NULL) 
+  mutate(
+    Method = gsub("basic_", "", wflow_id),
+    Method = factor(Method, levels = c("Unpenalized", "Ridge", "glmnet", "Lasso")),
+    parameter = factor(parameter, levels = c("Minimal Node Size", "# Terminal Nodes"))) |> 
+  ggplot(aes(value, brier_class, col = Method)) + 
+  geom_point(alpha = 1 / 4) + 
+  geom_smooth(se = FALSE, span = 0.6) +
+  facet_wrap(~ parameter, scale = "free_x") + 
+  theme(legend.position = "top") +
+  labs(y = "Brier Score", x = NULL) +
+  scale_color_brewer(palette = "Set2")
 ```
 
 ### Globally Estimated Trees {#sec-cls-tree-global}
