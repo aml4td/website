@@ -106,15 +106,23 @@ split_best <-
 cls_mtr <- metric_set(brier_class, roc_auc, pr_auc, mn_log_loss)
 ```
 
+TODO: 
+
+ - CART description
+ - more on bias
+ - more on instability
+ - rule conversion
+ - review for CIT
+ - compare to previous best models
+ - fig-split-county issue
+
 Classification trees are a powerful and interpretable approach for classification problems.  Their structure consists of nested if-then statements that partition the predictor space into regions, each of which is associated with a specific class. We've already seen them in a few different places:  @fig-reg-tree visualized a regression tree for the food delivery data, while @fig-hotels-agent-missing shows a classification tree to understand missingness. 
 
-As a refresher, decision trees are a hierarchical set of splits of predictors that produce two or more nodes^[Some models, such as C5.0, can produce more than two groups, and these will be discussed on a case-by-case basis.]. The split conditions (or rules) are logical statements based on the predictor values. We've seen rules such as `hour < 14.769` and `day in {Fri, Sat}`. As decision trees are trained, the child nodes produced by each split are split further until a predefined stopping rule is triggered. At the end of the tree are the _terminal nodes_, and the training data that fall into these nodes are used to estimate the model predictions. The terminal nodes are defined by a complete set of mutually exclusive rules that contain all of the split conditions from each stage of splitting.  
+As a refresher, decision trees are a hierarchical set of splits of predictors that produce two or more nodes^[Some models, such as C4.5, can produce more than two groups, and these will be discussed on a case-by-case basis.]. The split conditions (or rules) are logical statements based on the predictor values. We've seen rules such as `hour < 14.769` and `day in {Fri, Sat}`. As decision trees are trained, the child nodes produced by each split are split further until a predefined stopping rule is triggered. At the end of the tree are the _terminal nodes_, and the training data that fall into these nodes are used to estimate the model predictions. The terminal nodes are defined by a complete set of mutually exclusive rules that contain all of the split conditions from each stage of splitting.  
 
 The two seminal works in this area are @breiman1984classification and @quinlan1993c4. Additionally, @loh2014fifty provides a more recent and comprehensive review. 
 
-To describe the myriad aspects of tree-based models, we'll start from the smallest computations first, the tools to choose a split point for the logical statement inside the rule. After this, we'll describe how missing values can be handled algorithmically during split selection, tree growth, and pruning, as well as other relevant details. After these discussions, specific single-tree-based models are described, such as CART, C5.0, and others.
-
-Finally, the chapter concludes with discussions of tree stability and how rule-based models can be created.
+To describe the myriad aspects of tree-based models, we'll start from the smallest computations first, the tools to choose a split point for the logical statement inside the rule. After this, we'll describe how missing values can be handled algorithmically during split selection, tree growth, and pruning, along with other relevant details. After these discussions, specific single-tree-based models are described, such as CART, C4.5, and others. Finally, the chapter concludes with discussions of tree stability and the creation of rule-based models.
 
 As with previous chapters, we'll use the forestation data to illustrate how these methods work. 
 
@@ -255,7 +263,9 @@ where $p_1$ and $p_2$ are the class probabilities in the node.  The Gini index c
 
 When evaluating a potential split, the algorithm calculates the weighted average of the Gini indices for the resulting child nodes, with weights proportional to the number of samples in each node. The split that minimizes this weighted average is selected.
 
-For the data in @tbl-small-forest, the Gini index for this node would be $2 \times `r round(pr_1, 3)` \times `r round(pr_2, 3)` = `r round(pr_1 * pr_2, 3)`$. Now, suppose a split value for maximum vapor of `r vm_split` creates two child nodes: 
+For the data in @tbl-small-forest, the Gini index for this node would be $2 \times `r round(pr_1, 3)` \times `r round(pr_2, 3)` = `r round(pr_1 * pr_2, 3)`$. We call the node, prior to being split, the _parent node_. 
+
+Now, suppose a split value for maximum vapor of `r vm_split` creates two child nodes: 
 
 ::: {.columns}
 ::::: {.column width="20%"}
@@ -370,7 +380,7 @@ $$
 \end{align}
 $$
 
-The Gini value for this split is lower than the parent node's, indicating a reduction in impurity. We often frame the importance of a split in terms of its _gain_ relative to the current situation. Following the notation from @sec-gradient-opt, our objective function is denoted as $\psi$, and the gain is computed as:
+The Gini value for this split is lower than the parent node's, indicating a reduction in impurity. We often frame the importance of a split in terms of its _gain_ relative to the parent node. Following the notation from @sec-gradient-opt, our objective function is denoted as $\psi$, and the gain is computed as:
 
 $$
 \psi_{gain} = 
@@ -396,7 +406,7 @@ $$
 
 The information content is measured in bits and can be interpreted as the average number of bits needed to encode the class of a randomly selected sample from the node. A node with perfect purity (all samples belonging to the same class) has an information value of zero, while a node with maximum impurity (equal distribution of classes) has the highest information value. Splits with larger information gains are preferred as they create more homogeneous nodes.
 
-Using the same example as before, the information content of the original node would be:
+Using the same example as before, the information content of the parent node would be:
 
 $$
 CE = - \left[`r r3(pr_1)`\; \log_2\left(`r r3(pr_1)`\right) + `r r3(pr_2)`\; \log_2\left(`r r3(pr_2)`\right)\right] = `r r3(ce_par)`\; \text{bits}
@@ -413,7 +423,7 @@ $$
 \end{align}
 $$
 
-A limitation of information gain is its bias toward predictors with many possible values, particularly categorical predictors with numerous categories. To address this issue, @quinlan1986induction introduced the gain ratio in the C5.0 algorithm. The gain ratio is calculated by dividing the information gain by the intrinsic information of the split, which measures the potential information generated by dividing the samples according to the predictor:
+A limitation of information gain is its bias toward predictors with many possible values, particularly categorical predictors with numerous categories. To address this issue, @quinlan1986induction introduced the gain ratio in the C4.5 algorithm^[Quinlan's original classification tree model is called C4.5, while C5.0 is the latest version. The models are very similar, and until @sec-cls-c50 we will refer to the model as C4.5 (and then C5.0 from that point onward).]. The gain ratio is calculated by dividing the information gain by the intrinsic information of the split, which measures the potential information generated by dividing the samples according to the predictor:
 
 $$
 \text{gain ratio(split)} = \frac{\text{gain(split)}}{\text{intrinsic information(split)}}
@@ -433,7 +443,7 @@ $$
 \chi^2=\sum _{j=1}^{C}\sum _{k=1}^{C}{\frac {{\left(n_{jk}-e_{jk}\right)}^{2}}{e_{jk}}}
 $$
 
-or, for 2 $\times$ 2 tables: 
+or, for 2 $\times$ 2 tables^[This statistic can also be applied to tables of any dimensionality where the number of rows and columns is greater than 2.]: 
 
 $$
 \chi^2 = \frac{n\,(n_{11}\, n_{22} - n_{12}\, n_{21})^2}{n_{1+} \, n_{2+} \, n_{+1} \, n_{+2}}
@@ -470,9 +480,9 @@ $$
 \psi_{xgb}(\lambda_1, \lambda_2) = \sum_{i=1}^n\sum_{k=1}^{2}\frac{\tilde{e}_{ik}^2}{\widehat{p}_{i1} \widehat{p}_{i2} + \lambda_2}
 $$ {#eq-xgboost-l2}
 
-Unlike $\lambda_1$, this penalizes the sum of the current data at the node, which can range from 0 to $n/2$. All things being equal, this will penalize nodes with more data more than nodes with fewer data points.  However, very uncertain predictions (values near $\widehat{p}_{ij} = 0.5$) will affect this sum more than others. Both regularization methods can be used simultaneously and treated as tuning parameters. 
+Unlike $\lambda_1$, this penalizes the sum of the current data at the node, which can range from 0 to $n/2$. All things being equal, this will penalize nodes with more data more than it does for nodes with fewer data points.  However, very uncertain predictions (values near $\widehat{p}_{ij} = 0.5$) will affect this sum more than others. Both regularization methods can be used simultaneously and treated as tuning parameters. 
 
-As with previous statistics, this splitting statistic is computed for both sides of the split to measure the gain. 
+As with previous statistics, this splitting statistic is computed for both sides of the split to measure the gain. LightGBM takes the same approach.
 
 CatBoost uses essentially the same statistics with some slight alterations. First, no L<sub>1</sub> regularization is applied. Second, the L<sub>2</sub> penalty value is scaled to be: 
 
@@ -538,7 +548,7 @@ first_surr <- rownames(data.frame(adjacent_split_model$splits)[2, ])
 first_surr <- name_key$text[name_key$variable == first_surr]
 ```
 
-For continuous predictors, the conventional process of finding the optimal split point involves evaluating all possible binary partitions of the data based on the predictor values. The algorithm first orders the samples by predictor values, then evaluates splits between adjacent unique values. For each potential split point, it calculates the chosen split criterion and selects the split that optimizes this criterion.
+For continuous predictors, the conventional process of finding the optimal split point involves evaluating all possible binary partitions of the data based on the predictor values. The algorithm first orders the samples by predictor values, then evaluates splits between adjacent unique values. For each potential split point, it computes the chosen split criterion and selects the split that optimizes it.
 
 The computational complexity of this process is generally $O(n \log n)$ for each predictor, where $n$ is the number of samples, due to sorting. Once the samples are sorted, evaluating each potential split point can be efficient, as class distributions can be updated incrementally as you move through the sorted list.
 
@@ -654,7 +664,7 @@ Different splitting criteria for the maximum vapor predictor data from the entir
 
 :::
 
-The split curves and optimal values were the same for information gain, the $\chi^2$ statistic, and the three boosting methods. Note that, for the latter, the split-point candidates were not the same. Each boosting method used a binning strategy with 1,273 possible breaks. For 2 $\times$ 2 tables, these statistics are directly proportional to one another and differ by a constant. Their split values ranged from `r split_best$split[split_best$metric == "CatBoost"]` to `r split_best$split[split_best$metric == "Information Gain"]`, mostly due to small numerical differences. The curve for the information gain statistic was slightly shifted to the right, but it also produces an optimal split in this region. 
+The split curves and optimal values were the same for information gain, the $\chi^2$ statistic, and the three boosting methods. Note that, for the latter, the split-point candidates were not the same. Each boosting method used a binning strategy with 1,273 possible breaks. For 2 $\times$ 2 tables, the $\chi^2$ and information-based statistics are directly proportional to one another and differ by a constant. Their split values ranged from `r split_best$split[split_best$metric == "CatBoost"]` to `r split_best$split[split_best$metric == "Information Gain"]`, mostly due to small numerical differences. The curve for the information gain statistic was slightly shifted to the right, but it also produces an optimal split in this region. 
 
 ### Qualitative Predictors {#sec-tree-splits-qualitative}
 
@@ -662,12 +672,13 @@ Handling categorical predictors in classification trees presents unique challeng
 
 When using the binning approach, the algorithm must determine how to optimally partition the categories into two groups.   For a predictor with $k$ categories, there are $2^{k-1} - 1$ possible ways to create a binary split. Evaluating all these possibilities becomes computationally infeasible for predictors with many categories. Therefore, algorithms often use heuristics to find good splits without exhaustive search. For example, in the Classification and Regression Trees (CART) methodology [@breiman1984classification], categorical predictors are ordered by the proportion of samples in each class, and then binary splits are evaluated between adjacent categories in this ordering. This approach, very similar to an effect-encoding strategy and to the process described by @fisher1958grouping, reduces computational complexity while still allowing the algorithm to find effective splits.
 
-To illustrate the binning approach, consider the partitioning model illustrated in @fig-split-adjacent-tree.  The figure illustrates a tree of a maximum depth of 3 splits.  The first split uses the Gini index criteria to split the maximum vapor predictor at a value of 1248.  Samples with values greater than or equal to 1248 are illustrated on the right side of the tree.  The next split on this side of the tree is the county variable.  The adjacent category methodology creates a split with 7 counties in one group and the remaining counties in the other group.  @fig-split-county demonstrates why the counties were partitioned into these groups.  The x-axis in (a) and (b) of this figure provides the counties ordered from lowest proportion of forested counties (left) to highest proportion (right).  The top portion of the figure provides the Gini index for the partitioning of the samples at that county and all counties to the left.  The purity is optimized between the counties of Asotin and Okanogan.  At this split point, 7 counties are placed into one group and 13 counties are in the other group as illustrated in @fig-split-adjacent-tree.
+To illustrate the binning approach, consider the partitioning model illustrated in @fig-split-adjacent-tree.  The figure illustrates a tree of a maximum depth of 3 splits.  The first split uses the Gini index criterion to split the maximum vapor predictor at 1,248.  Samples with values greater than or equal to 1,248 are illustrated on the right side of the tree.  The next split on this side of the tree is the county variable.  The adjacent category methodology creates a split with 7 counties in one group and the remaining counties in the other group.  @fig-split-county demonstrates why the counties were partitioned into these groups.  The x-axis in (a) and (b) of this figure provides the counties ordered from the lowest proportion of forested counties (left) to the highest proportion (right).  The top portion of the figure provides the Gini index for the partitioning of the samples at that county and all counties to the left.  The purity is optimized between the counties of Asotin and Okanogan.  At this split point, 7 counties are placed into one group, and 13 counties are in the other group, as illustrated in @fig-split-adjacent-tree.
 
+TODO: what is @fig-split-county referring to?
 
 The second approach creates $k$ binary dummy variables, one for each category (or $k-1$ dummy variables to avoid redundancy). Each dummy variable is then treated as a separate predictor in the tree-building process. This approach, referred to as using independent categories, forces binary splits for the categories and effectively implements a one-versus-all splitting strategy.
 
-The choice between these approaches can impact model complexity and interpretability.  Grouped categories approach can capture more complex relationships between categories and the response variable.  Because the algorithm groups categories that have similar effects on the response, this often leads to more accurate and interpretable models. The independent categories approach, on the other hand, may not select any categories resulting in simpler, less accurate models.
+The choice between these approaches can impact model complexity and interpretability.  The grouped categories approach can capture more complex relationships between categories and the response variable.  Because the algorithm groups categories that have similar effects on the response, this often leads to more accurate and interpretable models. The independent categories approach, on the other hand, may not select any categories, resulting in simpler, less accurate models.
 
 ```{r}
 #| label: fig-split-adjacent-tree
@@ -787,9 +798,9 @@ $$
 
 $n_{+j}$ is the number of events in in category $j$ within all of the $n$ rows under consideration. CatBoost uses $\beta = 1$ and calls $\alpha$ the "prior" parameter, which can be used for tuning. Once all of the $j$ values of $\widehat{p}_j$ are computed, the split determination treats the predictor as if it were quantitative from the start. CatBoost's algorithm, which uses the CTR values to determine the best predictor (and value) to split on, is fairly complex and is detailed in @sec-cls-modern-boost. 
 
-So far, we've constrained our splits to be binary. C5.0 can create multiway splits for categorical predictors. For example, with categories `A`-`F`, a split might contain three groups such as `{A, B, C}`, `{D}`, and `{E, F}`. To do this, C5.0 uses a greedy, hill-climbing algorithm. When a specific split candidate is evaluated, it is rated using a penalized gain ratio. The gain is the improvement of the information statistic before and after combining categories. The penalty is based on the Minimum Description Length (MDL) principle and uses the logarithm of the number ways to partition $C$ categories into $k$ groups (a.k.a. a Bell number) divided by the number of data points. 
+So far, we've constrained our splits to be binary. C4.5 can create multiway splits for categorical predictors. For example, with categories `A`-`F`, a split might contain three groups such as `{A, B, C}`, `{D}`, and `{E, F}`. To do this, C4.5 uses a greedy, hill-climbing algorithm. When a specific split candidate is evaluated, it is rated using a penalized gain ratio. The gain is the improvement of the information statistic before and after combining categories. The penalty is based on the Minimum Description Length (MDL) principle [@quinlan1987inferring] and uses the logarithm of the number of ways to partition $C$ categories into $k$ groups (a.k.a. a Bell number) divided by the number of data points. 
 
-We start with $k = C$ groups and immediately combine categories that have the same frequency distributions (since they are identical results). If we start with $k$-way splits, the first iteration loops through the $k$ splits and merges one additional category. Again, with categories `A`-`F`, the first round of candidates are
+We start with $k = C$ groups and immediately combine categories with the same frequency distributions (since they yield identical results). If we start with $k$-way splits, the first iteration loops through the $k$ splits and merges one additional category. Again, with categories `A`-`F`, the first round of candidates is
 
 ::: {style="text-align: center;"}
 
@@ -900,9 +911,9 @@ An oblique tree required a single split to produce the class boundary shown in t
 
 $$
 - 1.71 \, \left(\frac{A - 0.0652}{0.966}\right) + 1.81\,\left(\frac{B - 0.048}{1.01}\right)  \le 0.0494.
-$$
+$$   {#eq-oblique-split}
 
-The values inside of the parentheses are means and standard deviations used to scale the predictors. When simplified: 
+The values inside the parentheses are means and standard deviations used to scale the predictors. When simplified: 
 
 $$
 0.020+1.77\, A-1.80 \, B \ge 0
@@ -911,6 +922,8 @@ $$
 We'll discuss a specific technique for creating oblique trees in @sec-cls-oblique.
 
 ## Understanding Bias in Splitting {#sec-tree-bias}
+
+TODO: WAAAY MORE HERE
 
 An important consideration in split selection is to understand the potential for selection bias. Predictors with many possible values (such as continuous predictors with many unique values or categorical predictors with many categories) have an advantage in the split selection process because they offer more potential split points, increasing the chance of finding a split that improves the objective function measure by chance.
 
@@ -944,46 +957,39 @@ This approach allows the tree to make predictions for samples with missing value
 
 ### Fractional Accounting {#sec-missing-propagation}
 
-The C5.0 algorithm takes a different approach to handling missing values, based on probabilistic weighting rather than surrogate splits. During tree construction, C5.0 adjusts the information gain calculations to account for missing values. When evaluating a potential split on a predictor with missing values, C5.0 calculates the information gain using only the samples with non-missing values for that predictor, then scales this gain by the fraction of non-missing data. This adjustment ensures that predictors with many missing values are not unfairly penalized or favored.
+The C4.5 algorithm takes a different approach to handling missing values, based on probabilistic weighting rather than surrogate splits. During tree construction, C4.5 adjusts the information gain calculations to account for missing values. When evaluating a potential split on a predictor with missing values, C4.5 calculates the information gain using only the samples with non-missing values for that predictor, then scales this gain by the fraction of non-missing data. This adjustment ensures that predictors with many missing values are not unfairly penalized or favored.
 
-C5.0 also modifies how it handles categorical predictors with missing values. When calculating the information value for a categorical predictor (used in the gain ratio calculation), C5.0 treats missing values as a separate category. This increases the number of branches in the split and affects the penalty applied to the information gain.
+C4.5 also modifies how it handles categorical predictors with missing values. When calculating the information value for a categorical predictor (used in the gain ratio calculation), C4.5 treats missing values as a separate category. This increases the number of branches in the split and affects the penalty applied to the information gain.
 
-A distinctive aspect of C5.0's approach is how it handles missing values when determining the class distribution in the resulting splits. Instead of assigning samples with missing values to a specific child node, C5.0 allows these samples to contribute fractionally to all child nodes. The fractional contribution is based on the distribution of non-missing values among the child nodes.
+A distinctive aspect of C4.5's approach is how it handles missing values when determining the class distribution in the resulting splits. Instead of assigning samples with missing values to a specific child node, C4.5 allows them to contribute fractionally to all child nodes. The fractional contribution is based on the distribution of non-missing values among the child nodes.
 
 For example, if 70% of samples with non-missing values go to the left child and 30% go to the right child, a sample with a missing value would contribute 0.7 of a sample to the left child and 0.3 of a sample to the right child. This fractional accounting means that the class frequency distribution in each node may not contain whole numbers, and the number of errors in a terminal node can also be fractional.
 
-During prediction, C5.0 uses a similar fractional approach. When a sample with missing values reaches a node with a split on a predictor for which the sample is missing, the sample is sent down all possible paths, with weights proportional to the distribution of non-missing values in the training data. The final prediction is based on a weighted vote from all relevant terminal nodes.
+During prediction, C4.5 uses a similar fractional approach. When a sample with missing values reaches a node with a split on a predictor for which the sample is missing, the sample is sent down all possible paths, with weights proportional to the distribution of non-missing values in the training data. The final prediction is based on a weighted vote from all relevant terminal nodes.
 
-This approach allows C5.0 to make use of all available information in a sample, even when some predictors have missing values. It also provides a natural way to incorporate uncertainty due to missing values into the prediction process.
+This approach allows C4.5 to make use of all available information in a sample, even when some predictors have missing values. It also provides a natural way to incorporate uncertainty due to missing values into the prediction process.
 
 ### Comparison of Approaches {#sec-tree-missing-comparison}
 
-Both the CART and C5.0 approaches to handling missing data have their strengths and weaknesses. The CART approach with surrogate splits is more deterministic, as each sample follows a single path through the tree. This can make the prediction process easier to interpret and explain. Surrogate splits also explicitly model relationships between predictors, providing additional insights into the data. However, identifying and storing surrogate splits increases the model's computational complexity and memory requirements.
+Both the CART and C4.5 approaches to handling missing data have their strengths and weaknesses. The CART approach with surrogate splits is more deterministic, as each sample follows a single path through the tree. This can make the prediction process easier to interpret and explain. Surrogate splits also explicitly model relationships between predictors, providing additional insights into the data. However, identifying and storing surrogate splits increases the model's computational complexity and memory requirements.
 
-The C5.0 approach with fractional samples is more probabilistic and can better represent the uncertainty introduced by missing values. By allowing samples to contribute to multiple nodes, it makes use of all available information in the tree. This approach can be particularly effective when missingness is informative or when there are complex patterns of missingness in the data. However, the fractional accounting can make the model more difficult to interpret, and the prediction process is more complex.
+The C4.5 approach with fractional samples is more probabilistic and can better represent the uncertainty introduced by missing values. By allowing samples to contribute to multiple nodes, it leverages all available information in the tree. This approach can be particularly effective when missingness is informative or when there are complex patterns of missingness in the data. However, fractional accounting can make the model more difficult to interpret and the prediction process more complex.
 
 Both approaches have been shown to perform well in practice, and the choice between them often depends on the specific requirements of the application, such as the need for interpretability, the patterns of missingness in the data, and the computational resources available.
-
-### Handling Missing Values in Rule-Based Models {#sec-missing-rules}
-
-Rule-based models derived from classification trees also require mechanisms to handle missing values. In C5.0Rules, which converts C5.0 trees into rule sets, the handling of missing values is integrated into the rule evaluation process. When evaluating whether a rule applies to a sample with missing values, C5.0Rules treats the rule as partially satisfied, with the degree of satisfaction determined by the distribution of non-missing values in the training data. This partial satisfaction contributes to the overall confidence in the rule's prediction.
-
-During prediction, multiple rules may be partially satisfied due to missing values. C5.0Rules aggregates the confidence values from all relevant rules to make the final prediction, similar to the weighted voting approach used in C5.0 trees.
-This approach allows rule-based models to handle missing values without requiring explicit imputation, maintaining the flexibility and robustness of the original tree model.
 
 ### Practical Considerations for Missing Data {#sec-tree-missing-considerations}
 
 While classification trees can handle missing values directly, there are still practical considerations to keep in mind when working with incomplete data.
 
-First, the effectiveness of the missing value handling mechanisms depends on the patterns of missingness in the data. If values are missing completely at random (MCAR), both CART and C5.0 should perform well. If values are missing at random (MAR) or missing not at random (MNAR), the performance may depend on whether the tree can capture the relationships between the missingness and other predictors or the response variable.
+First, the effectiveness of the missing value handling mechanisms depends on the patterns of missingness in the data. If values are missing completely at random (MCAR), both CART and C4.5 should perform well. If values are missing at random (MAR) or missing not at random (MNAR), performance may depend on whether the tree can capture relationships between missingness and other predictors, or between missingness and the response variable.
 
 Second, even with these sophisticated mechanisms, very high rates of missingness can still be problematic. If a predictor has too many missing values, it may not be selected as a split variable, even if it would be highly informative when available. In such cases, imputation might still be beneficial as a preprocessing step.
 
-Third, the handling of missing values can interact with other aspects of the tree-building process, such as pruning. For example, in C5.0, the fractional accounting for missing values affects the calculation of the pessimistic error rate used for pruning. This interaction should be considered when tuning the model.
+Third, the handling of missing values can interact with other aspects of the tree-building process, such as pruning. For example, in C4.5, the fractional accounting for missing values affects the calculation of the pessimistic error rate used for pruning. This interaction should be considered when tuning the model.
 
 ## Growing Trees {#sec-cls-tree-grow}
 
-For some shape and size of a tree, the search space of which predictors and splits to use to create all the data partitions is vast. Traditionally, trees are built from the top down using _greedy optimization_. Growing a classification tree involves recursively applying the splitting process described above until a stopping criterion is met. This will be our main focus, but @sec-cls-tree-bayes will provide a different, non-greedy approach for creating tree models. 
+For some shape and size of a tree, the search space of which predictors and splits to use to create all the data partitions is vast. Traditionally, trees are built from the top down using _greedy optimization_. Growing a classification tree involves recursively applying the splitting process described above until a stopping criterion is met. This will be our main focus, but @sec-cls-tree-global will describe an alternative, non-greedy approach to creating trees. 
 
 Most growing processes begin with all the training data in a single root node. The algorithm then searches for the best predictor and split point according to the chosen splitting criterion, as described in the previous section.  Once identified, the split divides the data into two child nodes. This process repeats recursively for each child node until one or more stopping criteria are met.
 
@@ -995,7 +1001,7 @@ To further illustrate how recursive partitioning across predictors serves as an 
 
 The left panel was constructed using a logistic regression model with maximum vapor, roughness, and their two-way interaction as predictors. The predicted probability of forestation is represented by color, with green indicating a high probability of forestation and brown indicating a high probability of non-forestation. The probability surface exhibits notable curvature, with the probability of forestation changing substantially across values of maximum vapor, conditional on the value of roughness. This non-linear relationship between the predictors and the outcome is the hallmark of a statistical interaction: accurate prediction requires knowledge of both predictor values simultaneously, as neither predictor's effect can be understood in isolation.
 
-In contrast, the right panel displays results from a logistic regression model using maximum vapor, northness, and their two-way interaction term as predictors. Here, the probability surface shows no curvature, with the probability of forestation remaining relatively constant across values of northness for any given value of maximum vapor. The straight contours indicate that there is no meaningful statistical interaction between these predictors. In this case, the predictors contribute additively to the probability of forestation, and each predictor's effect can be interpreted independently of the other's value.
+In contrast, the right panel displays results from a logistic regression model using maximum vapor, northness, and their two-way interaction term as predictors. Here, the probability surface shows no curvature, with the probability of forestation remaining relatively constant across northness values for any given value of maximum vapor. The straight contours indicate that there is no meaningful statistical interaction between these predictors. In this case, the predictors contribute additively to the probability of forestation, and each predictor's effect can be interpreted independently of the other's value.
 
 ```{r}
 #| label: fig-split-interactions
@@ -1116,11 +1122,11 @@ As the tree grows, the nodes become increasingly homogeneous with respect to the
 
 When should the algorithm stop recursively partitioning the data?  Several parameters control when tree growth should terminate. These stopping criteria are essential for preventing overfitting and ensuring that the tree generalizes well to new data.
 
-One common criterion is the minimum node size, which prevents the algorithm from splitting when a node contains fewer than a specified number of samples. This criterion ensures that each node has sufficient data to make reliable predictions. If a node has too few samples, any patterns observed there might be due to random variation rather than true relationships in the data. The optimal minimum node size depends on the dataset size and the complexity of the underlying relationships. Larger minimum node sizes lead to smaller trees with fewer terminal nodes, reducing the risk of overfitting but potentially increasing the risk of underfitting and missing important patterns in the data.
+As previously mentioned, one common criterion is the minimum node size, which prevents the algorithm from splitting when a node contains fewer than a specified number of samples (i.e., $n_{min}$). This criterion ensures that each node has sufficient data to make reliable predictions. If a node has too few samples, any patterns observed there might be due to random variation rather than true relationships in the data. The optimal minimum node size depends on the dataset size and the complexity of the underlying relationships. Larger minimum node sizes lead to smaller trees with fewer terminal nodes, reducing the risk of overfitting but potentially increasing the risk of underfitting and missing important patterns in the data.
 
-A second stopping criterion is tree depth, which limits the number of levels in the tree. A tree with a maximum depth of 1 would have only the root node.  While a tree with no maximum depth constraint could potentially have as many levels as there are samples in the training data. Like the minimum node size, the maximum depth controls the complexity of the tree.  Deeper trees can capture more complex relationships but are more prone to overfitting.
+A second stopping criterion is tree depth, which limits the number of levels in the tree. A tree with a maximum depth of 1 would have only the root node.  A tree without a maximum depth constraint could have as many levels as there are samples in the training data. Like the minimum node size, the maximum depth controls the tree's complexity during the growing phase.  Deeper trees can capture more complex relationships but are more prone to overfitting.
 
-Some tree-growing algorithms also use a minimum improvement criterion, which requires that a split improve the objective function by at least a specified amount to be considered. This criterion prevents splits that provide only marginal improvements, which are likely to capture noise rather than true patterns. The minimum improvement threshold can be set based on statistical significance (as in conditional inference trees) or as a fixed value.
+Some tree-growing algorithms also use a minimum improvement criterion, which requires that a split improve the objective function by at least a specified amount to be considered. This criterion prevents splits that provide only marginal improvements, which are likely to capture noise rather than true patterns. The minimum improvement threshold can be set based on statistical significance (see @sec-cls-cit below) or as a fixed value.
 
 Another criterion is early stopping. In this approach, the tree is grown incrementally, and the performance on a validation set is monitored. When the validation performance starts to deteriorate, tree growth is stopped. This approach directly optimizes for generalization performance but requires additional computational resources for cross-validation.
 
@@ -1128,11 +1134,9 @@ Stopping criterion is a tuning parameter.  To find a good fit for the data, that
 
 ## Reducing Tree Complexity {#sec-cls-tree-prune}
 
-Trees grown to maximum depth typically overfit the training data, capturing noise rather than underlying predictive patterns. Pruning addresses this issue by simplifying an overgrown tree, removing branches that do not contribute significantly to the model's predictive performance. Pruning is a critical step in tree construction, as it helps balance the trade-off between model complexity and predictive performance.
+Trees grown to maximum depth typically overfit the training data, capturing noise rather than underlying predictive patterns. _Pruning_, the process of removing leaves in a tree, addresses this issue by simplifying an overgrown tree, removing branches that do not contribute significantly to the model's predictive performance. Pruning is a critical step in tree construction, as it helps balance the trade-off between model complexity and predictive performance.
 
 Unpruned classification trees often exhibit excellent performance on the training data but poor performance on new, unseen data. This discrepancy occurs because the tree has learned not only the underlying patterns in the data but also the random noise present in the training samples. By fitting the noise, the tree becomes overly complex and fails to generalize well.
-
-This highlights an important characteristic of trees trained using greedy optimization: they are _unstable_. This means that if the training data are perturbed (e.g., resampled or individual values slightly changed), the tree structure might be completely different^[This is especially likely if there are correlated predictors in the training set.]. If a particular split variable or value is different, it is highly likely that all subsequent splits would also be different. This, in the context of the variables-bias discussion in @sec-variance-bias, means that trees have high model variance (but low bias). This is a significant disadvantage for trees, but, as we'll see in the next chapter, it makes them ideal for creating ensemble models. 
 
 Pruning aims to identify and remove the parts of the tree that are likely capturing noise rather than true patterns. The goal is to find a subtree of the original tree that minimizes the expected error on new data. This subtree should be complex enough to capture the important patterns in the data but simple enough to avoid fitting the noise.
 
@@ -1140,7 +1144,7 @@ The pruning process can be viewed as a form of regularization, similar to the pe
 
 #### Cost-Complexity Pruning {#sec-cost-complexity}
 
-Cost-complexity pruning, also known as weakest link pruning, is used in the CART methodology. It introduces a complexity parameter ($\alpha$) that penalizes the tree size:
+Cost-complexity pruning, also known as weakest-link pruning, is used in the CART methodology and other methods. It introduces a complexity parameter ($\alpha$) that penalizes the tree size:
 
 $$
 R_\alpha(T) = R(T) + \alpha|T|
@@ -1154,11 +1158,11 @@ The cost-complexity pruning process involves several steps:
 
 2.	Calculate a sequence of nested subtrees $T_1, T_2, ..., T_k$ and corresponding complexity parameters $\alpha_1, \alpha_2, ..., \alpha_k$, where $T_k$ is the root node (a tree with a single node). Each subtree $T_i$ is obtained by pruning $T_{i-1}$ in a way that minimizes the cost-complexity measure for the corresponding $\alpha_i$.
 
-3.	Use cross-validation to estimate the optimal complexity parameter $\alpha_{opt}$ that minimizes the expected error on new data.
+3.	Use an _internal_ cross-validation to estimate the optimal complexity parameter $\alpha_{opt}$ that minimizes the expected error on new data.
 
 4.	Return the subtree $T_i$ corresponding to $\alpha_{opt}$ as the final pruned tree.
 
-The sequence of nested subtrees is constructed by iteratively collapsing the internal node that results in the smallest increase in the training error per node removed. This node is called the "weakest link" because it contributes the least to the tree's performance relative to its complexity.
+The sequence of nested subtrees is constructed by iteratively collapsing the internal node that yields the smallest increase in training error per node removed. This node is called the "weakest link" because it contributes the least to the tree's performance relative to its complexity.
 
 An _internal_ cross-validation is used to select the optimal complexity parameter because the training error alone does not reliably indicate generalization performance. The complexity parameter that minimizes this resampled error is selected. This process is identical to previously discussed resampling procedures, but occurs _inside_ the training routine. 
 
@@ -1166,11 +1170,11 @@ Some tree implementations use a "one standard error" rule when selecting the opt
 
 This automated selection heuristic can be very effective, but one can also tune the cost-complexity parameter $\alpha$ using the usual (external) resampling procedure of choice. 
 
-#### Pessimistic Pruning (C5.0) {#sec-pessimistic-pruning}
+#### Pessimistic Pruning {#sec-pessimistic-pruning}
 
-Pessimistic pruning, used in the C5.0 algorithm, differs from cost-complexity pruning. Instead of using cross-validation, which can be computationally expensive, pessimistic pruning uses a statistical heuristic to estimate the expected error on new data.
+Pessimistic pruning, used in the C4.5 algorithm, differs from cost-complexity pruning. Instead of using cross-validation, which can be computationally expensive, pessimistic pruning uses a statistical heuristic to estimate the expected error on new data.
 
-The key insight of pessimistic pruning is that the apparent error rate on the training data is an optimistic estimate of the true error rate on new data. To correct for this optimism, C5.0 computes an upper confidence bound on the error rate, serving as a pessimistic estimate of the true error rate.
+The key insight of pessimistic pruning is that the apparent error rate on the training data is an optimistic estimate of the true error rate on new data. To correct for this optimism, C4.5 computes an upper confidence bound on the error rate, serving as a pessimistic estimate of the true error rate.
 
 For a node with $n$ training samples and $\mathcal{E}$ misclassifications, the apparent error rate is $\mathcal{E}/n$. The pessimistic error rate is calculated using the upper bound of a confidence interval for this proportion:
 
@@ -1178,24 +1182,25 @@ $$
 \text{pessimistic error rate} = \frac{\mathcal{E} + 0.5 + \frac{z^2}{2} + \sqrt{z^2 \left[ (\mathcal{E} + 0.5)\left(1 - \frac{\mathcal{E} + 0.5}{n}\right) + \frac{z^2}{4} \right]}}{n + z^2}
 $$ {#eq-pessinistic-error}
 
-Where $z_{\alpha/2}$ is the critical value from the standard normal distribution for the desired confidence level. C5.0 uses a default confidence level of 75% (corresponding to $z_{\alpha/2} = 0.69$), but this can be adjusted as a tuning parameter.
+where $z_{\alpha/2}$ is the critical value from the standard normal distribution for the desired confidence level. C4.5 uses a default confidence level of 75% (corresponding to $z_{\alpha/2} = 0.69$), but this can be adjusted as a tuning parameter. This is the Wilson Score technique for constructing a confidence interval [@wilson1927probable]. 
+
 The pessimistic pruning process involves a bottom-up traversal of the tree, starting from the terminal nodes. For each internal node, the algorithm compares the pessimistic error rate of the subtree rooted at that node with the pessimistic error rate if the node were converted to a terminal node (i.e., if the subtree were pruned). If pruning would reduce the pessimistic error rate, the subtree is pruned.
 
-C5.0 also considers a more complex operation called "subtree raising," where a subtree is moved up to replace its parent node. This operation is evaluated using the same pessimistic error rate criterion.
+C4.5 also considers a more complex operation called "subtree raising," where a subtree is moved up to replace its parent node. This operation is evaluated using the same pessimistic error rate criterion.
 
-While pessimistic pruning lacks theoretical foundation of cost-complexity pruning, it is computationally efficient and often works well in practice. The confidence level parameter controls the aggressiveness of pruning, with higher confidence levels resulting in more aggressive pruning.
+While pessimistic pruning lacks the theoretical foundation of cost-complexity pruning, it is computationally efficient and often works well in practice. The confidence level parameter controls the aggressiveness of pruning, with higher confidence levels resulting in more aggressive pruning.
 
 ## Terminal Node Estimates {#sec-tree-estimates}
 
-After the classification tree is built, each terminal node generates a raw probability for each class based on the training samples that fall into that node. In a binary classification problem, this vector contains the proportions of samples in each class at the node. For example, in the table shown in @sec-tree-splitting, the left split contains six samples and, based on the split results, the probability estimates would be (5/6, 1/6).
+After the classification tree is built, each terminal node generates a raw probability for each class based on the training samples that fall into that node. For example, in the table shown in @sec-tree-splitting, the left split contains six samples, and based on the split results, the probability estimates are (5/6, 1/6).
 
 For a new sample, the predicted class probabilities are determined by the terminal node it reaches after traversing the tree according to the splitting rules.  The sample is typically assigned to the class with the highest probability in that node, which is equivalent to the majority class among the training samples in the node.
 
-Some tree implementations also provide confidence intervals or other measures of uncertainty for these probability estimates. For example, C5.0 uses a pessimistic estimate of the error rate to provide upper and lower bounds on the class probabilities.
+Some tree implementations also provide confidence intervals or other measures of uncertainty for these probability estimates. For example, C4.5 uses a pessimistic estimate of the error rate to provide upper and lower bounds on the class probabilities.
 
 The class probability estimates from terminal nodes can be used not only for classification but also for ranking and probability estimation. When a terminal node contains few samples, the quality of the probability estimates decreases. It is possible to apply Laplace smoothing as previously described for naive Bayes or to use a regularized estimate, such as the Beta-binomial method from @eq-beta-bin-mean (as described for CatBoost). 
 
-Alternatively, C5.0 decision trees add the event rate to the numerator count and 1.0 to the denominator. For example, our previous left split, the raw probability for the "Yes" class was 5/6, and 7/12 of the data were truly forested.  C5.0 would compute it as (5 + (7/12)) / (6 + 1) = `r round((5 + (7/12)) / (6 + 1), 3)` instead of the raw estimate of `r round(5/6, 3)`. 
+Alternatively, C4.5 decision trees add the event rate to the numerator count and 1.0 to the denominator. For example, our previous left split, the raw probability for the "Yes" class was 5/6, and 7/12 of the data were truly forested.  C4.5 would compute it as (5 + (7/12)) / (6 + 1) = `r round((5 + (7/12)) / (6 + 1), 3)` instead of the raw estimate of `r round(5/6, 3)`. 
 
 For XGboost and LightGBM, once the split is made, the probability estimates for the leaves are estimated by: 
 
@@ -1673,7 +1678,7 @@ cart_fit_var_list <- cli::format_inline("{cart_fit_vars$text}")
 ```
 
 To demonstrate with the forestation data, a CART model was tuned over cost-complexity (10<sup>`r log10(forest_cart_rng[[1]][1])`</sup> to 10<sup>`r log10(forest_cart_rng[[1]][2])`</sup>), the tree-depth (`r forest_cart_rng[[2]][1]` to `r forest_cart_rng[[2]][2]`), and $n_{min}$  (`r forest_cart_rng[[3]][1]` to `r forest_cart_rng[[3]][2]`) using a space-filling design with 25 candidates. @fig-forest-cart shows the results
-based on minimizing the Brier score. The figure also computes several different aspects of the fitted trees: the number of terminal nodes, how many predictors  (or of `r ncol(forested_train) - 1`) were used in a split, and the average number of predictors in the rules. Like the Brier score values, the points in the visualization are averages of the trees fitted within each fold.
+based on minimizing the Brier score. The figure also computes several different aspects of the fitted trees: the number of terminal nodes, how many predictors  (out of `r ncol(forested_train) - 1`) were used in a split, and the average number of predictors in the rules. Like the Brier score values, the points in the visualization are averages of the trees fitted within each fold.
 
 ```{r}
 #| label: fig-forest-cart
@@ -1681,7 +1686,7 @@ based on minimizing the Brier score. The figure also computes several different 
 #| out-width: 100%
 #| fig-width: 9
 #| fig-height: 2.5
-#| fig-cap: "Tuning results for the CART model showing how the tree tuning parameters (cost-complexity, $n_{min}$, and tree depth) relate to the Brier score. There are three other characteristics computed each tree that reflext the average complexity of the trees created during resampling."
+#| fig-cap: "Tuning results for the CART model showing how the tree tuning parameters (cost-complexity, $n_{min}$, and tree depth) relate to the Brier score. There are three other characteristics computed for each tree that reflect the average complexity of the trees created during resampling."
 
 cart_lvls <- c("Cost Complexity (log)", "Minimal Node Size", "Tree Depth",
                "# Active Predictors", "Mean Rule Size", "# Terminal Nodes")
@@ -1726,9 +1731,9 @@ forest_cart_res |>
 
 We can see that the cost-complexity parameter does influence performance, but the trend is somewhat muddled, so it is not the most important parameter. In general, though, smaller values have better Brier scores; the data set favors deep CART trees. The panel for the tree depth has the same interpretation. For $n_{min}$, smaller Brier scores are mostly likely to occur with values greater than $n_{min} \approx$ 18.
 
-The three panels on the right measure the tree's complexity. We see a clear quadratic trend in the mean rule size and the number of terminal nodes. This indicates that the trees can under- and over-fit across these values. Tuning parameter combinations that produce around 25 to 60 terminal nodes have the best Brier scores. We can also see from the panel measuring how many "active parameters" in the tree (i.e., used in at least one split) that models that used the entire feature set did poorly. However, they can also perform poorly if fewer than 12 predictors are used by the tree. These values are also related to the model's complexity.
+The three panels on the right measure the tree's complexity. We see a clear quadratic trend in the mean rule size and the number of terminal nodes. This indicates that the trees can under- and over-fit across these values. Tuning parameter combinations that produce around 25 to 60 terminal nodes have the best Brier scores. We can also see from the panel measuring how many "active parameters" in the tree (i.e., used in at least one split) that models that used the entire feature set did poorly. However, they can also perform poorly if fewer than 11(ish) predictors are used by the tree. These values are also related to the model's complexity.
 
-The numerically best tree used a cost-complexity value of 10<sup>`r round(log10(forest_cart_best$cost_complexity), 2)`</sup>, a depth of `r forest_cart_best$tree_depth`, and $n_{min}$ = `r forest_cart_best$min_n` training set samples. The model's performance statistics are shown in @tbl-tree-statistics.
+The numerically best tree used a cost-complexity value of 10<sup>`r round(log10(forest_cart_best$cost_complexity), 2)`</sup>, a depth of `r forest_cart_best$tree_depth`, and $n_{min}$ = `r forest_cart_best$min_n` training set samples. The model's resampled performance statistics are shown in @tbl-tree-statistics.
 
 ::: columns
 ::::: {.column width="10%"}
@@ -1740,12 +1745,17 @@ The numerically best tree used a cost-complexity value of 10<sup>`r round(log10(
 #| label: tree-statistics
 #| echo: false
 theme_set(theme_bw())
+# fmt: skip
 tree_bt_stats |>
   dplyr::select(
     Model, 
     Estimate_brier_class, Lower_brier_class, Upper_brier_class, data_brier_class, 
     Estimate_roc_auc, , Lower_roc_auc, Upper_roc_auc, data_roc_auc
   ) |>
+  mutate(
+    Model = factor(Model, c("CART", "C5.0", "Conditional Inference", "Oblique (Ridge)")) 
+  ) |> 
+  arrange(Model) |> 
   gt() |> 
   gt_plt_dist(
     column = data_brier_class,
@@ -1837,7 +1847,7 @@ forest_cart_vip_plot <-
 
 Panel (c) shows the variable importance scores for the model. As CART splits the data to reduce impurity, it tracks the improvement in the Gini statistic for each predictor. This plot shows the cumulative effect of each predictor on the model. Three predictors have the largest contribution: `r cli::format_inline("{forest_cart_vip$text[1:3]}")`. Almost half of the predictors had little to no effect on the model. 
 
-### C5.0 {#sec-cls-c50}
+### C4.5 and C5.0 {#sec-cls-c50}
 
 C4.5 is a popular tree-based machine learning model, described in detail by @quinlan1993c4. C5.0 is its successor, developed as a closed-source product but released as open-source around 2010, and first described in @apm.  Many aspects of these two models are the same. For example, we've previously described a few aspects of how this model creates trees:
 
@@ -1848,7 +1858,7 @@ C4.5 is a popular tree-based machine learning model, described in detail by @qui
 
 Differences between the two are largely due to the addition of a boosting algorithm, which will be described in @sec-cls-modern-boost. One difference between the two versions is that C5.0 includes an option to perform a *global* pruning phase at the end of tree construction. This uses a form of the one-standard-error rule from CART. Pessimistic pruning occurs locally, trimming the tree at a specific node. The global process considers the entire tree at once.
 
-To start, we must compute what our "error budget." This is the number of errors in the tree that is allowable under the one-standard-error rule. To compute this, C5.0 determines the number of errors ($\mathcal{E}$) out of $n$ training set samples. Based on the equation for the Binomial variance, the standard errors for the number of errors is:
+To start, we must compute what our "error budget." This is the number of errors in the tree that is allowable under the one-standard-error rule. To compute this, C5.0 determines the number of errors ($\mathcal{E}$) out of $n$ training set samples. Based on the equation for the Binomial variance, the equation for the standard error of the number of errors is:
 
 $$
 \sigma_{\mathcal{E}} = \sqrt{\mathcal{E}\left(1 - \frac{\mathcal{E}}{n}\right)}
@@ -1857,10 +1867,6 @@ $$ {#eq-c5-error-stde}
 If tree has $n=100$ training set points and $\mathcal{E} = 10$ misclassified samples, $\sigma_{\mathcal{E}} = `r sqrt(10 * (1 - (10/100)))`$. This is the number of errors that would be acceptable if we were to choose a tree with one additional standard error or misclassified points. Note that C5.0 uses the resubstitution error rate; unlike CART, it does not perform internal cross-validation to obtain a better statistical estimate.
 
 Once we have our budget of $\sigma_{\mathcal{E}}$ errors, we traverse the tree from top to bottom and search for a subtree whose removal would reduce the error count below the error budget.
-
-For example, if we have a tree on the left side of FIGURE, there are four terminal nodes after local pessimistic pruning. Without any splits, using the most frequent class as the prediction, there are $\mathcal{E} = 10$ errors out of $n = 100$. On the left-hand side, another split (A) is used to generate terminal nodes B and C. If we had not split A into B and C, there are $\mathcal{E} = 4$. After the split, each terminal node has $\mathcal{E} = 2$ errors each. The difference in errors between the parent node (A) and the two child nodes is 4-4=0. Since this difference is less than our error budget of `r sqrt(10 * (1 - (10/100)))`, we can prune the two child nodes. The tree on the right-hand side of FIGURE shows the results.
-
-Can we prune the last two terminal nodes (A' and D)?
 
 Common tuning parameters are:
 
@@ -1935,7 +1941,7 @@ forest_c5_res |>
   labs(y = "Brier Score", x = NULL)  
 ```
 
-In this case, there is a definitive trend between $n_{min}$ and the Brier score. These data preferred C5.0, which makes as many splits as possible by lowering the threshold for how many training set samples are required to keep splitting the data. The confidence factor had almost no effect on the results. The other panels in the plot indicate that the data preferred to use as many predictors as possible, but still used fewer than the CART tree. Also, the number of predictors in the rule was associated with small Brier scores, as was a larger number of terminal nodes. However, the number of terminal nodes produced by C5.0 was much smaller than CART. The final model was fit using a threshold of $n_{min}$ = `r forest_c5_best$min_n` samples to continue splitting. The resampled performance of this configuration is shown in @tbl-tree-statistics and is very similar to CART. 
+In this case, there is a definitive trend between $n_{min}$ and the Brier score. These data preferred small values of $n_{min}$, which makes as many splits as possible by lowering the threshold for how many training set samples are required to keep splitting the data. The confidence factor had almost no effect on the results. The other panels in the plot indicate that the data preferred to use as many predictors as possible, but still used fewer than the CART tree. Also, the number of predictors in the rule was associated with small Brier scores, as was a larger number of terminal nodes. However, the number of terminal nodes produced by C5.0 was much smaller than CART. The final model was fit using a threshold of $n_{min}$ = `r forest_c5_best$min_n` samples to continue splitting. The resampled performance of this configuration is shown in @tbl-tree-statistics and is very similar to CART. 
 
 ### Conditional Inference Trees {#sec-cls-cit}
 
@@ -2023,9 +2029,9 @@ cit_small <-
   )
 ```
 
-There are a few interesting aspects to this process. First, there is no pruning phase. As splitting continues, the amount of data per node decreases, and so does the statistical test's ability to identify a predictor as "significant." To make this judgment, a p-value cutoff is used to determine whether the splitting process should proceed. This stopping criterion can be coupled with the usual threshold for the number of data points required for splitting, the maximum tree depth, and so on. The p-value cutoff can be a tuning parameter. Additionally, to be more conservative, the p-values between predictors can be adjusted for multiple testing using a Bonferroni or similar correction.
+There are a few interesting aspects to this process. First, there is no pruning phase. As splitting continues, the amount of data per node decreases, and so does the statistical test's ability to identify a predictor as "significant." To make this judgment, a p-value cutoff is used to determine whether the splitting process should proceed. This stopping criterion can be coupled with the usual thresholds for the number of data points required to split, the maximum tree depth, and so on. The p-value cutoff can be a tuning parameter. Additionally, to be more conservative, the p-values between predictors can be adjusted for multiple testing using a Bonferroni or similar correction [@sedgwick2012multiple].
 
-For example, during the first pass of the splitting process, the entire training set is used to evaluate the significance of each predictor (regardless of data type). @fig-cit-screening shows the results for each predictor. These test statistics are very large, and their corresponding p-values can be smaller than 10<sup>`r cit_first_p`</sup>, indicating extremely strong statistical significance. In this case, the `r cit_first$chosen[1]` predictor was chosen for splitting. The same figure shows another pass much later in the splitting process, where only $n = `r cit_small$data_size[1]`$ points are available. The test statistics are much smaller, and their corresponding p-values range from`r round(min(cit_small$p.value), 4)` to `r round(max(cit_small$p.value), 4)`. At this point, the best p-value is no longer significant enough, and the splitting process halts.\
+For example, during the first pass of the splitting process, the entire training set is used to evaluate the significance of each predictor (regardless of data type). @fig-cit-screening shows the results for each predictor. These test statistics are very large, and their corresponding p-values can be smaller than 10<sup>`r cit_first_p`</sup>, indicating extremely strong statistical significance. In this case, the `r cit_first$chosen[1]` predictor was chosen for splitting. The same figure shows another pass much later in the splitting process, where only $n = `r cit_small$data_size[1]`$ points are available. The test statistics are much smaller, and their corresponding p-values range from `r round(min(cit_small$p.value), 4)` to `r round(max(cit_small$p.value), 4)`. At this point, the best p-value is no longer significant enough, and the splitting process halts.\
 
 ```{r}
 #| label: fig-cit-screening
@@ -2057,7 +2063,7 @@ p_small <-
 p_first + p_small
 ```
 
-What statistical test is used to evaluate the predictors? @StrasserWeber developed mathematical methods for permutation tests of various data types and found a unifying framework. Their method shows that many statistical tests fall under the framework of *linear statistics*, and that their permutation test statistics can have the same distributions. In essence, we can conduct many different types of statistical tests and still make an "apples-to-apples" comparison (either using the test statistics or their p-values). For  classification, @tbl-cit-tests shows different combinations of predictor and  outcome types, their corresponding test descriptions, and any connection to existing statistical methods.
+What statistical test is used to evaluate the predictors? @StrasserWeber developed mathematical methods for permutation tests of various data types and found a unifying framework. Their method shows that many statistical tests fall within the framework of *linear statistics*, and that their permutation test statistics can have the same distributions. In essence, we can conduct many different types of statistical tests and still make an "apples-to-apples" comparison (either using the test statistics or their p-values). For  classification, @tbl-cit-tests shows different combinations of predictor and  outcome types, their corresponding test descriptions, and any connections to existing statistical methods.
 
 ::: {#tbl-cit-tests}
 ```{r}
@@ -2097,9 +2103,9 @@ The permutation test types for different outcome and predictor variables, along 
 
 :::
 
-For example, when evaluating numeric predictors such as longitude or annual  precipitation, we compare the centers of their distributions, similar to  comparing the medians per class. For our county predictor, we use the previously discussed $\chi^2$ statistic. For ordered qualitative columns (e.g., low, medium, high), the categories are converted to rank "scores" and treated as numeric.
+For example, when evaluating numeric predictors such as longitude or annual precipitation, we compare the centers of their distributions, similar to comparing the medians per class. For our county predictor, we use the previously discussed $\chi^2$ statistic. For ordered qualitative columns (e.g., low, medium, high), the categories are converted to rank "scores" and treated as numeric.
 
-The primary benefit of using this framework for data splitting is that the predictor selection process is completely unbiased. Since permutation statistics have the same distribution across data types and characteristics, these factors do not affect their probability of selection for splitting. It also has the  benefit of producing trees that are more stable (i.e., lower model variance)  than those from most other models described here.
+The primary benefit of using this framework for data splitting is that the predictor selection process is completely unbiased. Since permutation statistics have the same distribution across data types and characteristics, these factors do not affect their probability of selection for splitting. It also has the benefit of producing trees that are more stable (i.e., lower model variance)  than those from most other models described here.
 
 ```{r}
 #| label: forested-cit-stats
@@ -2127,9 +2133,9 @@ Using the forestation data, conditional inference trees were tuned over:
 - The p-value threshold to continue splitting: `r forest_cit_rng$mincriterion[1]` to `r forest_cit_rng$mincriterion[2]`.
 - Whether to use a Bonferroni p-value correction or not.
 
-The primary implementation is constrained to using qualitative predictors with less than 31 possible values. For the county predictor, we used an "othering" approach that limits the number of counties to fit this constraint. That process was not tuned but resampled along with the rest of the tuning parameters.
+The primary implementation is constrained to using qualitative predictors with fewer than 31 possible values. For the county predictor, we used an "othering" approach that limits the number of counties to fit this constraint. That process was not tuned, but resampled along with the rest of the tuning parameters.
 
-Performance statistics for 25 candidate parameters are shown in @fig-forest-cit. For this model, the tree depth is the strongest tuning parameter for these data. The p-value correction and $n_{min}$ do not seem to make a significant difference to the results. The choice on whether or not to correct the p-values ostensibly does not affect the Brier score in a meaningful way. However, using the correction definitely does stop the model from overfitting by reducing the number of predictors used and the number of terminal node. When the correction is not used, we see a trend of poor performance begin when the model is becoming excessively complex.
+Performance statistics for 25 candidate parameters are shown in @fig-forest-cit. For this model, the tree depth is the strongest tuning parameter for these data. The p-value correction and $n_{min}$ do not seem to make a significant difference to the results. The choice of whether or not to correct the p-values ostensibly does not affect the Brier score in a meaningful way. However, using the correction definitely helps prevent overfitting by reducing the number of predictors and terminal nodes. When the correction is not used, we see a trend of poor performance begin as the model becomes excessively complex.
 
 ```{r}
 #| label: fig-forest-cit
@@ -2137,7 +2143,7 @@ Performance statistics for 25 candidate parameters are shown in @fig-forest-cit.
 #| out-width: 100%
 #| fig-width: 9
 #| fig-height: 2.5
-#| fig-cap: "Tuning results for conditional inference trees  showing how the tree tuning parameters (p-value threshold, p-value correction,  $n_{min}$, and tree depth) relate to the Brier score. There are three other characteristics computed each tree that reflect the average complexity of the trees created during resampling."
+#| fig-cap: "Tuning results for conditional inference trees showing how the tree tuning parameters (p-value threshold, p-value correction,  $n_{min}$, and tree depth) relate to the Brier score. There are three other characteristics computed for each tree that reflect the average complexity of the trees created during resampling."
 
 cit_lvls <- c("Minimal Node Size", "Tree Depth", "p-value Threshold",
              "# Active Predictors", "Mean Rule Size", "# Terminal Nodes")
@@ -2186,37 +2192,75 @@ forest_cit_res |>
 
 The conditional inference tree has equivalent performance to the previous trees but with reduced complexity and uses fewer predictors.
 
+### Globally Estimated Trees {#sec-cls-tree-global}
+
+So far, we've used greedy methods for constructing trees. At each stage in splitting, the models make the *locally* optimal decisions and do not reevaluate any previous splits to ensure that the overall model is optimal. Although @murthy1995decision found that greedy optimization performed well in their experiments for finding optimal trees, it is worth considering alternatives.\
+
+There are also global methods for tree construction.  One will be discussed in the next chapter (@sec-cls-bart) that uses Bayesian estimation. Another approach is to use evolutionary optimization methods, such as genetic algorithms, to simultaneously configure all of the splits in the tree.
+
+How do we encode the tree in a manner that such optimization tools can be used? One approach is to specify the largest size tree that we are interested in as a placeholder. Specifying a maximum depth $d_{max}$ for binary splits indicates that there will be, at most, $2^{d_{max}}-1$, internal nodes. A vector-based structure to contain the tree details (a.k.a. the chromosome in GAs) would bind together for the split variable index, the split values, and the rule type (i.e., $\le$, $>$, $=$, or $\in$).
+
+A basic genetic algorithm can be used to generate new trees via reproduction (e.g., crossover, mutation). However, it is very possible that generic genetic operations can result in nonsensical or infeasible tree structures.
+
+Alternatively, @chipman1998bayesian describe sets of operations to modify tree structures. @fig-tree-mutation shows examples of how a binary tree with two splits and three terminal nodes might be refactored. The first is *growth*, in which a terminal node is picked at random, and a new split is created. *Pruning*  removes a randomly chosen split. We can also *change* a randomly chosen split by modifying the split variable and/or its split value. Finally, it might be  helpful during the search process to *swap* adjacent nodes in a tree.
+
+```{r}
+#| label: fig-tree-mutation
+#| echo: false
+#| out-width: 100%
+#| fig-width: 4
+#| fig-height: 5
+#| fig-cap: "Methods of mutating trees: growing, pruning, mutating, and swapping nodes. Orange nodes represent the portions of the tree affected by the changes."
+knitr::include_graphics("../premade/tree_operations_swap.svg")
+```
+
+For example, @JSSv061i01 describes a specific genetic algorithm called *evtree* using these operators^[However, it does not use the swapping operation and considers switching the split predictors and split values separate operations.]  to evolve a tree where the objective/fitness function is a penalized misclassification cost metric. The penalty is
+
+$$
+\mathcal{P}(T;\alpha) = \alpha\; (d_{max} + 1)\; log(n)
+$$
+
+where $T$ is the tree and $\alpha$ is a tuning parameter. Decreasing $\alpha$ should increase the depth of the final tree. By default, the algorithm uses 100 individuals in the population, 10,000 generations, and the following probabilities for operators:
+
+- Growing: 20%
+- Pruning: 20%,
+- Cross-over: 20%
+- Change split variable *and* point: 20%
+- Change split point: 20%
+
+There are a variety of similar evolutionary algorithms that can be used. See @papagelis2001breeding, @delisle2004induction, and @barros2011survey.
+
 ### Oblique Trees {#sec-cls-oblique}
 
-Recall that oblique trees create non-rectangular splits of the data by using rules that involve more than one predictors at a time.
+Recall that oblique trees create non-rectangular splits of the data by using rules that involve more than one predictor at a time.
 
-Many oblique CART trees deterministically compute predictor coefficients and, given these values, conduct a search to optimize the threshold parameter to minimize model impurity within each node. An early technique was OC1 [@murthy1994system].
+Many oblique CART trees deterministically compute predictor coefficients and, given these values, search to optimize the threshold parameter to minimize model impurity at each node. Section 5.3 of @breiman1984classification first described the notion of combining predictors within a single rule. Another early technique was OC1 [@murthy1994system].
 
-OC1 begins with a standard parallel-axis tree and uses its impurity estimate as a baseline value for the splitting statistic. It initializes the first oblique split coefficients with these split values. Over a course of iterations, the coefficients are perturbed. If the newly perturbed coefficient set shows better  results, then accept those values and move to the next split. This results in a  basic hill-climbing approach to constructing trees.
+OC1 begins with a standard parallel-axis tree and uses its impurity estimate as a baseline value for the splitting statistic. It initializes the first oblique split coefficients with these split values. Over the course of iterations, the coefficients are perturbed. If the newly perturbed coefficient set yields better results, accept those values and move to the next split. This results in a basic hill-climbing approach to constructing trees.
 
-More recently, @jaeger2022aorsf extended the work in @jaeger2019oblique to create a framework for oblique classification trees. Although this work is designed to produce ensembles, it can also be used to generate single oblique trees.\
+More recently, @jaeger2022aorsf extended the work in @jaeger2019oblique to create a framework for oblique classification trees. Although this work is designed to produce ensembles, it can also be used to generate single oblique trees (and was used to create @fig-oblique-splits).
 
-The tree construction is fairly similar to the process used by CART; the Gini  statistic is the default statistic used to determine the best fit using a greedy  search. However, at each node, the model fits a logistic regression model to  determine the linear combination that defines the oblique split. At the end of this stage, we have the left-hand side of the rule. For example, we might estimate the linear combination to be `2A - 7B + C` but the rule needs to be finalized by completing the inequality `2A - 7B + C > threshold`.
+The tree construction is fairly similar to the process used by CART; the Gini statistic is the default criterion for selecting the best split using a greedy search. However, at each node, the model fits a logistic regression model to determine the linear combination that defines the oblique split. At the end of this stage, we have the left-hand side of the rule. For example, we might estimate the linear combination to be `2A - 7B + C` but the rule needs to be finalized by completing the inequality `2A - 7B + C > threshold`.
 
-After the logistic model, a secondary step is executed to perform a small grid search over threshold values for the right-hand side of the rule. The threshold value associated with the best Gini statistic is used to finalize the rule. This implementation does not consider the gain relative to the parent node; it only looks at child purity, ignoring parent impurity.
+After the logistic model, a secondary step performs a small grid search over threshold values on the right-hand side of the rule. The threshold value associated with the best Gini statistic is used to finalize the rule. This implementation does not consider the gain relative to the parent node; it only looks at child purity, ignoring parent impurity.
 
 For subsequent splits, predefined termination criteria are used to halt the growing process:
 
 - The number of data points in the current node must be greater than $n_{min}$ (where 10 samples is the default).
-- The child nodes multiple have at least $n^*_{min}$ samples in the leaves.
+- The child nodes must have at least $n^*_{min}$ samples _in the leaves_.
 - The improvement in the Gini statistic should be greater than a preset threshold (defaulted to zero).
 
 Each of these criteria can be optimized as tuning parameters.
 
-This implementation does not prune the trees. Also, the quantitative predictors are centered and scaled by default and a reference cell encoding method is applied to qualitative predictors. 
+This implementation does not prune the trees. Also, the quantitative predictors are centered and scaled by default, and a reference cell encoding method is applied to qualitative predictors. This is reflected in @eq-oblique-split. 
 
-In regards to the logistic regression models, the training process might use an abbreviated number of optimization rounds used to estimate the logistic model -- perhaps a single step of iteratively reweighed least squares. Alternatively, following  @truong2009fast, a regularized logistic regression model could be used to estimate a sparse linear combination. @jaeger2022aorsf enables the specification of the glmnet mixing parameter $\alpha$ in @eq-glmnet-penalty. To determine the amount of regularization, the penalty is chosen based on an upper limit of the glmnet model's degrees of freedom associated with each penalty value. By default, the degrees of freedom are set to $\lceil \sqrt{p} \rceil$ where $p$ is the number of parameters used in the linear combination. 
+Regarding the logistic regression models, the training process might use an abbreviated number of optimization rounds to estimate the logistic model -- perhaps a single step of iteratively reweighed least squares. Alternatively, following  @truong2009fast, a regularized logistic regression model could be used to estimate a sparse linear combination. @jaeger2022aorsf enables the specification of the glmnet mixing parameter $\alpha$ in @eq-glmnet-penalty. To determine the amount of regularization, the penalty is chosen based on an upper limit on the glmnet model's degrees of freedom for each penalty value. By default, the degrees of freedom are set to $\lceil \sqrt{p} \rceil$ where $p$ is the number of parameters used in the linear combination. 
 
 Also, recall that logistic regression models are specific to classes with two possible values. For $C > 2$ outcome classes, the model creates a set of one-against-all models. It identified the outcome class that is determined to be most "splittable" (i.e., has sufficient events and non-events). Based on this, it fits a logistic regression for the favored class versus the others.
 
-To demonstrate using the forestation data, the model was tuned over $n_{min}$ and also by the logistic regression method. A regular grid was used combining 50 values of $n_{min}$ with four model configurations: standard logistic regression and glmnet models with $\alpha \in \{0.0, 0.5, 1.0\}$.  
+To demonstrate using the forestation data, the model was tuned over $n_{min}$ and also by the logistic regression method. A regular grid was used, combining 50 values of $n_{min}$ with four model configurations: standard logistic regression and glmnet models with $\alpha \in \{0.0, 0.5, 1.0\}$.  
 
-@fig-forest-oblique-tree shows the results. First, none of the logistic models preferred small values of $n_{min}$ with values of at least 25 showing good (and stable) performance. The unpenalized model worked well but the logistic regression using the ridge penalty showed the best results. The models with mixtures of $\alpha \in \{0.5, 1.0\}$ did not performance as well, especially with smaller values of $n_{min}$. The right-hand panel shows the relationship between the Brier scores and the number of terminal nodes. Fewer are better for this model and these data. We can see that the Brier scores rapidly inflate when there are more than 50 terminal nodes in the tree. 
+@fig-forest-oblique-tree shows the results. First, none of the logistic models preferred small values of $n_{min}$; values of at least 25 showed good (and stable) performance. The unpenalized model worked well, but the logistic regression using the ridge penalty showed the best results. The models with mixtures of $\alpha \in \{0.5, 1.0\}$ did not perform as well, especially with smaller values of $n_{min}$. The right-hand panel shows the relationship between the Brier scores and the number of terminal nodes. Fewer are better for this model and these data. We can see that the Brier scores rapidly inflate when there are more than 50 terminal nodes in the tree. 
 
 ```{r}
 #| label: forested-obl-stats
@@ -2290,47 +2334,17 @@ The performance metrics for the tree using $n_{min}$ = `r forest_obl_best$min_n`
 
 We'll discuss ensembles of oblique trees in the next chapter. 
 
-### Globally Estimated Trees {#sec-cls-tree-global}
-
-So far we've used greedy methods for constructing trees. At each stage in splitting, the models makes the *locally* optimal decisions and does not reevaluate any previous splits to ensure that the overall model is optimal. Although @murthy1995decision found that greedy optimization worked well at finding optimal trees in their experiments, it is worth considering alternatives.\
-
-There are also global tree construction methods. One will be discussed in the next chapter (@sec-cls-bart) that uses Bayesian estimation. Another approach is to use evolutionary optimization methods, such as genetic algorithms, to simultaneously configure all of the splits in the tree.
-
-How do we encode the tree in a manner than such optimization tools can be used? One approach is to specify the largest size tree that we are interested in as a placeholder. Specifying a maximum depth $d_{max}$ for binary splits indicates that there will be, at most, $2^{d_{max}}-1$, internal nodes. A vector-based structure to contain the tree details (a.k.a. the chromosome in GAs) would bind  together for the split variable index, the split values, and possible the rule (i.e., $\le$, $>$, $=$, or $\in$).
-
-A basic genetic algorithm can be used to make new trees via reproduction (i.e, cross-over, mutation, etc). However, it is very possible that generic genetic operations can results in nonsensical or infeasible tree structures.
-
-Alternatively, @chipman1998bayesian describe sets of operations to modify tree structures. @fig-tree-mutation shows examples of how a binary tree with two  splits and three terminal nodes might be refactored. The first is *growth* where  a terminal node is picked at random and a new split is created. *Pruning*  removes a randomly chosen split. We can also *change* a randomly chosen but  modifying the split variable and/or its split value. Finally, it might be  helpful during the search process to *swap* adjacent nodes in a tree.
-
-```{r}
-#| label: fig-tree-mutation
-#| echo: false
-#| out-width: 100%
-#| fig-width: 4
-#| fig-height: 5
-#| fig-cap: "Methods of mutating trees: growing, pruning, mutating, and swapping nodes. Orange nodes represent the portions of the tree affected by the changes."
-knitr::include_graphics("../premade/tree_operations_swap.svg")
-```
-
-For example, @JSSv061i01 describes a specific genetic algorithm called *evtree* using these operators^[However, it does not use the swapping operation and considers switching the split predictors and split values separate operations.]  to evolve a tree where the objective/fitness function is a penalized misclassification cost metric. The penalty is
-
-$$
-\mathcal{P}(T;\alpha) = \alpha\; (d_{max} + 1)\; log(n)
-$$
-
-where $T$ is the tree and $\alpha$ is a tuning parameter. Decreasing $\alpha$ should increase the depth of the final tree. By default the algorithm uses 100 individuals in the population, 10,000 generations, and the following probabilities for operators:
-
-- Growing: 20%
-- Pruning: 20%,
-- Cross-over: 20%
-- Change split variable *and* point: 20%
-- Change split point: 20%
-
-There are a variety of similar evolutionary algorithms that can be used. See @papagelis2001breeding, @delisle2004induction, and @barros2011survey.
 
 ## The Instability of Trees {#sec-cls-tree-unstable}
 
+
+This highlights an important characteristic of trees trained using greedy optimization: they are _unstable_. This means that if the training data are perturbed (e.g., resampled or individual values slightly changed), the tree structure might be completely different^[This is especially likely if there are correlated predictors in the training set.]. If a particular split variable or value is different, it is highly likely that all subsequent splits would also be different. This, in the context of the variables-bias discussion in @sec-variance-bias, means that trees have high model variance (but low bias). This is a significant disadvantage for trees, but, as we'll see in the next chapter, it makes them ideal for creating ensemble models. 
+
 ## From Trees to Rules {#sec-cls-rules}
 
-## Chapter References {.unnumbered}
+Rule-based models derived from classification trees also require mechanisms to handle missing values. In C5.0Rules, which converts C5.0 trees into rule sets, the handling of missing values is integrated into the rule evaluation process. When evaluating whether a rule applies to a sample with missing values, C5.0Rules treats the rule as partially satisfied, with the degree of satisfaction determined by the distribution of non-missing values in the training data. This partial satisfaction contributes to the overall confidence in the rule's prediction.
 
+During prediction, multiple rules may be partially satisfied due to missing values. C5.0Rules aggregates the confidence values from all relevant rules to make the final prediction, similar to the weighted voting approach used in C5.0 trees.
+This approach allows rule-based models to handle missing values without requiring explicit imputation, maintaining the flexibility and robustness of the original tree model.
+
+## Chapter References {.unnumbered}
