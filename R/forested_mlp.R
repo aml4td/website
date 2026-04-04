@@ -100,10 +100,7 @@ mlp_wflow_set <-
       orderNorm_pca = dummy_on_pca_rec,
       plain_pca = dummy_cs_pca_rec
     ),
-    models = list(
-      `1L_AdamW` = mlp_adam_spec,
-      `2L_AdamW` = mlp_adam_2layer_spec
-    )
+    models = list(`1L_AdamW` = mlp_adam_spec, `2L_AdamW` = mlp_adam_2layer_spec)
   ) |>
   option_add_parameters()
 
@@ -111,15 +108,16 @@ mlp_wflow_set <-
 
 pull_iter <- function(x) {
   require(tidymodels)
+  require(brulee)
   fit <- extract_fit_engine(x)
-  tibble(epoch_actual = fit$best_epoch, num_param = length(unlist(coef(fit))))
+  tibble(epoch_actual = fit$best_epoch,
+         num_param = length(unlist(coef(fit))))
 }
 
-ctrl <- control_race(
-  save_pred = TRUE,
-  parallel_over = "everything",
-  extract = pull_iter
-)
+ctrl <- control_grid(save_pred = TRUE,
+                     save_workflow = TRUE,
+                     parallel_over = "everything",
+                     extract = pull_iter)
 
 mlp_wflow_set <-
   mlp_wflow_set |>
@@ -127,7 +125,7 @@ mlp_wflow_set <-
 
 for (i in 1:nrow(mlp_wflow_set)) {
   wflow_id <- mlp_wflow_set$wflow_id[[i]]
-
+  
   prm <- mlp_wflow_set$option[[i]]$param_info
   prm <- prm |>
     update(
@@ -144,12 +142,14 @@ for (i in 1:nrow(mlp_wflow_set)) {
 
 set.seed(12)
 mlp_grid_res <-
-  mlp_wflow_set |>
+  mlp_wflow_set |> 
   workflow_map(
     resamples = forested_rs,
     grid = 25,
     verbose = TRUE
   )
+
+# save.image(file = "~/tmp/checkpoint.RData")
 
 # ------------------------------------------------------------------------------
 
@@ -167,12 +167,7 @@ mlp_best_mtr <-
 
 mlp_collect <-
   mlp_grid_res |>
-  mutate(
-    epochs = map(
-      result,
-      ~ collect_extracts(.x)
-    )
-  ) |>
+  mutate(epochs = map(result, ~ collect_extracts(.x))) |>
   select(wflow_id, epochs) |>
   unnest(epochs) |>
   filter(map_lgl(.extracts, ~ inherits(.x, "data.frame"))) |>
@@ -203,10 +198,8 @@ best_id <-
   mlp_ranks |>
   filter(.metric == "brier_class") |>
   slice_min(mean, n = 5) |>
-  inner_join(
-    brier_and_params |> select(wflow_id, .config, num_param),
-    by = join_by(wflow_id, .config)
-  ) |>
+  inner_join(brier_and_params |> select(wflow_id, .config, num_param),
+             by = join_by(wflow_id, .config)) |>
   slice_min(num_param, n = 1) |>
   pluck("wflow_id")
 
@@ -232,6 +225,12 @@ save(
   epoch_actual,
   file = "RData/forested_mlp.Rdata"
 )
+
+forest_mlp_set_res <-
+  mlp_grid_res |>
+  butcher::butcher()
+
+save(forest_mlp_set_res, file = "RData/forest_mlp_set_res.Rdata")
 
 # ------------------------------------------------------------------------------
 

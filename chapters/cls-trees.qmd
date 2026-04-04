@@ -1183,7 +1183,7 @@ $$
 \text{pessimistic error rate} = \frac{\mathcal{E} + 0.5 + \frac{z^2}{2} + \sqrt{z^2 \left[ (\mathcal{E} + 0.5)\left(1 - \frac{\mathcal{E} + 0.5}{n}\right) + \frac{z^2}{4} \right]}}{n + z^2}
 $$ {#eq-pessinistic-error}
 
-where $z_{\alpha/2}$ is the critical value from the standard normal distribution for the desired confidence level. C4.5 uses a default confidence level of 75% (corresponding to $z_{\alpha/2} = 0.69$), but this can be adjusted as a tuning parameter. This is the Wilson Score technique for constructing a confidence interval [@wilson1927probable]. 
+where $z_{\alpha/2}$ is the critical value from the standard normal distribution for the desired confidence level. C4.5 uses a default confidence level of 75% (corresponding to $z_{\alpha/2} = 0.69$), but this can be adjusted as a tuning parameter. @eq-pessinistic-error is the Wilson Score technique for constructing a confidence interval [@wilson1927probable]. 
 
 The pessimistic pruning process involves a bottom-up traversal of the tree, starting from the terminal nodes. For each internal node, the algorithm compares the pessimistic error rate of the subtree rooted at that node with the pessimistic error rate if the node were converted to a terminal node (i.e., if the subtree were pruned). If pruning would reduce the pessimistic error rate, the subtree is pruned.
 
@@ -1516,7 +1516,7 @@ obl_lasso_spec <-
   set_engine("aorsf", control = !!lasso_ctrl) |> 
   set_mode("classification")
 
-obl_set_res <- 
+forested_obl_set_res <- 
   workflow_set(
     preproc = list(basic = class ~ .),
     models = list(
@@ -1540,7 +1540,7 @@ obl_set_res <-
     seed = 1287
   )
 
-forest_obl_res <- obl_set_res |> extract_workflow_set_result("basic_Ridge")
+forest_obl_res <- forested_obl_set_res |> extract_workflow_set_result("basic_Ridge")
 
 # forest_obl_best <- select_best(forest_obl_res, metric = "brier_class")
 # override and use
@@ -2277,7 +2277,7 @@ forest_obl_rng <-
   map(range)
 
 obl_fit <-
-  obl_set_res |> 
+  forested_obl_set_res |> 
   extract_workflow("basic_Ridge") |>
   finalize_workflow(forest_obl_best) |>
   fit(forested_train)
@@ -2295,12 +2295,12 @@ obl_fit_stat <- obl_fit |> obl_extract()
 #| fig-cap: "Tuning results for the oblique tree models showing how $n_{min}$ relates to the Brier score and the number of terminal nodes for each method of estimating the logistic regression model."
 
 obl_set_mtr <- 
-  obl_set_res |> 
+  forested_obl_set_res |> 
   mutate(res = map(result, collect_metrics, type = "wide")) |> 
   select(wflow_id, res) |> 
   unnest(res) 
 
-obl_set_res |> 
+forested_obl_set_res |> 
   mutate(res = map(result, collect_extracts)) |> 
   select(wflow_id, res) |> 
   unnest(res) |> 
@@ -2338,6 +2338,138 @@ The performance metrics for the tree using $n_{min}$ = `r forest_obl_best$min_n`
 
 We'll discuss ensembles of oblique trees in the next chapter. 
 
+### Comparisons to Previous Models {#sec-cls-tree-compare}
+
+```{r}
+#| label: cls-tree-compare
+#| include: false
+
+load("../RData/forest_fda_set_res.Rdata")
+load("../RData/forest_nb_set_res.Rdata")
+load("../RData/forest_knn_set_res.Rdata")
+load("../RData/forest_linear_res.Rdata")
+load("../RData/forest_glmnet_set_res.Rdata")
+load("../RData/forest_logistic_set_res.Rdata")
+load("../RData/forest_mlp_set_res.Rdata")
+
+forest_cart_set_res <- 
+  as_workflow_set(
+    CART = forest_cart_res |> butcher::butcher()
+  )
+
+forest_c5_set_res <- 
+  as_workflow_set(
+    C5.0 = forest_c5_res |> butcher::butcher()
+  )
+
+forest_cit_set_res <- 
+  as_workflow_set(
+    "CIT" = forest_cit_res |> butcher::butcher()
+  )
+
+all_sets <-
+  list(
+    forest_fda_set_res,
+    forest_nb_set_res,
+    forest_knn_set_res,
+    forested_obl_set_res,
+    forest_cart_set_res,
+    forest_c5_set_res,
+    forest_glmnet_set_res,
+    forest_mlp_set_res,
+    forest_logistic_set_res
+  )
+
+best_brier <-
+  all_sets |>
+  map(
+    ~ rank_results(.x, rank_metric = "brier_class", select_best = TRUE) |>
+      filter(.metric == "brier_class")
+  ) |>
+  map_dfr( ~ slice_min(.x, mean, n = 1)) |>
+  mutate(
+    wflow_id = gsub("basic_", "Oblique (", wflow_id),
+    wflow_id = ifelse(grepl("Oblique", wflow_id), paste0(wflow_id, ")"), wflow_id),
+    wflow_id = ifelse(
+      grepl("logistic_mle", wflow_id),
+      paste0("Logistic (", wflow_id),
+      wflow_id
+    ),
+    wflow_id = ifelse(
+      grepl("logistic_mle", wflow_id),
+      paste0(wflow_id, ")"),
+      wflow_id
+    ),
+    wflow_id = ifelse(
+      grepl("logistic_mle", wflow_id),
+      gsub("_logistic_mle", "", wflow_id),
+      wflow_id
+    ),
+    wflow_id = ifelse(model == "mlp", paste0("MLP (", wflow_id), wflow_id),
+    wflow_id = ifelse(model == "mlp", gsub("_", ", ", wflow_id), wflow_id),
+    wflow_id = ifelse(model == "mlp", gsub(" none,", "", wflow_id), wflow_id),
+    wflow_id = ifelse(model == "mlp", paste0(wflow_id, ")"), wflow_id),
+    wflow_id = ifelse(
+      model == "mlp",
+      "glmnet (encoded + transformations + splines)",
+      wflow_id
+    )
+  ) |>
+  mutate(
+    lower = mean - qnorm(0.95) * std_err,
+    upper = mean + qnorm(0.95) * std_err,
+    wflow_id = factor(wflow_id),
+    wflow_id = reorder(wflow_id, mean)
+  )
+
+all_brier <-
+  all_sets |>
+  map_dfr(
+    ~ rank_results(.x, rank_metric = "brier_class", select_best = FALSE) |>
+      filter(.metric == "brier_class")
+  )
+
+brier_rng <- range(c(best_brier$lower, best_brier$upper, all_brier$mean))
+```
+
+```{r}
+#| label: fig-cls-tree-compare
+#| echo: false
+#| warning: false
+#| out-width: 70%
+#| fig-width: 7
+#| fig-height: 4
+#| fig-cap: "Progress for predicting the probability of forestation so far." 
+
+all_p <- 
+  all_brier |> 
+  ggplot(aes(x = mean)) + 
+  geom_histogram(col = "white", binwidth = 0.008) +
+  # geom_density(trim = FALSE) +
+  geom_rug(alpha = 1 / 10) +
+  lims(x = brier_rng) +
+  theme(
+    axis.text = element_blank(),
+    axis.ticks = element_blank(),
+    plot.margin = margin(t = 10, r = 10, b = 0, l = 10, unit = "pt")
+  ) +
+  labs(y = NULL, x = NULL) +
+  theme_void()
+
+best_p <- 
+  best_brier |>
+  ggplot(aes(mean, wflow_id)) +
+  geom_point() +
+  lims(x = brier_rng) +
+  geom_errorbar(aes(xmin = lower, xmax = upper), width = 1 / 2) +
+  labs(y = NULL, x = "Brier Score")  +
+  theme(
+    plot.margin = margin(t = 0, r = 10, b = 10, l = 10, unit = "pt")
+  )
+
+all_p / best_p + plot_layout(heights = c(2, 5))
+```
+
 
 ## The Instability of Trees {#sec-cls-tree-unstable}
 
@@ -2352,3 +2484,14 @@ During prediction, multiple rules may be partially satisfied due to missing valu
 This approach allows rule-based models to handle missing values without requiring explicit imputation, maintaining the flexibility and robustness of the original tree model.
 
 ## Chapter References {.unnumbered}
+
+
+```{r}
+#| label: cls-trees-results
+#| include: false
+
+save(forest_cart_set_res, file = "../RData/forest_cart_set_res.RData")
+save(forest_c5_set_res, file = "../RData/forest_c5_set_res.RData")
+save(forest_cit_set_res, file = "../RData/forest_cit_set_res.RData")
+save(forested_obl_set_res, file = "../RData/forested_obl_set_res.RData")
+```
