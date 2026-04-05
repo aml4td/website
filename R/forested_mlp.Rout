@@ -1,0 +1,308 @@
+
+R version 4.5.2 (2025-10-31) -- "[Not] Part in a Rumble"
+Copyright (C) 2025 The R Foundation for Statistical Computing
+Platform: aarch64-apple-darwin20
+
+R is free software and comes with ABSOLUTELY NO WARRANTY.
+You are welcome to redistribute it under certain conditions.
+Type 'license()' or 'licence()' for distribution details.
+
+  Natural language support but running in an English locale
+
+R is a collaborative project with many contributors.
+Type 'contributors()' for more information and
+'citation()' on how to cite R or R packages in publications.
+
+Type 'demo()' for some demos, 'help()' for on-line help, or
+'help.start()' for an HTML browser interface to help.
+Type 'q()' to quit R.
+
+> library(tidymodels)
+── Attaching packages ────────────────────────────────────── tidymodels 1.4.1 ──
+✔ broom        1.0.12     ✔ recipes      1.3.1 
+✔ dials        1.4.2      ✔ rsample      1.3.2 
+✔ dplyr        1.2.0      ✔ tailor       0.1.0 
+✔ ggplot2      4.0.2      ✔ tidyr        1.3.2 
+✔ infer        1.1.0      ✔ tune         2.0.1 
+✔ modeldata    1.5.1      ✔ workflows    1.3.0 
+✔ parsnip      1.4.1      ✔ workflowsets 1.1.1 
+✔ purrr        1.2.1      ✔ yardstick    1.3.2 
+── Conflicts ───────────────────────────────────────── tidymodels_conflicts() ──
+✖ purrr::discard() masks scales::discard()
+✖ dplyr::filter()  masks stats::filter()
+✖ dplyr::lag()     masks stats::lag()
+✖ recipes::step()  masks stats::step()
+> library(bestNormalize)
+Registered S3 method overwritten by 'butcher':
+  method                 from    
+  as.character.dev_topic generics
+> library(embed)
+> library(mirai)
+> library(spatialsample)
+> library(finetune)
+> 
+> load("RData/forested_data.RData")
+> 
+> # ------------------------------------------------------------------------------
+> 
+> tidymodels_prefer()
+> theme_set(theme_bw())
+> options(pillar.advice = FALSE, pillar.min_title_chars = Inf)
+> daemons(parallel::detectCores())
+> 
+> # ------------------------------------------------------------------------------
+> 
+> cls_mtr <- metric_set(brier_class, roc_auc, pr_auc, mn_log_loss)
+> 
+> # ------------------------------------------------------------------------------
+> 
+> encode_rec <-
++   recipe(class ~ ., data = forested_train) |>
++   step_lencode_mixed(county, outcome = "class") |>
++   step_orderNorm(all_numeric_predictors())
+> 
+> encode_pca_rec <-
++   encode_rec |>
++   step_pca(all_numeric_predictors(), -county, threshold = 1) |>
++   step_orderNorm(starts_with("PC"))
+> 
+> dummy_on_rec <-
++   recipe(class ~ ., data = forested_train) |>
++   step_dummy(county) |>
++   step_zv(all_predictors()) |>
++   step_orderNorm(all_numeric_predictors())
+> 
+> dummy_on_pca_rec <-
++   dummy_on_rec |>
++   step_pca(all_numeric_predictors(), -starts_with("county"), threshold = 1) |>
++   step_orderNorm(starts_with("PC"))
+> 
+> dummy_cs_rec <-
++   recipe(class ~ ., data = forested_train) |>
++   step_dummy(county) |>
++   step_zv(all_predictors()) |>
++   step_normalize(all_numeric_predictors())
+> 
+> dummy_cs_pca_rec <-
++   dummy_cs_rec |>
++   step_pca(all_numeric_predictors(), -starts_with("county"), threshold = 1) |>
++   step_normalize(starts_with("PC"))
+> 
+> # ------------------------------------------------------------------------------
+> 
+> mlp_adam_spec <-
++   mlp(
++     hidden_units = tune(),
++     penalty = tune(),
++     learn_rate = tune(),
++     epochs = 25,
++     activation = tune()
++   ) |>
++   set_engine(
++     "brulee",
++     stop_iter = 5,
++     optimizer = "ADAMw",
++     verbose = FALSE,
++     rate_schedule = tune(),
++     batch_size = tune(),
++     momentum = tune()
++   ) |>
++   set_mode("classification")
+> 
+> mlp_adam_2layer_spec <-
++   mlp(
++     hidden_units = tune(),
++     penalty = tune(),
++     learn_rate = tune(),
++     epochs = 25,
++     activation = tune()
++   ) |>
++   set_engine(
++     "brulee_two_layer",
++     hidden_units_2 = tune(),
++     activation_2 = tune(),
++     stop_iter = 5,
++     optimizer = "ADAMw",
++     verbose = FALSE,
++     rate_schedule = tune(),
++     batch_size = tune(),
++     momentum = tune()
++   ) |>
++   set_mode("classification")
+> 
+> mlp_wflow_set <-
++   workflow_set(
++     preproc = list(
++       encoded_none = encode_rec,
++       orderNorm_none = dummy_on_rec,
++       plain_none = dummy_cs_rec,
++       encoded_pca = encode_pca_rec,
++       orderNorm_pca = dummy_on_pca_rec,
++       plain_pca = dummy_cs_pca_rec
++     ),
++     models = list(`1L_AdamW` = mlp_adam_spec, `2L_AdamW` = mlp_adam_2layer_spec)
++   ) |>
++   option_add_parameters()
+> 
+> # ------------------------------------------------------------------------------
+> 
+> pull_iter <- function(x) {
++   require(tidymodels)
++   require(brulee)
++   fit <- extract_fit_engine(x)
++   tibble(epoch_actual = fit$best_epoch,
++          num_param = length(unlist(coef(fit))))
++ }
+> 
+> ctrl <- control_grid(save_pred = TRUE,
++                      save_workflow = TRUE,
++                      parallel_over = "everything",
++                      extract = pull_iter)
+> 
+> mlp_wflow_set <-
++   mlp_wflow_set |>
++   option_add(control = ctrl)
+> 
+> for (i in 1:nrow(mlp_wflow_set)) {
++   wflow_id <- mlp_wflow_set$wflow_id[[i]]
++   
++   prm <- mlp_wflow_set$option[[i]]$param_info
++   prm <- prm |>
++     update(
++       momentum = momentum(c(0.8, 0.99)),
++       penalty = penalty(c(-10, -1)),
++       learn_rate = learn_rate(c(-4, -1)),
++       activation = activation(c("elu", "relu", "tanh", "tanhshrink")),
++       rate_schedule = rate_schedule(c("cyclic", "decay_time", "none"))
++     )
++   mlp_wflow_set$option[[i]]$param_info <- prm
++ }
+> 
+> # ------------------------------------------------------------------------------
+> 
+> set.seed(12)
+> mlp_grid_res <-
++   mlp_wflow_set |> 
++   workflow_map(
++     resamples = forested_rs,
++     grid = 25,
++     verbose = TRUE,
++     metrics = cls_mtr
++   )
+i  1 of 12 tuning:     encoded_none_1L_AdamW
+✔  1 of 12 tuning:     encoded_none_1L_AdamW (7m 47.2s)
+i  2 of 12 tuning:     encoded_none_2L_AdamW
+✔  2 of 12 tuning:     encoded_none_2L_AdamW (7m 48.4s)
+i  3 of 12 tuning:     orderNorm_none_1L_AdamW
+✔  3 of 12 tuning:     orderNorm_none_1L_AdamW (5m 8.9s)
+i  4 of 12 tuning:     orderNorm_none_2L_AdamW
+✔  4 of 12 tuning:     orderNorm_none_2L_AdamW (6m 46.7s)
+i  5 of 12 tuning:     plain_none_1L_AdamW
+✔  5 of 12 tuning:     plain_none_1L_AdamW (5m 58.2s)
+i  6 of 12 tuning:     plain_none_2L_AdamW
+✔  6 of 12 tuning:     plain_none_2L_AdamW (7m 12.1s)
+i  7 of 12 tuning:     encoded_pca_1L_AdamW
+✔  7 of 12 tuning:     encoded_pca_1L_AdamW (7m 1.8s)
+i  8 of 12 tuning:     encoded_pca_2L_AdamW
+✔  8 of 12 tuning:     encoded_pca_2L_AdamW (8m 15.3s)
+i  9 of 12 tuning:     orderNorm_pca_1L_AdamW
+✔  9 of 12 tuning:     orderNorm_pca_1L_AdamW (5m 48.4s)
+i 10 of 12 tuning:     orderNorm_pca_2L_AdamW
+✔ 10 of 12 tuning:     orderNorm_pca_2L_AdamW (6m 48.6s)
+i 11 of 12 tuning:     plain_pca_1L_AdamW
+✔ 11 of 12 tuning:     plain_pca_1L_AdamW (6m 4.9s)
+i 12 of 12 tuning:     plain_pca_2L_AdamW
+✔ 12 of 12 tuning:     plain_pca_2L_AdamW (7m 47.7s)
+> 
+> # save.image(file = "~/tmp/checkpoint.RData")
+> 
+> # ------------------------------------------------------------------------------
+> 
+> mlp_ranks <-
++   mlp_grid_res |>
++   rank_results(rank_metric = "brier_class")
+> 
+> # ------------------------------------------------------------------------------
+> 
+> mlp_best_mtr <-
++   mlp_grid_res |>
++   mutate(.metrics = map(result, ~ collect_metrics(.x))) |>
++   select(wflow_id, .metrics) |>
++   unnest(.metrics)
+> 
+> mlp_collect <-
++   mlp_grid_res |>
++   mutate(epochs = map(result, ~ collect_extracts(.x))) |>
++   select(wflow_id, epochs) |>
++   unnest(epochs) |>
++   filter(map_lgl(.extracts, ~ inherits(.x, "data.frame"))) |>
++   unnest(.extracts)
+> 
+> epoch_actual <- mlp_collect
+> 
+> mlp_collect <-
++   mlp_collect |>
++   summarize(
++     epoch_min = min(epoch_actual),
++     epoch_max = max(epoch_actual),
++     epoch_mean = mean(epoch_actual),
++     epoch_sd = sd(epoch_actual),
++     num_param = mean(num_param),
++     .by = c(.config, wflow_id)
++   )
+> 
+> brier_and_params <-
++   full_join(mlp_ranks, mlp_collect, by = join_by(wflow_id, .config)) |>
++   filter(.metric == "brier_class") |>
++   # some models failed
++   filter(!is.na(num_param))
+> 
+> # ------------------------------------------------------------------------------
+> 
+> best_id <-
++   mlp_ranks |>
++   filter(.metric == "brier_class") |>
++   slice_min(mean, n = 5) |>
++   inner_join(brier_and_params |> select(wflow_id, .config, num_param),
++              by = join_by(wflow_id, .config)) |>
++   slice_min(num_param, n = 1) |>
++   pluck("wflow_id")
+> 
+> print(best_id)
+[1] "encoded_none_1L_AdamW"
+> 
+> # ------------------------------------------------------------------------------
+> 
+> mlp_best_res <-
++   mlp_grid_res |>
++   extract_workflow_set_result(id = best_id)
+> 
+> mlp_best_config <- select_best(mlp_best_res, metric = "brier_class")
+> 
+> # ------------------------------------------------------------------------------
+> 
+> save(
++   mlp_ranks,
++   best_id,
++   mlp_best_res,
++   mlp_best_config,
++   brier_and_params,
++   mlp_best_mtr,
++   epoch_actual,
++   file = "RData/forested_mlp.Rdata"
++ )
+> 
+> forest_mlp_set_res <-
++   mlp_grid_res |>
++   butcher::butcher()
+> 
+> save(forest_mlp_set_res, file = "RData/forest_mlp_set_res.Rdata")
+> 
+> # ------------------------------------------------------------------------------
+> 
+> if (!interactive()) {
++   q("no")
++ }
+> proc.time()
+    user   system  elapsed 
+  21.630   47.225 4961.382 

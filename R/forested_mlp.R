@@ -16,6 +16,10 @@ daemons(parallel::detectCores())
 
 # ------------------------------------------------------------------------------
 
+cls_mtr <- metric_set(brier_class, roc_auc, pr_auc, mn_log_loss)
+
+# ------------------------------------------------------------------------------
+
 encode_rec <-
   recipe(class ~ ., data = forested_train) |>
   step_lencode_mixed(county, outcome = "class") |>
@@ -146,7 +150,8 @@ mlp_grid_res <-
   workflow_map(
     resamples = forested_rs,
     grid = 25,
-    verbose = TRUE
+    verbose = TRUE,
+    metrics = cls_mtr
   )
 
 # save.image(file = "~/tmp/checkpoint.RData")
