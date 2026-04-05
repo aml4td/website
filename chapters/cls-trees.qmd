@@ -32,6 +32,9 @@ library(lorax)
 library(bonsai)
 library(probably)
 library(forcats)
+library(tidyposterior)
+library(rules)
+library(paletteer)
 
 # ------------------------------------------------------------------------------
 # set options
@@ -40,6 +43,8 @@ tidymodels_prefer()
 set_options()
 daemons(parallel::detectCores())
 theme_set(thm_lt)
+
+source("../R/compare_models.R")
 
 # ------------------------------------------------------------------------------
 # load data
@@ -1370,6 +1375,80 @@ forest_c5_mtr_ex <-
   cls_mtr(class, estimate = .pred_class, .pred_Yes)
 ```
 
+
+```{r}
+#| label: forest-c5rules
+#| include: false
+#| eval: false
+
+c5rules_spec <- 
+  C5_rules(min_n = tune()) |> 
+  set_engine("C5.0", CF = tune()) 
+
+c5rules_wflow <- workflow(class ~ ., c5rules_spec)
+
+c5rules_extract <- function(x) {
+  require(tidymodels)
+  require(lorax)
+  mold <- x$pre$mold
+  train_data <- dplyr::bind_cols(mold$outcomes, mold$predictors)
+  fit <- extract_fit_engine(x)
+  fit <- lorax:::as.party.C5.0(fit, data = train_data)
+  preds <- active_predictors(fit) |> 
+    dplyr::mutate(
+      .estimate = purrr::map_int(active_predictors, length),
+      .estimator = "none",
+      .metric = "# Active Predictors") |> 
+    select(-active_predictors)
+  rules <- 
+    fit |> 
+    extract_rules() |> 
+    dplyr::mutate(
+      terms = purrr::map_chr(rules, rlang::expr_deparse, width = 10^4),
+      terms = strsplit(terms, split = "&"),
+      num_terms = purrr::map_int(terms, length)
+    ) |> 
+    dplyr::summarize(
+      `Mean Rule Size` = mean(num_terms),
+      `# Terminal Nodes` = length(num_terms)
+    ) |> 
+    tidyr::pivot_longer(
+      c(`Mean Rule Size`, `# Terminal Nodes`),
+      names_to = ".metric",
+      values_to = ".estimate"
+    ) |> 
+    dplyr::mutate(.estimator = "none")
+  dplyr::bind_rows(preds, rules)
+}
+
+
+forest_c5rules_res <-
+  c5rules_wflow |>
+  tune_grid(
+    resamples = forested_rs,
+    grid = 25,
+    control = control_grid(
+      save_pred = TRUE,
+      save_workflow = TRUE,
+      # extract = c5rules_extract,
+      pkgs = "lorax"
+    ),
+    metrics = cls_mtr
+  )
+
+forest_c5rules_best <- select_best(forest_c5rules_res, metric = "brier_class")
+
+forest_c5rules_pred <-
+  forest_c5rules_res |>
+  collect_predictions(parameters = forest_c5rules_best) |>
+  mutate(wflow_id = "C5.0 Rules") |>
+  relocate(wflow_id)
+
+forest_c5rules_mtr_ex <-
+  forest_c5rules_pred |>
+  cls_mtr(class, estimate = .pred_class, .pred_Yes)
+```
+
 ```{r}
 #| label: forest-cit
 #| include: false
@@ -2338,7 +2417,20 @@ The performance metrics for the tree using $n_{min}$ = `r forest_obl_best$min_n`
 
 We'll discuss ensembles of oblique trees in the next chapter. 
 
-### Comparisons to Previous Models {#sec-cls-tree-compare}
+
+## From Trees to Rules {#sec-cls-rules}
+
+Rule-based models derived from classification trees also require mechanisms to handle missing values. In C5.0Rules, which converts C5.0 trees into rule sets, the handling of missing values is integrated into the rule evaluation process. When evaluating whether a rule applies to a sample with missing values, C5.0Rules treats the rule as partially satisfied, with the degree of satisfaction determined by the distribution of non-missing values in the training data. This partial satisfaction contributes to the overall confidence in the rule's prediction.
+
+During prediction, multiple rules may be partially satisfied due to missing values. C5.0Rules aggregates the confidence values from all relevant rules to make the final prediction, similar to the weighted voting approach used in C5.0 trees.
+
+This approach allows rule-based models to handle missing values without requiring explicit imputation, maintaining the flexibility and robustness of the original tree model.
+
+## The Instability of Trees {#sec-cls-tree-unstable}
+
+This highlights an important characteristic of trees trained using greedy optimization: they are _unstable_. This means that if the training data are perturbed (e.g., resampled or individual values slightly changed), the tree structure might be completely different^[This is especially likely if there are correlated predictors in the training set.]. If a particular split variable or value is different, it is highly likely that all subsequent splits would also be different. This, in the context of the variables-bias discussion in @sec-variance-bias, means that trees have high model variance (but low bias). This is a significant disadvantage for trees, but, as we'll see in the next chapter, it makes them ideal for creating ensemble models. 
+
+## Comparisons to Previous Models {#sec-cls-tree-compare}
 
 ```{r}
 #| label: cls-tree-compare
@@ -2368,7 +2460,7 @@ forest_cit_set_res <-
   )
 
 all_sets <-
-  list(
+  dplyr::bind_rows(
     forest_fda_set_res,
     forest_nb_set_res,
     forest_knn_set_res,
@@ -2379,109 +2471,70 @@ all_sets <-
     forest_mlp_set_res,
     forest_logistic_set_res
   )
-
-best_brier <-
-  all_sets |>
-  map(
-    ~ rank_results(.x, rank_metric = "brier_class", select_best = TRUE) |>
-      filter(.metric == "brier_class")
-  ) |>
-  map_dfr( ~ slice_min(.x, mean, n = 1)) |>
-  mutate(
-    wflow_id = gsub("basic_", "Oblique (", wflow_id),
-    wflow_id = ifelse(grepl("Oblique", wflow_id), paste0(wflow_id, ")"), wflow_id),
-    wflow_id = ifelse(
-      grepl("logistic_mle", wflow_id),
-      paste0("Logistic (", wflow_id),
-      wflow_id
-    ),
-    wflow_id = ifelse(
-      grepl("logistic_mle", wflow_id),
-      paste0(wflow_id, ")"),
-      wflow_id
-    ),
-    wflow_id = ifelse(
-      grepl("logistic_mle", wflow_id),
-      gsub("_logistic_mle", "", wflow_id),
-      wflow_id
-    ),
-    wflow_id = ifelse(model == "mlp", paste0("MLP (", wflow_id), wflow_id),
-    wflow_id = ifelse(model == "mlp", gsub("_", ", ", wflow_id), wflow_id),
-    wflow_id = ifelse(model == "mlp", gsub(" none,", "", wflow_id), wflow_id),
-    wflow_id = ifelse(model == "mlp", paste0(wflow_id, ")"), wflow_id),
-    wflow_id = ifelse(
-      model == "mlp",
-      "glmnet (encoded + transformations + splines)",
-      wflow_id
-    )
-  ) |>
-  mutate(
-    lower = mean - qnorm(0.95) * std_err,
-    upper = mean + qnorm(0.95) * std_err,
-    wflow_id = factor(wflow_id),
-    wflow_id = reorder(wflow_id, mean)
-  )
-
-all_brier <-
-  all_sets |>
-  map_dfr(
-    ~ rank_results(.x, rank_metric = "brier_class", select_best = FALSE) |>
-      filter(.metric == "brier_class")
-  )
-
-brier_rng <- range(c(best_brier$lower, best_brier$upper, all_brier$mean))
 ```
+
+```{r}
+#| label: cls-tree-compare-bayes
+#| include: false
+#| cache: true
+tree_compare <- compare_models(all_sets, chains = 10, cores = 10, iter = 5000)
+tree_compare
+
+tree_best <- tree_compare$model[is.na(tree_compare$probability)]
+
+tree_subset <- 
+  tree_compare |>
+  slice_min(median, by = c(class, engine)) |>
+  mutate(
+    model = as.character(model),
+    model = ifelse(grepl("basic_", model), "Oblique Tree", model),
+    model = ifelse(grepl("logistic_mle", model), "Logistic (unpenalized)", model),
+    model = ifelse(grepl("1L", model), "MLP (1 Layer)", model),
+    model = ifelse(grepl("2L", model), "MLP (2 Layers)", model),
+    model = gsub("glmnet", "Logistic (penalized)", model),
+    model = factor(model),
+    model = reorder(model, median)
+  )
+```
+
+How well do these models perform relative to previously discussed techniques? Currently, the `r tree_best` model has the smallest Brier score. @fig-cls-tree-compare visualizes the Brier score values for the best candidate in each evaluated model along with 90% Bayesian credible intervals.  
 
 ```{r}
 #| label: fig-cls-tree-compare
 #| echo: false
 #| warning: false
-#| out-width: 70%
+#| out-width: 80%
 #| fig-width: 7
 #| fig-height: 4
-#| fig-cap: "Progress for predicting the probability of forestation so far." 
+#| fig-cap: "Comparisons of current forestation models. The Bayesian methods in @sec-compare-resample-bayes were used to estimate the probability distributions for each of the best candidates for each model. The intervals show the 5%, 50%, and 90% quantiles. The bars on the right show the probability of practical equivalence to the current best model, assuming that a difference in Brier scores of 0.01 is practical."
 
-all_p <- 
-  all_brier |> 
-  ggplot(aes(x = mean)) + 
-  geom_histogram(col = "white", binwidth = 0.008) +
-  # geom_density(trim = FALSE) +
-  geom_rug(alpha = 1 / 10) +
-  lims(x = brier_rng) +
-  theme(
-    axis.text = element_blank(),
-    axis.ticks = element_blank(),
-    plot.margin = margin(t = 10, r = 10, b = 0, l = 10, unit = "pt")
-  ) +
-  labs(y = NULL, x = NULL) +
-  theme_void()
-
-best_p <- 
-  best_brier |>
-  ggplot(aes(mean, wflow_id)) +
+p_brier <- 
+  tree_subset |>
+  ggplot(aes(median, model)) +
   geom_point() +
-  lims(x = brier_rng) +
   geom_errorbar(aes(xmin = lower, xmax = upper), width = 1 / 2) +
-  labs(y = NULL, x = "Brier Score")  +
+  labs(y = NULL, x = "Brier Score") +
   theme(
-    plot.margin = margin(t = 0, r = 10, b = 10, l = 10, unit = "pt")
+    plot.margin = margin(t = 10, r = 2, b = 10, l = 10, unit = "pt")
   )
 
-all_p / best_p + plot_layout(heights = c(2, 5))
+p_brier_diff <- 
+  tree_subset |>
+  filter(model != tree_best) |> 
+  ggplot(aes(pract_equiv, model)) +
+  geom_bar(stat = "identity", aes(fill = pract_equiv), show.legend = FALSE) +
+  labs(y = NULL, x = "Pr[Equiv]") +
+  scale_x_continuous(breaks = round((0:2)/2, 2),limits = 0:1) + 
+  paletteer::scale_fill_paletteer_c("grDevices::Lajolla") +
+  theme(
+    axis.text.y = element_blank(),
+    axis.ticks.y = element_blank(),
+    plot.margin = margin(t = 10, r = 10, b = 10, l = 2, unit = "pt")
+  )
+
+p_brier + p_brier_diff+ plot_layout(widths = c(4, 1))
 ```
-
-
-## The Instability of Trees {#sec-cls-tree-unstable}
-
-
-This highlights an important characteristic of trees trained using greedy optimization: they are _unstable_. This means that if the training data are perturbed (e.g., resampled or individual values slightly changed), the tree structure might be completely different^[This is especially likely if there are correlated predictors in the training set.]. If a particular split variable or value is different, it is highly likely that all subsequent splits would also be different. This, in the context of the variables-bias discussion in @sec-variance-bias, means that trees have high model variance (but low bias). This is a significant disadvantage for trees, but, as we'll see in the next chapter, it makes them ideal for creating ensemble models. 
-
-## From Trees to Rules {#sec-cls-rules}
-
-Rule-based models derived from classification trees also require mechanisms to handle missing values. In C5.0Rules, which converts C5.0 trees into rule sets, the handling of missing values is integrated into the rule evaluation process. When evaluating whether a rule applies to a sample with missing values, C5.0Rules treats the rule as partially satisfied, with the degree of satisfaction determined by the distribution of non-missing values in the training data. This partial satisfaction contributes to the overall confidence in the rule's prediction.
-
-During prediction, multiple rules may be partially satisfied due to missing values. C5.0Rules aggregates the confidence values from all relevant rules to make the final prediction, similar to the weighted voting approach used in C5.0 trees.
-This approach allows rule-based models to handle missing values without requiring explicit imputation, maintaining the flexibility and robustness of the original tree model.
+The results show that, so far, the tree-based models discussed have mediocre results; they are not the worst, but they are not competitive with some of the previous models. The figure shows that they have virtually no chance of being practically equivalent to the higher performing model. That isn't much of a surprise. _Single_ tree-based models are not known for their outstanding effectiveness. 
 
 ## Chapter References {.unnumbered}
 
