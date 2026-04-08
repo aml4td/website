@@ -115,9 +115,7 @@ TODO:
 
  - CART description
  - more on instability
- - rule conversion
  - review for CIT
- - compare to previous best models
  - fig-split-county issue
 
 Classification trees are a powerful and interpretable approach for classification problems.  Their structure consists of nested if-then statements that partition the predictor space into regions, each of which is associated with a specific class. We've already seen them in a few different places:  @fig-reg-tree visualized a regression tree for the food delivery data, while @fig-hotels-agent-missing shows a classification tree to understand missingness. 
@@ -1206,7 +1204,7 @@ Some tree implementations also provide confidence intervals or other measures of
 
 The class probability estimates from terminal nodes can be used not only for classification but also for ranking and probability estimation. When a terminal node contains few samples, the quality of the probability estimates decreases. It is possible to apply Laplace smoothing as previously described for naive Bayes or to use a regularized estimate, such as the Beta-binomial method from @eq-beta-bin-mean (as described for CatBoost). 
 
-Alternatively, C4.5 decision trees add the event rate to the numerator count and 1.0 to the denominator. For example, our previous left split, the raw probability for the "Yes" class was 5/6, and 7/12 of the data were truly forested.  C4.5 would compute it as (5 + (7/12)) / (6 + 1) = `r round((5 + (7/12)) / (6 + 1), 3)` instead of the raw estimate of `r round(5/6, 3)`. 
+Alternatively, C4.5 decision trees add the event rate to the numerator count and 1.0 to the denominator. For example, our previous left split, the raw probability for the "Yes" class was 5/6, and 7/12 of the data were truly forested.  C4.5 would compute it as (5 + (7/12)) / (6 + 1) = `r round((5 + (7/12)) / (6 + 1), 3)` instead of the raw estimate of `r round(5/6, 3)`. In the context of that model, this terminal node estimate is called the "confidence value."
 
 For XGboost and LightGBM, once the split is made, the probability estimates for the leaves are estimated by: 
 
@@ -1379,11 +1377,12 @@ forest_c5_mtr_ex <-
 ```{r}
 #| label: forest-c5rules
 #| include: false
-#| eval: false
+#| cache: TRUE
 
 c5rules_spec <- 
-  C5_rules(min_n = tune()) |> 
-  set_engine("C5.0", CF = tune()) 
+  decision_tree(min_n = tune()) |> 
+  set_engine("C5.0", CF = tune(), rules = TRUE) |> 
+  set_mode("classification")
 
 c5rules_wflow <- workflow(class ~ ., c5rules_spec)
 
@@ -1393,7 +1392,6 @@ c5rules_extract <- function(x) {
   mold <- x$pre$mold
   train_data <- dplyr::bind_cols(mold$outcomes, mold$predictors)
   fit <- extract_fit_engine(x)
-  fit <- lorax:::as.party.C5.0(fit, data = train_data)
   preds <- active_predictors(fit) |> 
     dplyr::mutate(
       .estimate = purrr::map_int(active_predictors, length),
@@ -1402,7 +1400,7 @@ c5rules_extract <- function(x) {
     select(-active_predictors)
   rules <- 
     fit |> 
-    extract_rules() |> 
+    extract_rules(data = train_data) |> 
     dplyr::mutate(
       terms = purrr::map_chr(rules, rlang::expr_deparse, width = 10^4),
       terms = strsplit(terms, split = "&"),
@@ -1410,17 +1408,16 @@ c5rules_extract <- function(x) {
     ) |> 
     dplyr::summarize(
       `Mean Rule Size` = mean(num_terms),
-      `# Terminal Nodes` = length(num_terms)
+      `# Rules` = length(num_terms)
     ) |> 
     tidyr::pivot_longer(
-      c(`Mean Rule Size`, `# Terminal Nodes`),
+      c(`Mean Rule Size`, `# Rules`),
       names_to = ".metric",
       values_to = ".estimate"
     ) |> 
     dplyr::mutate(.estimator = "none")
   dplyr::bind_rows(preds, rules)
 }
-
 
 forest_c5rules_res <-
   c5rules_wflow |>
@@ -1430,7 +1427,7 @@ forest_c5rules_res <-
     control = control_grid(
       save_pred = TRUE,
       save_workflow = TRUE,
-      # extract = c5rules_extract,
+      extract = c5rules_extract,
       pkgs = "lorax"
     ),
     metrics = cls_mtr
@@ -1705,7 +1702,24 @@ forest_obl_bt <-
   mutate(Model = "Oblique (Ridge)") |>
   select(Model, .metric, estimate)
 
-tree_bt <- bind_rows(forest_cart_bt, forest_c5_bt, forest_cit_bt, forest_obl_bt)
+
+set.seed(4932)
+forest_c5rules_bt <-
+  forest_c5rules_res |>
+  int_pctl(
+    alpha = 0.1,
+    metrics = cls_mtr,
+    parameters = forest_c5rules_best,
+    times = 5000,
+    keep_replicates = TRUE
+  ) |>
+  select(.metric, .values) |>
+  unnest(.values) |>
+  filter(.metric %in% c("brier_class", "roc_auc")) |>
+  mutate(Model = "C5.0 Rules") |>
+  select(Model, .metric, estimate)
+
+tree_bt <- bind_rows(forest_cart_bt, forest_c5_bt, forest_cit_bt, forest_obl_bt, forest_c5rules_bt)
 
 tree_bt_stats <-
   tree_bt |>
@@ -1836,7 +1850,7 @@ tree_bt_stats |>
     Estimate_roc_auc, , Lower_roc_auc, Upper_roc_auc, data_roc_auc
   ) |>
   mutate(
-    Model = factor(Model, c("CART", "C5.0", "Conditional Inference", "Oblique (Ridge)")) 
+    Model = factor(Model, c("CART", "C5.0", "Conditional Inference", "Oblique (Ridge)", "C5.0 Rules")) 
   ) |> 
   arrange(Model) |> 
   gt() |> 
@@ -1877,8 +1891,6 @@ Performance statistics for the best candidates of each tree model. The limits ar
 ::::: {.column width="10%"}
 :::::
 :::
-
-final fit, variable importance, etc.
 
 When trained on the entire data set with the optimal parameters, the tree had `r cart_fit_stat$.estimate[cart_fit_stat$.metric == "# Terminal Nodes"]` terminal nodes. Of the `r ncol(forested_train) - 1` predictors, `r cart_fit_stat$.estimate[cart_fit_stat$.metric == "# Active Predictors"]` were actually used in the model: `r cart_fit_var_list`. Across the different paths to the terminal nodes, the average number of predictors used in the rules was `r round(cart_fit_stat$.estimate[cart_fit_stat$.metric == "Mean Rule Size"], 2)`. 
 
@@ -2418,13 +2430,151 @@ The performance metrics for the tree using $n_{min}$ = `r forest_obl_best$min_n`
 We'll discuss ensembles of oblique trees in the next chapter. 
 
 
-## From Trees to Rules {#sec-cls-rules}
+## Rule-Based Models {#sec-cls-rules}
 
-Rule-based models derived from classification trees also require mechanisms to handle missing values. In C5.0Rules, which converts C5.0 trees into rule sets, the handling of missing values is integrated into the rule evaluation process. When evaluating whether a rule applies to a sample with missing values, C5.0Rules treats the rule as partially satisfied, with the degree of satisfaction determined by the distribution of non-missing values in the training data. This partial satisfaction contributes to the overall confidence in the rule's prediction.
+Rule-based models can be created in different ways. The most frequently used strategy is to start with a decision tree and use the paths to the terminal nodes as an initial set of rules.  Examples of this approach are REF and REF. C4.5 was one of the first methods to do this. We'll describe what C5.0 does, but it is mostly the same as its predecessors. Also, this section focuses on a rule set derived from a single tree. The next chapter describes how rule set ensembles are created. 
 
-During prediction, multiple rules may be partially satisfied due to missing values. C5.0Rules aggregates the confidence values from all relevant rules to make the final prediction, similar to the weighted voting approach used in C5.0 trees.
+We start with a C5.0 classification tree and populate the initial rule set. From this initial set, the process to finalize the model is to
 
-This approach allows rule-based models to handle missing values without requiring explicit imputation, maintaining the flexibility and robustness of the original tree model.
+1. Simplify and/or prune the conditions of individual rules.
+2. Use an optimization method to determine which rules should be removed or added to the rule set.  
+
+To process the individual rules, we can first simplify them by removing logical redundancies. For example, if a rule was <tt>A < 5 & A < 3</tt>, we can achieve the same effect with just <tt>A < 3</tt>. The simplification can also involve different predictors, and @quinlan1993c4 presents a general method for identifying redundancies using cross-tabulations. 
+
+```{r}
+#| label: rule-calcs
+#| include: false
+offdiag <- function(x) {
+  sum(x[upper.tri(x)]) + sum(x[lower.tri(x)])
+}
+
+rule_err <- function(.data, rule, pred, digits = 1) {
+  lvls <- levels(.data$class)
+  num_lvls <- length(lvls)
+  tab <- 
+    .data |> 
+    dplyr::filter(!!rule) |> 
+    dplyr::mutate(pred = factor("No", levels = lvls)) |> 
+    yardstick::conf_mat(class, pred) |> 
+    purrr::pluck("table")
+  round((offdiag(tab) + 1) / sum(tab + num_lvls) * 100, digits)
+}
+
+rule_ex <- expr(vapor_max < 1247.5 & roughness < 12.5 & temp_annual_max < 15.965)
+rule_ex_1 <- expr(roughness < 12.5 & temp_annual_max < 15.965)
+rule_ex_2 <- expr(vapor_max < 1247.5 & temp_annual_max < 15.965)
+rule_ex_3 <- expr(vapor_max < 1247.5 & roughness < 12.5)
+
+iter_1_base <- rule_err(forested_train, rule_ex, "Yes")
+iter_1_m_1 <- rule_err(forested_train, rule_ex_1, "Yes")
+iter_1_m_2 <- rule_err(forested_train, rule_ex_2, "Yes")
+iter_1_m_3 <- rule_err(forested_train, rule_ex_3, "Yes")
+
+# Remove condition 2 (roughness)
+
+rule_2_ex <- expr(vapor_max < 1247.5 & temp_annual_max < 15.965)
+rule_2_ex_1 <- expr(temp_annual_max < 15.965)
+rule_2_ex_2 <- expr(vapor_max < 1247.5 )
+
+iter_2_base <- rule_err(forested_train, rule_2_ex, "Yes")
+iter_2_m_1 <- rule_err(forested_train, rule_2_ex_1, "Yes")
+iter_2_m_2 <- rule_err(forested_train, rule_2_ex_2, "Yes")
+```
+
+The second strategy for an individual rule is to determine which conditions of the rule will have acceptable performance; how many can we remove without significantly increasing errors? The algorithm iterates over all conditions in a specific rule and greedily removes those that do not improve the objective function. C5.0Rules uses an information gain statistic to make the determination on which (if any) condition to remove. For simplicity, we'll show the process using a simple accuracy statistic which, for this example, has the same results as information gain. 
+
+For example, consider this rule: 
+
+::: {style="text-align: center;"}
+
+<tt>max. vapor < 1247.5 & roughness < 12.5 & max annual temp < 15.965</tt>
+
+:::
+
+The training set points that are "active" under this rule are predominantly forested, so the class prediction suggested by this rule is "forested". 
+
+This baseline rule has a resubstitution accuracy of `r iter_1_base`%, using the correction defined in @sec-tree-estimates, which it calls the "confidence value". What happens when we remove each of the conditions in the rule but keep the same predicted value? 
+
+- <tt>max. vapor < 1247.5</tt> removed: `r iter_1_m_1`% accuracy
+- <tt>roughness < 12.5</tt> removed:  `r iter_1_m_2`% accuracy
+- <tt>max annual temp < 15.965</tt> removed:  `r iter_1_m_3`% accuracy
+
+Removing the roughness term increases the rule's performance, so we eliminate it. The new baseline accuracy is `r iter_1_m_2`% . 
+
+We continue the process by removing each of the two remaining conditions, one at a time: 
+
+- <tt>max. vapor < 1247.5</tt> removed: `r iter_2_m_1`% accuracy
+- <tt>max annual temp < 15.965</tt> removed: `r iter_2_m_2`% accuracy
+
+Since neither operation increases the accuracy, the rule is finalized with two conditions. 
+
+Similar to C5.0's approach to combining categories when splitting, the global optimization process tries to minimize a statistic based on the Minimum Description Length (MDL) principle [@quinlan1993c4,sect 5.2]. This statistic is another trade-off between the complexity of the rule set and the error rate that penalizes overfitting. We can conceptualize it as the sum of the model cost and the error cost. Assuming equal costs for different types of errors, the model cost is an information-theoretic value that is the number of bits needed to encode the entire rule set. As the rule set grows, so does the model's cost^[This statistic has different costs for different condition types (e.g., numeric, categorical) and includes a term related to the number of possible orderings.]. The error cost is a function of the resubstitution error rate of the current rule set. 
+
+Once the rules and the members of the rule set are determined, the model can make predictions. The complication is that many of the rules are active for any specific data point being predicted, and it is also possible that _no_ rules are active for a new data point.
+
+The algorithm orders the rules so that it prioritizes better quality rules, as measured by their terminal node estimate ($\widehat{\pi}$ ) and the number of training set samples covered/supported by the rule ($n_{rule}$):
+
+$$
+Utility = \widehat{\pi} \, \log(n_{rule} + 1) 
+$$
+
+When a new sample is predicted, C5.0Rules finds the _first active rule_ and uses the dominant class in that subset of data as the hard class prediction and $\widehat{\pi}$ as the probability estimate. 
+
+What occurs when no rules are active? In this case, the model finds locates training set points that are not matched by any rules. The class frequencies are computed from these data and their dominant class is used as the hard class prediction. 
+
+The model also intrinsically handles missing values. When evaluating whether a rule applies to a sample with missing values, C5.0Rules treats the rule as partially satisfied, with the degree of satisfaction determined by the distribution of non-missing values in the training data. This partial satisfaction contributes to the computation of $\widehat{\pi}$. During prediction, multiple rules may be partially satisfied due to missing values. C5.0Rules aggregates the $\widehat{\pi}$ from all relevant rules to make the final prediction, similar to the weighted voting approach used in C5.0 trees. This approach allows rule-based models to handle missing values without requiring explicit imputation, maintaining the flexibility and robustness of the original tree model.
+
+@fig-forest-c5rules shows the results of tuning the C5.0Rules model on the forstation data using the same approach as the C5.0 tree optimization. The results are very similar; more rules reduce the Brier score, and the confidence factor has little effect on performance. Unfortunately, $n_{min}$ cannot be any lower, so the best candidate is at the model's maximum complexity. 
+
+```{r}
+#| label: fig-forest-c5rules
+#| echo: false
+#| out-width: 100%
+#| fig-width: 9
+#| fig-height: 2.5
+#| fig-cap: "Tuning results for the C5.0Rules model showing how the tree tuning parameters ($n_{min}$ and the confidence factor) relate to the Brier score. There are three other characteristics computed for each tree that reflect the average complexity of the rules created during resampling."
+
+c5rules_lvls <- c("Minimal Node Size", "Confidence Factor log", 
+             "# Active Predictors", "# Rules", "Mean Rule Size")
+
+forest_c5rules_res |> 
+  collect_extracts() |> 
+  unnest(.extracts) |> 
+  summarize(
+    value = mean(.estimate), 
+    .by = c(.metric, .config)
+  ) |>
+  rename(parameter = .metric) |> 
+  full_join(
+    forest_c5rules_res |> 
+      collect_metrics(type = "wide") |> 
+      select(.config, brier_class, roc_auc),
+    by = ".config"
+  ) |> 
+  bind_rows(
+    forest_c5rules_res |> 
+      collect_metrics(type = "wide") |> 
+      mutate(
+        CF = log10(CF)
+      )  |> 
+      rename(
+        `Confidence Factor log` = CF,
+        `Minimal Node Size` = min_n
+      ) |> 
+      pivot_longer(
+        c(`Confidence Factor log`, `Minimal Node Size`),
+        names_to = "parameter",
+        values_to = "value"
+      ) 
+  ) |> 
+  mutate(parameter = factor(parameter, levels = c5rules_lvls)) |> 
+  ggplot(aes(value, brier_class)) + 
+  geom_point(alpha = 2 / 4, cex = 2) + 
+  facet_wrap(~ parameter, scales = "free_x", nrow = 1) +
+  labs(y = "Brier Score", x = NULL)  
+```
+
+Referring back to @tbl-tree-statistics, we see that this model, out of all of the methods discussed in this chapter, had the worst Brier score and area under the ROC curve. However, it's till better than the naive Bayes model. 
 
 ## The Instability of Trees {#sec-cls-tree-unstable}
 
@@ -2459,6 +2609,11 @@ forest_cit_set_res <-
     "CIT" = forest_cit_res |> butcher::butcher()
   )
 
+forest_c5rules_set_res <- 
+  as_workflow_set(
+    "C5.0 Rules" = forest_c5rules_res |> butcher::butcher()
+  )
+
 all_sets <-
   dplyr::bind_rows(
     forest_fda_set_res,
@@ -2467,6 +2622,7 @@ all_sets <-
     forested_obl_set_res,
     forest_cart_set_res,
     forest_c5_set_res,
+    forest_c5rules_set_res,
     forest_glmnet_set_res,
     forest_mlp_set_res,
     forest_logistic_set_res
@@ -2476,7 +2632,7 @@ all_sets <-
 ```{r}
 #| label: cls-tree-compare-bayes
 #| include: false
-#| cache: true
+#| cache: false
 set.seed(905)
 tree_compare <- compare_models(all_sets, chains = 10, cores = 10, iter = 5000)
 tree_compare
@@ -2550,4 +2706,5 @@ save(forest_cart_set_res, file = "../RData/forest_cart_set_res.RData")
 save(forest_c5_set_res, file = "../RData/forest_c5_set_res.RData")
 save(forest_cit_set_res, file = "../RData/forest_cit_set_res.RData")
 save(forested_obl_set_res, file = "../RData/forested_obl_set_res.RData")
+save(forest_c5rules_set_res, file = "../RData/forest_c5rules_set_res.RData")
 ```

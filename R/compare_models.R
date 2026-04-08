@@ -19,6 +19,8 @@ compare_models <- function(set,
     purrr::map_dfr( ~ dplyr::tibble(class = class(.x)[1], engine = .x$engine))
   combos$label <- set$wflow_id
   
+  combos$class[combos$label == "C5.0 Rules"] <- "C5_rules"
+  
   # exclude current
   best_mtr <-
     rank_results(set, rank_metric = metric, select_best = TRUE) |>
