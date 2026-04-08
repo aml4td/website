@@ -113,8 +113,6 @@ cls_mtr <- metric_set(brier_class, roc_auc, pr_auc, mn_log_loss)
 
 TODO: 
 
- - CART description
- - more on instability
  - review for CIT
  - fig-split-county issue
 
@@ -1223,6 +1221,24 @@ There is also the possibility of including an additional model inside each termi
 ## Specific Tree-Based Models {#sec-cls-tree-models}
 
 ### CART {#sec-cls-cart}
+CART, short for Classification And Regression Trees, is the most popular approach for creating individual trees [@breiman1984classification]. These trees are restricted to binary splits and use the following tactics discussed above: 
+
+- Recursive greedy searches that typically optimize the Gini statistic.
+- Grouping two sets of categories when splitting qualitative predictors. 
+- Reduced tree complexity via cost-complexity pruning. 
+- Surrogate splits account for missing predictor data. 
+- Basic estimates of proportions in the terminal nodes. 
+
+The primary tuning parameters are: 
+
+- The cost-complexity parameter $C_p$. Values tend to range between 0.1 (usually a tree with a single split) and zero (no pruning). Grids for this parameter are often created with equal spacing on the log<sub>10</sub> scale. 
+- $n_{min}$ and the maximum tree depth to reduce the complexity of the tree in the growing phase. 
+
+Despite multiple exhaustive searches, CART models are very efficient during training and can be created (and predicted) very quickly. Like all of the models described in this chapter, these models can be easily converted to highly efficient code, especially via SQL. 
+
+They are _very_ low maintenance; they require almost no preprocessing, handle missing data, and have automatic feature selection. 
+
+The downside to these models is that their split selection is biased towards predictors with higher information content (i.e., many unique values). Despite this, CART is a staple of ML modeling. 
 
 ```{r}
 #| label: forest-cart
@@ -2578,7 +2594,13 @@ Referring back to @tbl-tree-statistics, we see that this model, out of all of th
 
 ## The Instability of Trees {#sec-cls-tree-unstable}
 
-This highlights an important characteristic of trees trained using greedy optimization: they are _unstable_. This means that if the training data are perturbed (e.g., resampled or individual values slightly changed), the tree structure might be completely different^[This is especially likely if there are correlated predictors in the training set.]. If a particular split variable or value is different, it is highly likely that all subsequent splits would also be different. This, in the context of the variables-bias discussion in @sec-variance-bias, means that trees have high model variance (but low bias). This is a significant disadvantage for trees, but, as we'll see in the next chapter, it makes them ideal for creating ensemble models. 
+Tree models, especially those that use the standard greedy training approach, can be highly unstable [@breiman1996heuristics]. This means that the variance of these models is higher than many other models [Recall the variance-bias discussion in @sec-variance-bias.]. Consider CART and C5.0 trees, which search all split points across all predictors multiple times. The first split point is chosen as the numerically best split. However, as seen in @fig-tree-splits, the chosen split point (or predictor) might be influenced by random noise; other split points might perform equally well and achieve virtually the same performance. With a slightly different data set, the split might have been very different, to the point where individual data sets might have a considerable impact on the results.
+
+For trees, each split is greatly influenced by the split(s) that came before. If random noise in the data affects the _first_ split, a small change in the data might lead to a different split, which will likely change _all_ subsequent splits ^[This is especially likely if there are correlated predictors in the training set.]. If the interpretability of the tree model is important, the idea that you could get a completely different tree by adding or subtracting a few training set points can be problematic [@turney1995bias]. 
+
+However, some tree-based models are less unstable. Recall that conditional inference trees use a statistical test using all of the current training set data in the node to pick the predictor to split. After this, the standard search within that predictor is used (and is unstable). This decoupling enables these methods to have more reliable models. Also, the previously described oblique tree method in @jaeger2022aorsf fits a logistic regression model to obtain its linear predictor, which it uses as a split. This is a more complex but much more stable process than that used by CART or C5.0 and is even more reliable when a regularized model is used. 
+
+This is a significant disadvantage for trees, but, as we'll see in the next chapter, it makes them ideal for creating ensemble models. Perhaps surprisingly, ensembles have specific mechanisms to deliberately make their trees _more unstable_ to improve performance.  
 
 ## Comparisons to Previous Models {#sec-cls-tree-compare}
 
@@ -2693,6 +2715,8 @@ p_brier + p_brier_diff+ plot_layout(widths = c(4, 1))
 ```
 
 The results show that, so far, the tree-based models discussed have mediocre results; they are not the worst, but they are not competitive with some of the previous models. The figure shows that they have virtually no chance of being practically equivalent to the higher performing model. That isn't much of a surprise. _Single_ tree-based models are not known for their outstanding effectiveness. 
+
+It's also important to realize that the differences in the Brier scores and ROC AUC values for the five specific models discussed in this chapter are only different at the _second or third decimal place_. Their performance is effectively equivalent to one another.
 
 While the results for these models might be disappointing, their value lies in the next chapter where _ensembles_ of these models are described. These are some of the most effective tools for tabular data. 
 
