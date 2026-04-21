@@ -137,7 +137,8 @@ These examples illustrate the potential advantage of kernel density estimation w
 #| out-width: 75%
 #| fig-width: 6.5
 #| fig-height: 3
-#| fig-cap: Parametric and nonparametric density estimates for the minimum vapor predictor, shown separately for the entire training set and then for each class. The blue line is the nonparametric estimate, and the orange curve is the traditional Gaussian estimate. 
+#| fig-cap: Parametric and nonparametric density estimates for the minimum vapor predictor, shown separately for the entire training set and then for each class. The blue line is the nonparametric estimate, and the orange curve is the traditional Gaussian estimate.
+#| fig-alt: "Faceted density plots for the minimum vapor predictor, with panels for the entire training set, non-forested locations, and forested locations. Each panel overlays a flexible kernel density estimate and a smooth parametric Gaussian curve on a histogram. The kernel estimate captures multimodal and skewed shapes the Gaussian misses, especially for the trimodal non-forested distribution and the right-skewed forested distribution."
 
 forested_dens <-
   forested_train |>
@@ -288,7 +289,8 @@ One potential downside for this model is that there is a tendency for the class 
 #| out-width: 80%
 #| fig-width: 7
 #| fig-height: 4
-#| fig-cap: An example of how the probability estimates produced by naive Bayes can have poor calibration properties. 
+#| fig-cap: An example of how the probability estimates produced by naive Bayes can have poor calibration properties.
+#| fig-alt: "Two-panel figure. The left panel shows histograms of predicted forestation probabilities faceted by class, revealing a strongly bimodal distribution with most predictions concentrated near zero and one. The right panel shows a calibration curve that deviates severely from the diagonal, indicating that predicted probabilities do not match observed event rates."
 
 p_nb_prob <-
   forest_nb_pred |>
@@ -314,13 +316,17 @@ To address these calibration issues, an initial feature filter could be helpful.
 #| fig-width: 6.5
 #| fig-height: 3
 #| fig-cap: Aggregate feature rankings using a random forest importance score on the forestation data. The bands reflect 90% confidence intervals computed using replicates over cross-validation.
+#| fig-alt: "Horizontal dot plot with error bars showing random forest importance scores for each predictor. Annual precipitation has by far the highest score. Maximum vapor and longitude form a second tier. Several predictors cluster at intermediate values, while county, year, eastness, and westness show low importance. Error bars represent 90% confidence intervals from cross-validation replicates."
 
 forest_nb_res |>
   collect_extracts() |>
   dplyr::select(-.config, -id) |>
   unnest(.extracts) |>
   distinct() |>
-  filter(prop_terms == 1 & smoothness == 1) |>
+  inner_join(
+    select_best(forest_nb_res), 
+    by = c("smoothness", "prop_terms")
+  ) |>
   summarize(
     n = length(score),
     sd = sd(score),
@@ -358,8 +364,9 @@ The predictions for the _best_ candidate are those shown in @fig-nb-probs. As no
 #| out-width: 55%
 #| fig-width: 5
 #| fig-height: 4
-#| fig-cap: Naive Bayes tuning results for the forestation data. 
-autoplot(forest_nb_res, metric = c("brier_class", "roc_auc")) + 
+#| fig-cap: Naive Bayes tuning results for the forestation data.
+#| fig-alt: "Line plot of naive Bayes tuning results with Brier score on the y-axis and the proportion of predictors retained on the x-axis, with lines distinguished by kernel bandwidth. Both Brier score and ROC AUC are best when all predictors are retained, and performance degrades substantially at 20% retention. Smaller bandwidths are slightly favored across all thresholds."
+autoplot(forest_nb_res, metric = c("brier_class", "roc_auc")) +
   labs(y = "Brier Score") + 
   scale_colour_paletteer_d("calecopal::eschscholzia") +
   theme(legend.position = "top")
@@ -742,7 +749,8 @@ We can see how this worked out in @fig-fda-tune. Performance leveled off around 
 #| out-width: 90%
 #| fig-width: 8
 #| fig-height: 4
-#| fig-cap: FDA-MDA tuning results for the forestation data.  
+#| fig-cap: FDA-MDA tuning results for the forestation data.
+#| fig-alt: "Faceted line plot of FDA-MARS tuning results with two panels for forward and backward selection pruning. Brier score is on the y-axis and the number of model terms on the x-axis, with separate lines for additive and interaction model types. Performance levels off around 25 to 35 terms, with interaction models consistently outperforming additive models in both panels."
 forest_fda_res |>
   collect_metrics() |>
   filter(.metric == "brier_class") |>
@@ -801,8 +809,9 @@ To better understand what is driving the model, MARS has an _internal_ variable 
 #| fig-width: 6.5
 #| fig-height: 3
 #| fig-cap: MARS feature importance for the final forested model.
+#| fig-alt: "Horizontal dot plot of MARS importance scores based on GCV reduction. Annual precipitation and annual maximum temperature are tied at the highest importance. Terrain roughness, annual mean temperature, and longitude also contribute substantially, while several predictors have zero importance and do not appear in the final model."
 
-fda_imp |> 
+fda_imp |>
   ggplot(aes(gcv, reorder(text, gcv))) + 
   geom_point() +
   labs(y = NULL, x = "MARS Importance (GCV)")
@@ -820,7 +829,8 @@ For example, suppose we chose an additive model based on the tuning results in @
 #| out-width: 90%
 #| fig-width: 8
 #| fig-height: 5
-#| fig-cap: Profile plots showing how each predictor related to the probability of forestation when an additive FDA-MDA is used. The y-axis has no numbers since the probabilities are relative. 
+#| fig-cap: Profile plots showing how each predictor related to the probability of forestation when an additive FDA-MDA is used. The y-axis has no numbers since the probabilities are relative.
+#| fig-alt: "Grid of partial dependence profile plots, one per numeric predictor retained by the additive FDA-MARS model. Each panel shows a piecewise-linear curve of predicted forestation probability versus predictor value. The profiles reveal distinct nonlinear shapes including monotone increasing, monotone decreasing, and non-monotone trends with abrupt slope changes at MARS knot locations."
 fda_additive_spec <-
   discrim_flexible(num_terms = 30, prod_degree = 1, prune_method = "forward") |>
   set_engine("earth", nk = 201, keepxy = TRUE)
@@ -960,7 +970,8 @@ where $g()$ is a kernel function that weights the distances and $W$ is the sum o
 #| out-width: 80%
 #| fig-width: 8
 #| fig-height: 2.75
-#| fig-cap: Different kernel functions to downweight far-away neighbors. Values have been rescaled to have the same upper value.  
+#| fig-cap: Different kernel functions to downweight far-away neighbors. Values have been rescaled to have the same upper value.
+#| fig-alt: "Faceted line plot showing five kernel weighting functions (Rectangular, Triangular, Cosine, Gaussian, and Inverse) plotted over distance from zero to one. The Rectangular kernel is flat, the Triangular kernel decreases linearly, the Cosine kernel follows a smooth cosine curve, the Gaussian kernel decreases in a bell shape, and the Inverse kernel drops steeply near zero then flattens. All are rescaled to the same maximum."
 dists <-
   crossing(
     distance = seq(0.1, 1, length.out = 100),
@@ -1087,7 +1098,8 @@ How well does this technique work for the forestation data? To start, we used pr
 #| out-width: 80%
 #| fig-width: 8
 #| fig-height: 3
-#| fig-cap: K-nearest neighbors tuning results for the forestation data.  
+#| fig-cap: K-nearest neighbors tuning results for the forestation data.
+#| fig-alt: "Multi-panel tuning plot for K-nearest neighbors classification on forestation data. Panels show Brier score versus the number of neighbors, Minkowski distance parameter, proportion of predictors retained, and kernel function. Poor results occur with fewer than twenty neighbors. The distance parameter favors small values around 0.5. No single kernel function dominates."
 
 knn_best_res <- show_best(forest_knn_res, metric = "brier_class")
 autoplot(forest_knn_res, metric = "brier_class") +
@@ -1165,6 +1177,7 @@ lin_df <- tibble(
 #| fig-width: 5
 #| fig-height: 5
 #| fig-cap: Dot product values of a grid of vectors relative to $\boldsymbol{x} = (2.0, 0.5)$ (the black point). The dashed black line shows the contour of constant dot products and the white dotted line is points to the origin.
+#| fig-alt: "Heatmap of dot product values on a two-dimensional grid relative to a reference point at (2.0, 0.5). A dotted line extends from the origin to the reference point. A dashed diagonal line marks vectors with the same dot product as the reference vector with itself. Values increase toward the upper right and decrease toward the lower left, with a band of near-zero values perpendicular to the reference direction."
 #| warning: false
 lin_df |>
   ggplot(aes(x, y)) +
@@ -1206,6 +1219,7 @@ These connections between units on different layers continue as layers are added
 #| fig-width: 4
 #| fig-height: 5
 #| fig-cap: Architecture of a simple neural network with a single layer of hidden units.
+#| fig-alt: "Diagram of a multilayer perceptron with an input layer of predictor nodes on the left, a single hidden layer of nodes in the middle, and an output layer with nodes for each class on the right. Lines connect every node in each layer to every node in the next layer, representing model parameters."
 knitr::include_graphics("../premade/mlp.svg")
 ```
 
@@ -1228,6 +1242,7 @@ This representation and the one below were adapted from Izaak Neutelings's excel
 #| out-width: 80%
 #| fig-width: 4
 #| fig-height: 5
+#| fig-alt: "Diagram showing the input-to-hidden-layer portion of a neural network. Predictor nodes on the left connect via weighted lines to a single hidden unit on the right. The linear combination of inputs is passed through an activation function to produce the hidden unit's output."
 knitr::include_graphics("../premade/nnet_start.svg")
 ```
 
@@ -1243,6 +1258,7 @@ For the final layer, the previous set of hidden units is often connected to the 
 #| out-width: 70%
 #| fig-width: 4
 #| fig-height: 5
+#| fig-alt: "Diagram showing the hidden-to-output-layer portion of a neural network. Hidden unit nodes on the left connect via weighted lines to C output units on the right, one per class. A linear activation is used for the output layer, and the raw outputs are then normalized via the softmax function."
 knitr::include_graphics("../premade/nnet_end.svg")
 ```
 
@@ -1304,6 +1320,7 @@ Historically, the most commonly used nonlinear activation functions were sigmoid
 #| fig-width: 6
 #| fig-height: 2
 #| fig-cap: "Different sigmoidal activation functions."
+#| fig-alt: "Faceted line plot of three sigmoidal activation functions: logistic, tanh, and tanhshrink. The logistic function is bounded between zero and one with an S-shape. The tanh function has a similar shape but ranges from negative one to one. The tanhshrink function is near zero for small inputs and becomes approximately linear for large absolute inputs."
 sig_lvl <- c("logistic", "tanh", "tanhshrink")
 
 act_functions |>
@@ -1328,6 +1345,7 @@ In modern neural networks, the rectified linear unit (ReLU) is the default activ
 #| fig-width: 8
 #| fig-height: 2
 #| fig-cap: "Different ReLU-based activation functions."
+#| fig-alt: "Faceted line plot of five ReLU-based activation functions: relu, softplus, gelu, silu, and elu. All are approximately zero or negative for negative inputs and approximately linear for positive inputs. ReLU has a sharp corner at zero, while softplus, gelu, silu, and elu provide smooth approximations with slightly different curvatures near the origin."
 
 relu_lvl <- c("relu", "softplus", "gelu", "silu", "elu")
 
@@ -1406,8 +1424,9 @@ Let's use an example data set with a simple MLP to demonstrate how ReLU activati
 #| fig-height: 4.4
 #| warning: false
 #| fig-cap: "An example data set with two predictors and two classes. The black line is the class boundary from an MLP model using three hidden units with ReLU activation."
+#| fig-alt: "Scatter plot of a two-class data set with predictor A on the x-axis and predictor B on the y-axis. The two classes form partially overlapping clouds. A black contour line shows the decision boundary from an MLP with three ReLU hidden units, which traces a a path similar to a piecewise-linear boundary separating the classes."
 
-  grid_pred |> 
+  grid_pred |>
   ggplot(aes(A, B)) +
   geom_point(data = two_class_ex, aes(col = Class), alpha = 1/3) +
   geom_contour(aes(z = .pred_Class1), breaks = 0.5, col = "black") +
@@ -1452,8 +1471,9 @@ The top of @fig-nnet-ex-layer-1 displays a heatmap illustrating how these three 
 #| fig-height: 5
 #| warning: false
 #| fig-cap: "Heatmaps of the three linear predictors and their ReLU values across the predictor space. The black line emphasizes the location where the linear predictor is zero."
+#| fig-alt: "Two rows of three heatmaps each. The top row shows the raw linear predictor values for three hidden units across the A-B predictor space, each with a black contour line at zero dividing positive and negative regions. The bottom row shows the same values after ReLU activation, where negative regions are set to zero and positive regions retain their values."
 
-lp_layer <- 
+lp_layer <-
   components |> 
   dplyr::select(-starts_with("relu_"), -starts_with("output")) |> 
   pivot_longer(cols = c(starts_with("lp_"))) |> 
@@ -1530,8 +1550,9 @@ Note that the coefficients' signs are opposite for each outcome unit. @fig-nnet-
 #| fig-height: 5
 #| warning: false
 #| fig-cap: "Heatmaps of the three ReLU units and their output units across the predictor space."
+#| fig-alt: "Two rows of panels. The top row shows three heatmaps of ReLU-activated hidden unit values across the predictor space, with zero regions clearly visible. The bottom row shows two output unit heatmaps derived from weighted sums of the hidden units. The two output panels display nearly opposite patterns, with a black contour line at zero marking the class boundary."
 
-output_layer <- 
+output_layer <-
   components |>
   dplyr::select(-starts_with("lp"), -starts_with("relu_")) |>
   pivot_longer(cols = c(starts_with("output"))) |>
@@ -1582,6 +1603,7 @@ A second related issue is saddle points. These are locations where all of the gr
 #| out-width: 60%
 #| fig-width: 5.5
 #| fig-height: 4.7
+#| fig-alt: "Heatmap of a nonlinear loss surface over two parameters, with contour lines and four labeled stationary points: one minimum, one maximum, and two saddle points. The loss increases from lighter to darker shading. The minimum is in the upper-left region, the maximum in the lower right, and the saddle points lie between them."
 
 loss_grid |>
 	rename(loss = res) |> 
@@ -1628,8 +1650,9 @@ The model was first trained using basic gradient descent. For illustration, trai
 #| fig-height: 2.8
 #| warning: false
 #| fig-cap: "The loss function, using held out data, for the same MLP model for four optimization strategies. The lines on each panel represent runs initialized with different random numbers. The profiles are normalized to start from the same initial loss value."
+#| fig-alt: "Faceted line plot with four panels comparing optimization strategies: gradient descent, SGD, SGD with momentum, and one additional method. Each panel shows holdout cross-entropy loss over epochs for five runs with different initializations. Gradient descent shows slow convergence with minimal loss reduction. SGD and SGD with momentum converge faster, with some runs stopping early due to early stopping criteria."
 
-optimizers |> 
+optimizers |>
   filter(method != "L-BFGS") |> 
   ggplot(aes(epoch, loss_norm, col = seed, group = seed)) +
   geom_line(show.legend = FALSE,
@@ -1709,6 +1732,7 @@ where $x = |(i/r) - (2\,cycle) + 1|$. This is a good option when we are unsure h
 #| fig-width: 8
 #| fig-height: 2.8
 #| fig-cap: "The effect of different schedulers on the rate and success of convergence."
+#| fig-alt: "Faceted heatmap with four panels for constant, cyclic, decay, and stepwise learning rate schedulers. Each panel shows the loss surface in two parameter dimensions with overlaid optimization paths from two starting points. The constant rate path oscillates near the optimum. The cyclic and decay schedules converge more smoothly, while the stepwise schedule shows mixed results depending on starting location."
 base_sgd_plot(rates, NULL) + facet_wrap(~schedule, nrow = 1)
 ```
 
@@ -1774,6 +1798,7 @@ Values of $\phi$ are typically between 0.8 and 0.99, representing a weighted ave
 #| fig-height: 2.8
 #| warning: false
 #| fig-cap: "Examples of four different optimizers for the loss surface previously shown in @fig-schedulers."
+#| fig-alt: "Faceted heatmap with four panels for Momentum, AdaGrad, RMSprop with Nesterov, and ADAM optimizers. Each panel shows optimization paths from two starting points overlaid on the same two-dimensional loss surface. Momentum and ADAM converge effectively toward the minimum. AdaGrad stalls before reaching the optimum due to accumulated squared gradients. RMSprop with Nesterov converges smoothly."
 
 bind_rows(momentum_res, adam_res, rms_prop_res, adagrad_res) |>
   mutate(
@@ -1950,8 +1975,9 @@ A space-filling design with `r num_grid` candidates was evaluated. The six prepr
 #| fig-width: 9
 #| fig-height: 5.2
 #| fig-cap: Rankings of multilayer perceptron models for the forestation models using the Brier score. The panels represent different types of preprocessing, and the vertical lines are 90% confidence intervals.
+#| fig-alt: "Faceted dot plot of MLP model rankings by Brier score, arranged in a grid with columns for encoding type (Indicators, Indicators plus Symmetry, Effect Encoding plus Symmetry) and rows for PCA versus no PCA. Points are distinguished by one-layer and two-layer architectures. Vertical lines show 90% confidence intervals. PCA preprocessing generally produces worse results. The best performance comes from Indicators plus Symmetry and Effect Encoding plus Symmetry without PCA."
 
-mlp_ranks|> 
+mlp_ranks|>
   mutate(
     encoding = map_chr(wflow_id, ~ strsplit(.x, split = "_")[[1]][1]),
     encoding = case_when(
@@ -2251,8 +2277,9 @@ While the `r nlin_best` model currently has the smallest Brier score, there is a
 #| fig-width: 6
 #| fig-height: 3.5
 #| fig-cap: "Comparisons of current forestation models. The intervals are 90% credible intervals. The bars on the right show the probability of practical equivalence to the current best model, assuming that a difference in Brier scores of +/- 0.01 is practical."
+#| fig-alt: "Two-panel figure comparing forestation models. The left panel is a dot-and-whisker plot of Brier scores with 90% credible intervals for each model, ordered from best to worst. A cluster of models including logistic regression and MLP have similar low Brier scores, while naive Bayes performs notably worse. The right panel shows horizontal bars for the probability of practical equivalence to the best model."
 
-p_brier <- 
+p_brier <-
   nlin_subset |>
   ggplot(aes(median, model)) +
   geom_point() +
