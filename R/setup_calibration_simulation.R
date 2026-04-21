@@ -1,4 +1,3 @@
-
 set.seed(3468)
 sim_not_test <-
   sim_classification(2000) %>%
@@ -14,4 +13,4 @@ sim_test <-
 set.seed(56923)
 sim_rs <- validation_split(sim_not_test, prop = 0.5)
 sim_train <- analysis(sim_rs$splits[[1]])
-sim_val   <- assessment(sim_rs$splits[[1]])
+sim_val <- assessment(sim_rs$splits[[1]])

@@ -11,7 +11,7 @@ options(pillar.advice = FALSE, pillar.min_title_chars = Inf)
 # ------------------------------------------------------------------------------
 
 set.seed(283)
-logit_dat <- sim_logistic(500, ~ .1 + 5 * A - 5 * B , corr = .7)
+logit_dat <- sim_logistic(500, ~ .1 + 5 * A - 5 * B, corr = .7)
 
 # logit_dat |>
 #   ggplot(aes(A, B, col = class)) +
@@ -41,19 +41,18 @@ cart_nodes <- sum(cart_fit$fit$frame[, "var"] == "<leaf>")
 
 # ------------------------------------------------------------------------------
 
-
 set.seed(181)
 obl_fit <-
   oblique.tree(
     class ~ .,
     data = logit_dat,
-    oblique.splits	= "only",
+    oblique.splits = "only",
     control = tree.control(nobs = nrow(logit_dat), minsize = 500)
   )
 
 obl_pred <- grid
 obl_pred$class <- logit_dat$class[1]
-obl_pred$.pred_one <- predict(obl_fit, obl_pred)[,1]
+obl_pred$.pred_one <- predict(obl_fit, obl_pred)[, 1]
 obl_pred$split <- "Oblique"
 
 obl_print <- capture.output(print(obl_fit))
@@ -69,7 +68,9 @@ orig_dat <-
 
 oblique_example <-
   bind_rows(orig_dat, cart_pred, obl_pred) |>
-  dplyr::mutate(split = factor(split, levels = c("Data", "Rectanular", "Oblique"))) |>
+  dplyr::mutate(
+    split = factor(split, levels = c("Data", "Rectanular", "Oblique"))
+  ) |>
   select(-class)
 
 # oblique_example |>
@@ -85,4 +86,10 @@ oblique_example <-
 #   facet_wrap( ~ split) +
 #   scale_color_manual(values = c("#DF9ED4FF", "#3C4B99FF"))
 
-save(logit_dat, oblique_example, cart_nodes, obl_eqn, file = "RData/oblique_example.RData")
+save(
+  logit_dat,
+  oblique_example,
+  cart_nodes,
+  obl_eqn,
+  file = "RData/oblique_example.RData"
+)

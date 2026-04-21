@@ -27,24 +27,26 @@ bst_fit <-
   fit(class ~ ., data = forested_train %>% select(-county))
 
 set.seed(494)
-hstat_reps <- 
+hstat_reps <-
   future_lapply(
-    1:25, 
+    1:25,
     FUN = function(x) {
       bst_hstats <-
-        hstats(bst_fit,
-               X = forested_train %>% dplyr::select(-class, -county),
-               pairwise_m = p,
-               approx = TRUE,
-               n_max = 250,
-               verbose = FALSE, 
-               type = "prob")
+        hstats(
+          bst_fit,
+          X = forested_train %>% dplyr::select(-class, -county),
+          pairwise_m = p,
+          approx = TRUE,
+          n_max = 250,
+          verbose = FALSE,
+          type = "prob"
+        )
     },
-    future.seed=TRUE,
+    future.seed = TRUE,
     future.globals = c("forested_train", "bst_fit", "p"),
     future.packages = c("hstats", "tidymodels", "bonsai", "lightgbm")
   )
-  
+
 # ------------------------------------------------------------------------------
 # Process the data so that the terms within the interactions are sorted
 
@@ -52,17 +54,17 @@ tidy_hstats <- function(x, ...) {
   as_tibble(x$M, rownames = "term")
 }
 
-forested_hstats <-  
-  map(hstat_reps, ~ h2_pairwise(.x, zero = TRUE)) |> 
-  map_dfr(tidy_hstats, .id = "replicate") |> 
-  select(-.pred_No) |> 
+forested_hstats <-
+  map(hstat_reps, ~ h2_pairwise(.x, zero = TRUE)) |>
+  map_dfr(tidy_hstats, .id = "replicate") |>
+  select(-.pred_No) |>
   summarize(
     mean_score = mean(.pred_Yes),
     n = sum(!is.na(.pred_Yes)),
     std_dev_score = sd(.pred_Yes),
     std_err_score = std_dev_score / sqrt(n),
     .by = term
-  ) |> 
+  ) |>
   mutate(
     interaction_num = row_number(),
     variable = map(term, ~ sort(strsplit(.x, split = ":")[[1]])),
@@ -70,36 +72,36 @@ forested_hstats <-
   )
 
 # Data for presentation
-forested_hstats_text <- 
-  forested_hstats |> 
-  unnest(variable) |> 
-  full_join(name_key, by = "variable") |> 
+forested_hstats_text <-
+  forested_hstats |>
+  unnest(variable) |>
+  full_join(name_key, by = "variable") |>
   mutate(
     text = ifelse(is.na(text), variable, text),
     text = tools::toTitleCase(text)
-  ) |> 
+  ) |>
   summarize(
     term = paste(min(text), max(text), sep = " x "),
     mean_score = mean(mean_score),
     std_err_score = mean(std_err_score),
     .by = c(interaction_num)
-  ) |> 
-  arrange(desc(mean_score)) |> 
+  ) |>
+  arrange(desc(mean_score)) |>
   mutate(
     term = factor(term),
     term = reorder(term, mean_score),
     .lower = mean_score - qnorm(.95) * std_err_score,
     .upper = mean_score + qnorm(.95) * std_err_score
-  ) |> 
+  ) |>
   select(-interaction_num)
 
 # ------------------------------------------------------------------------------
 # Make an R formula with the top terms
 
-forested_int_form <- 
-  forested_hstats |> 
-  slice_max(mean_score, n = top) |> 
-  pluck("term_sorted") |> 
+forested_int_form <-
+  forested_hstats |>
+  slice_max(mean_score, n = top) |>
+  pluck("term_sorted") |>
   paste0(collapse = " + ")
 
 forested_int_form <- paste("~", forested_int_form)
@@ -107,10 +109,12 @@ forested_int_form <- as.formula(forested_int_form)
 
 # ------------------------------------------------------------------------------
 
-save(forested_int_form, forested_hstats_text, file = "RData/forested_interactions.RData")
+save(
+  forested_int_form,
+  forested_hstats_text,
+  file = "RData/forested_interactions.RData"
+)
 
 if (!interactive()) {
   q("no")
 }
-
-

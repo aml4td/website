@@ -1,4 +1,3 @@
-
 library(tidymodels)
 library(mirai)
 
@@ -62,7 +61,7 @@ compute_split_metrics <- function(x, y, split_value, positive_class) {
       left_prop = NA_real_,
       right_prop = NA_real_,
       gini_index = NA_real_,
-      gini_gain = NA_real_, 
+      gini_gain = NA_real_,
       info_gain = NA_real_,
       gain_ratio = NA_real_
     ))
@@ -80,7 +79,8 @@ compute_split_metrics <- function(x, y, split_value, positive_class) {
 
   # 2) Information Gain
   info_before <- entropy_binary(parent_prop)
-  info_after <- (n_left / n_total) * entropy_binary(left_prop) +
+  info_after <- (n_left / n_total) *
+    entropy_binary(left_prop) +
     (n_right / n_total) * entropy_binary(right_prop)
   info_gain <- info_before - info_after
 
@@ -105,15 +105,22 @@ compute_split_metrics <- function(x, y, split_value, positive_class) {
     left_prop = left_prop,
     right_prop = right_prop,
     gini_index = gini_idx,
-    gini_gain = gini_gain, 
+    gini_gain = gini_gain,
     info_gain = info_gain,
     gain_ratio = gain_ratio
   )
 }
 
-split_lvls <- 
-  c("Gini Gain", "Information Gain", "Information Gain Ratio", "Chi-Square", 
-    "XGBoost", "LightGBM", "CatBoost")
+split_lvls <-
+  c(
+    "Gini Gain",
+    "Information Gain",
+    "Information Gain Ratio",
+    "Chi-Square",
+    "XGBoost",
+    "LightGBM",
+    "CatBoost"
+  )
 
 #' Approximate XGBoost histogram-based split finding for binary classification
 #'
@@ -126,62 +133,62 @@ split_lvls <-
 #' @param base_score Initial prediction (default 0.5)
 #' @return Data frame with split points and gain values
 xgb_splits <- function(
-    x,
-    y,
-    max_bin = 256L,
-    lambda = 1,
-    gamma = 0,
-    min_child_weight = 1,
-    base_score = 0.5
+  x,
+  y,
+  max_bin = 256L,
+  lambda = 1,
+  gamma = 0,
+  min_child_weight = 1,
+  base_score = 0.5
 ) {
   # Convert factor to 0/1
-  
+
   if (!is.factor(y)) {
     y <- as.factor(y)
   }
-  
+
   label <- as.integer(y) - 1L
-  
+
   # Remove missing values
-  
+
   valid <- !is.na(x) & !is.na(label)
   x <- x[valid]
   label <- label[valid]
-  
+
   # Initial prediction (sigmoid of base margin)
   pred <- rep(base_score, length(label))
-  
+
   # Compute gradients and hessians for logistic loss
   # g_i = p_i - y_i
   # h_i = p_i * (1 - p_i)
-  
+
   grad <- pred - label
   hess <- pmax(pred * (1 - pred), 1e-16)
-  
+
   # Build histogram bin edges using quantiles
   n_bins <- min(max_bin, length(unique(x)))
   probs <- seq(0, 1, length.out = n_bins + 1)
   cuts <- unique(quantile(x, probs, type = 7))
-  
+
   # Bin assignments (which bin each observation falls into)
   bin_idx <- findInterval(x, cuts, rightmost.closed = TRUE)
   bin_idx <- pmax(1L, pmin(bin_idx, length(cuts) - 1L))
-  
+
   # Aggregate G and H per bin
   n_bins_actual <- length(cuts) - 1L
   bin_grad <- tapply(grad, bin_idx, sum)
   bin_hess <- tapply(hess, bin_idx, sum)
-  
+
   # Fill in zeros for empty bins
   all_bins <- seq_len(n_bins_actual)
   G <- H <- numeric(n_bins_actual)
   G[as.integer(names(bin_grad))] <- bin_grad
   H[as.integer(names(bin_hess))] <- bin_hess
-  
+
   # Total gradient and hessian for the node
   G_total <- sum(G)
   H_total <- sum(H)
-  
+
   # Calculate gain for each potential split point
   # Gain = 0.5 * [G_L^2/(H_L+λ) + G_R^2/(H_R+λ) - G^2/(H+λ)] - γ
   calc_gain <- function(g_left, h_left, g_right, h_right) {
@@ -193,18 +200,18 @@ xgb_splits <- function(
     gain_parent <- G_total^2 / (H_total + lambda)
     0.5 * (gain_left + gain_right - gain_parent) - gamma
   }
-  
+
   # Enumerate all split points (cumulative sums for efficiency)
   G_cumsum <- cumsum(G)
   H_cumsum <- cumsum(H)
-  
+
   # Split points are the upper edges of bins (except the last)
   split_points <- cuts[-1] # Remove first edge (minimum)
   split_points <- split_points[-length(split_points)] # Remove last edge
-  
+
   n_splits <- length(split_points)
   gains <- numeric(n_splits)
-  
+
   for (i in seq_len(n_splits)) {
     G_left <- G_cumsum[i]
     H_left <- H_cumsum[i]
@@ -212,7 +219,7 @@ xgb_splits <- function(
     H_right <- H_total - H_left
     gains[i] <- calc_gain(G_left, H_left, G_right, H_right)
   }
-  
+
   # Build result data frame
   results <- data.frame(
     split_value = split_points,
@@ -224,32 +231,34 @@ xgb_splits <- function(
   )
 
   # Add leaf weights for reference
-  results$left_weight <- -results$left_grad_sum / (results$left_hess_sum + lambda)
-  results$right_weight <- -results$right_grad_sum / (results$right_hess_sum + lambda)
-  
+  results$left_weight <- -results$left_grad_sum /
+    (results$left_hess_sum + lambda)
+  results$right_weight <- -results$right_grad_sum /
+    (results$right_hess_sum + lambda)
+
   # Sort by gain descending
-  
+
   results <- results[order(results$score, decreasing = TRUE), ]
   rownames(results) <- NULL
   results <- tibble::as_tibble(results)
   results$max_bin <- max_bin
   results$lambda <- lambda
   results$gamma <- gamma
-  
+
   results
 }
 
 # ------------------------------------------------------------------------------
 
 lgb_splits <- function(
-    x,
-    y,
-    max_bin = 255L,
-    lambda_l1 = 0.0,
-    lambda_l2 = 0.0,
-    min_data_in_leaf = 20L,
-    min_sum_hessian_in_leaf = 1e-3,
-    sigmoid = 1.0
+  x,
+  y,
+  max_bin = 255L,
+  lambda_l1 = 0.0,
+  lambda_l2 = 0.0,
+  min_data_in_leaf = 20L,
+  min_sum_hessian_in_leaf = 1e-3,
+  sigmoid = 1.0
 ) {
   # Convert factor to {-1, +1} labels (first level = -1, second = +1
   if (!is.factor(y)) {
@@ -257,25 +266,25 @@ lgb_splits <- function(
   }
   stopifnot(nlevels(y) == 2L)
   label <- ifelse(as.integer(y) == 1L, -1.0, 1.0)
-  
+
   # Remove NA values
   complete <- !is.na(x) & !is.na(label)
   x <- x[complete]
   label <- label[complete]
   n <- length(x)
-  
+
   # Compute initial gradients and hessians (score = 0 at first iteration)
-  
+
   # g = -label * sigmoid / (1 + exp(label * sigmoid * score))
   # At score=0: g = -label * sigmoid / 2
   grad <- -label * sigmoid / 2.0
   # h = |g| * (sigmoid - |g|)
   hess <- abs(grad) * (sigmoid - abs(grad))
-  
+
   # Greedy binning: use quantiles to approximate LightGBM's data-adaptive bins
   distinct_vals <- sort(unique(x))
   n_distinct <- length(distinct_vals)
-  
+
   if (n_distinct <= max_bin) {
     # Use midpoints between distinct values as bin boundaries
     bin_edges <- (distinct_vals[-n_distinct] + distinct_vals[-1]) / 2
@@ -285,18 +294,18 @@ lgb_splits <- function(
     bin_edges <- unname(quantile(x, probs, type = 1))
     bin_edges <- unique(bin_edges)
   }
-  
+
   # Sort data by predictor value
   ord <- order(x)
   x_sorted <- x[ord]
   grad_sorted <- grad[ord]
   hess_sorted <- hess[ord]
-  
+
   # L1 soft thresholding function
   threshold_l1 <- function(s, l1) {
     sign(s) * pmax(0, abs(s) - l1)
   }
-  
+
   # Compute gain for a leaf: ThresholdL1(sum_grad, l1)^2 / (sum_hess + l2)
   leaf_gain <- function(sum_grad, sum_hess) {
     if (lambda_l1 > 0) {
@@ -305,12 +314,12 @@ lgb_splits <- function(
       sum_grad^2 / (sum_hess + lambda_l2)
     }
   }
-  
+
   # Parent node statistics
   total_grad <- sum(grad_sorted)
   total_hess <- sum(hess_sorted)
   parent_gain <- leaf_gain(total_grad, total_hess)
-  
+
   # Evaluate each candidate split point
   results <- data.frame(
     split_value = numeric(0),
@@ -320,13 +329,13 @@ lgb_splits <- function(
     left_grad_sum = numeric(0),
     right_grad_sum = numeric(0)
   )
-  
+
   # Accumulate from left to right
   left_grad <- 0.0
   left_hess <- 0.0
   left_count <- 0L
   i <- 1L # index into sorted data
-  
+
   for (threshold in bin_edges) {
     # Accumulate all points <= threshold into left child
     while (i <= n && x_sorted[i] <= threshold) {
@@ -335,29 +344,29 @@ lgb_splits <- function(
       left_count <- left_count + 1L
       i <- i + 1L
     }
-    
+
     right_count <- n - left_count
     right_grad <- total_grad - left_grad
     right_hess <- total_hess - left_hess
-    
+
     # Check min_data_in_leaf constraint
     if (left_count < min_data_in_leaf || right_count < min_data_in_leaf) {
       next
     }
-    
+
     # Check min_sum_hessian_in_leaf constraint
     if (
       left_hess < min_sum_hessian_in_leaf ||
-      right_hess < min_sum_hessian_in_leaf
+        right_hess < min_sum_hessian_in_leaf
     ) {
       next
     }
-    
+
     # Compute split gain: left_gain + right_gain - parent_gain
     split_gain <- leaf_gain(left_grad, left_hess) +
       leaf_gain(right_grad, right_hess) -
       parent_gain
-    
+
     results <- rbind(
       results,
       data.frame(
@@ -370,11 +379,11 @@ lgb_splits <- function(
       )
     )
   }
-  
+
   # Sort by gain descending
   results <- results[order(-results$score), ]
   rownames(results) <- NULL
-  
+
   results <- tibble::as_tibble(results)
   results$max_bin <- max_bin
   results$lambda_l1 <- lambda_l1
@@ -461,26 +470,26 @@ lgb_splits <- function(
 #'
 #' @export
 cat_splits <- function(
-    x,
-    y,
-    max_bin = 254L,
-    binning_method = c(
-      "Uniform",
-      "GreedyLogSum",
-      "Median",
-      "UniformAndQuantiles",
-      "MinEntropy",
-      "MaxLogSum"
-    ),
-    l2_reg = 3,
-    nan_mode = c("Min", "Max", "Forbidden"),
-    initial_prediction = 0
+  x,
+  y,
+  max_bin = 254L,
+  binning_method = c(
+    "Uniform",
+    "GreedyLogSum",
+    "Median",
+    "UniformAndQuantiles",
+    "MinEntropy",
+    "MaxLogSum"
+  ),
+  l2_reg = 3,
+  nan_mode = c("Min", "Max", "Forbidden"),
+  initial_prediction = 0
 ) {
   # Validate inputs
-  
+
   binning_method <- match.arg(binning_method)
   nan_mode <- match.arg(nan_mode)
-  
+
   if (!is.numeric(x)) {
     stop("`x` must be a numeric vector")
   }
@@ -499,40 +508,40 @@ cat_splits <- function(
   if (l2_reg < 0) {
     stop("`l2_reg` must be non-negative")
   }
-  
+
   # Handle NaN values
-  
+
   nan_mask <- is.nan(x)
   has_nans <- any(nan_mask)
-  
+
   if (has_nans && nan_mode == "Forbidden") {
     stop("NaN values found in `x` but nan_mode = 'Forbidden'")
   }
-  
+
   # Separate NaN and non-NaN data
   x_clean <- x[!nan_mask]
   y_clean <- y[!nan_mask]
   y_nan <- y[nan_mask]
-  
+
   # Convert outcome to 0/1
-  
+
   y_numeric <- as.integer(y_clean) - 1L
   y_nan_numeric <- as.integer(y_nan) - 1L
-  
+
   # Calculate gradients (for log-loss: gradient = y - p)
-  
+
   p_initial <- 1 / (1 + exp(-initial_prediction))
   gradients <- y_numeric - p_initial
   gradients_nan <- y_nan_numeric - p_initial
-  
+
   # Phase 1: Select candidate splits (excluding NaN)
-  
+
   splits <- select_binning_method(
     x = x_clean,
     max_bin = if (has_nans) max_bin - 1L else max_bin,
     method = binning_method
   )
-  
+
   if (length(splits) == 0L) {
     warning("No valid splits found (feature may be constant)")
     return(data.frame(
@@ -546,24 +555,24 @@ cat_splits <- function(
       right_weight = numeric(0)
     ))
   }
-  
+
   # Phase 2: Score each split
-  
+
   n_splits <- length(splits)
   results <- vector("list", n_splits)
-  
+
   # Sort data for efficient cumulative sums
   ord <- order(x_clean)
   x_sorted <- x_clean[ord]
   g_sorted <- gradients[ord]
-  
+
   # Cumulative sums for left child statistics
   cumsum_g <- cumsum(g_sorted)
   cumsum_n <- seq_along(g_sorted)
-  
+
   total_g <- sum(gradients)
   total_n <- length(gradients)
-  
+
   # Add NaN gradients based on nan_mode
   if (has_nans) {
     nan_g <- sum(gradients_nan)
@@ -572,13 +581,13 @@ cat_splits <- function(
     nan_g <- 0
     nan_n <- 0L
   }
-  
+
   for (i in seq_along(splits)) {
     split <- splits[i]
-    
+
     # Find split point: left = values <= split
     split_idx <- sum(x_sorted <= split)
-    
+
     if (split_idx == 0L) {
       # All values go right
       left_g <- 0
@@ -597,7 +606,7 @@ cat_splits <- function(
       right_g <- total_g - left_g
       right_n <- total_n - left_n
     }
-    
+
     # Add NaN samples based on nan_mode
     if (has_nans) {
       if (nan_mode == "Min") {
@@ -610,16 +619,16 @@ cat_splits <- function(
         right_n <- right_n + nan_n
       }
     }
-    
+
     # Calculate leaf values with L2 regularization
     # Formula: leaf_value = sum_gradient / (count + l2_reg)
     left_leaf <- if (left_n > 0) left_g / (left_n + l2_reg) else 0
     right_leaf <- if (right_n > 0) right_g / (right_n + l2_reg) else 0
-    
+
     # Calculate L2 score
     # Formula: score = left_leaf * left_sum_gradient + right_leaf * right_sum_gradient
     score <- left_leaf * left_g + right_leaf * right_g
-    
+
     results[[i]] <- data.frame(
       split_value = split,
       score = score,
@@ -631,13 +640,13 @@ cat_splits <- function(
       right_weight = right_leaf
     )
   }
-  
+
   results <- do.call(rbind, results)
-  
+
   # Sort by score descending (best splits first)
   results <- results[order(-results$score), ]
   rownames(results) <- NULL
-  
+
   results <- tibble::as_tibble(results)
   results$max_bin <- max_bin
   results$binning_method <- binning_method
@@ -664,17 +673,17 @@ select_binning_method <- function(x, max_bin, method) {
   if (length(x) < 2L) {
     return(numeric(0))
   }
-  
+
   x_sorted <- sort(unique(x))
   n_unique <- length(x_sorted)
-  
+
   if (n_unique < 2L) {
     return(numeric(0))
   }
-  
+
   # Maximum possible splits is n_unique - 1
   max_bin <- min(max_bin, n_unique - 1L)
-  
+
   splits <- switch(
     method,
     "Uniform" = binning_uniform(x_sorted, max_bin),
@@ -692,7 +701,7 @@ select_binning_method <- function(x, max_bin, method) {
     "MaxLogSum" = binning_exact_logsum(x, max_bin),
     "MinEntropy" = binning_exact_entropy(x, max_bin)
   )
-  
+
   sort(unique(splits))
 }
 
@@ -702,11 +711,11 @@ select_binning_method <- function(x, max_bin, method) {
 binning_uniform <- function(x_sorted, max_bin) {
   min_val <- x_sorted[1]
   max_val <- x_sorted[length(x_sorted)]
-  
+
   if (min_val == max_val) {
     return(numeric(0))
   }
-  
+
   # splits at equal intervals
   seq(
     from = min_val + (max_val - min_val) / (max_bin + 1),
@@ -723,11 +732,11 @@ binning_median <- function(x, max_bin) {
   probs <- seq(0, 1, length.out = max_bin + 2)
   probs <- probs[-c(1, length(probs))]
   quantiles <- quantile(x, probs = probs, type = 1, names = FALSE)
-  
+
   # Place splits between adjacent unique values
   x_sorted <- sort(x)
   splits <- numeric(length(quantiles))
-  
+
   for (i in seq_along(quantiles)) {
     q <- quantiles[i]
     idx <- sum(x_sorted <= q)
@@ -740,7 +749,7 @@ binning_median <- function(x, max_bin) {
       splits[i] <- x_sorted[length(x_sorted)]
     }
   }
-  
+
   unique(splits)
 }
 
@@ -752,21 +761,21 @@ binning_uniform_and_quantiles <- function(x, max_bin) {
   # Half from median, half from uniform
   n_median <- max_bin - max_bin %/% 2
   n_uniform <- max_bin %/% 2
-  
+
   x_sorted <- sort(unique(x))
-  
+
   splits_median <- if (n_median > 0) {
     binning_median(x, n_median)
   } else {
     numeric(0)
   }
-  
+
   splits_uniform <- if (n_uniform > 0) {
     binning_uniform(x_sorted, n_uniform)
   } else {
     numeric(0)
   }
-  
+
   sort(unique(c(splits_median, splits_uniform)))
 }
 
@@ -780,15 +789,15 @@ binning_uniform_and_quantiles <- function(x, max_bin) {
 binning_greedy_logsum <- function(x, max_bin) {
   x_sorted <- sort(x)
   n <- length(x_sorted)
-  
+
   if (n < 2 || max_bin < 1) {
     return(numeric(0))
   }
-  
+
   # Score function: sum of log(count) for each bin
-  
+
   # Splitting bin with count w into w_L and w_R:
-  
+
   # score_improvement = log(w_L) + log(w_R) - log(w)
   calc_split_score <- function(w_left, w_right, w_total) {
     if (w_left <= 0 || w_right <= 0) {
@@ -796,40 +805,40 @@ binning_greedy_logsum <- function(x, max_bin) {
     }
     log(w_left) + log(w_right) - log(w_total)
   }
-  
+
   # Initialize: one bin with all data
-  
+
   # bins: list of (start_idx, end_idx) in x_sorted
-  
+
   bins <- list(c(1L, n))
-  
+
   # Find best split for a bin
   find_best_split <- function(bin_start, bin_end) {
     bin_size <- bin_end - bin_start + 1L
     if (bin_size < 2L) {
       return(list(score = -Inf, split_idx = NA, split = NA))
     }
-    
+
     # Try splitting at midpoint (greedy heuristic)
     mid_idx <- bin_start + bin_size %/% 2L - 1L
-    
+
     # Find actual split point between unique values
     best_score <- -Inf
     best_idx <- NA
     best_split <- NA
-    
+
     # Check a few candidate positions around the midpoint
     candidates <- unique(c(
       max(bin_start, mid_idx - 2L):min(bin_end - 1L, mid_idx + 2L)
     ))
-    
+
     for (idx in candidates) {
       # split between x_sorted[idx] and x_sorted[idx + 1]
       if (x_sorted[idx] < x_sorted[idx + 1L]) {
         w_left <- idx - bin_start + 1L
         w_right <- bin_end - idx
         score <- calc_split_score(w_left, w_right, bin_size)
-        
+
         if (score > best_score) {
           best_score <- score
           best_idx <- idx
@@ -837,12 +846,12 @@ binning_greedy_logsum <- function(x, max_bin) {
         }
       }
     }
-    
+
     list(score = best_score, split_idx = best_idx, split = best_split)
   }
-  
+
   splits <- numeric(0)
-  
+
   for (iter in seq_len(max_bin)) {
     # Find the best split across all current bins
     best_overall <- list(
@@ -851,11 +860,11 @@ binning_greedy_logsum <- function(x, max_bin) {
       split_idx = NA,
       split = NA
     )
-    
+
     for (b in seq_along(bins)) {
       bin <- bins[[b]]
       split_info <- find_best_split(bin[1], bin[2])
-      
+
       if (split_info$score > best_overall$score) {
         best_overall <- list(
           score = split_info$score,
@@ -865,24 +874,24 @@ binning_greedy_logsum <- function(x, max_bin) {
         )
       }
     }
-    
+
     # If no valid split found, stop
     if (is.infinite(best_overall$score) || is.na(best_overall$split)) {
       break
     }
-    
+
     # Record the split
     splits <- c(splits, best_overall$split)
-    
+
     # Split the bin
     old_bin <- bins[[best_overall$bin_idx]]
     new_bin_left <- c(old_bin[1], best_overall$split_idx)
     new_bin_right <- c(best_overall$split_idx + 1L, old_bin[2])
-    
+
     bins[[best_overall$bin_idx]] <- new_bin_left
     bins <- append(bins, list(new_bin_right), after = best_overall$bin_idx)
   }
-  
+
   sort(splits)
 }
 
@@ -895,11 +904,11 @@ binning_greedy_logsum <- function(x, max_bin) {
 binning_greedy_entropy <- function(x, max_bin, maximize = FALSE) {
   x_sorted <- sort(x)
   n <- length(x_sorted)
-  
+
   if (n < 2 || max_bin < 1) {
     return(numeric(0))
   }
-  
+
   # Entropy penalty: w * log(w)
   # Splitting score: -w_L*log(w_L) - w_R*log(w_R) + w*log(w)
   calc_split_score <- function(w_left, w_right, w_total) {
@@ -911,31 +920,31 @@ binning_greedy_entropy <- function(x, max_bin, maximize = FALSE) {
     penalty_total <- w_total * log(w_total)
     -penalty_left - penalty_right + penalty_total
   }
-  
+
   # Same structure as greedy_logsum but with different score function
   bins <- list(c(1L, n))
-  
+
   find_best_split <- function(bin_start, bin_end) {
     bin_size <- bin_end - bin_start + 1L
     if (bin_size < 2L) {
       return(list(score = -Inf, split_idx = NA, split = NA))
     }
-    
+
     mid_idx <- bin_start + bin_size %/% 2L - 1L
     best_score <- -Inf
     best_idx <- NA
     best_split <- NA
-    
+
     candidates <- unique(c(
       max(bin_start, mid_idx - 2L):min(bin_end - 1L, mid_idx + 2L)
     ))
-    
+
     for (idx in candidates) {
       if (x_sorted[idx] < x_sorted[idx + 1L]) {
         w_left <- idx - bin_start + 1L
         w_right <- bin_end - idx
         score <- calc_split_score(w_left, w_right, bin_size)
-        
+
         if (score > best_score) {
           best_score <- score
           best_idx <- idx
@@ -943,12 +952,12 @@ binning_greedy_entropy <- function(x, max_bin, maximize = FALSE) {
         }
       }
     }
-    
+
     list(score = best_score, split_idx = best_idx, split = best_split)
   }
-  
+
   splits <- numeric(0)
-  
+
   for (iter in seq_len(max_bin)) {
     best_overall <- list(
       score = -Inf,
@@ -956,11 +965,11 @@ binning_greedy_entropy <- function(x, max_bin, maximize = FALSE) {
       split_idx = NA,
       split = NA
     )
-    
+
     for (b in seq_along(bins)) {
       bin <- bins[[b]]
       split_info <- find_best_split(bin[1], bin[2])
-      
+
       if (split_info$score > best_overall$score) {
         best_overall <- list(
           score = split_info$score,
@@ -970,21 +979,21 @@ binning_greedy_entropy <- function(x, max_bin, maximize = FALSE) {
         )
       }
     }
-    
+
     if (is.infinite(best_overall$score) || is.na(best_overall$split)) {
       break
     }
-    
+
     splits <- c(splits, best_overall$split)
-    
+
     old_bin <- bins[[best_overall$bin_idx]]
     new_bin_left <- c(old_bin[1], best_overall$split_idx)
     new_bin_right <- c(best_overall$split_idx + 1L, old_bin[2])
-    
+
     bins[[best_overall$bin_idx]] <- new_bin_left
     bins <- append(bins, list(new_bin_right), after = best_overall$bin_idx)
   }
-  
+
   sort(splits)
 }
 
@@ -1000,46 +1009,46 @@ binning_exact_logsum <- function(x, max_bin) {
     message("Using greedy approximation for large dataset")
     return(binning_greedy_logsum(x, max_bin))
   }
-  
+
   x_sorted <- sort(x)
   n <- length(x_sorted)
-  
+
   if (n < 2 || max_bin < 1) {
     return(numeric(0))
   }
-  
+
   # Group identical values
   rle_x <- rle(x_sorted)
   values <- rle_x$values
   counts <- rle_x$lengths
   m <- length(values)
-  
+
   if (m < 2) {
     return(numeric(0))
   }
-  
+
   k <- min(max_bin, m - 1L)
   cum_counts <- cumsum(counts)
-  
+
   # penalty(i, j) = -log(sum of counts from i to j)
   penalty <- function(i, j) {
     w <- if (i == 1) cum_counts[j] else cum_counts[j] - cum_counts[i - 1]
     -log(w + 1e-10)
   }
-  
+
   # DP: dp[j, b] = min total penalty for first j groups with b splits
-  
+
   # We want to maximize sum of log(counts), i.e., minimize sum of -log(counts)
   dp <- matrix(Inf, nrow = m, ncol = k + 1)
   parent <- matrix(NA_integer_, nrow = m, ncol = k + 1)
-  
+
   # Base case: 0 splits (one bin)
   for (j in seq_len(m)) {
     dp[j, 1] <- penalty(1, j)
   }
-  
+
   # Fill DP table
-  
+
   for (b in 2:(k + 1)) {
     for (j in b:m) {
       for (i in (b - 1):(j - 1)) {
@@ -1051,12 +1060,12 @@ binning_exact_logsum <- function(x, max_bin) {
       }
     }
   }
-  
+
   # Backtrack to find splits
   splits <- numeric(0)
   j <- m
   b <- k + 1
-  
+
   while (b > 1 && !is.na(parent[j, b])) {
     i <- parent[j, b]
     # split between group i and i+1
@@ -1065,7 +1074,7 @@ binning_exact_logsum <- function(x, max_bin) {
     j <- i
     b <- b - 1
   }
-  
+
   splits
 }
 
@@ -1078,10 +1087,10 @@ binning_exact_entropy <- function(x, max_bin) {
     message("Using greedy approximation for large dataset")
     return(binning_greedy_entropy(x, max_bin))
   }
-  
+
   # Similar to exact_logsum but with entropy penalty
   # For brevity, use greedy version
-  
+
   binning_greedy_entropy(x, max_bin, maximize = FALSE)
 }
 
@@ -1198,12 +1207,20 @@ ctree_res <- ctree_split(
 # ------------------------------------------------------------------------------
 
 xgb_defaults <-
-  xgb_splits(split_example$vapor_max, split_example$class, max_bin = grid_size) |>
+  xgb_splits(
+    split_example$vapor_max,
+    split_example$class,
+    max_bin = grid_size
+  ) |>
   dplyr::select(split_value, value = score) |>
   mutate(metric = "XGBoost")
 
 lgb_defaults <-
-  lgb_splits(split_example$vapor_max, split_example$class, max_bin = grid_size) |>
+  lgb_splits(
+    split_example$vapor_max,
+    split_example$class,
+    max_bin = grid_size
+  ) |>
   dplyr::select(split_value, value = score) |>
   mutate(metric = "LightGBM")
 
@@ -1212,7 +1229,7 @@ cat_defaults <-
     split_example$vapor_max,
     split_example$class,
     binning_method = "Uniform",
-   max_bin = grid_size
+    max_bin = grid_size
   ) |>
   dplyr::select(split_value, value = score) |>
   mutate(metric = "CatBoost")

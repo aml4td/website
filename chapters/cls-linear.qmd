@@ -9,7 +9,6 @@ knitr:
 ```{r}
 #| label: cls-linear-setup
 #| include: false
-
 source("../R/_common.R")
 source("../R/_themes_ggplot.R")
 
@@ -55,14 +54,17 @@ ad_sub <-
   ad_data |>
   select(truth = Class, x_1 = Ab_42, x_2 = p_tau) |>
   mutate(
-    x_1 = scale(x_1)[,1], x_2 = scale(x_2)[,1],
+    x_1 = scale(x_1)[, 1],
+    x_2 = scale(x_2)[, 1],
     truth = factor(ifelse(truth == "Impaired", "A", "B"))
   )
 
 rngs <- map(ad_sub |> select(-truth), extendrange)
 
-ad_grid <- crossing(x_1 = seq(rngs[[1]][1], rngs[[1]][2], length.out = 200),
-                    x_2 = seq(rngs[[2]][1], rngs[[2]][2], length.out = 200))
+ad_grid <- crossing(
+  x_1 = seq(rngs[[1]][1], rngs[[1]][2], length.out = 200),
+  x_2 = seq(rngs[[2]][1], rngs[[2]][2], length.out = 200)
+)
 
 # ------------------------------------------------------------------------------
 
@@ -90,7 +92,12 @@ mid_pred <- augment(mid_fit, ad_grid) |> mutate(group = "Medium Complexity")
 all_pred <-
   bind_rows(low_pred, mid_pred, high_pred) |>
   rename(probability = .pred_A) |>
-  mutate(group = factor(group, levels = c("Low Complexity", "Medium Complexity",  "High Complexity")))
+  mutate(
+    group = factor(
+      group,
+      levels = c("Low Complexity", "Medium Complexity", "High Complexity")
+    )
+  )
 ```
 
 We often conceptualize classification models by the type of class boundary they produce. For example, in @fig-cls-boundaries, two predictors are visualized, and the colors and shapes of the data indicated their class memberships. The class boundaries are visualized as black lines, dividing the data into two (or more) regions where the model predicted a specific class. When there are more than two predictors, visualizing this boundary becomes impossible, but we still use the idea of a line that demarcates different regions that have the same (hard) class prediction. 
@@ -104,8 +111,7 @@ The low-complexity model attempts to bisect the two classes using a simple strai
 #| fig-width: 11
 #| fig-height: 5
 #| dev: "ragg_png"
-#| fig-cap: Three different levels of complexity for class boundaries where the data has two predictors and two classes. 
-
+#| fig-cap: Three different levels of complexity for class boundaries where the data has two predictors and two classes.
 all_pred |>
   ggplot(aes(x_1, x_2)) +
   scale_fill_gradient2(
@@ -131,21 +137,23 @@ all_pred |>
   scale_color_manual(values = c("#798234FF", "#D46780FF")) +
   scale_shape_manual(values = c(16, 17)) +
   coord_fixed(ratio = 1) +
-  geom_contour(aes(z = probability),
-               breaks = 1 / 2,
-               col = "black",
-               linewidth = 1) +
+  geom_contour(
+    aes(z = probability),
+    breaks = 1 / 2,
+    col = "black",
+    linewidth = 1
+  ) +
   geom_tile(aes(fill = probability), alpha = 1 / 6) +
-  facet_wrap(~ group) +
+  facet_wrap(~group) +
   theme(legend.position = "top") +
   labs(x = "Predictor 1", y = "Predictor 2")
 ```
 
-This chapter focuses on models that, at first appearance, produce strictly linear class boundaries. Apart from feature engineering, they tend to be relatively fast to train, and are more likely to be interpretable due to their simplicity. We’ll start by discussing the most used classification model: logistic regression. This model has many important aspects to explore, as well as numerous ways to estimate model parameters. An extension of this model for more than two classes, a.k.a. multinomial regression, is also described. Finally, we review generalized additive models (GAMs) that feature spline basis functions. 
+This chapter focuses on models that, at first appearance, produce strictly linear class boundaries. Apart from feature engineering, they tend to be relatively fast to train, and are more likely to be interpretable due to their simplicity. We'll start by discussing the most used classification model: logistic regression. This model has many important aspects to explore, as well as numerous ways to estimate model parameters. An extension of this model for more than two classes, a.k.a. multinomial regression, is also described. Finally, we review generalized additive models (GAMs) that feature spline basis functions. 
 
-However, before diving into modeling techniques, let’s take a deep look at the Washington State forestation data originally introduced in @sec-spatial-splitting. These data will be used to demonstrate the nuances of different classifications from this chapter through @sec-cls-ensembles.
+However, before diving into modeling techniques, let's take a deep look at the Washington State forestation data originally introduced in @sec-spatial-splitting. These data will be used to demonstrate the nuances of different classifications from this chapter through @sec-cls-ensembles.
 
-## Exploring Forestation Data  {#sec-forestation-eda}
+## Exploring Forestation Data {#sec-forestation-eda}
 
 These data have been discussed in Sections [-@sec-spatial-splitting], [-@sec-spatial-resampling], and [-@sec-unsupervised-selection]. As a refresher, locations in Washington state were surveyed, and specific criteria were applied to determine whether they were sufficiently forested. Using predictors on the climate,  terrain, and location, we want to accurately predict the probability of forestation at other sites within the state. 
 
@@ -157,7 +165,6 @@ To learn more about spatial machine learning and data analysis, @kopczewska2022s
 #| label: vert-forest
 #| include: false
 #| cache: true
-
 vert_forest <-
   forested_train |>
   pivot_longer(
@@ -235,7 +242,6 @@ Also, the annual minimum temperature, dew temperature, January minimum temperatu
 ```{r}
 #| label: forested-numeric
 #| echo: false
-
 vert_forest |>
   summarize(
     Minimum = min(value),
@@ -257,7 +263,6 @@ vert_forest |>
     fill_color = "white"
   ) |>
   cols_width(Predictor ~ pct(25))
-
 ```
 
 Histograms and statistical summaries of the numeric predictors in the Washington State training set. 
@@ -275,7 +280,6 @@ Individually, how does each of these features appear to relate to the outcome? T
 #| fig-width: 8
 #| fig-height: 6
 #| fig-cap: Binned rates of forestation over percentiles of the numeric predictors. The shaded regions are 90% confidence intervals.
-
 percentiles |>
   ggplot(aes(pctl, estimate)) +
   geom_line() +
@@ -299,7 +303,6 @@ In addition to longitude and latitude, the data contains a qualitative location-
 #| fig-width: 4
 #| fig-height: 6
 #| fig-cap: Outcome rates for different counties in Washington State.
-
 obs_rates |>
   ggplot(aes(y = county, col = `# Locations`)) +
   geom_point(aes(x = rate)) +
@@ -310,7 +313,7 @@ obs_rates |>
 ```
 
 Finally, it might be a good idea to assess potential interaction effects prior to modeling. Since almost all of our features are numeric, it can be difficult to assess interactions visually, so the H-statistics for two-way interactions were calculated using a boosted tree as the base model using the numeric features. Since there are only `r choose(15, 2)` possible interactions, the H-statistics were recomputed 25 times using different random number generators so that we can compute a mean H-statistic and its associated standard error. 
- 
+
 ```{r}
 #| label: fig-forested-interactions
 #| echo: false
@@ -318,7 +321,6 @@ Finally, it might be a good idea to assess potential interaction effects prior t
 #| fig-width: 8
 #| fig-height: 4.5
 #| fig-cap: Results for the top 25 H-statistic interactions. The error bars are 90% intervals based on replicate computations.
-
 forested_hstats_text |>
   slice_max(mean_score, n = 25) |>
   ggplot(aes(y = term)) +
@@ -331,7 +333,7 @@ forested_hstats_text |>
   labs(x = "Mean H-Statistic", y = NULL)
 ```
 
-The vast majority of the `r choose(15, 2)`  H-statistics are less than `r signif(quantile(forested_hstats_text$mean_score, probs = 0.95), 3)` and there are a handful of interactions that are greater than that value; we’ll take the top five interactions and use them in a logistic regression shown below.
+The vast majority of the `r choose(15, 2)`  H-statistics are less than `r signif(quantile(forested_hstats_text$mean_score, probs = 0.95), 3)` and there are a handful of interactions that are greater than that value; we'll take the top five interactions and use them in a logistic regression shown below.
 
 The next section will describe a mainstay of machine learning models for two classes: logistic regression. 
 
@@ -364,7 +366,6 @@ This keeps the probability values between zero and one no matter how large or sm
 ```{r}
 #| label: longitude-fit
 #| include: false
-
 linear_long_fit <-
   logistic_reg() |>
   fit(class ~ longitude, data = forested_train)
@@ -388,7 +389,7 @@ $$ {#eq-bernoulli-log-lik}
 
 Working with the log-likelihood is more numerically stable than attempting to maximize the likelihood itself for finding MLEs of the $\boldsymbol{\beta}$ parameters. @glm provides a detailed description of the gradient-based estimation procedure know as iteratively reweighted least squares (IRLS).  IRLS works by repeatedly fitting weighted least squares, where each observation's weight is a function of the current estimate of its variance. This algorithm tends to converge very quickly for logistic regression^[In fact, as we'll see shortly, their theory is not limited to logistic regression; it encompasses linear regression, Poisson regression, and other models.] and has theoretical guarantees. 
 
-Overall, for logistic regression, maximum likelihood estimation generates a relatively stable estimator. While it can be sensitive to outliers and high influence points [@pregibon1981logistic], a limited amount of data jittering or omissions will not widely affect the parameter estimates unless the training set is fairly small. We’ll see an exception below in @sec-logistic-multicollinearity,  where specific characteristics of the _training data_ make the estimators unstable.   
+Overall, for logistic regression, maximum likelihood estimation generates a relatively stable estimator. While it can be sensitive to outliers and high influence points [@pregibon1981logistic], a limited amount of data jittering or omissions will not widely affect the parameter estimates unless the training set is fairly small. We'll see an exception below in @sec-logistic-multicollinearity,  where specific characteristics of the _training data_ make the estimators unstable.   
 
 From a statistical perspective, MLEs yield parameter estimates that maximize the probability of observing the given data under the logistic model. They are also unbiased estimates of the true parameters.  However, they may suffer from high variance.^[Recall from @sec-variance-bias that unbiased estimates might have high variance. For the forestation data, we'll see that some of our logistic regression parameter estimates have irrationally large variances. Later in this chapter, we will introduce biased estimation methods (via regularization) to reduce the variance and improve predictive performance.].
 
@@ -404,7 +405,7 @@ Why does the rate swing up and down? Looking back at @fig-forested, we see that 
 
 ::: {#fig-longitude}
 
-::: {.figure-content}
+::::: {.figure-content}
 
 ```{shinylive-r}
 #| label: fig-longitude
@@ -597,7 +598,7 @@ app <- shinyApp(ui = ui, server = server)
 app
 ```
 
-:::
+:::::
 
 An example of a logistic regression model with a single predictor (longitude). The binned data points are the same as those shown in @fig-forest-percentiles and are for visualization purposes only; the models are trained on the individual rows in the training set. 
 
@@ -632,7 +633,6 @@ Logistic regression models can be drastically improved by including better repre
 ```{r}
 #| label: forest-logistic-elements
 #| include: false
-
 bare_rec <-
   recipe(class ~ ., data = forested_train) |>
   step_dummy(county) |>
@@ -735,15 +735,15 @@ glm_best_int <-
 
 We can assess each of these feature engineering steps by fitting logistic regression pipelines that sequentially add preprocessing operations. Our five models are:
 
- 1. **Simple model**: Convert each of the `r length(levels(forested_train$county))` counties to binary indicators and drop any predictors with zero-variance. 
- 2. **Normalization model**: Begin with the simple model and add a normalization step that applies the ORD transformation to all numeric predictors. 
- 3. **Encoding model**:  Build on the normalization model by replacing the county dummy indicators with effect encoding.
- 4. **Interaction model**:  extend the encoding by including interaction terms. 
- 5. **Spline model**:  Enhance the interaction model further with ten natural spline basis functions for a set of predictors. 
+1. **Simple model**: Convert each of the `r length(levels(forested_train$county))` counties to binary indicators and drop any predictors with zero-variance. 
+2. **Normalization model**: Begin with the simple model and add a normalization step that applies the ORD transformation to all numeric predictors. 
+3. **Encoding model**:  Build on the normalization model by replacing the county dummy indicators with effect encoding.
+4. **Interaction model**:  extend the encoding by including interaction terms. 
+5. **Spline model**:  Enhance the interaction model further with ten natural spline basis functions for a set of predictors. 
 
-For each of the five preprocessing/model configurations, we’ll resample the training set and estimate several performance metrics (but will focus on the Brier score). 
+For each of the five preprocessing/model configurations, we'll resample the training set and estimate several performance metrics (but will focus on the Brier score). 
 
-@fig-forest-logistic displays the results from resampling each of our five logistic regression models. Most preprocessing steps yield incremental reductions in the Brier score. The most substantial improvement comes from replacing many county-level indicator variables with effect encoding. Normalization also appears to reduce the Brier score, although its error bars overlap with those of previous models—suggesting that this benefit may not be statistically significant. Overall, the best pipeline achieves approximately one-third lower Brier score compared to the simple model by improving how we represent the predictors.^[We’ll discuss regularized models shortly, but in practice, we might _start_ with a complex model (such as Model #5) and use a penalized model to determine which model terms to keep. We’ll do exactly that in the next section.]. 
+@fig-forest-logistic displays the results from resampling each of our five logistic regression models. Most preprocessing steps yield incremental reductions in the Brier score. The most substantial improvement comes from replacing many county-level indicator variables with effect encoding. Normalization also appears to reduce the Brier score, although its error bars overlap with those of previous models---suggesting that this benefit may not be statistically significant. Overall, the best pipeline achieves approximately one-third lower Brier score compared to the simple model by improving how we represent the predictors.^[We'll discuss regularized models shortly, but in practice, we might _start_ with a complex model (such as Model #5) and use a penalized model to determine which model terms to keep. We'll do exactly that in the next section.]. 
 
 ```{r}
 #| label: fig-forest-logistic
@@ -752,7 +752,6 @@ For each of the five preprocessing/model configurations, we’ll resample the tr
 #| fig-width: 6
 #| fig-height: 3
 #| fig-cap: Cross-validated Brier scores for several stages of feature engineering of the forestation data using basic logistic regression. The red dashed line represents the permutation estimate of the no-information rate. The error bars are 90% confidence intervals based on the naive standard error estimates produced during resampling.
-
 forest_res |>
   rank_results(rank_metric = "brier_class") |>
   filter(.metric == "brier_class") |>
@@ -790,7 +789,6 @@ Along with the Brier score values of `r signif(logistic_mtr$mean[logistic_mtr$.m
 #| fig-width: 8
 #| fig-height: 4
 #| fig-cap: Calibration and ROC curves for the pooled assessment sets for the logistic regression model and the full preprocessing pipeline (e.g. up to spline terms). The calibration plot used a moving window, where windows that span 10% of the data are computed with moving increments of 2%.
-
 logistic_pred <-
   forest_res |>
   extract_workflow_set_result(
@@ -821,7 +819,7 @@ From here, we should investigate which predictors had the greatest influence on 
 
 ### Examining the Model {#sec-logistic-diagnostic}
 
-There are many ways to evaluate a model’s performance. One common, but often misplaced, focus is on the statistical significance (p-values) of individual model terms. If the model’s primary goal is interpretation, this may make sense. However, for ML applications, p-values are usually not very informative, because they often do not correlate with how well the model will make predictions. This is especially true in our logistic regression model, which includes many spline basis functions: knowing that the fourth spline term has a small p-value tells us little about overall predictive power. That said, we will revisit inference later as a diagnostic tool.
+There are many ways to evaluate a model's performance. One common, but often misplaced, focus is on the statistical significance (p-values) of individual model terms. If the model's primary goal is interpretation, this may make sense. However, for ML applications, p-values are usually not very informative, because they often do not correlate with how well the model will make predictions. This is especially true in our logistic regression model, which includes many spline basis functions: knowing that the fourth spline term has a small p-value tells us little about overall predictive power. That said, we will revisit inference later as a diagnostic tool.
 
 Instead, for assessing model quality, we recommend using the held-out predictions to conduct *residual analysis*, looking for systematic deviations in prediction errors. The most basic residual is the simple difference between the "observed" outcome and the predicted probability: $e_{ic} = y_{ic} - \widehat{p}_{ic}$.  However, these residuals have heteroscedastic variance--the variance of the $\widehat{p}_{ic}$ changes over their [0,1] range. A residual of 0.1 has a different context when $\widehat{p}_i = 0.01$ compared to $\widehat{p}_i = 0.5$.  To normalize these values, we can use _Pearson residuals_, which are $e_{ic}$  divided by the standard deviation: 
 
@@ -837,7 +835,7 @@ $$
 
 See @pregibon1981logistic and  @agresti2015foundations for discussions.  
 
-In practice, we should plot residuals against each predictor’s values to check for systematic patterns. If the residuals show non-random structure (e.g. curved or clustered patterns), it suggests that the predictor may not be represented properly in the model. For example, in @fig-longitude-residuals we plot deviance residuals versus longitude in the top panel, using predictions from each resampling fold on the held-out data.
+In practice, we should plot residuals against each predictor's values to check for systematic patterns. If the residuals show non-random structure (e.g. curved or clustered patterns), it suggests that the predictor may not be represented properly in the model. For example, in @fig-longitude-residuals we plot deviance residuals versus longitude in the top panel, using predictions from each resampling fold on the held-out data.
 
 The top left-hand panel shows residuals from the model that uses only simple linear predictor terms. For each class, we can see large spikes in residuals at specific longitude ranges--these spikes correspond to to the previous ups and downs shown in @fig-longitude. It is interesting that this visualization shows different patterns for each class; they are not mirrored reflections of one another. For example, for the region between longitudes of approximately -120.5° and -118°, the residuals for unforested locations are very small, while the forested locations exhibit a spike.
 
@@ -845,9 +843,9 @@ In contrast, the right-hand panel has many more residuals near zero and signific
 
 ::: {#fig-longitude-residuals}
 
-::: {.figure-content}
+::::: {.figure-content}
 
-::: {layout-nrow=2}
+::::::: {layout-nrow=2}
 
 ```{r}
 #| label: longitude-residuals-lab
@@ -856,7 +854,6 @@ In contrast, the right-hand panel has many more residuals near zero and signific
 #| fig-height: 4
 #| fig-align: center
 #| warning: false
-
 logistic_resdiduals <-
   forest_res |>
   extract_workflow_set_result("encoded_logistic_mle") |>
@@ -888,13 +885,13 @@ logistic_resdiduals |>
   theme(legend.position = "top")
 ```
 
-:::: {.columns}
+::::::::: {.columns}
 
-::: {.column width="15%"}
+::::::::::: {.column width="15%"}
 
-:::
+:::::::::::
 
-::: {.column width="70%"}
+::::::::::: {.column width="70%"}
 
 ```{r}
 #| label: map-residuals-lab
@@ -903,7 +900,6 @@ logistic_resdiduals |>
 #| fig-height: 5
 #| fig-align: center
 #| warning: false
-
 resid_cuts <- 21
 resid_cols <- colorRampPalette(c("#218239", "#FFFFFFFF", "#d4ad42"))(resid_cuts)
 resid_abs_max <- max(abs(logistic_resdiduals$deviance))
@@ -942,17 +938,17 @@ leaflet() |>
   addScaleBar()
 ```
 
-:::
+:::::::::::
 
-::: {.column width="15%"}
+::::::::::: {.column width="15%"}
 
-:::
+:::::::::::
 
-::::
+:::::::::
 
-:::
+:::::::
 
-:::
+:::::
 
 **Top**: Deviance residuals plotted against longitude for models with and without spline terms for predictors (including longitude). **Bottom**: The largest residuals ($\left|e^d_{ic}\right| \ge 1.25$) from the spline model mapped geographically. Hovering over the ponts shows the true class, the estimated probability of being forested, and the residual value. 
 
@@ -1063,7 +1059,6 @@ In either case, the logistic regression model does have a structure that lends i
 ```{r}
 #| label: best-glm-fit
 #| include: false
-
 best_mle_wflow <-
   forest_set |>
   extract_workflow(id = "encoded + transformations + splines_logistic_mle")
@@ -1107,7 +1102,6 @@ best_mle_sig <-
 #| label: logistic-pdp
 #| include: false
 #| cache: true
-
 explainer_logistic <-
   explain_tidymodels(
     best_mle_fit,
@@ -1130,7 +1124,7 @@ In addition to fitting models, there are methods to explain how a model or a spe
 
 We already saw that longitude exhibits a complex, nonlinear relationship with forestation classification when considered alone. When other predictors are included in the model, though, it becomes important to understand how longitude contributes to predictions in that broader context.  How does longitude affect model predictions when placed in a model with other predictors?
 
-Partial dependence plots (PDP) are visualization tools designed for this task.  Here is how they work: suppose we were to sample a single location $x_i$ from the training set (or any other set of data).  Hold all predictors except longitude constant, and vary longitude over a grid of values. For each grid value, compute the model’s predicted probability. That gives one profile curve showing how the prediction changes as longitude changes. Since this profile depends on the particular point’s other predictor values, different data points generate different profiles. To summarize the effect of longitude overall, sample many data points, compute all their profiles, and average them. The result is a PDP, which shows the average effect of longitude across its observed range, accounting for the rest of the model.
+Partial dependence plots (PDP) are visualization tools designed for this task.  Here is how they work: suppose we were to sample a single location $x_i$ from the training set (or any other set of data).  Hold all predictors except longitude constant, and vary longitude over a grid of values. For each grid value, compute the model's predicted probability. That gives one profile curve showing how the prediction changes as longitude changes. Since this profile depends on the particular point's other predictor values, different data points generate different profiles. To summarize the effect of longitude overall, sample many data points, compute all their profiles, and average them. The result is a PDP, which shows the average effect of longitude across its observed range, accounting for the rest of the model.
 
 @fig-longitude-pdp shows a PDP for longitude from our most complex model (including interactions and splines). The 1,000 grey lines show the individual profiles, and the red curve shows the average effect of this predictor, in the presence of the other model terms.
 
@@ -1142,7 +1136,6 @@ Partial dependence plots (PDP) are visualization tools designed for this task.  
 #| fig-height: 4
 #| fig-align: center
 #| warning: false
-
 ggplot_pdp <- function(obj, x) {
   p <-
     as_tibble(obj$agr_profiles) |>
@@ -1185,7 +1178,6 @@ Examining which model terms demonstrate statistical significance offers a valuab
 #| label: tbl-logistic-reg
 #| tbl-cap: "The top five most signficant model terms (top) and the five terms with the highest standard errors (bottom)."
 #| echo: false
-
 logistic_fit_tbl <-
   bind_rows(
     best_mle_coef |>
@@ -1232,22 +1224,22 @@ logistic_fit_tbl |>
 ```{r}
 #| label: max-spline
 #| include: false
-features <- 
-  forest_spline_rec |> 
-  prep() |> 
+features <-
+  forest_spline_rec |>
+  prep() |>
   bake(new_data = NULL, -class)
 
-abs_cor <- 
-  features |> 
-  cor() |> 
+abs_cor <-
+  features |>
+  cor() |>
   abs()
 abs_cor <- abs_cor[upper.tri(abs_cor)]
 
-upper_vals <- 
-  features |> 
-  select(contains("precip_annual")) |> 
-  map_dbl(~ max(.x)) |> 
-  mean() |> 
+upper_vals <-
+  features |>
+  select(contains("precip_annual")) |>
+  map_dbl(~ max(.x)) |>
+  mean() |>
   round(3)
 
 cor_data <- forested_train |>
@@ -1262,7 +1254,6 @@ For further insight, it is instructive to examine which predictors show no evide
 ```{r}
 #| label: two-param-colin-calc
 #| include: false
-
 elevation_fit <-
   logistic_reg() |>
   fit(class ~ elevation, data = forested_train) |>
@@ -1317,19 +1308,18 @@ where $R_j^2$ represents the coefficient of determination from a linear regressi
 
 @tbl-logistic-colin demonstrates the multicollinearity problem using a simplified model with two untransformed predictors: elevation and mean temperature. The correlation between these two predictors is `r signif(cor(forested_train$elevation, forested_train$temp_annual_mean), 2)`, indicating substantial collinearity. The first two rows present single-predictor models, while the third row displays the results when both predictors are included simultaneously. The parameter estimates undergo dramatic changes in the combined model: the elevation coefficient reverses sign, and the mean temperature coefficient increases by several orders of magnitude. Notably, the variance inflation factor reaches sufficiently high levels to flag this multicollinearity issue.
 
-:::: {.columns}
+::: {.columns}
 
-::: {.column width="8%"}
-:::
+::::: {.column width="8%"}
+:::::
 
-::: {.column width="84%"}
+::::: {.column width="84%"}
 
-::: {#tbl-logistic-colin}
+::::::: {#tbl-logistic-colin}
 
 ```{r}
 #| label: logistic-colin
 #| echo: false
-
 all_terms |>
   pivot_wider(
     id_cols = c(Model),
@@ -1360,24 +1350,24 @@ all_terms |>
 
 An example of how highly colinear predictors can affect parameter estimates and standard errors in a logistic regression model.
 
-:::
+:::::::
+
+:::::
+
+::::: {.column width="8%"}
+:::::
 
 :::
-
-::: {.column width="8%"}
-:::
-
-:::: 
 
 What can we do about this problem? Several strategies exist for mitigating multicollinearity. First, transforming the original predictors using principal component analysis (PCA) or partial least squares (PLS) can substantially reduce correlations among predictors. However, this approach complicates the incorporation of interaction terms and nonlinear relationships, as each derived predictor represents a composite of all original variables. Second, a correlation filter can be employed to remove the minimal set of predictors necessary to reduce multicollinearity's overall impact. While this represents a practical approach, it carries a risk of predictive performance degradation. Given that machine learning performance improvements often derive from incremental gains, the removal of nearly redundant predictors may diminish predictive ability.
 
-For logistic regression specifically, the most effective solution is to retain the original predictor set while employing regularization—an alternative parameter estimation technique that naturally addresses multicollinearity.
+For logistic regression specifically, the most effective solution is to retain the original predictor set while employing regularization---an alternative parameter estimation technique that naturally addresses multicollinearity.
 
 `r r_comp("cls-linear.html#sec-logistic-multicollinearity")`
 
 ### Regularization Through Penalization {#sec-logistic-penalized}
 
-Regularization is a technique that coerces a potentially complex solution into one that is less extreme. We’ve already seen regularization a few times: 
+Regularization is a technique that coerces a potentially complex solution into one that is less extreme. We've already seen regularization a few times: 
 
 - Early stopping when fitting neural networks (@sec-model-development-whole-game, footnote) prevented model training to become worse.
 - Effect encodings (@sec-effect-encodings) moved naive statistical estimates toward more moderate values.
@@ -1386,7 +1376,7 @@ Regularization is a technique that coerces a potentially complex solution into o
 
 This section examines regularization techniques commonly applied to regression models, primarily through the penalization of model coefficients. The next section introduces Bayesian estimation as a framework that naturally produces regularization effects.
 
-Why would we regularize a logistic regression model? There are several reasons. First, regularization prevents coefficient estimates from exploding to  magnitudes larger than appropriate. As demonstrated in the preceding section, highly correlated predictors can produce abnormally large coefficients—potentially with incorrect signs—and inflated standard errors. Second, regularization enables feature selection: when a predictor has no relationship with the outcome, any non-zero coefficient should be reduced toward zero.
+Why would we regularize a logistic regression model? There are several reasons. First, regularization prevents coefficient estimates from exploding to  magnitudes larger than appropriate. As demonstrated in the preceding section, highly correlated predictors can produce abnormally large coefficients---potentially with incorrect signs---and inflated standard errors. Second, regularization enables feature selection: when a predictor has no relationship with the outcome, any non-zero coefficient should be reduced toward zero.
 
 In logistic regression, parameter estimation proceeds through maximization of the Bernoulli log-likelihood function (@eq-bernoulli). The most common approach is to incorporating a penalty term to the log-likelihood (denoted as $\mathcal{P}(\boldsymbol{\beta})$) that discourages large parameter values. This penalty function may also include tuning parameters.
 
@@ -1400,7 +1390,7 @@ $$
 \mathcal{P}_{rr}(\boldsymbol{\beta};\lambda) =  \lambda\sum_{j=1}^{p} \beta_j^2
 $$ {#eq-ridge-penalty}
 
-The summation index starts at one, reflecting the convention that $\beta_0$ denotes the intercept parameter.  *Intercept terms are universally excluded from regularization penalties* for several compelling reasons. First, the intercept lacks any meaningful null value toward which shrinkage would be appropriate. A value of $\beta_0 = 0$ corresponds to a probability estimate of 0.5, which may differ substantially from the true population intercept determined by outcome prevalence. Forcing shrinkage toward this value risks substantial model degradation by directing the intercept toward a value that is inconsistent with the overall event rate. Second, for the summation in Equation @eq-ridge-penalty to function appropriately, predictors need to be in the same units.  When data are standardized to common mean and variance, the intercept's mean and variance become fixed at one and zero, respectively. Including the intercept in this summation would be like comparing apples to horses; it doesn’t make sense and lacks statistical justification.  Third, the intercept may naturally have a large magnitude when outcome prevalence is extremely low or high. _Squaring_ such a large value and incorporating it into the penalty sum causes the penalty to be dominated by this single term, thereby overwhelming the regularization effect on the slope coefficients—the parameters of primary inferential and predictive interest.
+The summation index starts at one, reflecting the convention that $\beta_0$ denotes the intercept parameter.  *Intercept terms are universally excluded from regularization penalties* for several compelling reasons. First, the intercept lacks any meaningful null value toward which shrinkage would be appropriate. A value of $\beta_0 = 0$ corresponds to a probability estimate of 0.5, which may differ substantially from the true population intercept determined by outcome prevalence. Forcing shrinkage toward this value risks substantial model degradation by directing the intercept toward a value that is inconsistent with the overall event rate. Second, for the summation in Equation @eq-ridge-penalty to function appropriately, predictors need to be in the same units.  When data are standardized to common mean and variance, the intercept's mean and variance become fixed at one and zero, respectively. Including the intercept in this summation would be like comparing apples to horses; it doesn't make sense and lacks statistical justification.  Third, the intercept may naturally have a large magnitude when outcome prevalence is extremely low or high. _Squaring_ such a large value and incorporating it into the penalty sum causes the penalty to be dominated by this single term, thereby overwhelming the regularization effect on the slope coefficients---the parameters of primary inferential and predictive interest.
 
 For a generalized linear model and a fixed value of the $\lambda$ penalty, we estimate parameters that maximize the penalized log-likelihood: 
 
@@ -1408,7 +1398,7 @@ $$
 \underset{\boldsymbol{\beta}}{\text{minimize}}:  -\log \ell(x| \boldsymbol{\beta}) + \mathcal{P}(\boldsymbol{\beta};\lambda)
 $$ 
 
-Ridge regression is particularly effective when the feature matrix is ill-conditioned—that is, when we cannot compute the inverse of critical matrices (notably $X'X$). This condition typically arises in two scenarios: when the number of features exceeds the number of training set points, or when severe multicollinearity exists among predictors. The ridge penalty has the effect of **shrinking** the model coefficients, driving them toward zero at varying rates across predictors. This shrinkage prevents parameter estimates from becoming too large due to multicollinearity, stabilizes the standard errors of estimates, and can mitigate coefficient sign instability, as signs may fluctuate with penalty magnitude changes.
+Ridge regression is particularly effective when the feature matrix is ill-conditioned---that is, when we cannot compute the inverse of critical matrices (notably $X'X$). This condition typically arises in two scenarios: when the number of features exceeds the number of training set points, or when severe multicollinearity exists among predictors. The ridge penalty has the effect of **shrinking** the model coefficients, driving them toward zero at varying rates across predictors. This shrinkage prevents parameter estimates from becoming too large due to multicollinearity, stabilizes the standard errors of estimates, and can mitigate coefficient sign instability, as signs may fluctuate with penalty magnitude changes.
 
 The amount of regularization is a tuning parameter, with effective values typically falling between zero and 0.1 (although larger values may be appropriate in certain contexts). When the penalty becomes excessively large, all coefficients shrink toward zero and the model effectively reduces to an intercept-only specification, yielding constant predictions across all observations. The penalty parameter is commonly evaluated on a $\log_{10}$ scale to facilitate tuning across orders of magnitude.
 
@@ -1416,7 +1406,7 @@ The amount of regularization is a tuning parameter, with effective values typica
 
 ::: {#fig-two-feature-penalty}
 
-::: {.figure-content}
+::::: {.figure-content}
 
 ```{shinylive-r}
 #| label: shiny-two-feature-penalty
@@ -1435,16 +1425,16 @@ source("https://raw.githubusercontent.com/aml4td/website/main/R/shiny-penalty.R"
 app
 ```
 
-:::
+:::::
 
 The path of coefficients for a logistic regression with two features when using different penalization methods. The horizontal dashed lines indicate the unpenalized coefficients. 
 
 :::
 
-We choose the amount of regularization just like any other parameter: using a performance metric to decide an appropriate value.  As we’ll see in  subsequent analyses, the penalty-response curve typically exhibits a plateau region where model performance remains relatively stable across a broad range of penalty values. This characteristic makes it virtually impossible to select a penalty magnitude that induces overfitting. Suboptimal tuning parameter choices instead manifest as over-regularization, wherein coefficients shrink excessively toward zero (i.e. underfitting).
+We choose the amount of regularization just like any other parameter: using a performance metric to decide an appropriate value.  As we'll see in  subsequent analyses, the penalty-response curve typically exhibits a plateau region where model performance remains relatively stable across a broad range of penalty values. This characteristic makes it virtually impossible to select a penalty magnitude that induces overfitting. Suboptimal tuning parameter choices instead manifest as over-regularization, wherein coefficients shrink excessively toward zero (i.e. underfitting).
 
 As previously mentioned, standard maximum likelihood estimation yields unbiased estimates; the estimates $\hat{\beta}$ have expected values that equal the true, unknown parameters $\beta$.  We can conceptualize this as "MLE is aiming for the right target." In contrast, the penalization methods discussed herein introduce bias into the estimates, with the magnitude of bias increasing monotonically with penalty strength. The advantage of ridge regression lies in its substantial reduction of parameter estimate variance as bias increases incrementally. This phenomenon exemplifies the fundamental bias-variance tradeoff: when the variance reduction outweighs the increase in squared bias, the mean squared error improves. However, when the predictor set lacks substantial multicollinearity, introducing bias provides no benefit, as variance reduction opportunities are minimal and the effects on estimation accuracy are adverse.
- 
+
 Alternatively, we can also penalize the regression using sum of the absolute value of the parameters: 
 
 $$
@@ -1477,7 +1467,7 @@ $$ {#eq-glmnet-penalty}
 
 where $\lambda$ is the total amount of regularization and $\alpha$  controls the mixture of the two methods so that $\alpha = 1$ is a Lasso model and $\alpha = 0$ is ridge regression. The glmnet penalty formulation tends to be favored by users. 
 
-The combination strategy can help the model move between the goals of dealing with multicollinearity (and similar issues) and feature selection. By tuning the penalty and the mixing parameters, we can let the data decide which penalty it needs most (and how much). As we’ll see below, a typical pattern is a fairly flat plain where there isn’t much change in our preferred metric for a wide range of penalty values. Also, the relationship between the penalty and performance can be similar for different mixtures but shows a lagging pattern over values of $\alpha$. As such, we can achieve virtually the same performance but with different numbers of non-zero coefficients. 
+The combination strategy can help the model move between the goals of dealing with multicollinearity (and similar issues) and feature selection. By tuning the penalty and the mixing parameters, we can let the data decide which penalty it needs most (and how much). As we'll see below, a typical pattern is a fairly flat plain where there isn't much change in our preferred metric for a wide range of penalty values. Also, the relationship between the penalty and performance can be similar for different mixtures but shows a lagging pattern over values of $\alpha$. As such, we can achieve virtually the same performance but with different numbers of non-zero coefficients. 
 
 The lagging trend might be related to the half contribution of the ridge penalty in @eq-glmnet-penalty. If we consider a pure ridge model ($\alpha = 0$) versus a pure lasso model ($\alpha = 1$), the total amount of regularization for the former is half of the latter (for a fixed $\lambda$). This will be offset by the magnitudes of the summations; a summation of squared parameters will be larger than the sum of absolute parameter estimates. However, we have observed that pure ridge solutions can require larger $\lambda$ values than pure lasso models to have the same effect on performance metrics. 
 
@@ -1487,7 +1477,7 @@ When choosing the best parameters for glmnet, we might want to factor in the num
 
 The nature of penalized models, such as Lasso and glmnet, makes them likely to be able to exploit submodels (@sec-submodels) for very efficient model tuning. For a specific mixture percentage, we can fit one glmnet model and evaluate a large number of penalty values almost for free^[This depends on the implementation, though.]. This is only the case when the tuning grid has many $\lambda$ values for each $\alpha$. Space-filling designs and iterative search would not be good choices here; regular grids for these model parameters can be _more_ computationally efficient. 
 
-The glmnet framework represents the most widely adopted approach to model regularization, yet it exhibits limitations when one or more parameter estimates are excessively large. Under Lasso or ridge penalization, a parameter estimate outlier can exert linear or quadratic influence on the penalty term, respectively. This disproportionate effect can draw other estimates toward the outlier, thereby granting it undue influence on the penalization. @fan2001variable and @mcp introduced alternative approaches—the smoothly clipped absolute deviation (SCAD) and minimax concave penalty (MCP) models, respectively—which address this vulnerability through their respective penalty functions:
+The glmnet framework represents the most widely adopted approach to model regularization, yet it exhibits limitations when one or more parameter estimates are excessively large. Under Lasso or ridge penalization, a parameter estimate outlier can exert linear or quadratic influence on the penalty term, respectively. This disproportionate effect can draw other estimates toward the outlier, thereby granting it undue influence on the penalization. @fan2001variable and @mcp introduced alternative approaches---the smoothly clipped absolute deviation (SCAD) and minimax concave penalty (MCP) models, respectively---which address this vulnerability through their respective penalty functions:
 
 $$
 \mathcal{P}_{scad}(\boldsymbol{\beta};\lambda, \gamma) =     \begin{cases}
@@ -1524,13 +1514,12 @@ A significant limitation of most penalization methods involves their incompatibi
 
 `r r_comp("cls-linear.html#sec-logistic-penalized")`
 
-#### Refitting the Forestation Model  {.unnumbered}
+#### Refitting the Forestation Model {.unnumbered}
 
 ```{r}
 #| label: glmn-calc
 #| include: false
 #| cache: true
-
 glmn_pen <- 10^seq(-6, -1, length.out = 50)
 glmn_grid <- crossing(penalty = glmn_pen, mixture = c(0:4) / 4)
 
@@ -1559,7 +1548,6 @@ glmn_best_metric <- show_best(glmn_res, metric = "brier_class", n = 1)
 #| label: tuned-glmn-penalties
 #| include: false
 #| cache: true
-
 pen_target <- -3
 glmn_sel_param <-
   glmn_res |>
@@ -1642,7 +1630,7 @@ at_show <-
   mutate(label = term)
 ```
 
-Let’s take our previous logistic regression Model #5 and create a penalized fit via the glmnet framework. The tuning process involves simultaneous optimization over the amount of penalization and Lasso mixing proportion. We evaluated `r length(glmn_pen)` penalization values from 10<sup>`r log10(min(glmn_pen))`</sup> to 10<sup>`r log10(max(glmn_pen))`</sup>.   In addition, we evaluated five mixing parameter values: pure ridge (0% Lasso), 25% Lasso, 50% Lasso, 75% Lasso, and pure Lasso (100%). All combinations of these parameters form a complete regular grid for evaluation.
+Let's take our previous logistic regression Model #5 and create a penalized fit via the glmnet framework. The tuning process involves simultaneous optimization over the amount of penalization and Lasso mixing proportion. We evaluated `r length(glmn_pen)` penalization values from 10<sup>`r log10(min(glmn_pen))`</sup> to 10<sup>`r log10(max(glmn_pen))`</sup>.   In addition, we evaluated five mixing parameter values: pure ridge (0% Lasso), 25% Lasso, 50% Lasso, 75% Lasso, and pure Lasso (100%). All combinations of these parameters form a complete regular grid for evaluation.
 
 @fig-logistic-glmnet (top panel) presents the tuning results, with the Brier score serving as the performance metric. The curves demonstrate that excessive penalty strength leads to elimination of important features and consequent underfitting. Conversely, at minimal penalty levels, Brier scores remain relatively stable across the entire range of mixing proportions. The numerically optimal combination corresponds to `r glmn_best_param$mixture * 100`% Lasso with a penalty value of 10<sup>`r signif(log10(glmn_best_param$penalty), 2)`</sup>. However, there are many different combinations with near equal Brier scores.
 
@@ -1656,7 +1644,6 @@ The bottom panel of @fig-logistic-glmnet reveals that despite the relative stabi
 #| out-width: 70%
 #| fig-cap: "Top: Results of tuning the complex logistic model using the glmnet penalty. The dotted vertical line designates the numerically optimal result while the dashed line is the selected penalty value. Bottom: Parameter estimates over penalty values for the best model. The features with the largest values at the selected penalty are highlighted."
 #| warning: false
-
 set.seed(836)
 p_glmnet_param <-
   glmn_best_coef |>
@@ -1694,7 +1681,7 @@ However, when we use the numerically optimal parameter settings, there is substa
 
 ### Bayesian Estimation {#sec-logistic-bayes} 
 
-Having examined parameter estimation for logistic regression through maximum likelihood methods—both penalized and unpenalized—we now turn to Bayesian estimation approaches. It is important to note that this explanation presents a simplified conceptual framework;  the mechanisms for serious Bayesian analysis are highly optimized and sophisticated.  Our example will demonstrate fundamental principles but would be inadequate for for solving most real problems.
+Having examined parameter estimation for logistic regression through maximum likelihood methods---both penalized and unpenalized---we now turn to Bayesian estimation approaches. It is important to note that this explanation presents a simplified conceptual framework;  the mechanisms for serious Bayesian analysis are highly optimized and sophisticated.  Our example will demonstrate fundamental principles but would be inadequate for for solving most real problems.
 
 Recall that the Bayesian posterior distribution is the endpoint of a Bayesian analysis.  It combines our prior belief with the observed data to make a complete probabilistic description of the parameters, given the data.  For a small-scale illustration, we will employ a single-predictor model:
 
@@ -1722,8 +1709,8 @@ The Metropolis-Hastings (MH) algorithm is used to demonstrate the process of est
 
 The procedure begins with initial draws from the two prior distributions, denoted as $\boldsymbol{\beta}^{(0)}$. Using these initial values in conjunction with the observed data, we compute the unnormalized posterior probability. Similar to simulated annealing, we generate proposals within a local neighborhood of the current parameter values. For this demonstration, we'll take a simple approach and simulate proposed values, $\boldsymbol{\beta}^{(1)}$, that are within $\pm 2.0$ of our current initial values.  Upon computing the posterior probability for the proposed $\boldsymbol{\beta}^{(1)}$ values, the acceptance decision as follows:
 
-* If the proposed posterior probability exceeds the current value, accept $\boldsymbol{\beta}^{(1)}$ as the new best estimate
-* Otherwise, accept $\boldsymbol{\beta}^{(1)}$ if a random uniform number is larger than the ratio of the first posterior value to the second. If it is not accepted, start the process anew, where the next proposal is again based on $\boldsymbol{\beta}^{(0)}$.
+- If the proposed posterior probability exceeds the current value, accept $\boldsymbol{\beta}^{(1)}$ as the new best estimate
+- Otherwise, accept $\boldsymbol{\beta}^{(1)}$ if a random uniform number is larger than the ratio of the first posterior value to the second. If it is not accepted, start the process anew, where the next proposal is again based on $\boldsymbol{\beta}^{(0)}$.
 
 If $\boldsymbol{\beta}^{(1)}$ is close (in posterior probability) to $\boldsymbol{\beta}^{(0)}$, we have a higher probability of accepting it (as with simulated annealing). 
 
@@ -1733,7 +1720,6 @@ If $\boldsymbol{\beta}^{(1)}$ is close (in posterior probability) to $\boldsymbo
 #| label: tbl-mcmc
 #| tbl-cap: "A set of iterations of the Metropolis-Hastings algorithm for Bayesian logistic regression at the beginning and ending phases of the optimization."
 #| echo: false
-
 dec_lvls <- c("initial", "improvement", "acceptable", "rejected")
 
 param <- param |>
@@ -1809,7 +1795,6 @@ Around iteration 55, the MH process has settled near the region surrounding the 
 ```{r}
 #| label: post-summary
 #| echo: false
-
 term_rate <-
   param |>
   slice_tail(n = 500) |>
@@ -1851,7 +1836,6 @@ At this point, it is reasonable to believe the MH has converged to the location 
 #| fig-height: 3.1
 #| fig-align: center
 #| fig-cap: Samples of the posterior distribution (post-warm) for the two logistic regression parameters.
-
 true_means <- c(1.0, -1.5)
 
 posterior |>
@@ -1941,7 +1925,7 @@ What should we use for the mixture prior $Pr[\alpha]$? With a Beta distribution,
 
 While these approaches do regularize parameters toward zero, it is important to remember that Bayesian models _do not_ produce a single point estimate for each parameter, but rather a posterior distribution of values. In contrast, methods such as the Lasso and glmnet can shrink coefficients exactly to zero, thereby removing predictors entirely from the model. This behavior does not generally occur in Bayesian models. As illustrated by the priors in @fig-sparse-posteriors, there is theoretically only an infinitesimal probability that a continuous posterior distribution will place substantial mass at exactly zero. In the case of spike-and-slab priors, the posterior distribution may be bimodal, with one mode concentrated at zero. Nevertheless, even in this setting, predictors are not deterministically excluded from the model. In summary, Bayesian regularization can strongly shrink coefficients toward zero but does not, in practice, eliminate predictors from the prediction equation.
 
-The _posterior predictive distribution_ is used to generate predictions for new data. When predicting a new observation at $x_0$, this distribution incorporates both uncertainty in the model parameters (as reflected in the posterior) and uncertainty in the new observation itself, represented by $Pr[X = x_0]$, where $X$ denotes the random predictor variable. Samples from the posterior predictive distribution are used to estimate class probabilities. Although it is common to report a single predictive summary—such as the posterior mean or mode—we can also report credible intervals that quantify uncertainty in these predictions. This ability to directly characterize predictive uncertainty is a key advantage of Bayesian estimation for these models.
+The _posterior predictive distribution_ is used to generate predictions for new data. When predicting a new observation at $x_0$, this distribution incorporates both uncertainty in the model parameters (as reflected in the posterior) and uncertainty in the new observation itself, represented by $Pr[X = x_0]$, where $X$ denotes the random predictor variable. Samples from the posterior predictive distribution are used to estimate class probabilities. Although it is common to report a single predictive summary---such as the posterior mean or mode---we can also report credible intervals that quantify uncertainty in these predictions. This ability to directly characterize predictive uncertainty is a key advantage of Bayesian estimation for these models.
 
 `r r_comp("cls-linear.html#sec-logistic-bayes")`
 

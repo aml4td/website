@@ -18,11 +18,11 @@ num_extra <- 20
 
 set.seed(212)
 sim_tr <- sim_regression(n_train, method = "hooker_2004")
-sim_te <- sim_regression(n_test,  method = "hooker_2004")
+sim_te <- sim_regression(n_test, method = "hooker_2004")
 
 set.seed(348)
 sim_tr <- sim_tr %>% bind_cols(sim_noise(n_train, num_extra))
-sim_te <- sim_te %>% bind_cols(sim_noise(n_test,  num_extra))
+sim_te <- sim_te %>% bind_cols(sim_noise(n_test, num_extra))
 
 # warning: Setting row names on a tibble is deprecated.
 sim_tr <- as.data.frame(sim_tr)
@@ -32,7 +32,7 @@ num_pred <- ncol(sim_tr) - 1
 # ------------------------------------------------------------------------------
 
 brulee_sa <- caretSA
-brulee_sa$fit <- function (x, y, lev = NULL, last = FALSE, ...)  {
+brulee_sa$fit <- function(x, y, lev = NULL, last = FALSE, ...) {
   require(tidymodels)
 
   if (is.vector(x)) {
@@ -47,8 +47,13 @@ brulee_sa$fit <- function (x, y, lev = NULL, last = FALSE, ...)  {
     step_normalize(all_predictors())
 
   mlp_spec <-
-    mlp(hidden_units = 20, penalty = 0.05, epochs = 250,
-        activation = "relu", learn_rate = 0.05) %>%
+    mlp(
+      hidden_units = 20,
+      penalty = 0.05,
+      epochs = 250,
+      activation = "relu",
+      learn_rate = 0.05
+    ) %>%
     set_engine("brulee", stop_iter = 3) %>%
     set_mode("regression")
 
@@ -60,17 +65,16 @@ brulee_sa$fit <- function (x, y, lev = NULL, last = FALSE, ...)  {
   mod
 }
 
-brulee_sa$pred <- function (object, x)  {
+brulee_sa$pred <- function(object, x) {
   predict(object, x)$.pred
 }
 
-brulee_sa$fitness_intern <- function (object, x, y, maximize, p) {
+brulee_sa$fitness_intern <- function(object, x, y, maximize, p) {
   res <- yardstick:::rmse_vec(y, predict(object, x)$.pred)
   c(RMSE = res)
 }
 
 # ------------------------------------------------------------------------------
-
 
 ctrl <-
   safsControl(
@@ -79,17 +83,18 @@ ctrl <-
     verbose = TRUE,
     allowParallel = TRUE,
     returnResamp = "all"
-
   )
 
 nnet_sa_time <-
   system.time({
     set.seed(486)
     nnet_sa <-
-      safs(x = sim_tr %>% select(-outcome),
-           y = sim_tr$outcome,
-           iters = 150,
-           safsControl = ctrl)
+      safs(
+        x = sim_tr %>% select(-outcome),
+        y = sim_tr$outcome,
+        iters = 150,
+        safsControl = ctrl
+      )
   })[3]
 
 
