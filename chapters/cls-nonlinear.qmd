@@ -9,6 +9,7 @@ knitr:
 ```{r}
 #| label: cls-nonlinear-setup
 #| include: false
+
 source("../R/_common.R")
 
 # ------------------------------------------------------------------------------
@@ -28,8 +29,8 @@ library(patchwork)
 library(important)
 library(paletteer)
 library(brulee)
-library(paletteer)
 library(brulee)
+library(tidyposterior)
 
 # ------------------------------------------------------------------------------
 # set options
@@ -40,10 +41,12 @@ set_options()
 theme_set(theme_bw())
 daemons(parallel::detectCores())
 
+source("../R/compare_models.R")
+
 cls_mtr <- metric_set(brier_class, roc_auc, pr_auc, mn_log_loss)
 
 # ------------------------------------------------------------------------------
-# load data
+# load data 
 
 load("../RData/forested_data.RData")
 load("../RData/optimizers.RData")
@@ -62,11 +65,11 @@ This chapter contains _two_ sections on neural networks. The first describes the
 
 To get started, the first chapter summarizes an old, traditional model for classification, linear discriminant analysis (LDA), and shows how it can be effectively modified to produce nonlinear class boundaries.   
 
-## Nonlinear Discriminants {#sec-nonlinear-da}
+## Nonlinear Discriminants  {#sec-nonlinear-da}
 
 Discriminant analysis is a classical statistical method for classification. While its prominence in the statistical learning literature has diminished in recent decades, understanding its foundations provides valuable context for several modern and highly effective classification methods. This section focuses on linear discriminant analysis (LDA).
 
-Linear discriminant analysis [@mclachlan2005discriminant;@murphy2012machine] produces linear classification boundaries and can be motivated via Bayes' Rule. 
+Linear discriminant analysis [@mclachlan2005discriminant;@murphy2012machine] produces linear classification boundaries and can be motivated via Bayes’ Rule. 
 Let's say that our training set predictors for class $k$ are contained in the random variable vector $X_k$ with $p$ elements. LDA assumes that the predictor distributions within each class follow a multivariate Gaussian distribution with class-specific mean vectors but a common covariance matrix across all classes. Formally, for class $k$, the conditional distribution of the predictors given class membership is $X_k \sim N(\boldsymbol{\mu}_k, \boldsymbol{\Sigma})$.
 
 To classify a new observation with predictor vector $\boldsymbol{x}$, LDA applies Bayes' theorem to compute the posterior probability of class membership. Given a prior probability $Pr[Y = k]$ for class $k$, the posterior probability is:
@@ -109,8 +112,8 @@ The primary advantage of the conditional independence assumption is that it rela
 
 For continuous predictors, kernel density estimation [@Silverman86;@chen2017tutorial] provides a flexible, nonparametric approach to estimating $Pr[x_j|Y = k]$. Kernel density estimators are smoothing methods that adaptively characterize the empirical distribution of the data. A kernel function $K(\cdot)$ is a non-negative, symmetric function that integrates to one and serves as a weighting scheme^[We'll see kernel functions two more times in this chapter.].  Common kernel functions are:
 
-- The **uniform kernel**, which assigns equal weight to all observations within a fixed range
-- The **Gaussian kernel**, $K(u) = \frac{1}{\sqrt{2\pi}}\exp(-u^2/2)$, which assigns weights that decrease exponentially with distance from the point of interest
+* The **uniform kernel**, which assigns equal weight to all observations within a fixed range
+* The **Gaussian kernel**, $K(u) = \frac{1}{\sqrt{2\pi}}\exp(-u^2/2)$, which assigns weights that decrease exponentially with distance from the point of interest
 
 The kernel density estimate at a point $u$ is constructed as:
 
@@ -118,7 +121,7 @@ $$
 \hat{f}(u) = \frac{1}{nh}\sum_{i=1}^n K\left(\frac{u - x_i}{h}\right)
 $$
 
-where $n$ is the number of observations, $x_i$ are the observed training set data points, and $h$ is the bandwidth parameter that controls the smoothness of the estimate.  We'll come back to the bandwidth parameter shortly.
+where $n$ is the number of observations, $x_i$ are the observed training set data points, and $h$ is the bandwidth parameter that controls the smoothness of the estimate.  We’ll come back to the bandwidth parameter shortly.
 
 For example, @fig-densities displays estimated densities for the minimum vapor pressure variable across three subsets of the data. Kernel density estimates are shown in blue, while fully parametric Gaussian density estimates (assuming $N(\mu, \sigma)$) are shown in orange. The left-hand panel presents the entire training set, which exhibits modest right skewness. Both estimation approaches provide reasonable approximations for vapor pressure values^[In units of  Pa × 100.] above 200. However, the Gaussian estimate lacks the flexibility to adequately capture the density in the middle of the range, and both methods perform poorly for values below 200, where the data are sparse.
 
@@ -134,7 +137,8 @@ These examples illustrate the potential advantage of kernel density estimation w
 #| out-width: 75%
 #| fig-width: 6.5
 #| fig-height: 3
-#| fig-cap: Parametric and nonparametric density estimates for the minimum vapor predictor, shown separately for the entire training set and then for each class. The blue line is the nonparametric estimate, and the orange curve is the traditional Gaussian estimate.
+#| fig-cap: Parametric and nonparametric density estimates for the minimum vapor predictor, shown separately for the entire training set and then for each class. The blue line is the nonparametric estimate, and the orange curve is the traditional Gaussian estimate. 
+
 forested_dens <-
   forested_train |>
   dplyr::select(vapor_min, county) |>
@@ -177,7 +181,7 @@ The kernel density estimator contains a tuning parameter: the bandwidth $h$, whi
 
 Several data-driven methods exist for selecting the bandwidth that optimizes specific criteria. Common approaches include minimizing an estimate of the mean integrated squared error or using cross-validation [@park1990comparison]. These default bandwidth selection methods are designed to produce generally accurate density estimates.
 
-However, the bandwidth that yields the most accurate density estimate may not necessarily produce the best classification performance. The objective in density estimation---minimizing the mean squared error---differs from the classification objective of minimizing prediction error. To address this potential misalignment, the bandwidth can be treated as a tuning parameter in the naive Bayes model. Rather than directly tuning $h$, it is often more convenient to tune a bandwidth adjustment factor that is a multiplier of the bandwidth.  A value greater than 1.0 encourages more smoothing of the data, while a smaller values make very bumpy densities.
+However, the bandwidth that yields the most accurate density estimate may not necessarily produce the best classification performance. The objective in density estimation—minimizing the mean squared error—differs from the classification objective of minimizing prediction error. To address this potential misalignment, the bandwidth can be treated as a tuning parameter in the naive Bayes model. Rather than directly tuning $h$, it is often more convenient to tune a bandwidth adjustment factor that is a multiplier of the bandwidth.  A value greater than 1.0 encourages more smoothing of the data, while a smaller values make very bumpy densities.
 
 Since naive Bayes does not assume much about $Pr[x_j|Y = k]$, categorical predictors can be readily incorporated into the model. For a categorical predictor, the conditional probabilities are estimated directly from the observed frequencies within each class. @fig-counties showed the raw probabilities associated with the forested class (i.e., $Pr[y = forested]$).
 
@@ -194,6 +198,17 @@ $$ {#eq-laplace-smooth}
 where $C_{x}$ is the number of levels of the qualitative predictor and $x_k$ and $n_k$ are the number of events and locations, respectively. Here, with $C_x = 2$ and $\alpha = 1$, the new estimate is `r round((0 + 1) / (10 + 1 * 2) * 100, 1)`%. 
 
 Despite the potentially unrealistic assumption of conditional independence among predictors, naive Bayes classifiers can demonstrate competitive predictive performance with other methods.  In addition, naive Bayes models can be computationally efficient since many of the calculations can be done in parallel.  Depending on how the conditional densities are computed, they can be easily added to database tables, and the final prediction can be executed using highly efficient SQL.
+
+```{r}
+#| label: fewer-workers
+#| include: false
+# The naive Bayes calculations will use a lot of memory. We'll reduce 
+# the number of parallel workers for now so that we don't take up
+# too much system memory
+
+daemons(0)
+daemons(6)
+```
 
 ```{r}
 #| label: forested-nb
@@ -226,7 +241,7 @@ forest_nb_res <-
   tune_grid(
     resamples = forested_rs,
     grid = crossing(
-      smoothness = seq(0.5, 1.5, by = 0.1),
+      smoothness = seq(0.5, 1.5, by = 0.2),
       prop_terms = (1:5 / 5)
     ),
     metrics = cls_mtr,
@@ -273,7 +288,8 @@ One potential downside for this model is that there is a tendency for the class 
 #| out-width: 80%
 #| fig-width: 7
 #| fig-height: 4
-#| fig-cap: An example of how the probability estimates produced by naive Bayes can have poor calibration properties.
+#| fig-cap: An example of how the probability estimates produced by naive Bayes can have poor calibration properties. 
+
 p_nb_prob <-
   forest_nb_pred |>
   ggplot(aes(.pred_Yes)) +
@@ -298,6 +314,7 @@ To address these calibration issues, an initial feature filter could be helpful.
 #| fig-width: 6.5
 #| fig-height: 3
 #| fig-cap: Aggregate feature rankings using a random forest importance score on the forestation data. The bands reflect 90% confidence intervals computed using replicates over cross-validation.
+
 forest_nb_res |>
   collect_extracts() |>
   dplyr::select(-.config, -id) |>
@@ -323,7 +340,7 @@ forest_nb_res |>
   labs(y = NULL, x = "Random Forest Importance Score")
 ```
 
-The results show that, according to random forest, annual precipitation has, by far, the largest effect on the prediction function. The second tier of importance includes maximum vapor pressure and longitude predictors, which exhibit nearly equivalent importance scores. A moderate cluster of predictors shows intermediate importance values, while several predictors---including county, year, eastness, and westness---yield low importance scores. 
+The results show that, according to random forest, annual precipitation has, by far, the largest effect on the prediction function. The second tier of importance includes maximum vapor pressure and longitude predictors, which exhibit nearly equivalent importance scores. A moderate cluster of predictors shows intermediate importance values, while several predictors—including county, year, eastness, and westness—yield low importance scores. 
 
 It is important to note that variable importance measures are model-specific and should not be interpreted as universal or absolute assessments of predictor relevance^[A different view of predictor importance will be seem later in @fig-forested-fda-imp.].  In this context, the random forest importance scores serve as a filtering mechanism to identify and remove potentially irrelevant predictors prior to fitting the classification model, rather than as definitive decisions regarding predictor-response relationships.
 
@@ -341,9 +358,9 @@ The predictions for the _best_ candidate are those shown in @fig-nb-probs. As no
 #| out-width: 55%
 #| fig-width: 5
 #| fig-height: 4
-#| fig-cap: Naive Bayes tuning results for the forestation data.
-autoplot(forest_nb_res, metric = c("brier_class", "roc_auc")) +
-  labs(y = "Brier Score") +
+#| fig-cap: Naive Bayes tuning results for the forestation data. 
+autoplot(forest_nb_res, metric = c("brier_class", "roc_auc")) + 
+  labs(y = "Brier Score") + 
   scale_colour_paletteer_d("calecopal::eschscholzia") +
   theme(legend.position = "top")
 ```
@@ -404,7 +421,7 @@ As we will see in @sec-reg-nonlinear, MARS is a forward stepwise procedure that 
 
 ::: {#fig-fda-hinge}
 
-::::: {.figure-content}
+::: {.figure-content}
 
 ```{shinylive-r}
 #| label: shiny-fda-hinge
@@ -519,7 +536,7 @@ app <- shinyApp(ui, server)
 app
 ```
 
-:::::
+:::
 
 An example of how MARS partitions the predictor space into two distinct regions, each with its own regression line that connects at the split point. For the bottom panel, we assume an intercept of $\beta_0 = 0$ for @fig-fda-hinge.
 
@@ -584,6 +601,13 @@ forest_fda_res <-
       parallel_over = "everything"
     )
   )
+```
+
+```{r}
+#| label: reset-workers
+#| include: false
+daemons(0)
+daemons(parallel::detectCores())
 ```
 
 ```{r}
@@ -718,7 +742,7 @@ We can see how this worked out in @fig-fda-tune. Performance leveled off around 
 #| out-width: 90%
 #| fig-width: 8
 #| fig-height: 4
-#| fig-cap: FDA-MDA tuning results for the forestation data.
+#| fig-cap: FDA-MDA tuning results for the forestation data.  
 forest_fda_res |>
   collect_metrics() |>
   filter(.metric == "brier_class") |>
@@ -742,16 +766,17 @@ Once the FDA-MARS model was fit to the training set, the results was `r nrow(fda
 
 The last condition triggered the training procedure to stop at `r nrow(fda_coefs)` model terms instead of the `r forest_fda_best$num_terms`  that were requested. Of these terms, `r num_main` used a single predictor and `r num_int` were interaction terms. The categorical predictor (county) was used `r num_ind` times in both main effects and interactions. To give the reader a sense of what the linear regression model looks like, @tbl-fda-coefs shows the set of coefficients, the model terms, and split points.
 
-::: columns
-::::: {.column width="10%"}
-:::::
+::::::: columns
+::: {.column width="10%"}
+:::
 
-::::: {.column width="80%"}
-::::::: {#tbl-fda-coefs}
+:::: {.column width="80%"}
+::: {#tbl-fda-coefs}
 
 ```{r}
 #| label: fda-coefs
 #| echo: false
+
 fda_coefs |>
   dplyr::select(1:2) |>
   gt() |>
@@ -760,12 +785,12 @@ fda_coefs |>
 
 Model terms contained used the final FDA-MARS fit from the training set. There were `r nrow(fda_coefs)` total coefficients, `r num_main` of which used a single predictor, and `r num_int` were interaction terms. The categorical predictor (county) was used in `r num_ind` terms. 
 
-:::::::
-:::::
-
-::::: {.column width="10%"}
-:::::
 :::
+::::
+
+::: {.column width="10%"}
+:::
+:::::::
 
 To better understand what is driving the model, MARS has an _internal_ variable importance metric.  The method estimates variable importance based on the improvement in model fit as terms are added. During the forward pass, MARS quantifies the reduction in GCV associated with each new basis function and attributes this improvement to the corresponding predictor(s). These GCV reductions are summed across all terms involving each predictor and scaled to range from 0 to 100, where 0 indicates the predictor does not appear in the final model. For our model, @fig-forested-fda-imp displays the results. Annual precipitation and annual maximum temperature were the most influential predictors, each receiving an importance score of 100. Terrain roughness, annual mean temperature, and longitude also contributed substantially to the classifier. There were `r length(excluded)` predictors that were not used at all: `r exluded_text`.
 
@@ -776,8 +801,9 @@ To better understand what is driving the model, MARS has an _internal_ variable 
 #| fig-width: 6.5
 #| fig-height: 3
 #| fig-cap: MARS feature importance for the final forested model.
-fda_imp |>
-  ggplot(aes(gcv, reorder(text, gcv))) +
+
+fda_imp |> 
+  ggplot(aes(gcv, reorder(text, gcv))) + 
   geom_point() +
   labs(y = NULL, x = "MARS Importance (GCV)")
 ```
@@ -794,7 +820,7 @@ For example, suppose we chose an additive model based on the tuning results in @
 #| out-width: 90%
 #| fig-width: 8
 #| fig-height: 5
-#| fig-cap: Profile plots showing how each predictor related to the probability of forestation when an additive FDA-MDA is used. The y-axis has no numbers since the probabilities are relative.
+#| fig-cap: Profile plots showing how each predictor related to the probability of forestation when an additive FDA-MDA is used. The y-axis has no numbers since the probabilities are relative. 
 fda_additive_spec <-
   discrim_flexible(num_terms = 30, prod_degree = 1, prune_method = "forward") |>
   set_engine("earth", nk = 201, keepxy = TRUE)
@@ -861,7 +887,7 @@ and so on. These patterns illustrate how individual predictors influence the cla
 
 `r r_comp("cls-nonlinear.html#sec-fda")`
 
-## K-Nearest Neighbors {#sec-cls-knn}
+## K-Nearest Neighbors  {#sec-cls-knn}
 
 K-nearest neighbors (KNN) is predicated on the idea that data points that are close to one another in the predictor space should have outcomes that are also similar. If we are predicting a new sample, we find the _K_ training set points that are "closest" to the new data point and use their outcome values to estimate the prediction. There is essentially no training here; everything happens when the sample is being predicted. KNN falls into a class of techniques called instance-based learning since it stores the training set instances and directly uses these data during prediction.  
 
@@ -877,11 +903,11 @@ The choice of distance metric can substantially influence model performance and 
 
 Beyond the Minkowski family, several specialized distance metrics may be appropriate depending on the structure and nature of the predictor space:
 
-- Geodesic distance (discussed in @sec-isomap) is based on a general distance matrix to construct a graph-based representation of inter-point relationships.
+* Geodesic distance (discussed in @sec-isomap) is based on a general distance matrix to construct a graph-based representation of inter-point relationships.
 
-- Haversine distance (introduced in @sec-centroids) accounts for the curvature of the Earth's surface and is the appropriate metric when predictors represent geographic coordinates (latitude and longitude).
+* Haversine distance (introduced in @sec-centroids) accounts for the curvature of the Earth's surface and is the appropriate metric when predictors represent geographic coordinates (latitude and longitude).
 
-- Mahalanobis distance [@JohnsonWichern; @DeMaesschalck20001] incorporates the covariance structure among predictors, effectively scaling predictor differences by their variances and correlations. This metric is particularly valuable when predictors exhibit substantial correlation and sufficient data are available to reliably estimate the covariance matrix. The Mahalanobis distance has a direct connection to the mathematics of discriminant analysis.
+* Mahalanobis distance [@JohnsonWichern; @DeMaesschalck20001] incorporates the covariance structure among predictors, effectively scaling predictor differences by their variances and correlations. This metric is particularly valuable when predictors exhibit substantial correlation and sufficient data are available to reliably estimate the covariance matrix. The Mahalanobis distance has a direct connection to the mathematics of discriminant analysis.
 
 These distance-based metrics require numeric predictors. For the Minkowski distance, predictors must be expressed in the same units to prevent variables with larger scales from dominating the distance calculation. This is typically accomplished through centering and scaling (standardization) or other normalization techniques. Additionally, addressing skewness through appropriate transformations (e.g., Box-Cox, Yeo-Johnson, orderNorm, etc.) prior to distance calculation is recommended, as highly skewed distributions can distort relationships and degrade model performance.
 
@@ -925,6 +951,7 @@ $$
 
 where $g()$ is a kernel function that weights the distances and $W$ is the sum of the $g(d_k)$ [@dudani1976distance;@zuo2008kernel;@Samworth]. @fig-weight-kernels shows some commonly used functions [@hechenbichler2004weighted]. 
 
+
 ```{r}
 #| label: fig-weight-kernels
 #| echo: false
@@ -933,7 +960,7 @@ where $g()$ is a kernel function that weights the distances and $W$ is the sum o
 #| out-width: 80%
 #| fig-width: 8
 #| fig-height: 2.75
-#| fig-cap: Different kernel functions to downweight far-away neighbors. Values have been rescaled to have the same upper value.
+#| fig-cap: Different kernel functions to downweight far-away neighbors. Values have been rescaled to have the same upper value.  
 dists <-
   crossing(
     distance = seq(0.1, 1, length.out = 100),
@@ -970,7 +997,7 @@ dists |>
   facet_wrap(~kernel, nrow = 1) +
   lims(y = extendrange(0:1)) +
   labs(x = "Distance to Neighbor", y = "Weight")
-```
+```  
 
 Outside of preprocessing methods, the primary tuning parameters are the number of neighbors, the weighting function, and the distance degree (if using a Minkowski distance). Recall from @fig-irrelevant-predictors that KNN models can be harmed when used with irrelevant predictors. As will be seen with these data, tuning an initial feature selection filter can improve model quality. 
 
@@ -978,6 +1005,7 @@ Outside of preprocessing methods, the primary tuning parameters are the number o
 #| label: forested-knn
 #| include: false
 #| cache: true
+
 knn_spec <-
   nearest_neighbor(
     neighbors = tune(),
@@ -1059,7 +1087,8 @@ How well does this technique work for the forestation data? To start, we used pr
 #| out-width: 80%
 #| fig-width: 8
 #| fig-height: 3
-#| fig-cap: K-nearest neighbors tuning results for the forestation data.
+#| fig-cap: K-nearest neighbors tuning results for the forestation data.  
+
 knn_best_res <- show_best(forest_knn_res, metric = "brier_class")
 autoplot(forest_knn_res, metric = "brier_class") +
   labs(y = "Brier Score")
@@ -1234,51 +1263,37 @@ In later sections, we'll also spend a considerable amount of time discussing the
 #| include: false
 lp_grid <- seq(-3, 3, length.out = 100)
 
-act_functions <-
+act_functions <- 
   bind_rows(
-    tibble(
-      input = lp_grid,
-      output = binomial()$linkinv(lp_grid),
-      activation = "logistic"
-    ),
-    tibble(input = lp_grid, output = tanh(lp_grid), activation = "tanh"),
-    tibble(
-      input = lp_grid,
-      output = as.numeric(nnf_relu(lp_grid)),
-      activation = "relu"
-    ),
-    tibble(
-      input = lp_grid,
-      output = as.numeric(nnf_elu(lp_grid)),
-      activation = "elu"
-    ),
-    tibble(
-      input = lp_grid,
-      output = lp_grid - tanh(lp_grid),
-      activation = "tanhshrink"
-    ),
-    tibble(
-      input = lp_grid,
-      output = as.numeric(nnf_softshrink(lp_grid)),
-      activation = "softshrink"
-    ),
-    tibble(
-      input = lp_grid,
-      output = as.numeric(nnf_gelu(lp_grid)),
-      activation = "gelu"
-    ),
-    tibble(
-      input = lp_grid,
-      output = as.numeric(nnf_silu(lp_grid)),
-      activation = "silu"
-    ),
-    tibble(
-      input = lp_grid,
-      output = as.numeric(nn_softplus()(lp_grid)),
-      activation = "softplus"
-    )
+    tibble(input = lp_grid,
+           output = binomial()$linkinv(lp_grid),
+           activation = "logistic"),
+    tibble(input = lp_grid,
+           output = tanh(lp_grid),
+           activation = "tanh"),
+    tibble(input = lp_grid,
+           output = as.numeric(nnf_relu(lp_grid)),
+           activation = "relu"),
+    tibble(input = lp_grid,
+           output = as.numeric(nnf_elu(lp_grid)),
+           activation = "elu"),
+    tibble(input = lp_grid,
+           output = lp_grid - tanh(lp_grid),
+           activation = "tanhshrink"),
+    tibble(input = lp_grid,
+           output = as.numeric(nnf_softshrink(lp_grid)),
+           activation = "softshrink"),
+    tibble(input = lp_grid,
+           output = as.numeric(nnf_gelu(lp_grid)),
+           activation = "gelu"),
+    tibble(input = lp_grid,
+           output = as.numeric(nnf_silu(lp_grid)),
+           activation = "silu"),
+    tibble(input = lp_grid,
+           output = as.numeric(nn_softplus()(lp_grid)),
+           activation = "softplus")
   )
-```
+```  
 
 Historically, the most commonly used nonlinear activation functions were sigmoidal. This means that the linear combination of the elements in the previous layer was converted into a "squashed" format, typically bounded (e.g., logistic activation values range between 0 and 1). @fig-sigmoid-activations shows several such functions. The logistic (@eq-logistic) function and hyperbolic tangent are fairly similar in shape, and were typical defaults. 
 
@@ -1313,6 +1328,7 @@ In modern neural networks, the rectified linear unit (ReLU) is the default activ
 #| fig-width: 8
 #| fig-height: 2
 #| fig-cap: "Different ReLU-based activation functions."
+
 relu_lvl <- c("relu", "softplus", "gelu", "silu", "elu")
 
 act_functions |>
@@ -1331,14 +1347,14 @@ There are various modified versions of ReLU that emulate the same form but have 
 #| label: nnet-ex-comps
 #| include: false
 #| cache: true
-two_class_ex <-
-  parabolic |>
-  set_names(c("A", "B", "Class"))
+two_class_ex <- 
+  parabolic |> 
+  set_names(c("A", "B", "Class")) 
 
-two_class_ex <-
-  recipe(Class ~ ., data = two_class_ex) |>
-  step_orderNorm(A, B) |>
-  prep() |>
+two_class_ex <-   
+  recipe(Class ~ ., data = two_class_ex) |> 
+  step_orderNorm(A, B) |> 
+  prep() |> 
   bake(new_data = NULL)
 
 x <- seq(-4, 4, length.out = 100)
@@ -1356,9 +1372,9 @@ fit_1 <- brulee_mlp(
 
 coefs <- stats::coef(fit_1)
 
-grid_pred <-
-  fit_1 |>
-  predict(grid, type = "prob") |>
+grid_pred <- 
+  fit_1 |> 
+  predict(grid, type = "prob") |> 
   bind_cols(grid)
 
 get_elements <- function(x, model) {
@@ -1376,7 +1392,7 @@ get_elements <- function(x, model) {
 
 components <- NULL
 for (i in 1:nrow(grid)) {
-  components <- bind_rows(components, get_elements(grid[i, ], fit_1))
+  components <- bind_rows(components, get_elements(grid[i,], fit_1))
 }
 ```
 
@@ -1390,9 +1406,10 @@ Let's use an example data set with a simple MLP to demonstrate how ReLU activati
 #| fig-height: 4.4
 #| warning: false
 #| fig-cap: "An example data set with two predictors and two classes. The black line is the class boundary from an MLP model using three hidden units with ReLU activation."
-grid_pred |>
+
+  grid_pred |> 
   ggplot(aes(A, B)) +
-  geom_point(data = two_class_ex, aes(col = Class), alpha = 1 / 3) +
+  geom_point(data = two_class_ex, aes(col = Class), alpha = 1/3) +
   geom_contour(aes(z = .pred_Class1), breaks = 0.5, col = "black") +
   coord_fixed() +
   scale_color_manual(values = c("#007FFFFF", "#FF7F00FF"))
@@ -1406,9 +1423,9 @@ With two predictors and three hidden units, the first set of coefficients for th
 #| results: "asis"
 wt_1 <- format(coefs$model.0.weight, digits = 1)
 wt_1 <- gsub("^ ", "+", wt_1)
-wt_1[, 1] <- paste0(wt_1[, 1], "\\:A")
-wt_1[, 2] <- paste0(wt_1[, 2], "\\:B")
-lp_1 <-
+wt_1[,1] <- paste0(wt_1[,1], "\\:A")
+wt_1[,2] <- paste0(wt_1[,2], "\\:B")
+lp_1 <- 
   cbind(
     format(coefs$model.0.bias, digits = 2),
     wt_1
@@ -1435,41 +1452,42 @@ The top of @fig-nnet-ex-layer-1 displays a heatmap illustrating how these three 
 #| fig-height: 5
 #| warning: false
 #| fig-cap: "Heatmaps of the three linear predictors and their ReLU values across the predictor space. The black line emphasizes the location where the linear predictor is zero."
-lp_layer <-
-  components |>
-  dplyr::select(-starts_with("relu_"), -starts_with("output")) |>
-  pivot_longer(cols = c(starts_with("lp_"))) |>
-  mutate(name = gsub("lp_", "hidden unit ", name)) |>
-  ggplot(aes(A, B)) +
-  geom_tile(aes(fill = value), show.legend = TRUE) +
+
+lp_layer <- 
+  components |> 
+  dplyr::select(-starts_with("relu_"), -starts_with("output")) |> 
+  pivot_longer(cols = c(starts_with("lp_"))) |> 
+  mutate(name = gsub("lp_", "hidden unit ", name)) |> 
+  ggplot(aes(A, B)) + 
+  geom_tile(aes(fill = value), show.legend = TRUE) + 
   geom_contour(aes(z = value), breaks = 0, col = "black") +
-  facet_wrap(~name, nrow = 1) +
-  scale_fill_gradient2(high = "#5D74A5FF") +
-  # coord_fixed() +
+  facet_wrap(~ name, nrow = 1) + 
+  scale_fill_gradient2(high = "#5D74A5FF") + 
+  # coord_fixed() + 
   theme(
     legend.position = "right",
     plot.title = element_text(hjust = 0.5),
     legend.title = element_blank()
-  ) +
+  ) + 
   labs(title = "Linear Predictor")
 
-relu_layer <-
-  components |>
-  dplyr::select(-starts_with("lp"), -starts_with("output")) |>
-  pivot_longer(cols = c(starts_with("relu_"))) |>
-  mutate(name = gsub("relu_", "hidden unit ", name)) |>
-  ggplot(aes(A, B)) +
-  geom_tile(aes(fill = value), show.legend = TRUE) +
+relu_layer <- 
+  components |> 
+  dplyr::select(-starts_with("lp"), -starts_with("output")) |> 
+  pivot_longer(cols = c(starts_with("relu_"))) |> 
+  mutate(name = gsub("relu_", "hidden unit ", name)) |> 
+  ggplot(aes(A, B)) + 
+  geom_tile(aes(fill = value), show.legend = TRUE) + 
   geom_contour(aes(z = value), breaks = 0, col = "5AAE61FF") +
-  facet_wrap(~name, nrow = 1) +
-  scale_fill_gradient2(high = "#5D74A5FF") +
-  # coord_fixed() +
+  facet_wrap(~ name, nrow = 1) + 
+  scale_fill_gradient2(high = "#5D74A5FF") + 
+  # coord_fixed() + 
   theme(
     legend.position = "right",
     plot.title = element_text(hjust = 0.5),
     legend.title = element_blank()
-  ) +
-  labs(title = "ReLU")
+  ) + 
+  labs(title = "ReLU") 
 
 lp_layer / relu_layer
 ```
@@ -1484,10 +1502,10 @@ However, the model estimates additional parameters that will merge these regions
 #| results: "asis"
 wt_2 <- format(coefs$model.2.weight, digits = 1)
 wt_2 <- gsub("^ ", "+", wt_2)
-wt_2[, 1] <- paste0(wt_2[, 1], "H_{i1}")
-wt_2[, 2] <- paste0(wt_2[, 2], "H_{i2}")
-wt_2[, 3] <- paste0(wt_2[, 3], "H_{i3}")
-lp_2 <-
+wt_2[,1] <- paste0(wt_2[,1], "H_{i1}")
+wt_2[,2] <- paste0(wt_2[,2], "H_{i2}")
+wt_2[,3] <- paste0(wt_2[,3], "H_{i3}")
+lp_2 <- 
   cbind(
     format(coefs$model.2.bias, digits = 2),
     wt_2
@@ -1512,7 +1530,8 @@ Note that the coefficients' signs are opposite for each outcome unit. @fig-nnet-
 #| fig-height: 5
 #| warning: false
 #| fig-cap: "Heatmaps of the three ReLU units and their output units across the predictor space."
-output_layer <-
+
+output_layer <- 
   components |>
   dplyr::select(-starts_with("lp"), -starts_with("relu_")) |>
   pivot_longer(cols = c(starts_with("output"))) |>
@@ -1524,15 +1543,15 @@ output_layer <-
     breaks = 0,
     col = "black"
   ) +
-  facet_wrap(~name, nrow = 1) +
-  scale_fill_gradient2(high = "#420F75FF", low = "#EAC541FF") +
-  coord_fixed() +
+  facet_wrap(~ name, nrow = 1) + 
+  scale_fill_gradient2(high = "#420F75FF", low = "#EAC541FF") + 
+  coord_fixed() + 
   theme(
     legend.position = "right",
     plot.title = element_text(hjust = 0.5),
     legend.title = element_blank()
-  ) +
-  labs(title = "Output", y = NULL)
+  )  + 
+  labs(title = "Output", y = NULL) 
 
 relu_layer / output_layer
 ```
@@ -1555,7 +1574,7 @@ A second related issue is saddle points. These are locations where all of the gr
 
 ::: {#fig-stationary}
 
-::::: {.figure-content}
+::: {.figure-content}
 
 ```{r}
 #| label: stationary
@@ -1563,24 +1582,25 @@ A second related issue is saddle points. These are locations where all of the gr
 #| out-width: 60%
 #| fig-width: 5.5
 #| fig-height: 4.7
+
 loss_grid |>
-  rename(loss = res) |>
-  ggplot(aes(x, y)) +
-  geom_tile(aes(fill = loss)) +
-  geom_contour(aes(z = loss), col = "darkred", bins = 7, alpha = 3 / 4) +
-  scale_fill_gradient(low = "white", high = "red") +
-  scale_shape_manual(values = c(2, 6, 1)) +
-  geom_point(
-    data = stationary,
-    aes(pch = type),
-    cex = 2.5,
-    col = "black"
-  ) +
-  coord_fixed(ratio = 5) +
-  labs(x = expression(theta[1]), y = expression(theta[2]))
+	rename(loss = res) |> 
+	ggplot(aes(x, y)) +
+	geom_tile(aes(fill = loss)) +
+	geom_contour(aes(z = loss), col = "darkred", bins = 7, alpha = 3 / 4) +
+	scale_fill_gradient(low = "white", high = "red") +
+	scale_shape_manual(values = c(2, 6, 1)) +
+	geom_point(
+		data = stationary,
+		aes(pch = type),
+		cex = 2.5,
+		col = "black"
+	) + 
+	coord_fixed(ratio = 5) + 
+	labs(x = expression(theta[1]), y = expression(theta[2]))
 ```
 
-:::::
+:::
 
 The loss surface for $\psi(\boldsymbol{\theta}) = \theta_1 cos(0.5\,\theta_1) - 2 \exp(-6(\theta_2 - 0.3)^2) + 0.2\, \theta_1 \theta_2$. Four stationary points are shown.
 
@@ -1590,7 +1610,7 @@ Another possible factor is that many deep learning models are trained on vast am
 
 Before proceeding, recall @sec-gradient-opt where gradient descent was introduced. There are two commonly used classes of gradient-based optimization: 
 
-- _First-order techniques_: $\quad\boldsymbol{\theta}_{i+1} = \boldsymbol{\theta}_i - \alpha\,g(\boldsymbol{\theta}_i)$,
+ - _First-order techniques_: $\quad\boldsymbol{\theta}_{i+1} = \boldsymbol{\theta}_i - \alpha\,g(\boldsymbol{\theta}_i)$,
 
 - _Second-order methods_: $\quad\boldsymbol{\theta}_{i+1} = \boldsymbol{\theta}_i - \alpha H(\boldsymbol{\theta_i})^{-1}\,g(\boldsymbol{\theta}_i)$,
 
@@ -1608,18 +1628,21 @@ The model was first trained using basic gradient descent. For illustration, trai
 #| fig-height: 2.8
 #| warning: false
 #| fig-cap: "The loss function, using held out data, for the same MLP model for four optimization strategies. The lines on each panel represent runs initialized with different random numbers. The profiles are normalized to start from the same initial loss value."
-optimizers |>
-  filter(method != "L-BFGS") |>
+
+optimizers |> 
+  filter(method != "L-BFGS") |> 
   ggplot(aes(epoch, loss_norm, col = seed, group = seed)) +
-  geom_line(show.legend = FALSE, linewidth = 3 / 4, alpha = 1 / 2) +
-  facet_wrap(~method, scale = "free_x", nrow = 1) +
-  scale_x_continuous(breaks = pretty_breaks()) +
+  geom_line(show.legend = FALSE,
+            linewidth = 3 / 4,
+            alpha = 1 / 2) +
+  facet_wrap(~ method, scale = "free_x", nrow = 1) +
+  scale_x_continuous(breaks = pretty_breaks()) + 
   labs(x = "Epochs", y = "Cross-Entropy (Holdout)")
 ```
 
 When training neural networks, _stochastic_ gradient descent (SGD) is the standard approach. SGD uses randomly allocated _batches_ training set samples. The gradient search is updated by processing each of these batches until the entire trained set has been used, which signifies the end of that epoch. In other words, a potentially large number of parameter updates are computed based on a small number of training point samples. The batch size used here was 64 data points. As a result, for this training set size, about 76 gradient updates are executed before the model has seen all of the training data. 
 
-For stochastic gradient descent, we track the process by _epochs_. An epoch is finished when the model has been updated using every data point in the training set. For this analysis, this means that there are about 76 parameter updates within an epoch. For regular gradient descent and second-order search methods, we'll count their progress as _iterations_ since there are no batches. 
+For stochastic gradient descent, we track the process by _epochs_. An epoch is finished when the model has been updated using every data point in the training set. For this analysis, this means that there are about 76 parameter updates within an epoch. For regular gradient descent and second-order search methods, we’ll count their progress as _iterations_ since there are no batches. 
 
 As shown in @fig-optimizers, SGD does far better than plain GD and although none stop early, there is a relatively flat trend after about 20 epochs, where the search does not substantially reduce the loss. In terms of time per epoch, SGD takes much longer than GD at `r  round(optimizer_times$per_epoch[optimizer_times$method == "SGD"], 3)`s. 
 
@@ -1637,8 +1660,8 @@ Network parameter initialization can significantly impact the success of trainin
 
 There are a few approaches for simulating initial values.  @lecun2002efficient initialization uses a uniform distribution centered around zero with limits defined by the number of connections feeding into the current node (known as the "fan in" and is denoted as $m_{in}$). They used $U(\pm \sqrt{2/m_{in}})$ as the distribution. There have been a few variations of this: 
 
-- Glorot/Xavier initialization [@glorot2010understanding]: $U(\pm \sqrt{6/(m_{in}+m_{out})})$ 
-- He/Kaiming initialization [@he2015delving]: $N(0, \sqrt{2 / m_{in}})$.
+ - Glorot/Xavier initialization [@glorot2010understanding]: $U(\pm \sqrt{6/(m_{in}+m_{out})})$ 
+ - He/Kaiming initialization [@he2015delving]: $N(0, \sqrt{2 / m_{in}})$.
 
 where $m_{out}$ is the number of parameters leaving the node. 
 
@@ -1751,6 +1774,7 @@ Values of $\phi$ are typically between 0.8 and 0.99, representing a weighted ave
 #| fig-height: 2.8
 #| warning: false
 #| fig-cap: "Examples of four different optimizers for the loss surface previously shown in @fig-schedulers."
+
 bind_rows(momentum_res, adam_res, rms_prop_res, adagrad_res) |>
   mutate(
     technique = factor(
@@ -1759,7 +1783,7 @@ bind_rows(momentum_res, adam_res, rms_prop_res, adagrad_res) |>
     )
   ) |>
   base_sgd_plot(NULL) +
-  facet_wrap(~technique, nrow = 1)
+  facet_wrap( ~ technique, nrow = 1)
 ```
 
 Momentum should be used in conjunction with a rate scheduler, or at the very least, without a consistently large learning rate. Making very large jumps in a central direction might lead the search to points far away from regions of improvement. Penalization also helps. 
@@ -1853,15 +1877,15 @@ As previously mentioned, there are numerous other variations of SGD that will no
 
 ### Newton's Method {#sec-newtons-method}
 
-As previously shown, Newton's method (a.k.a., the Newton--Raphson method) uses both gradients and the Hessian matrix to update parameters. This approach can be very effective when the local loss surface can be approximated by a second-degree polynomial. When the local search includes a stationary point, the signs of the eigenvalues of the Hessian can characterize it: all non-negative imply a maximum, all non-positive imply a minimum, and mixed signs indicate a saddle point. 
+As previously shown, Newton’s method (a.k.a., the Newton–Raphson method) uses both gradients and the Hessian matrix to update parameters. This approach can be very effective when the local loss surface can be approximated by a second-degree polynomial. When the local search includes a stationary point, the signs of the eigenvalues of the Hessian can characterize it: all non-negative imply a maximum, all non-positive imply a minimum, and mixed signs indicate a saddle point. 
 
-One issue with the method is related to the Hessian. If there are $p$ parameters, the matrix needs to save $p(p+1)/2$ parameters. For neural networks, $p$ can be in the millions, so the basic application of Newton's method can be slow and might require infeasible amounts of memory (depending on the model size). We also need to invert the Hessian, making it even more costly.
+One issue with the method is related to the Hessian. If there are $p$ parameters, the matrix needs to save $p(p+1)/2$ parameters. For neural networks, $p$ can be in the millions, so the basic application of Newton’s method can be slow and might require infeasible amounts of memory (depending on the model size). We also need to invert the Hessian, making it even more costly.
 
-We can approximate Newton's method using the Limited-memory Broyden--Fletcher--Goldfarb--Shanno algorithm (L-BFGS) search [@lu2022gradient,chapt 6]. It uses past gradients to approximate the Hessian as the search proceeds. L-BFGS computes gradients at different values of $\boldsymbol{\theta}$ for more than just updating the parameters (i.e., Hessian approximation and the line search), so it is not a good solution when loss function or gradient evaluations are expensive. 
+We can approximate Newton's method using the Limited-memory Broyden–Fletcher–Goldfarb–Shanno algorithm (L-BFGS) search [@lu2022gradient,chapt 6]. It uses past gradients to approximate the Hessian as the search proceeds. L-BFGS computes gradients at different values of $\boldsymbol{\theta}$ for more than just updating the parameters (i.e., Hessian approximation and the line search), so it is not a good solution when loss function or gradient evaluations are expensive. 
 
 However, if we have a small dataset, a low-to-medium complexity architecture, or both, L-BFGS can be a very effective tool for estimating parameters. 
 
-### Forestation Modeling {#sec-nnet-forestation}
+### Forestation Modeling  {#sec-nnet-forestation}
 
 ```{r}
 #| label: load-forested-mlp
@@ -1869,15 +1893,16 @@ However, if we have a small dataset, a low-to-medium complexity architecture, or
 # Code in R/forested_mlp.R
 load("../RData/forested_mlp.RData")
 
-brier_param_cor <-
-  cor(brier_and_params$mean, brier_and_params$num_param, method = "spearman") |>
+brier_param_cor <- 
+  cor(brier_and_params$mean, brier_and_params$num_param, 
+      method = "spearman") |> 
   round(2)
 
 num_metrics <- vctrs::vec_unique_count(mlp_ranks$.metric)
 num_configs <- nrow(mlp_ranks) / num_metrics
 num_grid <- vctrs::vec_unique_count(mlp_ranks$.config)
 
-wide_mtr <-
+wide_mtr <- 
   mlp_ranks |>
   dplyr::select(wflow_id, .config, .metric, mean) |>
   pivot_wider(
@@ -1890,27 +1915,27 @@ mtr_cor <- cor(wide_mtr$brier_class, wide_mtr$roc_auc) |> round(2)
 
 For the forested data, there are a few options for preprocessing: 
 
-- Use binary indicators to represent the `r length(levels(forested_train$county))` counties or a supervised effect encoding strategy. 
-- Several predictors are highly skewed. We can leave them as-is before centering/scaling, or use an orderNorm transformation to coerce each predictor to a standard normal distribution. 
-- Deal with the high correlation for some predictors via PCA extraction or leave as-is in the data. 
+ - Use binary indicators to represent the `r length(levels(forested_train$county))` counties or a supervised effect encoding strategy. 
+ - Several predictors are highly skewed. We can leave them as-is before centering/scaling, or use an orderNorm transformation to coerce each predictor to a standard normal distribution. 
+ - Deal with the high correlation for some predictors via PCA extraction or leave as-is in the data. 
 
 Several combinations of these operations were used: 
 
-- An effect encoding with and without PCA feature extraction.
-- Standard binary indicators with and without PCA feature extraction and with and without a symmetry transformation (i.e., orderNorm versus centering/scaling). 
+ - An effect encoding with and without PCA feature extraction.
+ - Standard binary indicators with and without PCA feature extraction and with and without a symmetry transformation (i.e., orderNorm versus centering/scaling). 
 
 For the PCA extraction, all possible components were used. 
 
 For the model, there are a fair number of tuning parameters to combine: 
 
-- One or two layers.
-- The number of hidden units. For each layer, these ranged from two to fifty units. 
-- The activation type: ReLU, elu, tanh, and tanhshrink.
-- L<sub>2</sub> regularization values between 10<sup>-10</sup> and 10<sup>-1</sup>.
-- Batch sizes between 2<sup>3</sup> and 2<sup>8</sup>.
-- Learning rates between 10<sup>-4</sup> and 10<sup>-1</sup>.
-- Learning rate schedules: constant, cyclic, and time decay.
-- Momentum values between [0.8, 0.99].
+ - One or two layers.
+ - The number of hidden units. For each layer, these ranged from two to fifty units. 
+ - The activation type: ReLU, elu, tanh, and tanhshrink.
+ - L<sub>2</sub> regularization values between 10<sup>-10</sup> and 10<sup>-1</sup>.
+ - Batch sizes between 2<sup>3</sup> and 2<sup>8</sup>.
+ - Learning rates between 10<sup>-4</sup> and 10<sup>-1</sup>.
+ - Learning rate schedules: constant, cyclic, and time decay.
+ - Momentum values between [0.8, 0.99].
 
 AdamW was used to train the models, with a maximum of 25 epochs allowed, but early stopping could occur after five consecutive epochs with poor performance. 
 
@@ -1925,7 +1950,8 @@ A space-filling design with `r num_grid` candidates was evaluated. The six prepr
 #| fig-width: 9
 #| fig-height: 5.2
 #| fig-cap: Rankings of multilayer perceptron models for the forestation models using the Brier score. The panels represent different types of preprocessing, and the vertical lines are 90% confidence intervals.
-mlp_ranks |>
+
+mlp_ranks|> 
   mutate(
     encoding = map_chr(wflow_id, ~ strsplit(.x, split = "_")[[1]][1]),
     encoding = case_when(
@@ -1933,14 +1959,7 @@ mlp_ranks |>
       encoding == "plain" ~ "Indicators",
       .default = "Effect Encoding + Symmetry"
     ),
-    encoding = factor(
-      encoding,
-      levels = c(
-        "Indicators",
-        "Indicators + Symmetry",
-        "Effect Encoding + Symmetry"
-      )
-    ),
+    encoding = factor(encoding, levels = c("Indicators", "Indicators + Symmetry", "Effect Encoding + Symmetry")),
     extraction = map_chr(wflow_id, ~ strsplit(.x, split = "_")[[1]][2]),
     extraction = ifelse(extraction == "pca", "PCA", "No PCA"),
     extraction = factor(extraction, levels = c("No PCA", "PCA")),
@@ -1948,13 +1967,14 @@ mlp_ranks |>
     layers = factor(layers, levels = c("1 layer", "2 layers")),
     lower = mean - qnorm(0.05) * std_err,
     upper = mean + qnorm(0.05) * std_err
-  ) |>
-  filter(.metric == "brier_class") |>
-  ggplot(aes(x = rank, col = layers)) +
-  geom_errorbar(aes(ymin = lower, ymax = upper), alpha = 1 / 3) +
-  geom_point(aes(y = mean), cex = 1 / 2) +
-  facet_grid(extraction ~ encoding) +
-  scale_color_manual(values = c("#0076BBFF", "#E9A17CFF")) +
+  ) |> 
+  filter(.metric == "brier_class") |> 
+  ggplot(aes(x= rank, col = layers)) + 
+  geom_errorbar(aes(ymin = lower, ymax = upper), 
+                alpha = 1 / 3) +
+  geom_point(aes(y = mean), cex = 1/2) +
+  facet_grid(extraction ~ encoding) + 
+  scale_color_manual( values = c("#0076BBFF", "#E9A17CFF")) +
   labs(x = "Overall Rank", y = "Brier Score") +
   theme(legend.position = "top")
 ```
@@ -1966,18 +1986,18 @@ The two cases that did the best were the "Indicators + Symmetry" and "Effect Enc
 ```{r}
 #| label: tbl-mlp-top-five
 #| tbl-cap: "The best models as ranked by the Brier score."
-top_five <-
-  mlp_ranks |>
-  filter(.metric == "brier_class") |>
+top_five <- 
+  mlp_ranks |> 
+  filter(.metric == "brier_class") |> 
   slice_min(mean, n = 5)
 
-top_five |>
+top_five |> 
   inner_join(
     brier_and_params |> distinct(wflow_id, .config, num_param),
     by = join_by(wflow_id, .config)
-  ) |>
-  dplyr::select(wflow_id, .config, rank, num_param) |>
-  inner_join(mlp_best_mtr, by = join_by(wflow_id, .config)) |>
+  ) |> 
+  dplyr::select(wflow_id, .config, rank, num_param) |> 
+  inner_join(mlp_best_mtr, by = join_by(wflow_id, .config)) |> 
   mutate(
     tmp1 = map2_chr(hidden_units, activation, ~ paste0(.x, " ", .y)),
     tmp2 = map2_chr(hidden_units_2, activation_2, ~ paste0(", ", .x, " ", .y)),
@@ -1985,18 +2005,10 @@ top_five |>
     Architecture = map2_chr(tmp1, tmp2, ~ paste0(.x, " ", .y)),
     Penalty = format(log10(penalty), digits = 3),
     Penalty = paste0("10<sup>", Penalty, "</sup>"),
-    rate_schedule = ifelse(
-      rate_schedule == "decay_time",
-      "inverse decay",
-      rate_schedule
-    ),
+    rate_schedule = ifelse(rate_schedule == "decay_time", "inverse decay", rate_schedule),
     learn_rate = format(log10(learn_rate), digits = 3),
     learn_rate = paste0("10<sup>", learn_rate, "</sup>"),
-    learn_rate = map2_chr(
-      learn_rate,
-      rate_schedule,
-      ~ paste0(.x, " (", .y, ")")
-    ),
+    learn_rate = map2_chr(learn_rate, rate_schedule, ~ paste0(.x, " (", .y, ")")),
     encoding = map_chr(wflow_id, ~ strsplit(.x, split = "_")[[1]][1]),
     encoding = case_when(
       encoding == "orderNorm" ~ "Indicators, Symmetry",
@@ -2008,31 +2020,15 @@ top_five |>
     extraction = factor(extraction, levels = c("No PCA", "PCA")),
     Preprocessing = map2_chr(encoding, extraction, ~ paste0(.x, ", ", .y)),
     across(where(is.numeric), ~ format(.x, digits = 3))
-  ) |>
-  dplyr::select(
-    -wflow_id,
-    -.config,
-    -hidden_units,
-    -hidden_units_2,
-    -tmp1,
-    -tmp2,
-    -activation,
-    -activation_2,
-    -.estimator,
-    -n,
-    -std_err,
-    -rate_schedule,
-    -encoding,
-    -extraction,
-    -penalty,
-    -rank
-  ) |>
-  rename(
-    `Learning Rate` = learn_rate,
-    `Batch Size` = batch_size,
-    Momentum = momentum,
-    `# Parameters` = num_param,
-  ) |>
+  ) |> 
+  dplyr::select(-wflow_id, -.config, -hidden_units, -hidden_units_2, -tmp1, -tmp2,
+         -activation, -activation_2, -.estimator, -n, -std_err, -rate_schedule, 
+         -encoding, -extraction, -penalty, -rank) |> 
+  rename(`Learning Rate` = learn_rate, 
+         `Batch Size` = batch_size, 
+         Momentum = momentum, 
+         `# Parameters` = num_param,
+  ) |> 
   pivot_wider(
     id_cols = c(
       `Learning Rate`,
@@ -2045,7 +2041,7 @@ top_five |>
     ),
     names_from = c(.metric),
     values_from = c(mean)
-  ) |>
+  ) |> 
   dplyr::select(
     Preprocessing,
     Architecture,
@@ -2056,11 +2052,11 @@ top_five |>
     Momentum,
     Brier = brier_class,
     ROC = roc_auc
-  ) |>
-  gt() |>
-  fmt_markdown(columns = c(Penalty, `Learning Rate`)) |>
-  tab_spanner("Performance", columns = c(Brier, ROC)) |>
-  fmt_number(decimals = 3, columns = c(Brier, ROC)) |>
+  ) |> 
+  gt() |> 
+  fmt_markdown(columns = c(Penalty, `Learning Rate`)) |> 
+  tab_spanner("Performance", columns = c(Brier, ROC)) |> 
+  fmt_number(decimals = 3, columns = c(Brier, ROC)) |> 
   cols_width(
     Preprocessing ~ pct(20),
     Architecture ~ pct(11),
@@ -2071,10 +2067,10 @@ top_five |>
     Momentum ~ pct(10),
     Brier ~ pct(8),
     ROC ~ pct(8)
-  )
+)
 ```
 
-Digging in further, @tbl-mlp-top-five displays the top five candidates from a pool of 300. They are a mixture of one- and two-layer networks, but note that we have to go to the third decimal place to distinguish their Brier scores. Constant learning rates did well as long as their rates were fairly low and batch sizes were fairly small. The number of parameters varied as well; increasing the model's complexity did not appear to help for this dataset. In fact, the rank correlation between the Brier score and the number of parameters was `r brier_param_cor`, implying that there is little evidence that adding more layers and/or units to the MLP improves the model for these data.
+Digging in further, @tbl-mlp-top-five displays the top five candidates from a pool of 300. They are a mixture of one- and two-layer networks, but note that we have to go to the third decimal place to distinguish their Brier scores. Constant learning rates did well as long as their rates were fairly low and batch sizes were fairly small. The number of parameters varied as well; increasing the model’s complexity did not appear to help for this dataset. In fact, the rank correlation between the Brier score and the number of parameters was `r brier_param_cor`, implying that there is little evidence that adding more layers and/or units to the MLP improves the model for these data.
 
 The Brier scores are low and the areas under the ROC curves are all at least 0.94, indicating that the predictions effectively separate the classes and that the probability estimates are accurate. Across the candidates, the rank correlation between the Brier score and the ROC AUC was `r mtr_cor`; in this case, their optimization results are well-aligned. 
 
@@ -2082,6 +2078,7 @@ The Brier scores are low and the areas under the ROC curves are all at least 0.9
 #| label: mlp-mtr-diffs
 #| inlcude: false
 #| cache: true
+
 mtr_differences <- function(split, ref_model) {
   mtr_vals <-
     split |>
@@ -2143,35 +2140,35 @@ mlp_mtr_bt <-
   bootstraps(times = 2000) |>
   mutate(stats = map(splits, mtr_differences, ref_model = "mlp"))
 
-mlp_mtr_diffs <-
+mlp_mtr_diffs <- 
   mlp_mtr_bt |>
   int_pctl(stats, alpha = 0.1)
 
-mlp_mtr <-
-  mlp_best_res |>
-  collect_metrics() |>
+mlp_mtr <- 
+  mlp_best_res |> 
+  collect_metrics() |> 
   inner_join(mlp_best_config |> dplyr::select(.config), by = ".config")
 
 mlp_brier <- mlp_mtr$mean[mlp_mtr$.metric == "brier_class"]
 knn_brier <-
   forest_knn_res |>
-  collect_metrics() |>
+  collect_metrics() |> 
   filter(.metric == "brier_class") |>
   inner_join(
     forest_knn_best,
     by = join_by(neighbors, weight_func, dist_power, prop_terms, .config)
-  ) |>
+  ) |> 
   pluck("mean")
 
 mlp_roc <- mlp_mtr$mean[mlp_mtr$.metric == "roc_auc"]
 knn_roc <-
   forest_knn_res |>
-  collect_metrics() |>
+  collect_metrics() |> 
   filter(.metric == "roc_auc") |>
   inner_join(
     forest_knn_best,
     by = join_by(neighbors, weight_func, dist_power, prop_terms, .config)
-  ) |>
+  ) |> 
   pluck("mean")
 ```
 
@@ -2179,7 +2176,7 @@ How do these results compare to the previous KNN model? The Brier scores are ver
 
 `r r_comp("cls-nonlinear.html#sec-cls-nnet")`
 
-## Special Tabular Network Models {#sec-cls-tab-net}
+## Special Tabular Network Models  {#sec-cls-tab-net}
 
 `r r_comp("cls-nonlinear.html#sec-cls-tab-net")`
 
@@ -2187,15 +2184,113 @@ How do these results compare to the previous KNN model? The Brier scores are ver
 
 `r r_comp("cls-nonlinear.html#sec-cls-svm")`
 
+
+## Comparisons to Previous Models {#sec-cls-tree-compare}
+
+Is there a specific model, so far, that appears to work best for the forested data? To determine that, we conduct a Bayesian comparison of the models using their resampling statistics (from @sec-compare-resample-bayes). We'll focus on the best candidate from each distinct modeling method. 
+
+A Bayesian model was created using Gaussian priors to estimate the posterior distribution of the Brier statistic for each model and to contrast the current best model with others. A ROPE approach is taken here, in which we specify that a difference of ±0.01 in the Brier scores between models would be considered a realistic change. 
+
+```{r}
+#| label: cls-nonlinear-compare
+#| include: false
+
+daemons(0)
+
+forest_knn_set_res <- as_workflow_set(KNN = forest_knn_res |> butcher::butcher())
+forest_nb_set_res <- as_workflow_set("naive Bayes" = forest_nb_res |> butcher::butcher())
+forest_fda_set_res <- as_workflow_set("FDA" = forest_fda_res |> butcher::butcher())
+
+load("../RData/forest_linear_res.Rdata")
+load("../RData/forest_glmnet_set_res.Rdata")
+load("../RData/forest_mlp_set_res.Rdata")
+load("../RData/forest_logistic_set_res.Rdata")
+
+all_sets <-
+  dplyr::bind_rows(
+    forest_fda_set_res,
+    forest_nb_set_res,
+    forest_knn_set_res,
+    forest_glmnet_set_res,
+    forest_mlp_set_res,
+    forest_logistic_set_res
+  )
+```
+
+```{r}
+#| label: cls-nonlinear-compare-bayes
+#| include: false
+#| cache: true
+set.seed(905)
+nlin_compare <- compare_models(all_sets, chains = 10, cores = 2, iter = 5000)
+nlin_compare
+
+nlin_best <- nlin_compare$model[is.na(nlin_compare$probability)]
+
+nlin_subset <- 
+  nlin_compare |>
+  slice_min(median, by = c(class, engine)) |>
+  mutate(
+    model = as.character(model),
+    model = ifelse(grepl("logistic_mle", model), "Logistic (unpenalized)", model),
+    model = ifelse(grepl("1L", model), "MLP (1 Layer)", model),
+    model = ifelse(grepl("2L", model), "MLP (2 Layers)", model),
+    model = gsub("glmnet", "Logistic (penalized)", model),
+    model = factor(model),
+    model = reorder(model, median)
+  )
+```
+
+While the `r nlin_best` model currently has the smallest Brier score, there is a cluster of models that have roughly the same Brier scores. This includes the logistic models from the previous chapter. Clearly, the naive Bayes model is not in the running for best model, not even through the lens of practical equivalence. 
+
+```{r}
+#| label: fig-cls-nonlinear-compare
+#| echo: false
+#| warning: false
+#| out-width: 70%
+#| fig-width: 6
+#| fig-height: 3.5
+#| fig-cap: "Comparisons of current forestation models. The intervals are 90% credible intervals. The bars on the right show the probability of practical equivalence to the current best model, assuming that a difference in Brier scores of +/- 0.01 is practical."
+
+p_brier <- 
+  nlin_subset |>
+  ggplot(aes(median, model)) +
+  geom_point() +
+  geom_errorbar(aes(xmin = lower, xmax = upper), width = 1 / 2) +
+  labs(y = NULL, x = "Brier Score") +
+  theme(
+    plot.margin = margin(t = 10, r = 2, b = 10, l = 10, unit = "pt")
+  )
+
+p_brier_diff <- 
+  nlin_subset |>
+  filter(model != nlin_best) |> 
+  ggplot(aes(pract_equiv, model)) +
+  geom_bar(stat = "identity", aes(fill = pract_equiv), show.legend = FALSE) +
+  labs(y = NULL, x = "Pr[Equiv]") +
+  scale_x_continuous(breaks = round((0:2)/2, 2),limits = 0:1) + 
+  scale_fill_viridis_c(direction = -1) +
+  theme(
+    axis.text.y = element_blank(),
+    axis.ticks.y = element_blank(),
+    plot.margin = margin(t = 10, r = 10, b = 10, l = 2, unit = "pt")
+  )
+
+p_brier + p_brier_diff+ plot_layout(widths = c(4, 1))
+```
+
 ## Chapter References {.unnumbered}
 
 ```{r}
 #| label: cls-nonlinear-save
 #| include: false
-forest_knn_wflow_res <- as_workflow_set(knn = forest_knn_res)
-save(
-  forest_knn_res,
-  forest_knn_best,
-  file = "../RData/forested_knn.Rdata"
-)
+
+# save(
+#  forest_knn_res, forest_knn_best,
+#   file = "../RData/forested_knn.Rdata"
+# )
+
+save(forest_knn_set_res, file = "../RData/forest_knn_set_res.Rdata")
+save(forest_nb_set_res, file = "../RData/forest_nb_set_res.Rdata")
+save(forest_fda_set_res, file = "../RData/forest_fda_set_res.Rdata")
 ```
