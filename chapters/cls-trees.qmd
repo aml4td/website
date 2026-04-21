@@ -667,19 +667,112 @@ Handling categorical predictors in classification trees presents unique challeng
 
 When using the binning approach, the algorithm must determine how to optimally partition the categories into two groups.   For a predictor with $k$ categories, there are $2^{k-1} - 1$ possible ways to create a binary split. Evaluating all these possibilities becomes computationally infeasible for predictors with many categories. Therefore, algorithms often use heuristics to find good splits without exhaustive search. For example, in the Classification and Regression Trees (CART) methodology [@breiman1984classification], categorical predictors are ordered by the proportion of samples in each class, and then binary splits are evaluated between adjacent categories in this ordering. This approach, very similar to an effect-encoding strategy and to the process described by @fisher1958grouping, reduces computational complexity while still allowing the algorithm to find effective splits.
 
-To illustrate the binning approach, consider the partitioning model illustrated in @fig-split-adjacent-tree.  The figure illustrates a tree of a maximum depth of 3 splits.  The first split uses the Gini index criterion to split the maximum vapor predictor at 1,248.  Samples with values greater than or equal to 1,248 are illustrated on the right side of the tree.  The next split on this side of the tree is the county variable.  The adjacent category methodology creates a split with 7 counties in one group and the remaining counties in the other group.  @fig-split-county demonstrates why the counties were partitioned into these groups.  The x-axis in (a) and (b) of this figure provides the counties ordered from the lowest proportion of forested counties (left) to the highest proportion (right).  The top portion of the figure provides the Gini index for the partitioning of the samples at that county and all counties to the left.  The purity is optimized between the counties of Asotin and Okanogan.  At this split point, 7 counties are placed into one group, and 13 counties are in the other group, as illustrated in @fig-split-adjacent-tree.
+```{r}
+#| label: categorical-split-comp
+vapor_max_ge_1248 <-
+  forested_train %>%
+  dplyr::filter(vapor_max >= 1248) %>%
+  dplyr::select(class, county) %>%
+  mutate(county = fct_drop(county))
 
-TODO: what is @fig-split-county referring to?
+county_proportions <- 
+  vapor_max_ge_1248 %>%
+  group_by(county) %>%
+  summarise(
+    total_count = n(),
+    yes_count = sum(class == "Yes"),
+    no_count = sum(class == "No"),
+    prop_yes = yes_count / total_count,
+    .groups = "drop"
+  ) %>%
+  arrange(prop_yes) %>%
+  mutate(rank = row_number())
 
-The second approach creates $k$ binary dummy variables, one for each category (or $k-1$ dummy variables to avoid redundancy). Each dummy variable is then treated as a separate predictor in the tree-building process. This approach, referred to as using independent categories, forces binary splits for the categories and effectively implements a one-versus-all splitting strategy.
+calculate_gini <- function(yes_count, no_count) {
+  total <- yes_count + no_count
+  if (total == 0) return(NA)
+  
+  p_yes <- yes_count / total
+  p_no <- no_count / total
+  
+  gini <- 1 - (p_yes^2 + p_no^2)
+  return(gini)
+}
 
-The choice between these approaches can impact model complexity and interpretability.  The grouped categories approach can capture more complex relationships between categories and the response variable.  Because the algorithm groups categories that have similar effects on the response, this often leads to more accurate and interpretable models. The independent categories approach, on the other hand, may not select any categories, resulting in simpler, less accurate models.
+calculate_weighted_gini <- function(left_yes, left_no, right_yes, right_no) {
+  n_total <- left_yes + left_no + right_yes + right_no
+  n_left <- left_yes + left_no
+  n_right <- right_yes + right_no
+  
+  if (n_total == 0) return(NA)
+  
+  gini_left <- calculate_gini(left_yes, left_no)
+  gini_right <- calculate_gini(right_yes, right_no)
+  
+  weighted_gini <- (n_left / n_total) * gini_left + (n_right / n_total) * gini_right
+  
+  return(weighted_gini)
+}
+
+# Evaluate all possible binary splits
+split_evaluations <- tibble()
+
+for (split_point in 1:(nrow(county_proportions) - 1)) {
+  # Left side: counties 1 to split_point
+  left_counties <- county_proportions$county[1:split_point]
+  left_data <- vapor_max_ge_1248 %>%
+    filter(county %in% left_counties)
+  
+  left_yes <- sum(left_data$class == "Yes")
+  left_no <- sum(left_data$class == "No")
+  
+  # Right side: counties split_point+1 to n
+  right_counties <- county_proportions$county[(split_point + 1):nrow(county_proportions)]
+  right_data <- vapor_max_ge_1248 %>%
+    filter(county %in% right_counties)
+  
+  right_yes <- sum(right_data$class == "Yes")
+  right_no <- sum(right_data$class == "No")
+  
+  # Calculate weighted Gini
+  weighted_gini <- calculate_weighted_gini(left_yes, left_no, right_yes, right_no)
+  
+  split_evaluations <- bind_rows(
+    split_evaluations,
+    tibble(
+      split_point = split_point,
+      split_after_county = county_proportions$county[split_point],
+      left_counties_count = split_point,
+      right_counties_count = nrow(county_proportions) - split_point,
+      left_yes = left_yes,
+      left_no = left_no,
+      right_yes = right_yes,
+      right_no = right_no,
+      weighted_gini = weighted_gini
+    )
+  )
+}
+
+split_evaluations <- split_evaluations %>%
+  mutate(
+    rank = split_point,
+    split_label = paste0(split_after_county, "\nvs.\nRest")
+  )
+
+# Find the optimal split (minimum weighted Gini)
+optimal_split <- split_evaluations %>%
+  filter(weighted_gini == min(weighted_gini, na.rm = TRUE))
+```
+
+
+To illustrate the binning approach, consider the partitioning model illustrated in @fig-split-adjacent-tree.  The figure illustrates a tree of a maximum depth of 3 splits.  The first split uses the Gini index criterion to split the maximum vapor predictor at 1,248.  Samples with values greater than or equal to 1,248 are illustrated on the right side of the tree.  The next split on this side of the tree is the county variable.  
+
 
 ```{r}
 #| label: fig-split-adjacent-tree
 #| echo: false
 #| warning: false
-#| out-width: 90%
+#| out-width: 85%
 #| fig-width: 14
 #| fig-height: 6
 #| fig-cap: Recursive partitioning tree when using the county variable in its adjacent category form.  The labels for the split points for the county variable have been simplified to summarize the number of counties included at each split. 
@@ -722,13 +815,66 @@ rpart.plot(
 )
 ```
 
+
+The adjacent category methodology creates a split with 7 counties in one group and the remaining counties in the other group.  @fig-split-county demonstrates why the counties were partitioned into these groups.  The x-axis in (a) and (b) of this figure provides the counties ordered from the lowest proportion of forested counties (left) to the highest proportion (right).  The top portion of the figure provides the Gini index for the partitioning of the samples at that county and all counties to the left.  The purity is optimized between the counties of Asotin and Okanogan.  At this split point, 7 counties are placed into one group, and 13 counties are in the other group, as illustrated in @fig-split-adjacent-tree.
+
+```{r}
+#| label: fig-split-county
+#| echo: false
+#| fig-width: 6
+#| fig-height: 6
+#| out-width: 70%
+#| fig-cap: (a) The Gini index index for each partition of the ordered counties for the samples of forestation training data with a value of maximum vapor greater than or equal to 1,248.  (b) The proportion of forested samples within each county for this subset of data.
+
+gini_fig <- 
+  ggplot(split_evaluations, aes(x = rank, y = weighted_gini)) +
+  geom_line(color = "grey") +
+  geom_point(aes(color = weighted_gini == min(weighted_gini, na.rm = TRUE)), 
+             size = 3.5, alpha = 1) +
+  scale_color_manual(
+    values = c("FALSE" = "#DE7DC6", "TRUE" = "#218239"),
+    guide = "none"
+  ) +
+  labs(title = "(a)",
+       y = "Weighted Gini Index") +
+  theme(
+    axis.text.y = element_text(angle = 90, hjust = 0.5),
+    axis.text.x = element_blank(),
+    axis.title.x = element_blank()
+  ) +
+  scale_x_continuous(breaks = seq(1, nrow(county_proportions) - 1, 1))
+
+proportion_fig <- 
+  ggplot(county_proportions, aes(x = reorder(county, prop_yes), y = prop_yes)) +
+  geom_col(fill = "#218239", alpha = 0.8, color = "black") +
+  labs(
+    title = "(b)",
+    x = "\n\nCounty",
+    y = "Forestation Rate",
+  ) +
+  theme(
+    axis.text.x = element_text(angle = 45, hjust = 1),
+    axis.text.y = element_text(angle = 90, hjust = 0.5)
+  ) +
+  scale_y_continuous(limits = c(0, 1), breaks = seq(0, 1, 0.2)) +
+  scale_x_discrete(expand = expansion(add = c(1, 1)))
+
+gini_fig / proportion_fig
+```
+
+The second approach creates $k$ binary dummy variables, one for each category (or $k-1$ dummy variables to avoid redundancy). Each dummy variable is then treated as a separate predictor in the tree-building process. This approach, referred to as using independent categories, forces binary splits for the categories and effectively implements a one-versus-all splitting strategy. We do not recommend this approach.
+
+@fig-split-binary-tree shows a tree resulting from binary indicators where no county features were chosen. This is likely to do with the inherent splitting bias in CART trees discussed below in @sec-tree-bias.
+
+The choice between these approaches can impact model complexity and interpretability.  The grouped categories approach can capture more complex relationships between categories and the response variable.  Because the algorithm groups categories that have similar effects on the response, this often leads to more accurate and interpretable models. The independent categories approach, on the other hand, may not select any categories, resulting in simpler, less accurate models.
+
 ```{r}
 #| label: fig-split-binary-tree
 #| echo: false
 #| warning: false
 #| out-width: 90%
 #| fig-width: 14
-#| fig-height: 14
+#| fig-height: 11
 #| fig-cap: Recursive partitioning tree when transforming the county variable into many dummy, binary variables.
 # Create the plot
 rpart.plot(
@@ -1227,7 +1373,7 @@ CART, short for Classification And Regression Trees, is the most popular approac
 The primary tuning parameters are: 
 
 - The cost-complexity parameter $C_p$. Values tend to range between 0.1 (usually a tree with a single split) and zero (no pruning). Grids for this parameter are often created with equal spacing on the log<sub>10</sub> scale. 
-- $n_{min}$ and the $maximum tree depth$ to reduce the complexity of the tree in the growing phase. 
+- $n_{min}$ and the _maximum tree depth_ to reduce the complexity of the tree in the growing phase. 
 
 Despite multiple exhaustive searches, CART models are very efficient during training and and can generate predictions quickly. Like all models described in this chapter, CART can be easily converted to highly efficient code, especially via SQL. 
 
@@ -1951,7 +2097,7 @@ forest_cart_vip_plot <-
 (forest_cart_cal + forest_cart_roc) / forest_cart_vip_plot
 ```
 
-Panel (c) shows the variable importance scores for the model. As CART splits the data to reduce impurity, it tracks the improvement in the Gini statistic for each predictor. This plot shows the cumulative effect of each predictor on the model. Three predictors have the largest contribution: `r cli::format_inline("{forest_cart_vip$text[1:3]}")`. This figure does not account for surrogate splits.  Almost half of the predictors had little to no effect on the model. 
+Panel (c) shows the variable importance scores for the model. As CART splits the data to reduce impurity, it tracks the improvement in the Gini statistic for each predictor. This plot shows the cumulative effect of each predictor on the model^[These computations should not include the effect of surrogate splits.]. The two predictors have the largest contributions: `r cli::format_inline("{forest_cart_vip$text[1:2]}")`. Almost half of the predictors had little to no effect on the model. 
 
 ### C4.5 and C5.0 {#sec-cls-c50}
 
@@ -2443,7 +2589,7 @@ We'll discuss ensembles of oblique trees in the next chapter.
 
 ## Rule-Based Models {#sec-cls-rules}
 
-Rule-based models can be created in different ways. The most frequently used strategy is to start with a decision tree and use the paths to the terminal nodes as an initial set of rules.  Examples of this approach are REF and REF. C4.5 was one of the first methods to do this. We'll describe what C5.0 does, but it is mostly the same as its predecessors. Also, this section focuses on a rule set derived from a single tree. The next chapter describes how rule set ensembles are created. 
+Rule-based models can be created in different ways. The most frequently used strategy is to start with a decision tree and use the paths to the terminal nodes as an initial set of rules.  Examples of this approach are @cohen1993cient and @frank1998generating. C4.5 was one of the first methods to do this. We'll describe what C5.0 does, but it is mostly the same as its predecessors. Also, this section focuses on a rule set derived from a single tree. The next chapter describes how rule set ensembles are created. 
 
 We start with a C5.0 classification tree and populate the initial rule set. From this initial set, the process to finalize the model is to
 

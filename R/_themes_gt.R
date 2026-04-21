@@ -1,5 +1,5 @@
 require(gt)
-source("https://raw.githubusercontent.com/aml4td/website/main/R/_themes.R")
+# source("https://raw.githubusercontent.com/aml4td/website/main/R/_themes.R")
 
 # ------------------------------------------------------------------------------
 
@@ -44,13 +44,17 @@ thm_tbl_lt <- function(gt_object, ...) {
         color = "#595959"
       ),
       locations = gt::cells_title(groups = "title")
-    ) |> 
+    ) |>
     gt::tab_style(
-      style = gt::cell_borders(sides = "bottom", weight = gt::px(3), col = "grey"),
+      style = gt::cell_borders(
+        sides = "bottom",
+        weight = gt::px(3),
+        col = "grey"
+      ),
       locations = list(
         gt::cells_column_labels()
       )
-    )  |> 
+    ) |>
     gt::tab_style(
       style = gt::cell_borders(
         sides = c("top", "bottom"),
@@ -113,7 +117,7 @@ thm_tbl_dk <- function(gt_object, ...) {
         col = dark_tan
       ),
       locations = list(
-        gt::cells_column_labels(), 
+        gt::cells_column_labels(),
         gt::cells_column_spanners()
       )
     ) |>
