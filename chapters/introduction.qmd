@@ -35,31 +35,35 @@ For example, in the next chapter, we try to predict how long it takes to deliver
 
 ```{r}
 #| label: simple-deliveries
-
 source("../R/setup_deliveries.R")
 
 set.seed(28)
 delivery_tbl <-
-  delivery_train %>%
+  delivery_train |>
   mutate(
     group_1 = ntile(time_to_delivery, 15),
     group_2 = item_01 > 1
-    ) %>% 
-  group_by(group_1, group_2) %>% 
-  sample_n(1) %>% 
-  ungroup() %>% 
-  slice(1:4, 12:15) %>% 
-  sample_n(8) %>%
-  select(-starts_with("group")) %>%
-  select(time_to_delivery:item_02, item_27) %>% 
-  setNames(c("Time to Delivery", "Hour of Order", "Day of Order", "Distance", 
-             paste("   ", c(1, 2, 27), "   "))) %>%
+  ) |>
+  group_by(group_1, group_2) |>
+  sample_n(1) |>
+  ungroup() |>
+  slice(1:4, 12:15) |>
+  sample_n(8) |>
+  select(-starts_with("group")) |>
+  select(time_to_delivery:item_02, item_27) |>
+  setNames(c(
+    "Time to Delivery",
+    "Hour of Order",
+    "Day of Order",
+    "Distance",
+    paste("   ", c(1, 2, 27), "   ")
+  )) |>
   mutate(
     blank = "  ...  ",
     `Time to Delivery` = round(`Time to Delivery`, 2),
     `Hour of Order` = round(`Hour of Order`, 1),
     Distance = round(Distance, 2)
-    ) %>%
+  ) |>
   relocate(blank, .after = "    2    ")
 
 lm_fit <- lm(log(time_to_delivery) ~ distance, data = delivery_train)
@@ -69,20 +73,22 @@ eq_coef <- format(coef(lm_fit), digits = 2)
 ```{r}
 #| label: tbl-deliveries
 #| tbl-cap: "A random selection of several rows from a tabular data set on food delivery times."
-
-delivery_tbl %>% 
-  gt() %>% 
-  tab_options(table.background.color = light_bg) %>% 
-  cols_label_with(fn = function(x) ifelse(x == "blank", "...", x)) %>% 
-  tab_spanner(label = "Item Counts", columns = c((ncol(delivery_tbl)-3):ncol(delivery_tbl))) %>% 
+delivery_tbl |>
+  gt() |>
+  tab_options(table.background.color = light_bg) |>
+  cols_label_with(fn = function(x) ifelse(x == "blank", "...", x)) |>
+  tab_spanner(
+    label = "Item Counts",
+    columns = c((ncol(delivery_tbl) - 3):ncol(delivery_tbl))
+  ) |>
   tab_style(
-    style = cell_borders(sides = c("bottom"),  weight = px(1.8)),
+    style = cell_borders(sides = c("bottom"), weight = px(1.8)),
     locations = cells_body(rows = nrow(delivery_tbl))
-  ) %>% 
+  ) |>
   tab_style(
-    style = cell_borders(sides = c("top", "bottom"),  weight = px(1.8)),
+    style = cell_borders(sides = c("top", "bottom"), weight = px(1.8)),
     locations = cells_column_labels()
-  ) %>% 
+  ) |>
   cols_width(c(starts_with(" ")) ~ px(100))
 ```
 
@@ -100,9 +106,9 @@ $$ {#eq-log-linear}
 
 We could use this equation for new orders: 
 
- - If we had placed an order at the restaurant (i.e., a zero distance) we predict that it would take $e^{`r round(coef(lm_fit)[1], 3)`} \approx `r round(exp(coef(lm_fit)[1]), 1)`$ minutes. 
- - If we were four miles away, the predicted delivery time is $e^{(`r round(coef(lm_fit)[1], 3)` + `r round(4 * coef(lm_fit)[2], 3)`)} \approx `r round(exp(predict(lm_fit, data.frame(distance = 4))), 2)`$ minutes.
- 
+- If we had placed an order at the restaurant (i.e., a zero distance) we predict that it would take $e^{`r round(coef(lm_fit)[1], 3)`} \approx `r round(exp(coef(lm_fit)[1]), 1)`$ minutes. 
+- If we were four miles away, the predicted delivery time is $e^{(`r round(coef(lm_fit)[1], 3)` + `r round(4 * coef(lm_fit)[2], 3)`)} \approx `r round(exp(predict(lm_fit, data.frame(distance = 4))), 2)`$ minutes.
+
 and so on.
 
 This is an incredibly reductive approach; it assumes that the relationship between the distance and time are log-linearly related and is not influenced by any other characteristics of the process. On the bright side, the exponential function ensures that there are no negative time predictions, and it is straightforward to explain.  
@@ -124,25 +130,28 @@ Based on this criterion, we can define intermediate equations that, if we solve 
 #| echo: false
 dist_grid <-
   tibble(
-    distance = 
-      seq(
-        min(delivery_val$distance),
-        max(delivery_val$distance),
-        length.out = 500
-      )
+    distance = seq(
+      min(delivery_val$distance),
+      max(delivery_val$distance),
+      length.out = 500
+    )
   )
 
-pred_val <- 
-  dist_grid %>% 
+pred_val <-
+  dist_grid |>
   mutate(
     `linear regression` = exp(predict(lm_fit, dist_grid)),
-    `regression tree` = 
-      24.7 * (distance <= 3.125) + 
-      27.6 * (distance <= 4.465 & distance > 3.125) + 
-      32.3 * (distance <= 5.985 & distance > 4.465) + 
+    `regression tree` = 24.7 *
+      (distance <= 3.125) +
+      27.6 * (distance <= 4.465 & distance > 3.125) +
+      32.3 * (distance <= 5.985 & distance > 4.465) +
       39.6 * (distance > 5.985)
-  ) %>% 
-  pivot_longer(cols = c(-distance), names_to = "Model", values_to = "prediction")
+  ) |>
+  pivot_longer(
+    cols = c(-distance),
+    names_to = "Model",
+    values_to = "prediction"
+  )
 ```
 
 Sadly, @eq-log-linear, while better than a random guess, is not very effective. It does the best it can with a the single predictor. It just isn't very accurate. 
@@ -164,7 +173,7 @@ Like the linear regression model that produced @eq-log-linear, the performance o
 
 This book is focused on the practice of applying various ML models to data to make accurate predictions. Before proceeding, we'll discuss different types of the data used to estimate models and then explore some aspects of ML models, particularly neural networks. 
 
-## Non-Tabular Data  {#sec-nontabular}
+## Non-Tabular Data {#sec-nontabular}
 
 The columns shown in @tbl-deliveries are defined within a small scope. For example, the delivery hour column encapsulates everything about that order characteristic: 
 
@@ -179,7 +188,6 @@ Non-tabular data does not have the same properties. Consider images, such as the
 #| out-width: "40%"
 #| fig-align: "center"
 #| fig-cap: "An example image of several cells using two colors. Image from @Yucells."
-
 knitr::include_graphics("../premade/cells.png")
 ```
 
@@ -201,7 +209,7 @@ Perhaps a better text example relates to the structure of chemicals. A chemical 
 
 Our motives for categorizing data as tabular and non-tabular are related to how we choose an appropriate model. Our opinion is that most modeling projects involve tabular data (or data that can be effectively represented as tabular). Models for non-tabular data are very specialized and, while these ML approaches are the most discussed in the social media, they tend not to be the best approach for tabular data. 
 
-## Converting Non-Tabular Data to Tabular  {#sec-nontabular-convert}
+## Converting Non-Tabular Data to Tabular {#sec-nontabular-convert}
 
 In some situations, non-tabular data can be effectively converted to a tabular format, depending on the specific problem and data. 
 
@@ -215,7 +223,6 @@ We can pre-analyze the 3D arrays to determine which pixels in an image correspon
 #| out-width: "40%"
 #| fig-align: "center"
 #| fig-cap: "The cell segmentation results for the four neuroblastomas shown in @fig-cells."
-
 knitr::include_graphics("../premade/segmented.png")
 ```
 
@@ -224,27 +231,26 @@ Once our cells have been segmented, we can compute various statistics of interes
 ```{r}
 #| label: tbl-cells
 #| tbl-cap: "Cells, such as those found in @fig-cells, translated into a tabular format using three features for the nuclear and non-nuclear regions of the segmented cells."
-
-cell_data <- 
-tibble::tribble(
-  ~ID,  ~n_ecc,  ~c_ecc, ~blank_1, ~n_area, ~c_area, ~blank_2, ~n_mean, ~c_mean,
-  17L, 0.49375, 0.83583,      " ",   3352L,  11699L,      " ", 0.27438, 0.15497,
-  18L,  0.7077, 0.54952,      " ",   1777L,   4980L,      " ", 0.27805, 0.20983,
-  21L, 0.49524, 0.80247,      " ",   1274L,   3081L,      " ", 0.32611, 0.21763,
-  22L, 0.80864, 0.97505,      " ",   1169L,   3933L,      " ", 0.58297, 0.22871
-  ) %>% 
-  rename_with(~ gsub("n_", "Nucleus_", .x), starts_with("n_")) %>% 
+cell_data <-
+  tibble::tribble(
+    ~ID , ~n_ecc  , ~c_ecc  , ~blank_1 , ~n_area , ~c_area , ~blank_2 , ~n_mean , ~c_mean ,
+    17L , 0.49375 , 0.83583 , " "      , 3352L   , 11699L  , " "      , 0.27438 , 0.15497 ,
+    18L , 0.7077  , 0.54952 , " "      , 1777L   ,  4980L  , " "      , 0.27805 , 0.20983 ,
+    21L , 0.49524 , 0.80247 , " "      , 1274L   ,  3081L  , " "      , 0.32611 , 0.21763 ,
+    22L , 0.80864 , 0.97505 , " "      , 1169L   ,  3933L  , " "      , 0.58297 , 0.22871
+  ) |>
+  rename_with(~ gsub("n_", "Nucleus_", .x), starts_with("n_")) |>
   rename_with(~ gsub("c_", "Cell_", .x), starts_with("c_"))
 
-cell_data %>% 
-  gt() %>% 
-  tab_options(table.background.color = light_bg) %>% 
-  fmt_integer(columns = c(contains("area"))) %>% 
-  fmt_number(columns = c(contains("ecc"), contains("mean")), n_sigfig = 3) %>%   
-  cols_label(blank_1 = " ", blank_2 = " ") %>% 
-  cols_label_with(fn = function(x) gsub("(_area)|(_mean)|(_ecc)", "", x)) %>% 
-  tab_spanner(label = "Area", columns = c(ends_with("area"))) %>% 
-  tab_spanner(label = "Intensity", columns = c(ends_with("mean"))) %>% 
+cell_data |>
+  gt() |>
+  tab_options(table.background.color = light_bg) |>
+  fmt_integer(columns = c(contains("area"))) |>
+  fmt_number(columns = c(contains("ecc"), contains("mean")), n_sigfig = 3) |>
+  cols_label(blank_1 = " ", blank_2 = " ") |>
+  cols_label_with(fn = function(x) gsub("(_area)|(_mean)|(_ecc)", "", x)) |>
+  tab_spanner(label = "Area", columns = c(ends_with("area"))) |>
+  tab_spanner(label = "Intensity", columns = c(ends_with("mean"))) |>
   tab_spanner(label = "Eccentricity", columns = c(ends_with("ecc")))
 ```
 
@@ -252,8 +258,8 @@ This conversion to tabular data isn't appropriate for all image analysis problem
 
 Let's also consider the text examples. For the book quote, @tbl-sanderson shows a few simple predictors that are tabular in nature: 
 
-* Presence/absence columns for each word in the entire document.   @tbl-sanderson shows columns corresponding to the words "always", "can", and "take". These are represented as counts. 
-* Sentence summaries, such as the number of commas, words, characters, first-person speech, etc. 
+- Presence/absence columns for each word in the entire document.   @tbl-sanderson shows columns corresponding to the words "always", "can", and "take". These are represented as counts. 
+- Sentence summaries, such as the number of commas, words, characters, first-person speech, etc. 
 
 There are many more ways to represent these data. More complex numeric _embeddings_ that are built on separate large databases can reflect different parts of speech, text sequences (called n-grams), and others. @hvitfeldt2021supervised and @Boykis_What_are_embeddings_2023 describe these and other tools for analyzing text data (in either format).
 
@@ -261,42 +267,49 @@ There are many more ways to represent these data. More complex numeric _embeddin
 #| label: tbl-sanderson
 #| echo: false
 #| tbl-cap: "An example of converting non-numeric data to a numeric, tabular format."
-
-steps <- 
-  tibble(Sentence = 
-           c("The most important step a man can take.",
-             "It's not the first one, is it?",
-             "It's the next one.",
-             "Always the next step, Dalinar.")
+steps <-
+  tibble(
+    Sentence = c(
+      "The most important step a man can take.",
+      "It's not the first one, is it?",
+      "It's the next one.",
+      "Always the next step, Dalinar."
+    )
   )
 
 steps_data <-
-  recipe(~ Sentence, data = steps) %>% 
-  step_textfeature(Sentence, keep_original_cols = TRUE) %>%
-  step_tokenize(Sentence) %>%
-  step_stopwords(Sentence) %>%
-  step_tf(Sentence) %>%
-  prep() %>% 
-  bake(new_data = NULL) %>% 
-  rename_with(~ paste0('"', .x, '"'), c(starts_with("tf_Sentence_"))) %>% 
-  rename_with(~ gsub("tf_Sentence_", "", .x), c(everything())) %>% 
-  rename_with(~ gsub("textfeature_Sentence_n_", "", .x), c(everything())) %>% 
-  rename_with(~ gsub("textfeature_Sentence_", "", .x), c(everything())) %>% 
-  mutate(`   ` = "...") %>% 
-  select(`"always"`:`"can"`, `   `, `"take"`, Characters = charS, Commas = commas)
+  recipe(~Sentence, data = steps) |>
+  step_textfeature(Sentence, keep_original_cols = TRUE) |>
+  step_tokenize(Sentence) |>
+  step_stopwords(Sentence) |>
+  step_tf(Sentence) |>
+  prep() |>
+  bake(new_data = NULL) |>
+  rename_with(~ paste0('"', .x, '"'), c(starts_with("tf_Sentence_"))) |>
+  rename_with(~ gsub("tf_Sentence_", "", .x), c(everything())) |>
+  rename_with(~ gsub("textfeature_Sentence_n_", "", .x), c(everything())) |>
+  rename_with(~ gsub("textfeature_Sentence_", "", .x), c(everything())) |>
+  mutate(`   ` = "...") |>
+  select(
+    `"always"`:`"can"`,
+    `   `,
+    `"take"`,
+    Characters = charS,
+    Commas = commas
+  )
 
-bind_cols(steps, steps_data) %>% 
-  gt()%>% 
-  tab_options(table.background.color = light_bg) %>% 
-  cols_align(align = "center", columns = c(-Sentence)) %>% 
+bind_cols(steps, steps_data) |>
+  gt() |>
+  tab_options(table.background.color = light_bg) |>
+  cols_align(align = "center", columns = c(-Sentence)) |>
   tab_style(
-    style = cell_borders(sides = c("top", "bottom"),  weight = px(1.8)),
+    style = cell_borders(sides = c("top", "bottom"), weight = px(1.8)),
     locations = cells_column_labels()
-    ) %>% 
+  ) |>
   tab_style(
-    style = cell_borders(sides = c("bottom"),  weight = px(1.8)),
+    style = cell_borders(sides = c("bottom"), weight = px(1.8)),
     locations = cells_body(rows = 4)
-    ) %>% 
+  ) |>
   cols_label_with(fn = function(x) ifelse(x == "   ", "...", x))
 ```
 
@@ -304,7 +317,7 @@ For the chemical structure of Ibuprofen, there is a rich field of molecular desc
 
 The process of determining the best data representations is called _feature engineering_. This is a critical task in machine learning and is often overlooked. Part 2 of this book spends some time looking at feature engineering methods (once the data are in a tabular format). 
 
-## Models and Machine Learning   {#sec-model-types}
+## Models and Machine Learning {#sec-model-types}
 
 Since we have mentioned linear regression and regression trees, it makes sense to talk about possible machine learning scenarios. There are many, but we will focus on two types. 
 
@@ -323,7 +336,7 @@ We are focused on prediction problems. This implies that our data will contain a
 
 Several synonyms for machine learning include statistical learning, predictive modeling, pattern recognition, and others. While many specific models are designed for machine learning, we suggest that users think about machine learning as the problem and not the solution. Any model that can adequately predict the outcome values deserves the title. A commonly used argument for this position is that two models that are conventionally thought of as tools to make inferences (e.g., p-values) are _linear regression_ and _logistic regression_. @eq-log-linear is a simplistic linear regression model. As will be seen in future chapters, linear and logistic regression models can produce highly accurate predictions for complex problems. 
 
-## Data Characteristics  {#sec-data-types}
+## Data Characteristics {#sec-data-types}
 
 It's helpful to discuss different nomenclature and types of data. With tabular data, there are a number of ways to refer to a row. The terms sample, instance, observation, and/or data point are commonly used. The first, "sample", can be used in a few different contexts; we will also use it to describe a subset of a greater data collection (as in "we took a random sample of the data".). The notation for the number of rows in a data set is $n$ with subscripts for specificity (e.g., $n_{tr}$). 
 
@@ -345,20 +358,20 @@ value types, skewness, colinearity, distributions, ordinal
 
 When discussing the modeling process, it is traditional to think the parameter estimation steps occur only when the model is fit. However, as more complex techniques are used to prepare predictor values for the model, it is crucial to understand that important quantities are also being estimated before the model. Here are a few examples: 
 
-* Imputation methods, discussed in @sec-missing-data, create sub-models that estimate missing predictor values. These are applied to the data before modeling to complete the data set. 
-* Feature selection tools [@fes] often compute measures of predictor importance to remove uninformative predictors before passing the data to the model. 
-* Effect encoding tools, discussed in @sec-effect-encodings, use the effect of the predictor on the outcome as a predictor. 
-* Post-model adjustments to predictions, such as model calibration ([Section -@sec-calibration-whole-game] and [-@sec-cls-calibration]), are examples of postprocessing operations^[**A note to readers**: these `?sec-*` references are to sections or chapters that are planned by not (entirely) written yet. They will resolve to actual references as we add more content.].
+- Imputation methods, discussed in @sec-missing-data, create sub-models that estimate missing predictor values. These are applied to the data before modeling to complete the data set. 
+- Feature selection tools [@fes] often compute measures of predictor importance to remove uninformative predictors before passing the data to the model. 
+- Effect encoding tools, discussed in @sec-effect-encodings, use the effect of the predictor on the outcome as a predictor. 
+- Post-model adjustments to predictions, such as model calibration ([Section -@sec-calibration-whole-game] and [-@sec-cls-calibration]), are examples of postprocessing operations^[**A note to readers**: these `?sec-*` references are to sections or chapters that are planned by not (entirely) written yet. They will resolve to actual references as we add more content.].
 
 ::: {.note-box}
-These operations can profoundly affect the overall results, yet they are not usually considered part of "the model." We’ll use the more expansive term "modeling pipeline" to describe any estimation for the model or operations before or after the model: 
+These operations can profoundly affect the overall results, yet they are not usually considered part of "the model." We'll use the more expansive term "modeling pipeline" to describe any estimation for the model or operations before or after the model: 
 
 <p style="text-align: center;"><tt><b>model pipeline = preprocessing + supervised model + postprocessing</b></tt></p>
 :::
 
 This is important to understand: a common pitfall in ML is only validating the model fitting step instead of the whole process. This can lead to performance statistics that can be extraordinarily optimistic and might deceive a practitioner into believing that their model is much better than it truly is.  
 
-## Deep Learning  {#sec-deep-learning}
+## Deep Learning {#sec-deep-learning}
 
 While many models can be used for machine learning, _neural networks_ are the elephant in the room. These complex, nonlinear models are frequently used in machine learning to the point where, in some domains, these models are synonymous with ML. One class of neural network models is _deep learning (DL) models_ [@goodfellow2016deep;@udl2023]. Here, "deep" means that the models have many structural layers, resulting in extraordinary amounts of complexity. 
 
@@ -380,7 +393,6 @@ After flattening, the final two layers correspond to the classic supervised neur
 #| out-width: "100%"
 #| fig-align: "center"
 #| fig-cap: A simplified version of the convolutional neural network deep learning model proposed by @simonyan2014very. This version only includes a single dense layer (instead of four).
-
 knitr::include_graphics("../premade/vgg16.jpg")
 ```
 
@@ -416,17 +428,17 @@ talk about subject-matter knowledge/intuition vs "let the machine figure it out"
 
 assistive vs automated usage
 
-## Outline of These Materials  {#sec-outline}
+## Outline of These Materials {#sec-outline}
 
 This work is organized into parts: 
 
- - **Introduction**: The next chapter shows an abbreviated example to illustrate important concepts used later. 
- - **Preparation**: These chapters discuss topics such as data splitting and feature engineering. These activities occur before the actual training of the machine learning model but are critically important. 
- - **Optimization**: To find the model that has the best performance, we often need to tune them so that they are effective but do not overfit. These chapters describe overfitting, methods to measure performance, and two different classes of optimization methods. 
- - **Classification**: Various models for classification are described in this part. 
- - **Regression**: These chapter describe models for numeric outcomes. 
- - **Characterization**: Once you have a model, how do you describe it or its predictions? How do you know when you should question the results of your model? We'll address these questions in this part. 
- - **Finalization**: Post-modeling activities such as monitoring performance are discussed. 
+- **Introduction**: The next chapter shows an abbreviated example to illustrate important concepts used later. 
+- **Preparation**: These chapters discuss topics such as data splitting and feature engineering. These activities occur before the actual training of the machine learning model but are critically important. 
+- **Optimization**: To find the model that has the best performance, we often need to tune them so that they are effective but do not overfit. These chapters describe overfitting, methods to measure performance, and two different classes of optimization methods. 
+- **Classification**: Various models for classification are described in this part. 
+- **Regression**: These chapter describe models for numeric outcomes. 
+- **Characterization**: Once you have a model, how do you describe it or its predictions? How do you know when you should question the results of your model? We'll address these questions in this part. 
+- **Finalization**: Post-modeling activities such as monitoring performance are discussed. 
 
 Before diving into the process of creating a good model, let's have a short case study. The next chapter is designed to give you a sense of the overall process and illustrate important ideas and concepts that will appear later in the materials. 
 

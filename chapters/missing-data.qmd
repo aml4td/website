@@ -11,7 +11,6 @@ knitr:
 #| include: false
 #| message: false
 #| warning: false
-
 source("../R/_common.R")
 source("../R/_themes.R")
 source("../R/_themes_ggplot.R")
@@ -44,165 +43,196 @@ load("../RData/hotel_rates_all.RData")
 #| cache: true
 #| message: false
 #| warning: false
-
 #Note:  Remove quality predictors. These are subjective and related to Sale Price
 # TODO move some of this to the data generation script
 
 load("../RData/ames_original.RData")
 ames_original <-
-  ames_original %>%
-  dplyr::select(!contains("Qual"), -`Misc Feature`) %>%
+  ames_original |>
+  dplyr::select(!contains("Qual"), -`Misc Feature`) |>
   mutate(
-    `basement type` = 
-      if_else(is.na(`BsmtFin Type 1`) & is.na(`BsmtFin Type 2`), 
-              NA_character_, "non_missing"),
-    `basement size` = 
-      if_else(is.na(`BsmtFin SF 1`) & is.na(`BsmtFin SF 1`), 
-              NA_real_, `BsmtFin SF 1` + `BsmtFin SF 2`),
-    
-  ) %>% 
-  mutate(Neighborhood = factor(Neighborhood)) %>%
-  arrange(Neighborhood, Order) %>% 
-  select(-`BsmtFin Type 1`, -`BsmtFin Type 2`, -`BsmtFin SF 1`, -`BsmtFin SF 2`) %>% 
-  clean_names() %>% 
-  rename(`alley type` = alley, `fence type` = fence) %>% 
-  rename_with(~ gsub("_", " ", .)) %>% 
-  rename_with(~ gsub("(qu$)|(qc$)", "quality", .)) %>% 
-  rename_with(~ gsub("(sf)", "area", .)) %>% 
-  rename_with(~ gsub("(cond)", "condition", .)) %>% 
-  rename_with(~ gsub("(bsmt)", "basement", .)) %>% 
-  rename_with(~ gsub(" unf", "unfinished", .)) %>% 
-  rename_with(~ gsub("yr blt", "year", .)) %>% 
-  rename_with(~ gsub("mas vnr", "masonry", .)) %>% 
+    `basement type` = if_else(
+      is.na(`BsmtFin Type 1`) & is.na(`BsmtFin Type 2`),
+      NA_character_,
+      "non_missing"
+    ),
+    `basement size` = if_else(
+      is.na(`BsmtFin SF 1`) & is.na(`BsmtFin SF 1`),
+      NA_real_,
+      `BsmtFin SF 1` + `BsmtFin SF 2`
+    ),
+  ) |>
+  mutate(Neighborhood = factor(Neighborhood)) |>
+  arrange(Neighborhood, Order) |>
+  select(
+    -`BsmtFin Type 1`,
+    -`BsmtFin Type 2`,
+    -`BsmtFin SF 1`,
+    -`BsmtFin SF 2`
+  ) |>
+  clean_names() |>
+  rename(`alley type` = alley, `fence type` = fence) |>
+  rename_with(~ gsub("_", " ", .)) |>
+  rename_with(~ gsub("(qu$)|(qc$)", "quality", .)) |>
+  rename_with(~ gsub("(sf)", "area", .)) |>
+  rename_with(~ gsub("(cond)", "condition", .)) |>
+  rename_with(~ gsub("(bsmt)", "basement", .)) |>
+  rename_with(~ gsub(" unf", "unfinished", .)) |>
+  rename_with(~ gsub("yr blt", "year", .)) |>
+  rename_with(~ gsub("mas vnr", "masonry", .)) |>
   rename_with(~ gsub("total basement area", "basement area total", .))
-  
-ames_has_missing_vals <- 
-  ames_original %>% 
-  naniar::miss_var_summary() %>% 
+
+ames_has_missing_vals <-
+  ames_original |>
+  naniar::miss_var_summary() |>
   filter(pct_miss > 0)
 
-ames_has_missing_cols <- 
-  ames_has_missing_vals %>% 
+ames_has_missing_cols <-
+  ames_has_missing_vals |>
   pluck("variable")
 
 ames_predictors <-
-  ames_original %>%
+  ames_original |>
   dplyr::select(-order, -pid, -`sale price`)
 
-ames_pct_missing <- 
-  100 * sum(is.na(ames_predictors)) / (nrow(ames_predictors) * ncol(ames_predictors))
-  
+ames_pct_missing <-
+  100 *
+  sum(is.na(ames_predictors)) /
+  (nrow(ames_predictors) * ncol(ames_predictors))
+
 ames_missing <-
-  ames_predictors %>%
+  ames_predictors |>
   summarize_all(~ sum(is.na(.)))
 
 ames_num_missing_predictors <- length(which(ames_missing > 0))
 
 ames_missing_long <-
-  ames_predictors %>%
-  mutate(RowNum = row_number()) %>%
-  mutate(across(everything(), as.character)) %>%
-  pivot_longer(cols = -RowNum, names_to = "Predictor", values_to = "value") %>%
-  mutate(Missing = ifelse(is.na(value), "Yes", "No")) %>%
-  mutate(Missing = factor(Missing, levels = c("Yes", "No"))) %>%
+  ames_predictors |>
+  mutate(RowNum = row_number()) |>
+  mutate(across(everything(), as.character)) |>
+  pivot_longer(cols = -RowNum, names_to = "Predictor", values_to = "value") |>
+  mutate(Missing = ifelse(is.na(value), "Yes", "No")) |>
+  mutate(Missing = factor(Missing, levels = c("Yes", "No"))) |>
   dplyr::select(-value)
 
 #Remove predictors with more than 20% missing data
 ames_missing_summary <-
-  ames_missing %>%
-  pivot_longer(cols = everything(), names_to = "Predictors", values_to = "value") %>%
-  mutate(`Percent Missing` = 100*value/nrow(ames))
+  ames_missing |>
+  pivot_longer(
+    cols = everything(),
+    names_to = "Predictors",
+    values_to = "value"
+  ) |>
+  mutate(`Percent Missing` = 100 * value / nrow(ames))
 
 ames_pred_gt_20 <-
-  ames_missing_summary %>%
-  dplyr::filter(`Percent Missing` > 20) %>%
-  dplyr::select(Predictors) %>%
+  ames_missing_summary |>
+  dplyr::filter(`Percent Missing` > 20) |>
+  dplyr::select(Predictors) |>
   pull()
 
 ames_predictors_subset <-
-  ames_predictors %>%
+  ames_predictors |>
   dplyr::select(-all_of(ames_pred_gt_20))
 
-ames_pct_missing_subset <- 
-  100 * sum(is.na(ames_predictors_subset)) / 
+ames_pct_missing_subset <-
+  100 *
+  sum(is.na(ames_predictors_subset)) /
   (nrow(ames_predictors_subset) * ncol(ames_predictors_subset))
 
 #Compute the percent missing values within each sample
 binary_fcn <- function(x) ifelse(x == "Yes", 1, 0)
 
 ames_samples <-
-  ames_predictors_subset %>%
-  mutate(RowNum = row_number()) %>%
-  mutate(across(everything(), as.character)) %>%
-  pivot_longer(cols = -RowNum, names_to = "Predictor", values_to = "value") %>%
-  mutate(Missing = ifelse(is.na(value), "Yes", "No")) %>%
-  mutate(Missing = factor(Missing, levels = c("Yes", "No"))) %>% 
-  dplyr::select(-value) %>%
-  pivot_wider(id_cols = "Predictor", names_from = "RowNum", values_from = "Missing") %>%
-  dplyr::select(-Predictor) %>%
-  mutate(across(everything(), binary_fcn)) %>%
-  summarize_all( ~ sum(.) / ncol(ames_predictors_subset) * 100)
-  
+  ames_predictors_subset |>
+  mutate(RowNum = row_number()) |>
+  mutate(across(everything(), as.character)) |>
+  pivot_longer(cols = -RowNum, names_to = "Predictor", values_to = "value") |>
+  mutate(Missing = ifelse(is.na(value), "Yes", "No")) |>
+  mutate(Missing = factor(Missing, levels = c("Yes", "No"))) |>
+  dplyr::select(-value) |>
+  pivot_wider(
+    id_cols = "Predictor",
+    names_from = "RowNum",
+    values_from = "Missing"
+  ) |>
+  dplyr::select(-Predictor) |>
+  mutate(across(everything(), binary_fcn)) |>
+  summarize_all(~ sum(.) / ncol(ames_predictors_subset) * 100)
+
 max_missing_ames_samples <- max(ames_samples)
 
 # ------------------------------------------------------------------------------
 
 hotels_predictors <-
-  hotel_rates_all %>%
+  hotel_rates_all |>
   dplyr::select(-avg_price_per_room)
 
-hotels_pct_missing <- 
-  100 * sum(is.na(hotels_predictors)) / 
+hotels_pct_missing <-
+  100 *
+  sum(is.na(hotels_predictors)) /
   (nrow(hotels_predictors) * ncol(hotels_predictors))
 
 hotels_missing <-
-  hotels_predictors %>%
-  summarize_all(~ sum(is.na(.))) %>%
+  hotels_predictors |>
+  summarize_all(~ sum(is.na(.))) |>
   data.frame()
 
 hotels_num_missing_predictors <- length(which(hotels_missing > 0))
 
-hotels_pct_missing_agent <- 100 * length(which(is.na(hotel_rates_all$agent))) / nrow(hotel_rates_all)
-hotels_pct_missing_company <- 100 * length(which(is.na(hotel_rates_all$company))) / nrow(hotel_rates_all)
+hotels_pct_missing_agent <- 100 *
+  length(which(is.na(hotel_rates_all$agent))) /
+  nrow(hotel_rates_all)
+hotels_pct_missing_company <- 100 *
+  length(which(is.na(hotel_rates_all$company))) /
+  nrow(hotel_rates_all)
 
 hotels_missing_summary <-
-  hotels_missing %>%
-  pivot_longer(cols = everything(), names_to = "Predictors", values_to = "value") %>%
+  hotels_missing |>
+  pivot_longer(
+    cols = everything(),
+    names_to = "Predictors",
+    values_to = "value"
+  ) |>
   mutate(`Percent Missing` = 100 * value / nrow(ames))
 
 #Remove predictors with more than 20% missing data
 hotels_pred_gt_20 <-
-  hotels_missing_summary %>%
-  dplyr::filter(`Percent Missing` > 20) %>%
-  dplyr::select(Predictors) %>%
+  hotels_missing_summary |>
+  dplyr::filter(`Percent Missing` > 20) |>
+  dplyr::select(Predictors) |>
   pull()
 
 hotels_predictors_subset <-
-  hotels_predictors %>%
+  hotels_predictors |>
   dplyr::select(-all_of(hotels_pred_gt_20))
 
-hotels_pct_missing_subset <- 100 * 
+hotels_pct_missing_subset <- 100 *
   sum(is.na(hotels_predictors_subset)) /
   (nrow(hotels_predictors_subset) * ncol(hotels_predictors_subset))
 
 # Compute the percent missing values within each sample
 hotels_samples <-
-  hotels_predictors_subset %>%
-  mutate(RowNum = row_number()) %>%
-  mutate(across(everything(), as.character)) %>%
-  pivot_longer(cols=-RowNum, names_to = "Predictor", values_to = "value") %>%
-  mutate(Missing = ifelse(is.na(value), "Yes", "No")) %>%
-  mutate(Missing = factor(Missing, levels=c("Yes", "No"))) %>%
-  dplyr::select(-value) %>%
-  pivot_wider(id_cols="Predictor", names_from="RowNum", values_from="Missing") %>%
-  dplyr::select(-Predictor) %>%
-  mutate(across(everything(), binary_fcn)) %>%
-  summarize_all(~sum(.)/ncol(hotels_predictors_subset)*100)
+  hotels_predictors_subset |>
+  mutate(RowNum = row_number()) |>
+  mutate(across(everything(), as.character)) |>
+  pivot_longer(cols = -RowNum, names_to = "Predictor", values_to = "value") |>
+  mutate(Missing = ifelse(is.na(value), "Yes", "No")) |>
+  mutate(Missing = factor(Missing, levels = c("Yes", "No"))) |>
+  dplyr::select(-value) |>
+  pivot_wider(
+    id_cols = "Predictor",
+    names_from = "RowNum",
+    values_from = "Missing"
+  ) |>
+  dplyr::select(-Predictor) |>
+  mutate(across(everything(), binary_fcn)) |>
+  summarize_all(~ sum(.) / ncol(hotels_predictors_subset) * 100)
 
 max_missing_hotels_samples <- max(hotels_samples)
 ```
 
-It is not uncommon for some predictor values to be unknown. There can be a multitude of reasons. To illustrate, let’s consider a laboratory test for a respiratory disease. One or more results may be missing due to a failed control or an inappropriate database join. It is also possible that the test itself failed to produce a result. For example, the test might fail for diagnostics that use throat swabs because an interfering substance, such as food coloring from a lozenge, is on the swab. 
+It is not uncommon for some predictor values to be unknown. There can be a multitude of reasons. To illustrate, let's consider a laboratory test for a respiratory disease. One or more results may be missing due to a failed control or an inappropriate database join. It is also possible that the test itself failed to produce a result. For example, the test might fail for diagnostics that use throat swabs because an interfering substance, such as food coloring from a lozenge, is on the swab. 
 
 One of our illustrative data, the Ames housing data, has missing values in `r ames_num_missing_predictors` predictors. @fig-ames-missing illustrates the occurrence of missingness for the these data. This figure presents the full rectangular data matrix where each property (sorted alphabetically by neighborhood) is on the x-axis, and each predictor is on the y-axis. Red indicates that the value was missing in the data. 
 
@@ -213,11 +243,10 @@ One of our illustrative data, the Ames housing data, has missing values in `r am
 #| fig-width: 8
 #| fig-height: 5
 #| fig-cap: A visualization of the missing data for the Ames Housing data set.
-
-ames_missing_long %>% 
-  filter(Predictor %in% ames_has_missing_cols) %>% 
-  ggplot(aes(x = RowNum, y = Predictor, fill = Missing)) + 
-  geom_tile() + 
+ames_missing_long |>
+  filter(Predictor %in% ames_has_missing_cols) |>
+  ggplot(aes(x = RowNum, y = Predictor, fill = Missing)) +
+  geom_tile() +
   scale_fill_manual(values = c("darkred", "lightgray")) +
   xlab("Property") +
   scale_y_discrete(limits = rev) +
@@ -239,10 +268,9 @@ An "upset plot" is a method for visualizing high-dimensional Venn diagrams [@lex
 #| out-width: 100%
 #| fig-width: 8
 #| fig-height: 6
-#| fig-cap: An upset plot showing a few patterns of missingness in the Ames data. 
-
-ames_predictors %>% 
-  select(all_of(ames_has_missing_cols)) %>% 
+#| fig-cap: An upset plot showing a few patterns of missingness in the Ames data.
+ames_predictors |>
+  select(all_of(ames_has_missing_cols)) |>
   naniar::gg_miss_upset(nsets = 8)
 ```
 
@@ -258,7 +286,7 @@ With MCAR, we have significant latitude in terms of how to handle the situation.
 
 As a counter-example, suppose that patients with more severe respiratory illnesses were more likely to deal with their symptoms by using a lozenge, possibly leading to missing values. If the likelihood of a missing predictor value is a function of some other variable(s) _contained in the data_, this is called missing at random (MAR). You can think of this as conditional MCAR: each each level of a column describing lozenge usage (yes/no), the data are MCAR. @bhaskaran2014difference contains practical examples that help distinguish MAR and MCAR. 
 
-Another example data set will be introduced in @sec-hotel-rates, where we try to predict the cost of a hotel room (known as the "average daily rate" or ADR). The data set includes data on the method of booking the room, such as the name of the travel agent, the travel company, and the customer's country of origin. The agent variable in the hotel rate data was missing for `r round(hotels_pct_missing_agent,1)`% of the data. We don't always know if the agent is missing because no agent was used or because the value was not recorded. Treating the missingness of the agent as a binary outcome, we can use a simple recursive partitioning model (@sec-cart-cls) to understand potential relationships with other predictors. This might suggest the mechanism(s) influencing the occurrence of missing data. @fig-hotels-agent-missing illustrates the predictors that partition the missing agent data into increasing homogeneous groups. For example, non-missing company values are highly associated with missing values. This might mean that the company making the reservation used automated systems instead of a specific person in the company being associated with the reservation. Lead time also appears to be related to missingness, with shorter lead times occurring more frequently with missing agent values. We don't know whether lead time influences missingness or vice-versus. However, this analysis would provide a direction to begin an investigation. 
+Another example data set will be introduced in @sec-hotel-rates, where we try to predict the cost of a hotel room (known as the "average daily rate" or ADR). The data set includes data on the method of booking the room, such as the name of the travel agent, the travel company, and the customer's country of origin. The agent variable in the hotel rate data was missing for `r round(hotels_pct_missing_agent,1)`% of the data. We don't always know if the agent is missing because no agent was used or because the value was not recorded. Treating the missingness of the agent as a binary outcome, we can use a simple recursive partitioning model (@sec-cls-cart) to understand potential relationships with other predictors. This might suggest the mechanism(s) influencing the occurrence of missing data. @fig-hotels-agent-missing illustrates the predictors that partition the missing agent data into increasing homogeneous groups. For example, non-missing company values are highly associated with missing values. This might mean that the company making the reservation used automated systems instead of a specific person in the company being associated with the reservation. Lead time also appears to be related to missingness, with shorter lead times occurring more frequently with missing agent values. We don't know whether lead time influences missingness or vice-versus. However, this analysis would provide a direction to begin an investigation. 
 
 ```{r}
 #| label: fig-hotels-agent-missing
@@ -267,9 +295,8 @@ Another example data set will be introduced in @sec-hotel-rates, where we try to
 #| fig-width: 10.5
 #| fig-height: 7.5
 #| fig-cap: A classification tree to predict the missing category of agent in the hotel rate dataset. "TA" stands for travel agent and "TO" means tour operators.
-
 hotels_for_rpart <-
-  hotels_predictors %>%
+  hotels_predictors |>
   mutate(
     across(where(is.factor), as.character),
     across(where(is.character), tolower),
@@ -281,22 +308,27 @@ hotels_for_rpart <-
     market_segment = gsub("travel_agent", "TA", market_segment),
     across(where(is.character), ~ gsub("_", " ", .x)),
     across(where(is.character), as.factor)
-  ) %>%
+  ) |>
   rename_with(~ gsub("_", " ", .))
 
-rpart_mod <- rpart(agent ~ ., data = hotels_for_rpart, 
-                   control = rpart.control(maxdepth = 3))
+rpart_mod <- rpart(
+  agent ~ .,
+  data = hotels_for_rpart,
+  control = rpart.control(maxdepth = 3)
+)
 rpart_party <- as.party(rpart_mod)
-rpart_party %>% 
-  plot(ep_args = list(justmin = 20, abbreviate = TRUE), 
-       tp_args = list(text = "vertical", rot = 45, gp = gpar(cex = .9)))
+rpart_party |>
+  plot(
+    ep_args = list(justmin = 20, abbreviate = TRUE),
+    tp_args = list(text = "vertical", rot = 45, gp = gpar(cex = .9))
+  )
 ```
 
 With some simple exploration, as demonstrated with the Ames and hotel rate data sets, we can understand the causes or potential reasons for missing data. However, determining the cause of missing data may be more challenging for many other data sets. We need a framework to understand and manage missing data in such cases.
 
 One helpful framework involves examining the mechanisms behind missing data, including structural deficiencies, random occurrences, and specific causes.
 
-First, there can be structural deficiencies. This type of missing data arises when necessary information about a predictor is omitted. Moreover, it is often the easiest to address once the missing information has been identified. The agent variable in the hotel rate data is one example of a structural deficiency. As a second example, we saw earlier in the Ames housing data that several of the garage predictors were simultaneously missing across `r ames_missing_summary %>% dplyr::filter(Predictors=="garage year") %>% dplyr::select("Percent Missing") %>% pull() %>% round(., 0)`% of homes. The missing information was because these homes did not have a garage^[However, note that these properties have complete values for their size column (i.e., a zero ft<sup>2</sup> garage). ]. Some or all of the variables of finish, quality, type, and year built for garages will likely be important for determining a home's value. Therefore, we will need an approach to address these structural deficiencies.
+First, there can be structural deficiencies. This type of missing data arises when necessary information about a predictor is omitted. Moreover, it is often the easiest to address once the missing information has been identified. The agent variable in the hotel rate data is one example of a structural deficiency. As a second example, we saw earlier in the Ames housing data that several of the garage predictors were simultaneously missing across `r ames_missing_summary |> dplyr::filter(Predictors=="garage year") |> dplyr::select("Percent Missing") |> pull() |> round(0)`% of homes. The missing information was because these homes did not have a garage^[However, note that these properties have complete values for their size column (i.e., a zero ft<sup>2</sup> garage). ]. Some or all of the variables of finish, quality, type, and year built for garages will likely be important for determining a home's value. Therefore, we will need an approach to address these structural deficiencies.
 
 There can also be random occurrences.  Missing values often occur at random with no defined root cause. For example, a patient in a clinical trial may miss a scheduled visit due to a scheduling mishap. As another example, sporadically occurring severe weather can create missing data for collection devices that depend on continuous power. Generally, missing data due to random occurrences can happen a small percentage of the time and can be remedied. However, if randomly missing data occurs a large percentage of the time, the measurement system should be evaluated, and the collected variables should be scrutinized before being included in the modeling process. For a detailed understanding of this type of problem, see @little2019statistical.
 
@@ -338,7 +370,7 @@ The primary benefit of these models is that we can use the original data as-is. 
 These models only solve the logistical aspect of missing data. If the nature of missingness in your data causes a systematic bias, the models above _will not_ correct this bias.
 :::
 
-For example, naive Bayes [@webb2010naive] builds models by analyzing each predictor independently of the others. When a predictor contains a missing value, this missing sample’s information is omitted from probability calculations for only the affected predictors. If a distribution is systematically affected by missingness, the probabilities computed during prediction will be biased and may result in poor results in new samples. If missing data informs our understanding of the response, omitting the missing samples will be detrimental to the model. 
+For example, naive Bayes [@webb2010naive] builds models by analyzing each predictor independently of the others. When a predictor contains a missing value, this missing sample's information is omitted from probability calculations for only the affected predictors. If a distribution is systematically affected by missingness, the probabilities computed during prediction will be biased and may result in poor results in new samples. If missing data informs our understanding of the response, omitting the missing samples will be detrimental to the model. 
 
 @fig-missing-naive-bayes shows a two-class classification example where one predictor is used. The top panel shows the probability of a missing predictor value is related to its own value (i.e., MCAR). The predictor value is less likely to be complete was its value increases. 
 
@@ -351,43 +383,42 @@ Naive Bayes would use the predictor data to compute _conditional densities_ of t
 #| fig-width: 6
 #| fig-height: 5
 #| fig-cap: An example of how missingness can cause bias in the training data and impair a model fit.
-
 set.seed(8230)
 nb_n <- 5000
-nb_data <- 
-  tibble::tibble(value = rnorm(nb_n * 2), outcome = rep(LETTERS[1:2], nb_n)) %>% 
+nb_data <-
+  tibble::tibble(value = rnorm(nb_n * 2), outcome = rep(LETTERS[1:2], nb_n)) |>
   mutate(
     value = if_else(outcome == "A", value, value + 3),
     miss_lp = -5 + 2.6 * value,
     miss_prob = binomial()$linkinv(miss_lp),
-    is_missing = runif(5000*2) <= miss_prob
-    )
+    is_missing = runif(5000 * 2) <= miss_prob
+  )
 
 val_range <- extendrange(nb_data$value, f = .025)
 
-nb_predictors <- 
-  nb_data %>% 
-  mutate(Data = "True") %>% 
+nb_predictors <-
+  nb_data |>
+  mutate(Data = "True") |>
   bind_rows(
-    nb_data %>% 
-      filter(!is_missing) %>% 
+    nb_data |>
+      filter(!is_missing) |>
       mutate(Data = "Observed")
-  ) %>% 
+  ) |>
   mutate(Data = factor(Data, levels = c("True", "Observed")))
 
-p_nb <- 
-  nb_predictors %>% 
-  ggplot(aes(value, fill = outcome)) + 
-  stat_density(trim = TRUE, alpha = .3) + 
-  lims(x = val_range) + 
-  facet_wrap(~ Data, nc = 1) +
+p_nb <-
+  nb_predictors |>
+  ggplot(aes(value, fill = outcome)) +
+  stat_density(trim = TRUE, alpha = .3) +
+  lims(x = val_range) +
+  facet_wrap(~Data, nc = 1) +
   theme(legend.position = "bottom") +
   labs(x = "Predictor Values")
 
-p_miss <- 
-  nb_data %>% 
-  ggplot(aes(value, miss_prob)) + 
-  geom_line() + 
+p_miss <-
+  nb_data |>
+  ggplot(aes(value, miss_prob)) +
+  geom_line() +
   lims(x = val_range, y = 0:1) +
   labs(x = "Predictor Values", y = "Pr[missingness]") +
   theme(
@@ -396,8 +427,7 @@ p_miss <-
     axis.ticks.x = element_blank()
   )
 
-p_miss / p_nb + 
-  plot_layout(heights = c(1, 3))
+p_miss / p_nb + plot_layout(heights = c(1, 3))
 ```
 
 The bottom set of densities reflects the observed data. The density for class level `B` is more affected and would appear to have a tighter distribution. This induces more overlap in the densities, making the classification problem more difficult. 
@@ -415,15 +445,20 @@ The simplest method for managing missing data is to eliminate the predictors *or
 #| fig-width: 5.5
 #| fig-height: 3.5
 #| fig-cap: The distribution of percent missing values across predictors for the Ames housing data set.
-
 ames_missing_summary <-
-  ames_missing %>%
-  pivot_longer(cols=everything(), names_to = "Predictors", values_to = "value") %>%
-  mutate(`Percent Missing` = 100*value/nrow(ames))
+  ames_missing |>
+  pivot_longer(
+    cols = everything(),
+    names_to = "Predictors",
+    values_to = "value"
+  ) |>
+  mutate(`Percent Missing` = 100 * value / nrow(ames))
 
-ames_num_pred_gt_20 <- length(which(ames_missing_summary$`Percent Missing` > 20))
+ames_num_pred_gt_20 <- length(which(
+  ames_missing_summary$`Percent Missing` > 20
+))
 
-ggplot(ames_missing_summary, aes(x=`Percent Missing`)) +
+ggplot(ames_missing_summary, aes(x = `Percent Missing`)) +
   geom_histogram(binwidth = 5)
 ```
 
@@ -442,165 +477,207 @@ There are a couple of caveats to removing predictors or samples based on missing
 #| cache: true
 #| message: false
 #| warning: false
-
 load("../RData/simulation_data.RData")
 
-simulation_nonlinear <- 
-  simulation_data %>%
-  filter(relationship == "nonlinear") %>% 
-  rename(`Predictor 1` = x1, `Predictor 2` = x2) %>%
+simulation_nonlinear <-
+  simulation_data |>
+  filter(relationship == "nonlinear") |>
+  rename(`Predictor 1` = x1, `Predictor 2` = x2) |>
   dplyr::select(`Predictor 1`, `Predictor 2`, Observed)
 
-simulation_linear <- 
-  simulation_data %>%
-  filter(relationship == "linear") %>% 
-  rename(`Predictor 1` = x1, `Predictor 2` = x2) %>%
+simulation_linear <-
+  simulation_data |>
+  filter(relationship == "linear") |>
+  rename(`Predictor 1` = x1, `Predictor 2` = x2) |>
   dplyr::select(`Predictor 1`, `Predictor 2`, Observed)
 
 #Randomly select 10% of samples to have missing values
 set.seed(1009)
-missing_samples <- 
+missing_samples <-
   sample(
     1:nrow(simulation_nonlinear),
     size = 0.1 * nrow(simulation_nonlinear),
     replace = FALSE
   )
 predictor1_missing <- missing_samples[1:(length(missing_samples) / 2)]
-predictor2_missing <- missing_samples[((length(missing_samples) / 2) + 1):length(missing_samples)]
+predictor2_missing <- missing_samples[
+  ((length(missing_samples) / 2) + 1):length(missing_samples)
+]
 
 simulation_nonlinear_original_data <-
-  simulation_nonlinear %>%
-  dplyr::filter(row_number() %in% missing_samples) %>%
-  mutate(Imputation = "Original Data",
-         Type = "Original")
+  simulation_nonlinear |>
+  dplyr::filter(row_number() %in% missing_samples) |>
+  mutate(Imputation = "Original Data", Type = "Original")
 
 #Induce missing values
 simulation_nonlinear_missing <-
-  simulation_nonlinear %>%
-  mutate(`Predictor 1 New` = `Predictor 1`,
-         `Predictor 2 New` = `Predictor 2`) %>% 
-  mutate(`Predictor 1 New` = ifelse(row_number() %in% predictor1_missing, NA, `Predictor 1 New`),
-         `Predictor 2 New` = ifelse(row_number() %in% predictor2_missing, NA, `Predictor 2 New`)) %>%
-  dplyr::select(`Predictor 1 New`, `Predictor 2 New`, Observed) %>%
-  rename(`Predictor_1` = `Predictor 1 New`,
-         `Predictor_2` = `Predictor 2 New`)
+  simulation_nonlinear |>
+  mutate(
+    `Predictor 1 New` = `Predictor 1`,
+    `Predictor 2 New` = `Predictor 2`
+  ) |>
+  mutate(
+    `Predictor 1 New` = ifelse(
+      row_number() %in% predictor1_missing,
+      NA,
+      `Predictor 1 New`
+    ),
+    `Predictor 2 New` = ifelse(
+      row_number() %in% predictor2_missing,
+      NA,
+      `Predictor 2 New`
+    )
+  ) |>
+  dplyr::select(`Predictor 1 New`, `Predictor 2 New`, Observed) |>
+  rename(`Predictor_1` = `Predictor 1 New`, `Predictor_2` = `Predictor 2 New`)
 
 #Mean imputation
-impute_mean_recipe <- 
-  recipe(Observed ~ ., data = simulation_nonlinear_missing) %>%
-  step_impute_mean(all_predictors()) %>%
+impute_mean_recipe <-
+  recipe(Observed ~ ., data = simulation_nonlinear_missing) |>
+  step_impute_mean(all_predictors()) |>
   prep(training = simulation_nonlinear_missing)
 
-impute_mean_data <- 
-  bake(impute_mean_recipe, simulation_nonlinear_missing) %>%
-  mutate(Imputation = "Mean",
-         Type = "Imputed") %>%
-  rename(`Predictor 1` = Predictor_1,
-         `Predictor 2` = Predictor_2) %>%
+impute_mean_data <-
+  bake(impute_mean_recipe, simulation_nonlinear_missing) |>
+  mutate(Imputation = "Mean", Type = "Imputed") |>
+  rename(`Predictor 1` = Predictor_1, `Predictor 2` = Predictor_2) |>
   dplyr::filter(row_number() %in% missing_samples)
 
 #Median imputation
-impute_median_recipe <- 
-  recipe(Observed ~ ., data = simulation_nonlinear_missing) %>%
-  step_impute_median(all_predictors()) %>%
+impute_median_recipe <-
+  recipe(Observed ~ ., data = simulation_nonlinear_missing) |>
+  step_impute_median(all_predictors()) |>
   prep(training = simulation_nonlinear_missing)
 
-impute_median_data <- 
-  bake(impute_median_recipe, simulation_nonlinear_missing) %>%
-  mutate(Imputation = "Median",
-         Type = "Imputed") %>%
-  rename(`Predictor 1` = Predictor_1,
-         `Predictor 2` = Predictor_2) %>%
+impute_median_data <-
+  bake(impute_median_recipe, simulation_nonlinear_missing) |>
+  mutate(Imputation = "Median", Type = "Imputed") |>
+  rename(`Predictor 1` = Predictor_1, `Predictor 2` = Predictor_2) |>
   dplyr::filter(row_number() %in% missing_samples)
 
 #linear imputation
-impute_linear_recipe <- 
-  recipe(Observed ~ ., data = simulation_nonlinear_missing) %>%
-  step_impute_linear(all_predictors()) %>%
+impute_linear_recipe <-
+  recipe(Observed ~ ., data = simulation_nonlinear_missing) |>
+  step_impute_linear(all_predictors()) |>
   prep(training = simulation_nonlinear_missing)
 
-# TODO use a nonlinear model for each? 
-# impute_linear_recipe <- 
-#   recipe(Observed ~ ., data = simulation_nonlinear_missing) %>%
-#   step_mutate(quad_term = Predictor_1^2) %>% 
-#   step_impute_linear(Predictor_2, impute_with = imp_vars(quad_term)) %>%
-#   step_rm(quad_term) %>% 
+# TODO use a nonlinear model for each?
+# impute_linear_recipe <-
+#   recipe(Observed ~ ., data = simulation_nonlinear_missing) |>
+#   step_mutate(quad_term = Predictor_1^2) |>
+#   step_impute_linear(Predictor_2, impute_with = imp_vars(quad_term)) |>
+#   step_rm(quad_term) |>
 #   prep(training = simulation_nonlinear_missing)
 
-impute_linear_data <- 
-  bake(impute_linear_recipe, simulation_nonlinear_missing) %>%
-  mutate(Imputation = "Linear",
-         Type = "Imputed") %>%
-  rename(`Predictor 1` = Predictor_1,
-         `Predictor 2` = Predictor_2) %>%
+impute_linear_data <-
+  bake(impute_linear_recipe, simulation_nonlinear_missing) |>
+  mutate(Imputation = "Linear", Type = "Imputed") |>
+  rename(`Predictor 1` = Predictor_1, `Predictor 2` = Predictor_2) |>
   dplyr::filter(row_number() %in% missing_samples)
 
 #k-NN imputation
-impute_knn_recipe <- 
-  recipe(Observed ~ ., data = simulation_nonlinear_missing) %>%
-  step_impute_knn(all_predictors()) %>%
+impute_knn_recipe <-
+  recipe(Observed ~ ., data = simulation_nonlinear_missing) |>
+  step_impute_knn(all_predictors()) |>
   prep(training = simulation_nonlinear_missing)
 
-impute_knn_data <- 
-  bake(impute_knn_recipe, simulation_nonlinear_missing) %>%
-  mutate(Imputation = "k-NN",
-         Type = "Imputed") %>%
-  rename(`Predictor 1` = Predictor_1,
-         `Predictor 2` = Predictor_2) %>%
+impute_knn_data <-
+  bake(impute_knn_recipe, simulation_nonlinear_missing) |>
+  mutate(Imputation = "k-NN", Type = "Imputed") |>
+  rename(`Predictor 1` = Predictor_1, `Predictor 2` = Predictor_2) |>
   dplyr::filter(row_number() %in% missing_samples)
 
 #Bag imputation
-impute_bag_recipe <- 
-  recipe(Observed ~ ., data = simulation_nonlinear_missing) %>%
-  step_impute_bag(all_predictors()) %>%
+impute_bag_recipe <-
+  recipe(Observed ~ ., data = simulation_nonlinear_missing) |>
+  step_impute_bag(all_predictors()) |>
   prep(training = simulation_nonlinear_missing)
 
-impute_bag_data <- 
-  bake(impute_bag_recipe, simulation_nonlinear_missing) %>%
-  mutate(Imputation = "Bag",
-         Type = "Imputed") %>%
-  rename(`Predictor 1` = Predictor_1,
-         `Predictor 2` = Predictor_2) %>%
+impute_bag_data <-
+  bake(impute_bag_recipe, simulation_nonlinear_missing) |>
+  mutate(Imputation = "Bag", Type = "Imputed") |>
+  rename(`Predictor 1` = Predictor_1, `Predictor 2` = Predictor_2) |>
   dplyr::filter(row_number() %in% missing_samples)
 
 imputation_simulation_comparison <-
-  bind_rows(simulation_nonlinear_original_data,
-            impute_mean_data,
-            impute_median_data,
-            impute_linear_data,
-            impute_knn_data,
-            impute_bag_data) %>%
-  mutate(Imputation = factor(Imputation, levels=c("Original Data", "Mean", "Median", "Linear", "k-NN", "Bag")),
-         Observed_Type = paste0(Observed,"_",Type)) %>%
-  mutate(Observed_Type = factor(Observed_Type, levels=c("Group 1_Original", "Group 2_Original", 
-                                                        "Group 1_Imputed", "Group 2_Imputed"))) 
+  bind_rows(
+    simulation_nonlinear_original_data,
+    impute_mean_data,
+    impute_median_data,
+    impute_linear_data,
+    impute_knn_data,
+    impute_bag_data
+  ) |>
+  mutate(
+    Imputation = factor(
+      Imputation,
+      levels = c("Original Data", "Mean", "Median", "Linear", "k-NN", "Bag")
+    ),
+    Observed_Type = paste0(Observed, "_", Type)
+  ) |>
+  mutate(
+    Observed_Type = factor(
+      Observed_Type,
+      levels = c(
+        "Group 1_Original",
+        "Group 2_Original",
+        "Group 1_Imputed",
+        "Group 2_Imputed"
+      )
+    )
+  )
 
 simulation_nonlinear_original_data_small <-
-  simulation_nonlinear_original_data %>%
-  dplyr::select(`Predictor 1`, `Predictor 2`) %>%
+  simulation_nonlinear_original_data |>
+  dplyr::select(`Predictor 1`, `Predictor 2`) |>
   mutate(Sample = row_number())
 
 imputation_distance_comparison <-
   bind_cols(
-    simulation_nonlinear_original_data %>% dplyr::select(`Predictor 1`, `Predictor 2`) %>% rename(Orig1 = `Predictor 1`, Orig2 = `Predictor 2`),
-    impute_mean_data %>% dplyr::select(`Predictor 1`, `Predictor 2`) %>% rename(Mean1 = `Predictor 1`, Mean2 = `Predictor 2`),
-    impute_median_data %>% dplyr::select(`Predictor 1`, `Predictor 2`) %>% rename(Median1 = `Predictor 1`, Median2 = `Predictor 2`),
-    impute_linear_data %>% dplyr::select(`Predictor 1`, `Predictor 2`) %>% rename(Linear1 = `Predictor 1`, Linear2 = `Predictor 2`),
-    impute_knn_data %>% dplyr::select(`Predictor 1`, `Predictor 2`) %>% rename(knn1 = `Predictor 1`, knn2 = `Predictor 2`),
-    impute_bag_data %>% dplyr::select(`Predictor 1`, `Predictor 2`) %>% rename(Bag1 = `Predictor 1`, Bag2 = `Predictor 2`)
-  ) %>%
-  mutate(Mean = sqrt((Orig1 - Mean1)^2 + (Orig2 - Mean2)^2),
-         Median = sqrt((Orig1 - Median1)^2 + (Orig2 - Median2)^2),
-         Linear = sqrt((Orig1 - Linear1)^2 + (Orig2 - Linear2)^2),
-         `k-NN` = sqrt((Orig1 - knn1)^2 + (Orig2 - knn2)^2),
-         Bag = sqrt((Orig1 - Bag1)^2 + (Orig2 - Bag2)^2)) %>%
-  dplyr::select(Mean, Median, `Linear\nRegression` = Linear, KNN = `k-NN`, Bagging = Bag) %>%
+    simulation_nonlinear_original_data |>
+      dplyr::select(`Predictor 1`, `Predictor 2`) |>
+      rename(Orig1 = `Predictor 1`, Orig2 = `Predictor 2`),
+    impute_mean_data |>
+      dplyr::select(`Predictor 1`, `Predictor 2`) |>
+      rename(Mean1 = `Predictor 1`, Mean2 = `Predictor 2`),
+    impute_median_data |>
+      dplyr::select(`Predictor 1`, `Predictor 2`) |>
+      rename(Median1 = `Predictor 1`, Median2 = `Predictor 2`),
+    impute_linear_data |>
+      dplyr::select(`Predictor 1`, `Predictor 2`) |>
+      rename(Linear1 = `Predictor 1`, Linear2 = `Predictor 2`),
+    impute_knn_data |>
+      dplyr::select(`Predictor 1`, `Predictor 2`) |>
+      rename(knn1 = `Predictor 1`, knn2 = `Predictor 2`),
+    impute_bag_data |>
+      dplyr::select(`Predictor 1`, `Predictor 2`) |>
+      rename(Bag1 = `Predictor 1`, Bag2 = `Predictor 2`)
+  ) |>
+  mutate(
+    Mean = sqrt((Orig1 - Mean1)^2 + (Orig2 - Mean2)^2),
+    Median = sqrt((Orig1 - Median1)^2 + (Orig2 - Median2)^2),
+    Linear = sqrt((Orig1 - Linear1)^2 + (Orig2 - Linear2)^2),
+    `k-NN` = sqrt((Orig1 - knn1)^2 + (Orig2 - knn2)^2),
+    Bag = sqrt((Orig1 - Bag1)^2 + (Orig2 - Bag2)^2)
+  ) |>
+  dplyr::select(
+    Mean,
+    Median,
+    `Linear\nRegression` = Linear,
+    KNN = `k-NN`,
+    Bagging = Bag
+  ) |>
   pivot_longer(
     everything(),
     names_to = "Method",
     values_to = "Distance"
-  ) %>%
-  mutate(Method = factor(Method, levels=c("Mean", "Median", "Linear\nRegression", "KNN", "Bagging")))
+  ) |>
+  mutate(
+    Method = factor(
+      Method,
+      levels = c("Mean", "Median", "Linear\nRegression", "KNN", "Bagging")
+    )
+  )
 ```
 
 Imputation is the process of using other existing information (i.e., the predictors) to estimate what each missing value might have been. In other words, we will build an imputation model to fill in the missing column(s) so that we can run the primary machine-learning model. A separate imputation model is required for each column that contains (or could contain) missing data. 
@@ -615,7 +692,7 @@ In the statistical literature [@d2024behind], two terms can help us understand t
 
 One important concept heavily featured in subsequent chapters is resampling, where we'll train our preprocessors and supervised models using slightly different data sets. The goal of resampling is to estimate model performance accurately. Although resampling will involve repeated re-imputation of missing data, it is not a stochastic imputation method.
 
-Let’s highlight a couple of key distinctions when considering imputation for the purpose of inference versus prediction. One is that inferential models generally make assumptions about the statistical distributions of the predictors. Conversely, many machine learning models, like support vector machines, tree-based models, and neural networks, do not make such assumptions. Therefore, stochastic imputation is less relevant for predictive models. A second difference is that multiple imputation methods focus on understanding relationships within the existing data, while predictive models aim for generalizable relationships to unseen samples. This difference has implications on when imputation should be applied to the data, which will be discussed later in @sec-when-to-address-missing-data. Finally, in some cases, including the _outcome_ data in the imputation model might make sense. This is inappropriate for our goals here (i.e., deterministic imputation). While @d2024behind explains the theoretical reasons why this is the case, our objections can be viewed as purely functional: if we require the outcome to make decisions, we cannot predict new samples where the outcome is unknown. 
+Let's highlight a couple of key distinctions when considering imputation for the purpose of inference versus prediction. One is that inferential models generally make assumptions about the statistical distributions of the predictors. Conversely, many machine learning models, like support vector machines, tree-based models, and neural networks, do not make such assumptions. Therefore, stochastic imputation is less relevant for predictive models. A second difference is that multiple imputation methods focus on understanding relationships within the existing data, while predictive models aim for generalizable relationships to unseen samples. This difference has implications on when imputation should be applied to the data, which will be discussed later in @sec-when-to-address-missing-data. Finally, in some cases, including the _outcome_ data in the imputation model might make sense. This is inappropriate for our goals here (i.e., deterministic imputation). While @d2024behind explains the theoretical reasons why this is the case, our objections can be viewed as purely functional: if we require the outcome to make decisions, we cannot predict new samples where the outcome is unknown. 
 
 What are the important characteristics of an imputation technique that will be used in a prediction model?  There are a few that we will focus on:
 
@@ -629,7 +706,7 @@ What are the important characteristics of an imputation technique that will be u
 
 - Be accurate:  the results should be close to what the actual value would have been^[Unfortunately, we may not be able to judge the accuracy of the imputation for most data sets since the missing data will never be known.].
 
-By considering each of these characteristics, imputation can effectively alleviate missing data problems, enhancing models’ quality and predictive performance. There are several imputation methods that meet most or all of the above characteristics. These imputation techniques fall into two general categories: most likely value and model-based (i.e., "regression imputation"). 
+By considering each of these characteristics, imputation can effectively alleviate missing data problems, enhancing models' quality and predictive performance. There are several imputation methods that meet most or all of the above characteristics. These imputation techniques fall into two general categories: most likely value and model-based (i.e., "regression imputation"). 
 
 To illustrate how these methods work, we will use two simple, simulated two-predictor classification data sets. @fig-imputation-simulation-data displays the simulated data. For these data sets, the optimal class separation is defined by the black lines. We will initially focus on the nonlinear data set. From these data set, 10% of the samples will be randomly selected. Of these samples, half will have the value of first predictor deleted, while the other half will have the second predictor deleted. 
 
@@ -641,12 +718,11 @@ To illustrate how these methods work, we will use two simple, simulated two-pred
 #| fig-width: 8
 #| fig-height: 4
 #| fig-cap: Two complete two-class simulated datasets with 200 data points, one with a linear relationship between the predictors and the other nonlinear. The optimal partitions of the classes are represented by the black lines.
-
-p_nonlin <- 
+p_nonlin <-
   ggplot(simulation_nonlinear, aes(x = `Predictor 1`, y = `Predictor 2`)) +
   geom_point(aes(pch = Observed, color = Observed), size = 2, alpha = 2 / 4) +
   geom_function(
-    fun = function(x) (x ^ 2) / 2 + 4,
+    fun = function(x) (x^2) / 2 + 4,
     col = "black",
     linewidth = 2,
     alpha = 1 / 5
@@ -655,7 +731,7 @@ p_nonlin <-
   scale_shape_manual(values = c(16, 17)) +
   ggtitle("Nonlinear Relationship")
 
-p_lin <- 
+p_lin <-
   ggplot(simulation_linear, aes(x = `Predictor 1`, y = `Predictor 2`)) +
   geom_point(aes(pch = Observed, color = Observed), size = 2, alpha = 2 / 4) +
   geom_function(
@@ -665,11 +741,10 @@ p_lin <-
     alpha = 1 / 5
   ) +
   scale_color_manual(values = c("#56B4E9", "#D55E00")) +
-  scale_shape_manual(values = c(16, 17))  +
+  scale_shape_manual(values = c(16, 17)) +
   ggtitle("Linear Relationship")
 
 p_lin + p_nonlin + plot_layout(guides = 'collect')
-
 ```
 
 `r r_comp("missing-data.html#imputation")`
@@ -698,7 +773,7 @@ For many data sets, and especially for sets with a minimal number of missing val
 
 ::: {#fig-imputation-exploration}
 
-::: {.figure-content}
+::::: {.figure-content}
 
 ```{shinylive-r}
 #| label: shiny-imputation-exploration
@@ -718,7 +793,7 @@ source("https://raw.githubusercontent.com/aml4td/website/main/R/shiny-imputation
 app
 ```
 
-:::
+:::::
 
 A visualization of the four new features for different linear embedding methods. The data shown are the validation set results from the two simulations shown in @fig-imputation-simulation-data.
 
@@ -734,7 +809,7 @@ Selecting the nonlinear data set in @fig-imputation-exploration illustrates the 
 
 However, if these predictors were linearly related, then this technique would generate values closer to the actual values. This can be seen by choosing the linear data set in @fig-imputation-exploration.
 
-Since this imputation method is basically linear regression, we can use it for slightly more sophisticated results. For example, if we want to impute a predictor’s values based on some other predictors categories, linear regression can achieve this. There is also the possibility of interactions, splines, and so on (as long as the "predictors" in the imputation model are not missing themselves). 
+Since this imputation method is basically linear regression, we can use it for slightly more sophisticated results. For example, if we want to impute a predictor's values based on some other predictors categories, linear regression can achieve this. There is also the possibility of interactions, splines, and so on (as long as the "predictors" in the imputation model are not missing themselves). 
 
 When the predictor that requires imputation is categorical, then logistic or multinomial regression can be used to generate an imputed category.
 
@@ -748,17 +823,16 @@ When the predictor that requires imputation is categorical, then logistic or mul
 #| fig-width: 6
 #| fig-height: 4.25
 #| fig-cap: A comparison of the distribution of distances between the actual and imputed samples across imputation techniques for the nonlinear data shown in @fig-imputation-simulation-data. The mean, median, and linear techniques perform similarly, while K-NN and bagging generate imputed values that are modestly closer to the actual values.
-
 ggplot(imputation_distance_comparison, aes(x = Method, y = Distance)) +
   geom_boxplot(outlier.size = 0) +
-  geom_jitter(height = 0, width = 0.05, color = "blue", alpha = 3 / 4) + 
+  geom_jitter(height = 0, width = 0.05, color = "blue", alpha = 3 / 4) +
   scale_y_log10() +
   labs(x = NULL)
 ```
 
-### Nearest Neighbors  {#sec-imputation-knn}
+### Nearest Neighbors {#sec-imputation-knn}
 
-$K$-nearest neighbor calculations will be discussed in @sec-mds, where it will be used in some multidimensional scaling methods, and in @sec-knn-cls in the context of a supervised model. In short, when imputing a missing predictor value for a new sample, the $K$ most similar samples from the training set are determined (using all complete predictor values). The $K$ predictor values for the predictor of interest are summarized via the mean (for numeric outcomes) or the mode. This summary statistic is used to fill in the missing value. This is a localized version of the most likely value approach.
+$K$-nearest neighbor calculations will be discussed in @sec-mds, where it will be used in some multidimensional scaling methods, and in @sec-cls-knn in the context of a supervised model. In short, when imputing a missing predictor value for a new sample, the $K$ most similar samples from the training set are determined (using all complete predictor values). The $K$ predictor values for the predictor of interest are summarized via the mean (for numeric outcomes) or the mode. This summary statistic is used to fill in the missing value. This is a localized version of the most likely value approach.
 
 @fig-imputation-exploration shows that a nearest-neighbor approach generally increases the accuracy of the imputation, especially for the first predictor. For the linear case, both predictors have high-quality imputations. 
 
@@ -766,7 +840,7 @@ $K$-nearest neighbor calculations will be discussed in @sec-mds, where it will b
 
 As mentioned earlier, tree-based models are a reasonable choice for imputation techniques because many types of trees do not require complete data themselves. They generally provide good accuracy and do not extrapolate values beyond the bounds of the training data. While a single tree can be used for imputation, it will likely have low bias but high variance. Ideally, we would like imputed values to have low bias as well as low variance.
 
-Tree ensembles, such as bagging and random forests (Chapters [-@sec-trees-cls] and [-@sec-trees-reg]), help solve this issue since they blend the predictors from many individual tree models. However, these methods can be computationally taxing for moderate- to large-sized data sets. Specifically, random forests require many trees (hundreds to thousands) to achieve a stable and reliable imputation model. This comes at the cost of a large computational footprint, which may become a challenge as the number of predictors with missing data increases; a separate model must be trained and retained for each predictor. As discussed later, bagged tree models tend to be smaller and faster than their random forest counterparts. Typically, there is a marginal loss in accuracy from using bagging instead of random forests. 
+Tree ensembles, such as bagging and random forests (Chapters [-@sec-cls-trees] and [-@sec-reg-trees]), help solve this issue since they blend the predictors from many individual tree models. However, these methods can be computationally taxing for moderate- to large-sized data sets. Specifically, random forests require many trees (hundreds to thousands) to achieve a stable and reliable imputation model. This comes at the cost of a large computational footprint, which may become a challenge as the number of predictors with missing data increases; a separate model must be trained and retained for each predictor. As discussed later, bagged tree models tend to be smaller and faster than their random forest counterparts. Typically, there is a marginal loss in accuracy from using bagging instead of random forests. 
 
 Like nearest-neighbor imputation, the bagged tree places most of the imputed values close to the original data distribution, as seen in @fig-imputation-exploration. The distribution of distances (@fig-imputation-distance-comparison) for bagged imputation is similar to that of nearest neighbors.  @fig-imputation-exploration provides a comparison of the imputation techniques discussed here with the nonlinear simulated data and a data set in which the two groups are optimally separated by a linear boundary.  In this comparison, the percentage of missing data can be adjusted to demonstrate how each imputation method performs.
 

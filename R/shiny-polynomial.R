@@ -29,14 +29,14 @@ server <- function(input, output, session) {
   maybe_lm <- function(x) {
     try(lm(y ~ poly(x, input$piecewise_deg), data = x), silent = TRUE)
   }
-  
+
   names_zero_padded <- function(num, prefix = "x", call = rlang::caller_env()) {
     rlang:::check_number_whole(num, min = 1, call = call)
     ind <- format(seq_len(num))
     ind <- gsub(" ", "0", ind)
     paste0(prefix, ind)
   }
-  
+
   expansion_to_tibble <- function(x, original, prefix = "term ") {
     cls <- class(x)[1]
     nms <- names_zero_padded(ncol(x), prefix)
@@ -49,14 +49,14 @@ server <- function(input, output, session) {
     }
     res
   }
-  
+
   mult_poly <- function(dat, degree = 4) {
     rng <- extendrange(dat$x, f = .025)
     grid <- seq(rng[1], rng[2], length.out = 1000)
     grid_df <- tibble(x = grid)
     feat <- poly(grid_df$x, degree)
     res <- expansion_to_tibble(feat, grid_df$x)
-    
+
     # make some random names so that we can plot the features with distinct colors
     rand_names <- lapply(
       1:degree,
@@ -69,7 +69,7 @@ server <- function(input, output, session) {
       dplyr::rename(name = name2)
     res
   }
-  
+
   col_rect <- ggplot2::element_rect(fill = "#fcfefe", colour = "#fcfefe")
   theme_light_bl <- function() {
     ggplot2::theme(
@@ -80,23 +80,23 @@ server <- function(input, output, session) {
       plot.background = col_rect
     )
   }
-  
+
   # ------------------------------------------------------------------------------
-  
+
   spline_example <- tibble(x = fossil$age, y = fossil$strontium.ratio)
   rng <- extendrange(fossil$age, f = .025)
   grid <- seq(rng[1], rng[2], length.out = 1000)
   grid_df <- tibble(x = grid)
   alphas <- 1 / 4
   line_wd <- 1.0
-  
+
   base_p <- spline_example %>%
     ggplot(aes(x = x, y = y)) +
     geom_point(alpha = 3 / 4, pch = 1, cex = 3) +
     labs(x = "Age", y = "Isotope Ratio") +
     lims(x = rng) +
     theme_light_bl()
-  
+
   output$global <- renderPlot({
     poly_fit <- lm(y ~ poly(x, input$global_deg), data = spline_example)
     poly_pred <- predict(
@@ -106,9 +106,9 @@ server <- function(input, output, session) {
       level = .90
     ) %>%
       bind_cols(grid_df)
-    
+
     global_p <- base_p
-    
+
     if (input$global_deg > 0) {
       global_p <- global_p +
         geom_ribbon(
@@ -129,7 +129,7 @@ server <- function(input, output, session) {
           legend.background = col_rect,
           legend.key = col_rect
         )
-      
+
       feature_p <- poly(grid_df$x, input$global_deg) %>%
         expansion_to_tibble(grid_df$x) %>%
         ggplot(aes(variable, y = value, group = name, col = name)) +
@@ -143,13 +143,12 @@ server <- function(input, output, session) {
           legend.key = col_rect
         ) +
         scale_color_viridis(discrete = TRUE, option = "turbo")
-      
+
       p <- (feature_p / global_p) + plot_layout(heights = c(1.5, 4))
     }
-    
+
     print(p)
   })
 }
 
 app <- shinyApp(ui, server)
-

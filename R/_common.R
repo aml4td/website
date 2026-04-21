@@ -23,7 +23,7 @@ pkg_chr <- function(x) {
 
 # ------------------------------------------------------------------------------
 
-holdout_plots <- function(x, resid_rng, alpha = 3/4) {
+holdout_plots <- function(x, resid_rng, alpha = 3 / 4) {
   require(patchwork)
 
   y_nm <- .get_tune_outcome_names(x)
@@ -69,7 +69,13 @@ val_roc_plots <- function(x) {
   x %>%
     ggplot(aes(x = 1 - specificity, y = sensitivity)) +
     geom_abline(col = "red", lty = 3) +
-    geom_step(data = prev_res, aes(group = Model), show.legend = FALSE, col = "blue", alpha = 0.2) +
+    geom_step(
+      data = prev_res,
+      aes(group = Model),
+      show.legend = FALSE,
+      col = "blue",
+      alpha = 0.2
+    ) +
     geom_step(data = new_res, col = "black") +
     coord_obs_pred()
 }
@@ -211,7 +217,8 @@ if (is_html) {
 r_comp <- function(stub) {
   glue::glue(
     '<a href="https://tidymodels.aml4td.org/chapters/[stub]">{{< fa brands r-project size=Large >}}</a>',
-    .open = "[", .close = "]"
+    .open = "[",
+    .close = "]"
   )
 }
 
@@ -251,5 +258,4 @@ names_zero_padded <- function(num, prefix = "x", call = rlang::caller_env()) {
 # ------------------------------------------------------------------------------
 
 log_2_breaks <- scales::trans_breaks("log2", function(x) 2^x)
-log_2_labs   <- scales::trans_format("log2", scales::math_format(2^.x))
-
+log_2_labs <- scales::trans_format("log2", scales::math_format(2^.x))
