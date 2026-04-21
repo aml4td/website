@@ -106,10 +106,10 @@ These models are described in detail in subsequent chapters. The colors of the p
 #| fig-height: 5
 #| fig-cap: For different regression models, the percent increase in RMSE is shown as a function of the number of additional non-informative predictors.
 
-noise_simulation_results_pct %>%
+noise_simulation_results_pct |>
   mutate(
     `Automatic Selection` = ifelse(fs, "yes", "no")
-  ) %>%
+  ) |>
   ggplot(aes(num_extra, increase)) +
   geom_hline(yintercept = 0, col = "green", alpha = 1 / 2) +
   geom_point(aes(col = `Automatic Selection`)) +
@@ -182,11 +182,11 @@ We can determine thresholds for both of these criteria to remove the predictor. 
 cor_data <- forested_train |>
   select(-class, -county)
 
-cor_mat <- cor_data %>%
+cor_mat <- cor_data |>
   cor(use = "pairwise.complete.obs")
 
-cut_0.50 <- cor_data %>%
-  recipes:::corr_filter(cutoff = .50) %>%
+cut_0.50 <- cor_data |>
+  recipes:::corr_filter(cutoff = .50) |>
   sort()
 
 cut_0.50 <- 
@@ -246,18 +246,18 @@ The next few sections will describe the mechanics of these techniques. However, 
 #| include: false
 
 set.seed(3838)
-mars_res <- mars(prod_degree = 2, mode = "regression") %>%
+mars_res <- mars(prod_degree = 2, mode = "regression") |>
   fit(time_to_delivery ~ ., data = delivery_train)
 
 pat <- paste0("(", levels(delivery_train$day), ")", collapse = "|")
 
-mars_imp <- mars_res$fit %>%
-  evimp() %>%
-  unclass() %>%
+mars_imp <- mars_res$fit |>
+  evimp() |>
+  unclass() |>
   as.matrix()
 
-mars_df <- mars_imp %>%
-  as_tibble(rownames = "term") %>%
+mars_df <- mars_imp |>
+  as_tibble(rownames = "term") |>
   mutate(predictor = gsub(pat, "", term))
 
 mars_active <- distinct(mars_df, predictor)
@@ -307,8 +307,8 @@ Since feature selection is part of the broader model pipeline, 10-fold cross-val
 #| fig-cap: The progress of using simulated annealing to select features for.a neural network. The dashed green line indicators the best RMSE value achievable for these simulated data.
 load("../RData/nnet_sa_res.RData")
 
-nnet_sa_res$internal %>%
-  summarize(mean = mean(RMSE), .by = c(Iter)) %>%
+nnet_sa_res$internal |>
+  summarize(mean = mean(RMSE), .by = c(Iter)) |>
   ggplot(aes(Iter, mean)) +
   geom_line() +
   geom_point(cex = 1 / 2) +
@@ -329,7 +329,7 @@ However, looks can be deceiving. The feature selection process is incredibly var
 #| fig-cap: The individual SA runs that make up the data in @fig-selection-sa.
 load("../RData/nnet_sa_res.RData")
 
-nnet_sa_res$internal %>%
+nnet_sa_res$internal |>
   ggplot(aes(Iter, RMSE)) +
   geom_line() +
   facet_wrap(~Resample, ncol = 5) +
@@ -387,8 +387,8 @@ sim_tr <- sim_regression(n_train, method = "hooker_2004")
 sim_te <- sim_regression(n_test, method = "hooker_2004")
 
 set.seed(348)
-sim_tr <- sim_tr %>% bind_cols(sim_noise(n_train, num_extra))
-sim_te <- sim_te %>% bind_cols(sim_noise(n_test, num_extra))
+sim_tr <- sim_tr |> bind_cols(sim_noise(n_train, num_extra))
+sim_te <- sim_te |> bind_cols(sim_noise(n_test, num_extra))
 
 num_pred <- ncol(sim_tr) - 1
 
@@ -397,13 +397,13 @@ sim_rs <- vfold_cv(sim_tr)
 
 # ------------------------------------------------------------------------------
 
-sim_rec <- recipe(outcome ~ ., data = sim_tr) %>%
+sim_rec <- recipe(outcome ~ ., data = sim_tr) |>
   step_predictor_best(
     all_predictors(),
     score = "imp_rf",
     prop_terms = tune(),
     id = "filter"
-  ) %>%
+  ) |>
   step_normalize(all_predictors())
 
 mlp_spec <- mlp(
@@ -412,14 +412,14 @@ mlp_spec <- mlp(
   epochs = 250,
   activation = tune(),
   learn_rate = tune()
-) %>%
-  set_engine("brulee", stop_iter = 5) %>%
+) |>
+  set_engine("brulee", stop_iter = 5) |>
   set_mode("regression")
 
 mlp_wflow <- workflow(sim_rec, mlp_spec)
 
-mlp_param <- mlp_wflow %>%
-  extract_parameter_set_dials() %>%
+mlp_param <- mlp_wflow |>
+  extract_parameter_set_dials() |>
   update(
     learn_rate = learn_rate(c(-3, -1 / 2)),
     hidden_units = hidden_units(c(2, 20)),
@@ -430,9 +430,9 @@ mlp_param <- mlp_wflow %>%
 
 get_rm <- function(x) {
   require(tidymodels)
-  x %>%
-    extract_recipe() %>%
-    tidy(id = "filter") %>%
+  x |>
+    extract_recipe() |>
+    tidy(id = "filter") |>
     dplyr::filter(removed) |> 
     dplyr::select(terms)
 }
@@ -440,7 +440,7 @@ get_rm <- function(x) {
 ctrl_filter <- control_grid(save_workflow = TRUE, extract = get_rm)
 
 set.seed(152)
-mlp_rf_sfd_res <- mlp_wflow %>%
+mlp_rf_sfd_res <- mlp_wflow |>
   tune_grid(
     resamples = sim_rs,
     param_info = mlp_param,
@@ -453,8 +453,8 @@ mlp_rf_fit <- fit_best(mlp_rf_sfd_res, metric = "rmse")
 mlp_rf_mtr <- collect_metrics(mlp_rf_sfd_res) # save for later
 mlp_rf_best <- select_best(mlp_rf_sfd_res, metric = "rmse")
 
-mlp_rf_mtr <- mlp_rf_fit %>%
-  augment(sim_te) %>%
+mlp_rf_mtr <- mlp_rf_fit |>
+  augment(sim_te) |>
   rmse(outcome, .pred)
 
 retained_variables <- map(
@@ -471,15 +471,15 @@ retained_variables <- map(
       .config
     )
   )
-) %>%
-  map(~ .x$.extracts[[1]]) %>%
-  map(~ anti_join(tibble(terms = names(sim_tr)[-1]), .x, by = "terms")) %>%
+) |>
+  map(~ .x$.extracts[[1]]) |>
+  map(~ anti_join(tibble(terms = names(sim_tr)[-1]), .x, by = "terms")) |>
   map_dfr(~.x, .id = "fold")
 
-final_variables <- mlp_rf_fit %>%
-  extract_mold() %>%
-  pluck("predictors") %>%
-  names() %>%
+final_variables <- mlp_rf_fit |>
+  extract_mold() |>
+  pluck("predictors") |>
+  names() |>
   sort()
 
 num_noise <- sum(grepl("noise", final_variables))
@@ -508,10 +508,10 @@ p_rmse <- autoplot(mlp_rf_sfd_res, metric = "rmse") +
   geom_hline(yintercept = 0.25, col = "darkgreen", lty = 2) +
   labs(title = "(a) Resampled RMSE results")
 
-p_terms <- retained_variables %>%
+p_terms <- retained_variables |>
   mutate(
     terms = gsub("predictor", "x", terms)
-  ) %>%
+  ) |>
   ggplot(aes(terms)) +
   geom_bar() +
   coord_flip() +

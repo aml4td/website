@@ -79,7 +79,7 @@ When the cost is low, the results are often boundaries with low complexity. @fig
 f <- expr(-1 - 4 * A - 2 * B - 0.2 * A^2 + 1 * B^2)
 
 x_seq <- seq(-4, 4, length.out = 100)
-grid <- crossing(A = seq(-3, 3, length.out = 100), B = x_seq) %>%
+grid <- crossing(A = seq(-3, 3, length.out = 100), B = x_seq) |>
   mutate(
     lp = rlang::eval_tidy(f, data = .)
   )
@@ -100,17 +100,17 @@ svm_grid_vals <- function(cost = 1) {
     y = sim_tr$class,
     C = cost,
     kpar = list(sigma = 10^-1)
-  ) %>%
+  ) |>
     predict(as.matrix(grid[, 1:2]), type = "decision")
   colnames(res) <- "value"
-  as_tibble(res) %>% bind_cols(grid)
+  as_tibble(res) |> bind_cols(grid)
 }
 
 high_cost <- svm_grid_vals(2^20)
 mid_cost <- svm_grid_vals(1)
 low_cost <- svm_grid_vals(1 / 100)
 
-base_plot <- sim_tr %>%
+base_plot <- sim_tr |>
   ggplot(aes(A, B)) +
   geom_point(
     aes(col = class, pch = class),
@@ -212,7 +212,7 @@ This boundary demonstrates how added complexity can be a bad thing. A test set o
 #| fig-height: 6
 #| fig-cap: The high complexity fit from @fig-two-class-overfit(d) superimposed over a test set of data.
 
-sim_new %>%
+sim_new |>
   ggplot(aes(A, B)) +
   geom_point(
     aes(col = class, pch = class),
@@ -281,8 +281,8 @@ This tuning parameter, we'll call it $n_{min}$, is used to moderate the tree-gro
 #| message: false
 #| warning: false
 
-lgb_spec <- boost_tree(trees = 100, learn_rate = 0.1, min_n = tune()) %>%
-  set_mode("classification") %>%
+lgb_spec <- boost_tree(trees = 100, learn_rate = 0.1, min_n = tune()) |>
+  set_mode("classification") |>
   set_engine("lightgbm")
 
 min_vals <- tibble(min_n = 3:80)
@@ -290,7 +290,7 @@ min_vals <- tibble(min_n = 3:80)
 brier <- metric_set(brier_class)
 
 set.seed(888)
-lgb_cv_res <- lgb_spec %>%
+lgb_cv_res <- lgb_spec |>
   tune_grid(
     class ~ .,
     resamples = sim_rs,
@@ -316,7 +316,7 @@ get_resub <- function(x) {
 ctrl <- control_grid(extract = get_resub)
 
 set.seed(888)
-lgb_test_res <- lgb_spec %>%
+lgb_test_res <- lgb_spec |>
   tune_grid(
     class ~ .,
     resamples = test_rs,
@@ -327,23 +327,23 @@ lgb_test_res <- lgb_spec %>%
 
 # ------------------------------------------------------------------------------
 
-brier_cv <- collect_metrics(lgb_cv_res) %>%
-  select(min_n, brier = mean) %>%
+brier_cv <- collect_metrics(lgb_cv_res) |>
+  select(min_n, brier = mean) |>
   mutate(Method = "Resampling")
 
-brier_test <- collect_metrics(lgb_test_res) %>%
-  select(min_n, brier = mean) %>%
+brier_test <- collect_metrics(lgb_test_res) |>
+  select(min_n, brier = mean) |>
   mutate(Method = "Test Set")
 
-brier_resub <- collect_extracts(lgb_test_res) %>%
+brier_resub <- collect_extracts(lgb_test_res) |>
   mutate(
     train_pred = map(.extracts, ~ augment(.x, new_data = sim_tr)),
     brier = map_dbl(train_pred, ~ brier_class(.x, class, .pred_one)$.estimate)
-  ) %>%
-  select(min_n, brier) %>%
+  ) |>
+  select(min_n, brier) |>
   mutate(Method = "Resubstitution")
 
-brier_all <- bind_rows(brier_resub, brier_cv, brier_test) %>%
+brier_all <- bind_rows(brier_resub, brier_cv, brier_test) |>
   mutate(
     Method = factor(
       Method,
@@ -357,7 +357,7 @@ method_cols <- c(
   Resampling = "#0b84a5"
 )
 
-min_n_df <- brier_all %>%
+min_n_df <- brier_all |>
   slice_min(brier, n = 1, by = Method)
 ```
 
@@ -373,8 +373,8 @@ We took the training data and fit models using values $n_{min}$ = 3, 4, ..., 80.
 #| fig-height: 4.25
 #| fig-cap: "An example to show how complexity and model error, measured two ways, interact. The tuning parameter on the x-axis is $n_{min}$ used for moderating tree growth."
 
-brier_all %>%
-  filter(Method != "Resampling") %>%
+brier_all |>
+  filter(Method != "Resampling") |>
   ggplot(aes(min_n, brier, col = Method, pch = Method)) +
   geom_point(cex = 1.2) +
   geom_line() +
@@ -413,7 +413,7 @@ Resampling methods take the training set and make multiple variations of it, usu
 #| fig-height: 4.25
 #| fig-cap: Model complexity versus model error with external validation via resampling.
 
-brier_all %>%
+brier_all |>
   ggplot(aes(min_n, brier, col = Method, pch = Method)) +
   geom_point(cex = 1.2) +
   geom_line() +
@@ -444,18 +444,18 @@ The solid points illustrate a very simple five-point grid of errors whose y-axis
 #| fig-cap: An example of grid search containing five candidates for a learning rate parameter.
 
 set.seed(1)
-grid_points <- grid_points %>%
+grid_points <- grid_points |>
   mutate(
     smoothed = stats::filter(mean, rep(1 / 3, 3)),
     smoothed = if_else(is.na(smoothed), mean, smoothed),
     sampled = smoothed + rnorm(n(), sd = 1 / 2)
   )
 
-grid_points %>%
+grid_points |>
   ggplot(aes(learn_rate)) +
   geom_line(aes(y = smoothed), linewidth = 1, alpha = 1 / 4) +
   geom_point(
-    data = grid_points %>% slice(c(1, 25, 50, 75, 100)),
+    data = grid_points |> slice(c(1, 25, 50, 75, 100)),
     aes(y = sampled),
     cex = 3
   ) +
@@ -495,12 +495,12 @@ svm_high_pred <-
   
 svm_brier_perm <- 
   svm_high_pred |> 
-  permutations(permute = class, times = 50) %>% 
+  permutations(permute = class, times = 50) |> 
   mutate(
     brier_perm = map_dbl(splits, ~ brier_class(analysis(.x), class, .pred_one)$.estimate)
-  ) %>% 
-  pluck("brier_perm") %>% 
-  mean() %>% 
+  ) |> 
+  pluck("brier_perm") |> 
+  mean() |> 
   signif(digits = 3)
 ```
 
