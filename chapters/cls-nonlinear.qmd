@@ -29,8 +29,8 @@ library(patchwork)
 library(important)
 library(paletteer)
 library(brulee)
-library(paletteer)
 library(brulee)
+library(tidyposterior)
 
 # ------------------------------------------------------------------------------
 # set options
@@ -40,6 +40,8 @@ theme_set(theme_bw())
 set_options()
 theme_set(theme_bw())
 daemons(parallel::detectCores())
+
+source("../R/compare_models.R")
 
 cls_mtr <- metric_set(brier_class, roc_auc, pr_auc, mn_log_loss)
 
@@ -198,6 +200,17 @@ where $C_{x}$ is the number of levels of the qualitative predictor and $x_k$ and
 Despite the potentially unrealistic assumption of conditional independence among predictors, naive Bayes classifiers can demonstrate competitive predictive performance with other methods.  In addition, naive Bayes models can be computationally efficient since many of the calculations can be done in parallel.  Depending on how the conditional densities are computed, they can be easily added to database tables, and the final prediction can be executed using highly efficient SQL.
 
 ```{r}
+#| label: fewer-workers
+#| include: false
+# The naive Bayes calculations will use a lot of memory. We'll reduce 
+# the number of parallel workers for now so that we don't take up
+# too much system memory
+
+daemons(0)
+daemons(6)
+```
+
+```{r}
 #| label: forested-nb
 #| include: false
 #| cache: false
@@ -228,7 +241,7 @@ forest_nb_res <-
   tune_grid(
     resamples = forested_rs,
     grid = crossing(
-      smoothness = seq(0.5, 1.5, by = 0.1),
+      smoothness = seq(0.5, 1.5, by = 0.2),
       prop_terms = (1:5 / 5)
     ),
     metrics = cls_mtr,
@@ -588,6 +601,13 @@ forest_fda_res <-
       parallel_over = "everything"
     )
   )
+```
+
+```{r}
+#| label: reset-workers
+#| include: false
+daemons(0)
+daemons(parallel::detectCores())
 ```
 
 ```{r}
@@ -2164,15 +2184,113 @@ How do these results compare to the previous KNN model? The Brier scores are ver
 
 `r r_comp("cls-nonlinear.html#sec-cls-svm")`
 
+
+## Comparisons to Previous Models {#sec-cls-tree-compare}
+
+Is there a specific model, so far, that appears to work best for the forested data? To determine that, we conduct a Bayesian comparison of the models using their resampling statistics (from @sec-compare-resample-bayes). We'll focus on the best candidate from each distinct modeling method. 
+
+A Bayesian model was created using Gaussian priors to estimate the posterior distribution of the Brier statistic for each model and to contrast the current best model with others. A ROPE approach is taken here, in which we specify that a difference of ±0.01 in the Brier scores between models would be considered a realistic change. 
+
+```{r}
+#| label: cls-nonlinear-compare
+#| include: false
+
+daemons(0)
+
+forest_knn_set_res <- as_workflow_set(KNN = forest_knn_res |> butcher::butcher())
+forest_nb_set_res <- as_workflow_set("naive Bayes" = forest_nb_res |> butcher::butcher())
+forest_fda_set_res <- as_workflow_set("FDA" = forest_fda_res |> butcher::butcher())
+
+load("../RData/forest_linear_res.Rdata")
+load("../RData/forest_glmnet_set_res.Rdata")
+load("../RData/forest_mlp_set_res.Rdata")
+load("../RData/forest_logistic_set_res.Rdata")
+
+all_sets <-
+  dplyr::bind_rows(
+    forest_fda_set_res,
+    forest_nb_set_res,
+    forest_knn_set_res,
+    forest_glmnet_set_res,
+    forest_mlp_set_res,
+    forest_logistic_set_res
+  )
+```
+
+```{r}
+#| label: cls-nonlinear-compare-bayes
+#| include: false
+#| cache: true
+set.seed(905)
+nlin_compare <- compare_models(all_sets, chains = 10, cores = 2, iter = 5000)
+nlin_compare
+
+nlin_best <- nlin_compare$model[is.na(nlin_compare$probability)]
+
+nlin_subset <- 
+  nlin_compare |>
+  slice_min(median, by = c(class, engine)) |>
+  mutate(
+    model = as.character(model),
+    model = ifelse(grepl("logistic_mle", model), "Logistic (unpenalized)", model),
+    model = ifelse(grepl("1L", model), "MLP (1 Layer)", model),
+    model = ifelse(grepl("2L", model), "MLP (2 Layers)", model),
+    model = gsub("glmnet", "Logistic (penalized)", model),
+    model = factor(model),
+    model = reorder(model, median)
+  )
+```
+
+While the `r nlin_best` model currently has the smallest Brier score, there is a cluster of models that have roughly the same Brier scores. This includes the logistic models from the previous chapter. Clearly, the naive Bayes model is not in the running for best model, not even through the lens of practical equivalence. 
+
+```{r}
+#| label: fig-cls-nonlinear-compare
+#| echo: false
+#| warning: false
+#| out-width: 70%
+#| fig-width: 6
+#| fig-height: 3.5
+#| fig-cap: "Comparisons of current forestation models. The intervals are 90% credible intervals. The bars on the right show the probability of practical equivalence to the current best model, assuming that a difference in Brier scores of +/- 0.01 is practical."
+
+p_brier <- 
+  nlin_subset |>
+  ggplot(aes(median, model)) +
+  geom_point() +
+  geom_errorbar(aes(xmin = lower, xmax = upper), width = 1 / 2) +
+  labs(y = NULL, x = "Brier Score") +
+  theme(
+    plot.margin = margin(t = 10, r = 2, b = 10, l = 10, unit = "pt")
+  )
+
+p_brier_diff <- 
+  nlin_subset |>
+  filter(model != nlin_best) |> 
+  ggplot(aes(pract_equiv, model)) +
+  geom_bar(stat = "identity", aes(fill = pract_equiv), show.legend = FALSE) +
+  labs(y = NULL, x = "Pr[Equiv]") +
+  scale_x_continuous(breaks = round((0:2)/2, 2),limits = 0:1) + 
+  scale_fill_viridis_c(direction = -1) +
+  theme(
+    axis.text.y = element_blank(),
+    axis.ticks.y = element_blank(),
+    plot.margin = margin(t = 10, r = 10, b = 10, l = 2, unit = "pt")
+  )
+
+p_brier + p_brier_diff+ plot_layout(widths = c(4, 1))
+```
+
 ## Chapter References {.unnumbered}
 
 ```{r}
 #| label: cls-nonlinear-save
 #| include: false
 
-forest_knn_wflow_res <- as_workflow_set(knn = forest_knn_res)
-save(
- forest_knn_res, forest_knn_best,
-  file = "../RData/forested_knn.Rdata"
-)
+# save(
+#  forest_knn_res, forest_knn_best,
+#   file = "../RData/forested_knn.Rdata"
+# )
+
+save(forest_knn_set_res, file = "../RData/forest_knn_set_res.Rdata")
+save(forest_nb_set_res, file = "../RData/forest_nb_set_res.Rdata")
+save(forest_fda_set_res, file = "../RData/forest_fda_set_res.Rdata")
 ```

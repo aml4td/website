@@ -24,7 +24,10 @@ diff(range(ames$Longitude)) / diff(range(ames$Latitude))
 ames_scaled <-
   ames %>%
   select(Longitude, Latitude) %>%
-  mutate(scaled_lon = scale(Longitude)[,1], scaled_lat = scale(Latitude)[,1]) %>%
+  mutate(
+    scaled_lon = scale(Longitude)[, 1],
+    scaled_lat = scale(Latitude)[, 1]
+  ) %>%
   select(starts_with("scaled"))
 n <- nrow(ames)
 
@@ -38,16 +41,16 @@ starter <-
   slice_min(dist, n = 1) %>%
   pluck(".row")
 
-ames_scaled_start <- ames_scaled[ starter,]
-ames_scaled_pool  <- ames_scaled[-starter,]
-ames_start <- ames[ starter,]
-ames_pool  <- ames[-starter,]
+ames_scaled_start <- ames_scaled[starter, ]
+ames_scaled_pool <- ames_scaled[-starter, ]
+ames_start <- ames[starter, ]
+ames_pool <- ames[-starter, ]
 
 n_added <- 24
 n_selected <- n_added + 1
 selection_path <- maxDissim(ames_scaled_start, ames_scaled_pool, n_added)
 ames_seq <-
-  bind_rows(ames_start, ames_pool[selection_path,]) %>%
+  bind_rows(ames_start, ames_pool[selection_path, ]) %>%
   mutate(iteration = row_number())
 
 # ------------------------------------------------------------------------------
@@ -77,20 +80,29 @@ all_ames <-
   ) +
   geom_sf(data = ia_roads, aes(geometry = geometry), alpha = .1) +
   geom_point(
-    data = ames, aes(x = Longitude, y = Latitude),
-    size = 1 / 8, alpha = 1
+    data = ames,
+    aes(x = Longitude, y = Latitude),
+    size = 1 / 8,
+    alpha = 1
   )
 
 # ------------------------------------------------------------------------------
 
 base_cols <- RColorBrewer::brewer.pal(9, "YlOrRd")[-(1:2)]
-ames_pal <- colorRampPalette(RColorBrewer::brewer.pal(9, "YlOrRd")[-(1:2)])(n_selected)
+ames_pal <- colorRampPalette(RColorBrewer::brewer.pal(9, "YlOrRd")[-(1:2)])(
+  n_selected
+)
 
 if (interactive()) {
   all_ames +
     geom_point(
       data = ames_seq,
-      aes(x = Longitude, y = Latitude, col = format(iteration), size = -iteration),
+      aes(
+        x = Longitude,
+        y = Latitude,
+        col = format(iteration),
+        size = -iteration
+      ),
       show.legend = FALSE
     ) +
     scale_color_manual(values = ames_pal) +
@@ -101,7 +113,12 @@ md_anim <-
   all_ames +
   geom_point(
     data = ames_seq,
-    aes(x = Longitude, y = Latitude,col = format(iteration), size = -iteration),
+    aes(
+      x = Longitude,
+      y = Latitude,
+      col = format(iteration),
+      size = -iteration
+    ),
     show.legend = FALSE
   ) +
   transition_states(
@@ -126,4 +143,3 @@ animate(
 )
 
 anim_save("premade/anime_ames_selection.gif")
-

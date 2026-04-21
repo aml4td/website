@@ -18,7 +18,7 @@ resolve_sa_path <- function(x, iter) {
   x2 <- x %>% filter(.iter <= iter)
   restarts <- grep("restart", x2$results[x2$.iter < iter])
   bests <- grep("new best", x2$results)
-  
+
   # delete restarted chunks
   rm <- NULL
   for (i in restarts) {
@@ -26,14 +26,14 @@ resolve_sa_path <- function(x, iter) {
     rm <- c(rm, (recent_best + 1):i)
   }
   rm <- sort(unique(rm))
-  if ( length(rm) > 0 ) {
-    x2 <- x2[-rm,]
+  if (length(rm) > 0) {
+    x2 <- x2[-rm, ]
   }
   # remove previously discarded
-  
+
   discarded <- which(x2$.iter < iter & x2$results == "discard suboptimal")
-  if ( length(discarded) > 0 ) {
-    x2 <- x2[-discarded,]
+  if (length(discarded) > 0) {
+    x2 <- x2[-discarded, ]
   }
   x2 %>% rename(RMSE = mean)
 }
@@ -42,22 +42,30 @@ describe_sa_result <- function(x) {
   require(cli)
   mtr_current <- x$RMSE[nrow(x)]
   chr_current <- format(mtr_current, digits = 3, scientific = FALSE)
-  
-  good_verbs <- c("improvement over the last RMSE of", "decrease from the previous value of")
-  bad_verbs <- c("degradation from the previous RMSE of", "worse value than the last RMSE of")
-  
+
+  good_verbs <- c(
+    "improvement over the last RMSE of",
+    "decrease from the previous value of"
+  )
+  bad_verbs <- c(
+    "degradation from the previous RMSE of",
+    "worse value than the last RMSE of"
+  )
+
   if (nrow(x) > 1) {
     mtr_prev <- x$RMSE[nrow(x) - 1]
     chr_prev <- format(mtr_prev, digits = 3, scientific = FALSE)
-    
+
     pct_diff <- (mtr_prev - mtr_current) / mtr_prev * 100
-    pct_diff <- round(pct_diff, 1)  
+    pct_diff <- round(pct_diff, 1)
     if (pct_diff > 0) {
       res <- sample(good_verbs, 1)
     } else {
       res <- sample(bad_verbs, 1)
     }
-    txt <- format_inline("The current RMSE is {chr_current}, which is a {abs(pct_diff)}% {res} {chr_prev}.")
+    txt <- format_inline(
+      "The current RMSE is {chr_current}, which is a {abs(pct_diff)}% {res} {chr_prev}."
+    )
   } else {
     txt <- format_inline("The current RMSE is {chr_current}.")
   }
@@ -70,24 +78,26 @@ reproduce_gp_surface <- function(file) {
   # We will predict what the _next_ candidate should be so we will have to
   # use different columns for the iteration.
   load(file)
-  
+
   # cli::cli_inform("For iteration {i}, the GP had results for {nrow(x$X)} candidates.")
-  
+
   pred <- predict(gp_fit, large_scaled_grid)
   grid_predictions <-
     large_grid %>%
     dplyr::mutate(.mean = pred$Y_hat, .sd = sqrt(pred$MSE))
   obj <-
-    predict(exp_improve(),
-            grid_predictions,
-            maximize = FALSE, # since we are minimizing RMSE
-            best = score_card$best_val)
-  
+    predict(
+      exp_improve(),
+      grid_predictions,
+      maximize = FALSE, # since we are minimizing RMSE
+      best = score_card$best_val
+    )
+
   # make a normalized objective function for visualizations
   rngs <- range(obj$objective)
   obj$objective_scaled <- (obj$objective - rngs[1]) / (rngs[2] - rngs[1])
   ret <- bind_cols(grid_predictions, obj)
-  
+
   ret$iter <- i
   ret$.iter <- i
   ret$num_points <- nrow(gp_fit$X)
@@ -95,17 +105,20 @@ reproduce_gp_surface <- function(file) {
 }
 
 yardstick_fitness <- function(values, wflow, param_info, metrics, ...) {
-  
   require(tidymodels)
   # load req packages
   info <- as_tibble(metrics)
-  
-  values <- purrr::map2_dbl(values, param_info$object, ~ dials::value_inverse(.y, .x))
+
+  values <- purrr::map2_dbl(
+    values,
+    param_info$object,
+    ~ dials::value_inverse(.y, .x)
+  )
   values <- matrix(values, nrow = 1)
   colnames(values) <- param_info$id
   values <- as_tibble(values)
   ctrl <- control_grid(allow_par = FALSE)
-  
+
   res <- tune_grid(
     wflow,
     metrics = metrics,
@@ -129,21 +142,25 @@ save_details <- function(object, ...) {
   pop <- tibble::as_tibble(pop)
   pop$fitness <- -object@fitness
   pop$time <- lubridate::now()
-  
-  if(!exists("ga_generations", envir = globalenv())) {
+
+  if (!exists("ga_generations", envir = globalenv())) {
     assign("ga_generations", list(pop), envir = globalenv())
   } else {
     ga_res <- get("ga_generations", envir = globalenv())
-    assign("ga_generations", append(ga_generations, list(pop)), envir = globalenv()) 
+    assign(
+      "ga_generations",
+      append(ga_generations, list(pop)),
+      envir = globalenv()
+    )
   }
-  object 
+  object
 }
 
 # ------------------------------------------------------------------------------
 
 rec <-
   recipe(barley ~ ., data = barley_train) %>%
-  step_orderNorm(all_predictors()) %>% 
+  step_orderNorm(all_predictors()) %>%
   step_pca(all_predictors(), num_comp = 10) %>%
   step_normalize(all_predictors())
 
@@ -158,7 +175,7 @@ svm_param <-
   extract_parameter_set_dials() %>%
   update(
     cost = cost(c(-10, 10)),
-    scale_factor = scale_factor(c(-10, -1/10))
+    scale_factor = scale_factor(c(-10, -1 / 10))
   )
 
 reg_mtr <- metric_set(rmse)
@@ -255,8 +272,16 @@ for (i in 1:max(bo_tile$iter)) {
   new_bo_points <- bind_rows(new_bo_points, curr_iter_points)
 }
 
-save(bo_mtr, bo_ci, bo_tile, bo_time, init_grid, old_bo_points, new_bo_points,
-     file = glue("{stub}_bo.RData"))
+save(
+  bo_mtr,
+  bo_ci,
+  bo_tile,
+  bo_time,
+  init_grid,
+  old_bo_points,
+  new_bo_points,
+  file = glue("{stub}_bo.RData")
+)
 
 # ------------------------------------------------------------------------------
 cli::cli_rule("Simulated annealing")
@@ -305,7 +330,10 @@ poor_init <-
 
 # loop over path and descriptions
 
-paths <- iter_best <- iter_label <- iter_descr <- vector(mode = "list", length = 50)
+paths <- iter_best <- iter_label <- iter_descr <- vector(
+  mode = "list",
+  length = 50
+)
 
 for (i in 1:50) {
   current_path <-
@@ -318,7 +346,6 @@ for (i in 1:50) {
     filter(results == "new best" & .iter < i) %>%
     slice_max(.iter)
   iter_best[[i]] <- last_best
-
 
   iter_descr[[i]] <- describe_sa_result(current_path)
 
@@ -334,8 +361,18 @@ for (i in 1:50) {
   iter_label[[i]] <- paste0("iteration ", i, ": ", res)
 }
 
-save(sa_mtr, sa_ci, sa_history, sa_time, init_grid, paths, iter_best, iter_label,
-     iter_descr, file = glue("{stub}_sa.RData"))
+save(
+  sa_mtr,
+  sa_ci,
+  sa_history,
+  sa_time,
+  init_grid,
+  paths,
+  iter_best,
+  iter_label,
+  iter_descr,
+  file = glue("{stub}_sa.RData")
+)
 
 # ------------------------------------------------------------------------------
 cli::cli_rule("Genetic algorithm")
@@ -370,8 +407,12 @@ ga_time <- system.time({
     )
 })
 
-ga_history <- 
-  map2_dfr(seq_along(ga_generations), ga_generations, ~ mutate(.y, generation = .x) %>% distinct()) %>% 
+ga_history <-
+  map2_dfr(
+    seq_along(ga_generations),
+    ga_generations,
+    ~ mutate(.y, generation = .x) %>% distinct()
+  ) %>%
   mutate(cost = 2^cost, scale_factor = 10^scale_factor)
 
 save(ga_history, ga_time, ga_res, file = glue("{stub}_ga.RData"))

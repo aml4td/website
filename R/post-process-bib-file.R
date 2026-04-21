@@ -30,7 +30,11 @@ scholar_url <- function(title, year) {
 
 
 insert_link <- function(x, type) {
-  if (!(tolower(type) %in% c("article", "incollection", "inproceedings"))) {
+  links_for <- 
+    c("Article", "InBook", "InCollection", "InProceedings", 
+      "Manual", "Misc", "PhdThesis", "TechReport", "Unpublished")
+  
+  if (!(tolower(type) %in% tolower(links_for))) {
     return(x)
   }
   yr <- x$year

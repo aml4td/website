@@ -95,7 +95,9 @@ for (i in 2:(num_iter + 1)) {
   param$better[i] <- param$log_post[i] > param$log_post[curr]
 
   if (param$better[i]) {
-    if (verbose) {cli_alert_success("new best at iteration {i}")}
+    if (verbose) {
+      cli_alert_success("new best at iteration {i}")
+    }
     param$accept[i] <- TRUE
     param$current_row[i] <- i
   } else {
@@ -103,11 +105,15 @@ for (i in 2:(num_iter + 1)) {
     param$accept_prob[i] <- exp(change)
 
     if (param$random[i] <= param$accept_prob[i]) {
-      if (verbose) {cli_alert_warning("accept suboptimal at iteration {i}")}
+      if (verbose) {
+        cli_alert_warning("accept suboptimal at iteration {i}")
+      }
       param$accept[i] <- TRUE
       param$current_row[i] <- i
     } else {
-      if (verbose) {cli_alert_danger("reject suboptimal at iteration {i}")}
+      if (verbose) {
+        cli_alert_danger("reject suboptimal at iteration {i}")
+      }
       param$accept[i] <- FALSE
       param$current_row[i] <- curr
     }
@@ -124,13 +130,15 @@ warmup_data <-
   param %>%
   filter(iteration <= warmup) %>%
   mutate(
-    Decision =
-      case_when(
-        better ~ "improvement",
-        !better & accept ~ "acceptable",
-        TRUE ~ "rejected"
-      ),
-    Decision = factor(Decision, levels = c("improvement", "acceptable", "rejected"))
+    Decision = case_when(
+      better ~ "improvement",
+      !better & accept ~ "acceptable",
+      TRUE ~ "rejected"
+    ),
+    Decision = factor(
+      Decision,
+      levels = c("improvement", "acceptable", "rejected")
+    )
   )
 
 # ------------------------------------------------------------------------------
@@ -145,12 +153,17 @@ nrow(posterior)
 
 # ------------------------------------------------------------------------------
 
-save(warmup, param, tr_data, warmup_data, posterior, 
-     file = "RData/logistic_bayes.RData")
+save(
+  warmup,
+  param,
+  tr_data,
+  warmup_data,
+  posterior,
+  file = "RData/logistic_bayes.RData"
+)
 
 # ------------------------------------------------------------------------------
 
 if (!interactive()) {
   q("no")
 }
-
