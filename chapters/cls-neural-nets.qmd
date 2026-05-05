@@ -45,6 +45,7 @@ cls_mtr <- metric_set(brier_class, roc_auc, pr_auc, mn_log_loss)
 
 load("../RData/forested_data.RData")
 load("../RData/optimizers.RData")
+load("../RData/dat_2d.RData")
 
 # ------------------------------------------------------------------------------
 # Gradient descent helpers
@@ -213,27 +214,19 @@ There are various modified versions of ReLU that emulate the same form but have 
 #| label: nnet-ex-comps
 #| include: false
 #| cache: true
-two_class_ex <- 
-  parabolic |> 
-  set_names(c("A", "B", "Class")) 
-
-two_class_ex <-   
-  recipe(Class ~ ., data = two_class_ex) |> 
-  step_orderNorm(A, B) |> 
-  prep() |> 
-  bake(new_data = NULL)
-
-x <- seq(-4, 4, length.out = 100)
+x <- seq(-3, 3, length.out = 100)
 grid <- crossing(A = x, B = x)
 
 set.seed(123)
 fit_1 <- brulee_mlp(
-  Class ~ A + B,
-  data = two_class_ex,
-  hidden_units = 3,
+  class ~ A + B,
+  data = dat_2d_train,
+  hidden_units = 4,
   penalty = 0,
+  learn_rate = 0.001,
   activation = "relu",
-  verbose = TRUE
+  optimizer = "ADAMw",
+  batch_size = 16L,
 )
 
 coefs <- stats::coef(fit_1)
@@ -262,27 +255,27 @@ for (i in 1:nrow(grid)) {
 }
 ```
 
-Let's use an example data set with a simple MLP to demonstrate how ReLU activation works. @fig-nnet-ex displays the results of a model with a single layer comprised of three hidden units, utilizing ReLU activation. The model converged in `r fit_1$best_epoch` epochs and does a good job discriminating between the two classes. 
+Let's use an example data set with a simple MLP to demonstrate how ReLU activation works. @fig-nnet-ex displays the results of a model with a single layer comprised of four hidden units, utilizing ReLU activation. The model converged in `r fit_1$best_epoch` epochs and does a good job discriminating between the two classes. 
 
 ```{r}
 #| label: fig-nnet-ex
 #| echo: false
-#| out-width: 50%
+#| out-width: 60%
 #| fig-width: 5
 #| fig-height: 4.4
 #| warning: false
-#| fig-cap: "An example data set with two predictors and two classes. The black line is the class boundary from an MLP model using three hidden units with ReLU activation."
-#| fig-alt: "Scatter plot of a two-class data set with predictor A on the x-axis and predictor B on the y-axis. The two classes form partially overlapping clouds. A black contour line shows the decision boundary from an MLP with three ReLU hidden units, which traces a a path similar to a piecewise-linear boundary separating the classes."
+#| fig-cap: "An example data set with two predictors and two classes. The black line is the class boundary from an MLP model using four hidden units with ReLU activation."
+#| fig-alt: "Scatter plot of a two-class data set with predictor A on the x-axis and predictor B on the y-axis. The two classes form partially overlapping clouds. A black contour line shows the decision boundary from an MLP with four ReLU hidden units, which traces a a path similar to a piecewise-linear boundary separating the classes."
 
-  grid_pred |>
+grid_pred |>
   ggplot(aes(A, B)) +
-  geom_point(data = two_class_ex, aes(col = Class), alpha = 1/3) +
-  geom_contour(aes(z = .pred_Class1), breaks = 0.5, col = "black") +
+  geom_point(data = dat_2d_train, aes(col = class), alpha = 1/3) +
+  geom_contour(aes(z = .pred_one), breaks = 0.5, col = "black") +
   coord_fixed() +
   scale_color_manual(values = c("#007FFFFF", "#FF7F00FF"))
 ```
 
-With two predictors and three hidden units, the first set of coefficients for the model is three sets of linear predictors (i.e., an intercept and two slopes) for each of the three hidden units. The predictors were normalized to have the same mean and variance (zero and one, respectively). The three equations produced during training were: 
+With two predictors and four hidden units, the first set of coefficients for the model is four sets of linear predictors (i.e., an intercept and two slopes) for each of the four hidden units. The predictors were normalized to have the same mean and variance (zero and one, respectively). The four equations produced during training were: 
 
 ```{r}
 #| label: nnet-ex-first
@@ -298,7 +291,7 @@ lp_1 <-
     wt_1
   )
 lp_1 <- apply(lp_1, 1, function(x) paste0(x, collapse = ""))
-lp_1 <- paste0("H_{", 1:3, "}&=", lp_1, " \\notag")
+lp_1 <- paste0("H_{", 1:4, "}&=", lp_1, " \\notag")
 
 cat("$$")
 cat("\\begin{align}")
@@ -307,9 +300,9 @@ cat("\\end{align}")
 cat("$$")
 ```
 
-The intercept estimate for the first hidden unit is significantly larger than those of the other two. That unit also has a large positive slope for predictor A. The second hidden unit emphasizes predictor B, while $H_{i3}$ has strong positive effects for both predictors. 
+The first hidden unit has fairly small coefficients relative to the others. The second is almost equally weighted by both predictors, but with different signs. The slope coefficients within the third unit are also in parity, but both are negative. Finally, the fourth is mostly driven by the second predictor and has the largest intercept (a.k.a. bias) term of the four. 
 
-The top of @fig-nnet-ex-layer-1 displays a heatmap illustrating how these three artificial features vary across the two-dimensional predictor space (before activation). The black line segments show the contour corresponding to zero values. The first hidden unit has larger values on the right-hand side of the predictor space, with a slightly diagonal contour for zero. The pattern shown for the second hidden unit is nearly the opposite of the first, although the zero contour cuts more through the center of the space. Finally, the third unit is driven by both predictors with larger values in the upper right region. 
+The top of @fig-nnet-ex-layer-1 displays a heatmap illustrating how these four artificial features vary across the two-dimensional predictor space (before activation). The black line segments show the contour corresponding to zero values. The first panel shows weak coefficients for the first unit; the light colors indicate a muted effect on the model. The second and third panels show stronger effects and are nearly mirror images. The fourth panel demonstrates the strong slope for the second predictor. The contour shows that most of the effect is in the vertical direction. 
 
 ```{r}
 #| label: fig-nnet-ex-layer-1
@@ -318,8 +311,8 @@ The top of @fig-nnet-ex-layer-1 displays a heatmap illustrating how these three 
 #| fig-width: 7
 #| fig-height: 5
 #| warning: false
-#| fig-cap: "Heatmaps of the three linear predictors and their ReLU values across the predictor space. The black line emphasizes the location where the linear predictor is zero."
-#| fig-alt: "Two rows of three heatmaps each. The top row shows the raw linear predictor values for three hidden units across the A-B predictor space, each with a black contour line at zero dividing positive and negative regions. The bottom row shows the same values after ReLU activation, where negative regions are set to zero and positive regions retain their values."
+#| fig-cap: "Heatmaps of the four linear predictors and their ReLU values across the predictor space. The black line emphasizes the location where the linear predictor is zero."
+#| fig-alt: "Two rows of four heatmaps each. The top row shows the raw linear predictor values for four hidden units across the A-B predictor space, each with a black contour line at zero dividing positive and negative regions. The bottom row shows the same values after ReLU activation, where negative regions are set to zero and positive regions retain their values."
 
 lp_layer <-
   components |> 
@@ -360,7 +353,7 @@ relu_layer <-
 lp_layer / relu_layer
 ```
 
-The figure's bottom panels illustrate the effect of the ReLU function, where values less than zero are set to zero. At this point, $H_{i1}$ and $H_{i3}$ have the most substantial effect on the model, but in somewhat overlapping regions.
+The figure's bottom panels illustrate the effect of the ReLU function, where values less than zero are set to zero. At this point, $H_{i2}$ and $H_{i3}$ have the most substantial effect on the model, but in opposite directions.
 
 However, the model estimates additional parameters that will merge these regions using weights that are estimated to be most helpful for predicting the data. Those equations were estimated to be: 
 
@@ -373,6 +366,7 @@ wt_2 <- gsub("^ ", "+", wt_2)
 wt_2[,1] <- paste0(wt_2[,1], "H_{i1}")
 wt_2[,2] <- paste0(wt_2[,2], "H_{i2}")
 wt_2[,3] <- paste0(wt_2[,3], "H_{i3}")
+wt_2[,4] <- paste0(wt_2[,4], "H_{i4}")
 lp_2 <- 
   cbind(
     format(coefs$model.2.bias, digits = 2),
@@ -388,7 +382,7 @@ cat("\\end{align}")
 cat("$$")
 ```
 
-Note that the coefficients' signs are opposite for each outcome unit. @fig-nnet-ex-layer-2 illustrates the transition from the hidden layer to the outcome layer. The weighted sum of the three variables at the top produces the regions of strong positive (or negative) activation for the two classes. Once again, the black curve indicates the location of the zero contour. 
+@fig-nnet-ex-layer-2 illustrates the transition from the hidden layer to the outcome layer. The weighted sum of the four variables at the top produces the regions of strong positive (or negative) activation for the two classes. Once again, the black curve indicates the location of the zero contour. 
 
 ```{r}
 #| label: fig-nnet-ex-layer-2
@@ -397,8 +391,8 @@ Note that the coefficients' signs are opposite for each outcome unit. @fig-nnet-
 #| fig-width: 7
 #| fig-height: 5
 #| warning: false
-#| fig-cap: "Heatmaps of the three ReLU units and their output units across the predictor space."
-#| fig-alt: "Two rows of panels. The top row shows three heatmaps of ReLU-activated hidden unit values across the predictor space, with zero regions clearly visible. The bottom row shows two output unit heatmaps derived from weighted sums of the hidden units. The two output panels display nearly opposite patterns, with a black contour line at zero marking the class boundary."
+#| fig-cap: "Heatmaps of the four ReLU units and their output units across the predictor space."
+#| fig-alt: "Two rows of panels. The top row shows four heatmaps of ReLU-activated hidden unit values across the predictor space, with zero regions clearly visible. The bottom row shows two output unit heatmaps derived from weighted sums of the hidden units. The two output panels display nearly opposite patterns, with a black contour line at zero marking the class boundary."
 
 output_layer <-
   components |>
