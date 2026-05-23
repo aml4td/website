@@ -604,7 +604,7 @@ For non-numeric data, the tools described in @sec-categorical-predictors can be 
 
 If the non-numeric predictors are not complex, a layer could be added early in the network, enabling the model to derive encodings based on the data when training. @guo2016entity describes a relatively simple architecture for doing this. While LLMs are better at creating embeddings overall, they are unaware of the _context_ in your data. Estimating the parameters associated with a simple embedding layer may be more effective, as it is optimized for your dataset. 
 
-For numeric predictors, we suggest avoiding irrelevant predictors and highly collinear feature sets. @fig-irrelevant-predictors in @sec-feature-selection demonstrated the harm of including predictors unrelated to the outcome in a neural network. Multicollinearity can also affect these models, even if we do not invert the feature matrix or use the Hessian during optimization. Highly redundant predictors can result in the loss function having difficult characteristics and a large number of unnecessary parameters. Using an L<sub>2</sub> penalty or a feature extraction method can be very helpful. 
+For numeric predictors, we suggest avoiding irrelevant predictors and highly collinear feature sets^[Although the need for preprocessing features prior to training a neural network has long been recognized, @lecun2002efficient and @wiesler2014mean re-emphasized that standardization (i.e., centering and scaling) and decorrelating are critical for the optimization algorithm to converge within a reasonable time. ]. @fig-irrelevant-predictors in @sec-feature-selection demonstrated the harm of including predictors unrelated to the outcome in a neural network. Multicollinearity can also affect these models, even if we do not invert the feature matrix or use the Hessian during optimization. Highly redundant predictors can result in the loss function having difficult characteristics and a large number of unnecessary parameters. Using an L<sub>2</sub> penalty or a feature extraction method can be very helpful. 
 
 Also, predictors with highly skewed distributions might benefit from a transformation to make their distribution more symmetric. If not, outlying values can exert significant influence in computations, potentially preventing the generation of high-quality parameter estimates. 
 
@@ -1123,6 +1123,20 @@ knn_roc <-
 ## Special Tabular Network Models {#sec-cls-tab-net}
 
 ### Batch Normalization {#sec-cls-batchnorm}
+
+We previously noted that substantial preprocessing is required for our original predictors. @wiesler2014mean notes that the effects of this preprocessing can vanish as more layers are added to the network; there is no guarantee that the hidden units in later layers will have distributional properties that encourage convergence. Consider the example in  @sec-nnet-activation where, for a basic MLP model with ReLU activation, large portions of the parameter space have values of absolute zero. No matter the distribution entering the layer, the outputs are likely to have a large point mass at zero and perhaps a second distributional mode. 
+
+@wiesler2014mean suggested that standardizing the embeddings across different network phases could yield the same benefits for the model as initial standardization. Their solution was to use batches during SGD to compute a running mean of the model's internal features and to center the embeddings. 
+
+@ioffe2015batch took this idea a few steps further to minimize _covariate shifts_ between batches. Their approach, called _batch normalization_ (a.k.a. "BatchNorm"), standardizes the current embeddings with some extra parameters:
+
+$$
+\tilde{H}_J = b\left(H_j\right) = \frac{H_j - \bar{H_j}}{\sqrt{s_j^2 + \epsilon}}\,  \theta_1 + \theta_2
+$$
+
+where $\epsilon$ is a small constant and $\bar{H_j}$ and $s_j^2$ are the estimated mean and variance of embedding $j$, respectively. Recall that during SGD, small batches of the training set are used. These two statistics are computed on the current mini-batch of data. The extra term $\theta_1$ estimates a scale shift and $\theta_2$ estimates a location shift. These are learned parameters; they are estimated via gradient descent.  
+
+"BatchNorm" doesn't increase the model's predictive capacity; it generally lowers the difficulty level of SGD.
 
 ### Residual Networks {#sec-cls-resnet}
 
