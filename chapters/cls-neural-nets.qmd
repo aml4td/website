@@ -1210,6 +1210,63 @@ Residual connections are often used with batch normalization. For tabular data, 
 $$
 \boldsymbol{H}_1 = \boldsymbol{W}_1^{(2)}f_1\left(b(\boldsymbol{W}_1^{(1)}\boldsymbol{x})\right) + \boldsymbol{P}_1\boldsymbol{x}
 $$
+```{r}
+#| label: load-resnet
+#| include: false
+load("../RData/forested_resnet.Rdata")
+load("../RData/forest_resnet_set_res.Rdata")
+
+resnet_brier <- 
+  resnet_ranks |>
+  filter(.metric == "brier_class")
+
+best_overall <- 
+  resnet_brier |> 
+  slice_min(mean, n = 5) 
+
+best_configs <- 
+  best_overall |> 
+  distinct(wflow_id, .config)
+
+best_metrics <-
+  collect_metrics(forest_resnet_set_res) |>
+  select(wflow_id, .config, mean, .metric) |>
+  pivot_wider(
+    id_cols = c(wflow_id, .config),
+    names_from = .metric,
+    values_from = mean
+  ) |>
+  select(wflow_id, .config, brier_class, roc_auc)  |> 
+  inner_join(best_configs, join_by(wflow_id, .config)) 
+  
+best_per_arch <-
+  map2_dfr(forest_resnet_set_res$result, forest_resnet_set_res$wflow_id,
+          ~ show_best(.x, metric = "brier_class", n = 20) |> 
+            mutate(wflow_id = .y)) |> 
+  mutate(
+    hidden_units = map_chr(hidden_units, ~ paste(.x, collapse = ",")),
+    batch_norm_units = map_chr(batch_norm_units, ~ paste(.x, collapse = ","))
+  )
+
+resnet_epochs <- 
+  collect_extracts(forest_resnet_set_res) |> 
+  unnest(.extracts) |> 
+  summarize(
+    epochs = median(epoch_actual),
+    .by = c(wflow_id, .config)
+  ) |> 
+  inner_join(best_configs, join_by(wflow_id, .config))
+
+resnet_tbl <- 
+  best_per_arch |> 
+  inner_join(best_configs, by = join_by(wflow_id, .config)) |> 
+  full_join(resnet_epochs, join_by(wflow_id, .config)) |> 
+  full_join(best_metrics, join_by(wflow_id, .config)) |> 
+  select(-.estimator, -n, -.config, -wflow_id, -.metric, -brier_class) |> 
+  relocate(Brier = mean, .after = c(everything())) |> 
+  relocate(ROC = roc_auc, .after = c(everything())) |> 
+  relocate(epochs, .after = c(momentum))
+```
 
 To demonstrate the model, the optimal feature engineering method from prior work on MLP models (shown in @tbl-mlp-top-five) was used. ResNet models with one to six layers were tuned using the same parameters as in @sec-nnet-forestation. A space-filling design was used to generate a grid for the non-layer parameters and the number of hidden units in each layer. Skip connections were used in each layer. 
 
@@ -1217,6 +1274,72 @@ To demonstrate the model, the optimal feature engineering method from prior work
 
 MORE ON WHY IT WORKS
 
+```{r}
+#| label: fig-forest-resnet-ranks
+#| echo: false
+#| out-width: 95%
+#| fig-width: 9
+#| fig-height: 5.2
+#| fig-cap: Rankings of multilayer perceptron models for the forestation models using the Brier score. The panels represent different types of preprocessing, and the vertical lines are 90% confidence intervals.
+
+resnet_brier |>
+  ggplot(aes(rank)) + geom_point(aes(y = mean, col = wflow_id)) +
+  geom_errorbar(aes(
+    ymin = mean - 1.96 * std_err,
+    ymax = mean + 1.96 * std_err,
+    col = wflow_id
+  ),
+  alpha = 1 / 2) +
+  scale_color_viridis_d() +
+  labs(x = "Overall Rank", y = "Brier Score", color = "Architecture") +
+  theme(legend.position = "top")
+```
+
+
+```{r}
+#| label: tbl-resnet-top-five
+#| tbl-cap: "The best ResNet models as ranked by the Brier score."
+
+resnet_tbl |>
+  arrange(Brier) |> 
+  mutate(
+    Penalty = format(log10(penalty), digits = 2),
+    Penalty = paste0("10<sup>", Penalty, "</sup>"),
+    rate_schedule = ifelse(
+      rate_schedule == "decay_time",
+      "inverse decay",
+      rate_schedule
+    ),
+    learn_rate = format(log10(learn_rate), digits = 2),
+    learn_rate = paste0("10<sup>", learn_rate, "</sup>"),
+    learn_rate = map2_chr(
+      learn_rate,
+      rate_schedule,
+      ~ paste0(.x, " (", .y, ")")
+    ),
+    across(where(is.numeric), ~ format(.x, digits = 3))
+  ) |>
+  rename(`Learning Rate` = learn_rate, 
+         `Batch\nSize` = batch_size, 
+         Momentum = momentum
+  ) |>
+  select(
+    `Hidden Units` = hidden_units,
+    `BatchNorm Units` = batch_norm_units, 
+    Penalty,
+    `Learning Rate`,
+    Momentum, 
+    `Batch\nSize`,
+    `Median Epochs` = epochs,
+    Brier, 
+    ROC
+  ) |> 
+  gt() |>
+  fmt_markdown(columns = c(Penalty, `Learning Rate`)) |>
+  tab_spanner("Performance", columns = c(Brier, ROC)) |>
+  tab_spanner("Embedding Dimensions", columns = c(contains("units"))) |>
+  fmt_number(decimals = 3, columns = c(Brier, ROC))
+```
 
 
 `r r_comp("cls-neural-nets.html#sec-cls-resnet")`
