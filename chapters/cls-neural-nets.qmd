@@ -1142,7 +1142,7 @@ $$
 
 where $\epsilon$ is a small constant and $\bar{H_j}$ and $s_j^2$ are the estimated mean and variance of embedding $j$, respectively. Recall that during SGD, small batches of the training set are used. These two statistics are computed on the current mini-batch of data. The extra term $\theta_1$ estimates a scale shift and $\theta_2$ estimates a location shift. These are learned parameters; they are estimated via gradient descent.  
 
-In @ioffe2015batch, batch normalization occurs between the formation of a new linear predictor transformation and the application of a nonlinear activation. For example, this would have occurred between the two rows of variables shown in @fig-nnet-ex-layer-1. However, @he2016identity, in a paper discussed in the next section, showed that "pre-activation" works better for their model. This means normalization occurs before forming the linear combination, which is also what @gorishniy2021revisiting suggests for tabular data. 
+In @ioffe2015batch, batch normalization occurs between the formation of a new linear predictor transformation and the application of a nonlinear activation. For example, this would have occurred between the two rows of variables shown in @fig-nnet-ex-layer-1. However, @he2016deep, in a paper discussed in the next section, showed that "pre-activation" works better for their model. This means normalization occurs before forming the linear combination, which is also what @gorishniy2021revisiting suggests for tabular data. 
 
 BatchNorm doesn't increase the model's predictive capacity; it generally lowers the difficulty level of SGD. It is unclear how. There is some dispute as to whether the correction for covariate shifts is the reason for its effectiveness. There is some belief that BatchNorm smooths the objective function [@santurkar2018does;@peng2023re]. 
 
@@ -1175,13 +1175,13 @@ A residual network takes the current features prior to the hidden layer and adds
 
 The idea is that ordinary feed-forward networks are tasked with learning, at each layer, a better representation of the outcome via $f_i(\cdot)$. By adding the previous embeddings to this function, we are really learning $f_i(\boldsymbol{H}_{i-1}) = \boldsymbol{H}_i - \boldsymbol{H}_{i-1}$; a residual. 
 
-This process makes training easier, especially for models with many layers. Early practitioners assumed that performance could be increased simply by adding more layers. This was not the case. @he2016identity showed that large models paradoxically saw both training and test error increase as the number of layers increased. This isn't believed to be related to overfitting, but due to how gradients flow through the system during optimization. Residual connections address this by giving gradients a direct path back through the network: for layer $i$, the gradient is $f_i'(\boldsymbol{H}_{i-1}) + I$. If we add too much capacity to the model (e.g., more layers), it can simply estimate zero for the residual. The extra term $I$ in the gradient prevents them from becoming too small across the network, even $f_i'(\boldsymbol{H}_{i-1})$ has elements that are approximately zero. 
+This process makes training easier, especially for models with many layers. Early practitioners assumed that performance could be increased simply by adding more layers. This was not the case. @he2016deep showed that large models paradoxically saw both training and test error increase as the number of layers increased. This isn't believed to be related to overfitting, but due to how gradients flow through the system during optimization. Residual connections address this by giving gradients a direct path back through the network: for layer $i$, the gradient is $f_i'(\boldsymbol{H}_{i-1}) + I$. If we add too much capacity to the model (e.g., more layers), it can simply estimate zero for the residual. The extra term $I$ in the gradient prevents them from becoming too small across the network, even $f_i'(\boldsymbol{H}_{i-1})$ has elements that are approximately zero. We'll describe other potential benefits to this model towards the end of this section. 
 
-With residuals, we'll refer to the elements being added as the "skip path" and the other components (e.g. nonlinear activation) as the "main path". 
+@he2016deep is generally credited for the ResNet model. It showed significant improvements for convolutional neural networks for image analysis.  For tabular data, we'll focus on the formulation in Section 3.2 of @gorishniy2021revisiting. With this model, we'll refer to the elements being added as the "skip path" and the other components (e.g. nonlinear activation) as the "main path". 
 
 Let's get back to the particulars. Our equations above are unrealistic, as they assume the embedding dimension remains the same size as the predictor dimension throughout the network. Once we loosen that constraint, additional considerations are required to align the dimensions
 
-For tabular data, the same residual strategy applies, but additional considerations are required to align the dimensions. Suppose we begin with $p=2$ predictors ($x_1$ and $x_2$ within $2 \times 1$ vector $\boldsymbol{x}$). Suppose we use a "bottleneck" architecture in which the hidden unit layers have output dimensions (10, 3, 10). If $\boldsymbol{H}_1$ is ($10 \times 1$), how do we add the two elements in $\boldsymbol{x}$? 
+For tabular data, the same residual strategy applies, but additional considerations are required to align the dimensions. Suppose we begin with $p=2$ predictors within $2 \times 1$ vector $\boldsymbol{x}$. Suppose we use a "bottleneck" architecture in which the hidden unit layers have output dimensions (10, 3, 10). If $\boldsymbol{H}_1$ is ($10 \times 1$), how do we add the two elements in $\boldsymbol{x}$? 
 
 The answer is that we use a parameter matrix to form a linear combination of the inputs to achieve the correct dimensionality (i.e., project the inputs to the correct dimensions). For the first hidden layer, the skip path adds $\boldsymbol{P}_1\boldsymbol{x}$ where $\boldsymbol{P}_1$ is a ($10 \times 2$) _projection matrix_. This generates a version of the original predictors that has the correct size. 
 
@@ -1200,7 +1200,24 @@ $$
 
 where $\boldsymbol{W}_1^{(2)}$ is a ($10\times 10$) parameter matrix that enables more effective linear combinations of the activated inputs. It adds predictive capacity. 
 
-The next two layers also have projection matrices that are ($3 \times 10$) and ($10 \times 3$) for the bottleneck pattern. The equation for future blocks is the same as above, but uses $\boldsymbol{H}_{j}$, the incoming features, instead of $\boldsymbol{x}$. 
+The next two layers also have projection matrices that are ($3 \times 10$) and ($10 \times 3$) for the bottleneck pattern. The equation for future blocks is: 
+
+$$
+\boldsymbol{H}_j = \boldsymbol{W}_j^{(2)}f_j\left(\boldsymbol{W}_j^{(1)}\boldsymbol{H}_{j-1}\right) + \boldsymbol{P}_j\boldsymbol{H}_{j-1} 
+$$
+Residual connections are often used with batch normalization. For tabular data, we would apply the BatchNorm operator $b(\cdot)$ to the embeddings within the activation, such as: 
+
+$$
+\boldsymbol{H}_1 = \boldsymbol{W}_1^{(2)}f_1\left(b(\boldsymbol{W}_1^{(1)}\boldsymbol{x})\right) + \boldsymbol{P}_1\boldsymbol{x}
+$$
+
+To demonstrate the model, the optimal feature engineering method from prior work on MLP models (shown in @tbl-mlp-top-five) was used. ResNet models with one to six layers were tuned using the same parameters as in @sec-nnet-forestation. A space-filling design was used to generate a grid for the non-layer parameters and the number of hidden units in each layer. Skip connections were used in each layer. 
+
+
+
+MORE ON WHY IT WORKS
+
+
 
 `r r_comp("cls-neural-nets.html#sec-cls-resnet")`
 
