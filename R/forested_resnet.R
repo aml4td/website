@@ -48,21 +48,18 @@ names(resnet_list) <- map_chr(1:6, ~ cli::format_inline("{.x} layer{?s}"))
 for (lyr in seq_along(resnet_list)) {
   cli::cli_inform(format(Sys.time()))
   
-  lyrs <- 1:lyr
   rn_spec <-
     tabular_resnet(
       hidden_units = tune(),
-      batch_norm_units = tune(),
+      bottleneck_units = tune(),
       penalty = tune(),
       learn_rate = tune(),
-      epochs = 50L,
-      activation = tune()
+      epochs = 50L
     ) |>
     set_mode("classification") |>
     set_engine(
       "brulee",
       stop_iter = 5,
-      residual_at = !!lyrs,
       optimizer = "ADAMw",
       verbose = FALSE,
       rate_schedule = tune(),
@@ -71,8 +68,14 @@ for (lyr in seq_along(resnet_list)) {
     )
   
   rn_wflow <- workflow(encode_rec, rn_spec)
+  rn_param <- 
+    rn_wflow |> 
+    extract_parameter_set_dials() |> 
+    update(
+      batch_size = batch_size(c(2, 7))
+    )
   
-  grd <- neural_net_grid_space_filling(rn_wflow, num_layers = lyr, size = 25)
+  grd <- neural_net_grid_space_filling(rn_wflow, param_info = rn_param, num_layers = lyr, size = 25)
   
   set.seed(2937)
   rn_res <-
