@@ -164,14 +164,14 @@ save(
   brier_and_params,
   resnet_best_mtr,
   epoch_actual,
-  file = "RData/forested_resnet.Rdata"
+  file = "forested_resnet.Rdata"
 )
 
 forest_resnet_set_res <-
   forest_resnet_set_res |>
   butcher::butcher()
 
-save(forest_resnet_set_res, file = "RData/forest_resnet_set_res.Rdata")
+save(forest_resnet_set_res, file = "forest_resnet_set_res.Rdata")
 
 # ------------------------------------------------------------------------------
 
