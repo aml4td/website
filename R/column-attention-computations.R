@@ -1,5 +1,6 @@
 library(tidymodels)
 library(torch)
+library(patchwork)
 
 # ------------------------------------------------------------------------------
 # Module 1: Self-Attention Layer (Standard)
@@ -58,14 +59,12 @@ AttentionBinaryClassifier <- nn_module(
   initialize = function(
     n_features,
     hidden_units_1 = 5L,
-    hidden_units_2 = 10L,
     embed_dim = 8L
   ) {
     self$fc1 <- nn_linear(n_features, hidden_units_1)
     self$bn1 <- nn_batch_norm1d(hidden_units_1)
     self$attention <- SelfAttention(hidden_units_1, embed_dim)
-    self$fc2 <- nn_linear(hidden_units_1, hidden_units_2)
-    self$fc3 <- nn_linear(hidden_units_2, 1L)
+    self$fc2 <- nn_linear(hidden_units_1, 1L)
   },
 
   forward = function(x) {
@@ -79,12 +78,13 @@ AttentionBinaryClassifier <- nn_module(
     x <- attn_result$output
     attn_weights <- attn_result$attention
 
-    # Second hidden layer
-    x <- self$fc2(x)
-    x <- nnf_relu(x)
+    # # Second hidden layer
+    # x <- self$fc2(x)
+    # x <- nnf_relu(x)
 
     # Output logit
-    logit <- self$fc3(x)
+    # logit <- self$fc3(x)
+    logit <- self$fc2(x)
 
     return(list(logit = logit, attention = attn_weights))
   }
@@ -164,7 +164,8 @@ train_model <- function(
 
     # Early stopping
     if (history$val_loss[epoch] < best_val_loss) {
-      best_val_loss <- history$val_loss[epoch]
+      best_epoch <- which.min(history$val_loss[1:epoch])
+      best_val_loss <- history$val_loss[best_epoch]
       best_model_state <- model$state_dict()
       stop_iter_counter <- 0L
     } else {
@@ -186,6 +187,8 @@ train_model <- function(
   return(list(
     model = model,
     history = history,
+    best_epoch = best_epoch,
+    actual_epochs = actual_epochs,
     best_val_loss = best_val_loss
   ))
 }
@@ -316,12 +319,12 @@ grid <- expand.grid(A = x_seq, B = x_seq)
 grid_tens <- torch_tensor(as.matrix(grid), dtype = torch_float())
 
 # Create model
-torch_manual_seed(711)
+set.seed(561)
+torch_manual_seed(561)
 model <- AttentionBinaryClassifier(
   n_features = 2,
   hidden_units_1 = 4L,
-  hidden_units_2 = 10L,
-  embed_dim = 6L
+  embed_dim = 30L
 )
 
 col_att_model <- train_model(
@@ -329,32 +332,30 @@ col_att_model <- train_model(
   train_data = train_data,
   val_data = val_data,
   epochs = 100L,
-  batch_size = 16L,
-  learn_rate = 0.01,
+  batch_size = 64L,
+  learn_rate = 0.05,
   penalty = 0.01,
   stop_iter = 5L
 )
 
+tibble(loss = col_att_model$history$val_loss) |>
+  mutate(iteration = row_number()) |>
+  ggplot(aes(iteration, loss)) +
+  geom_point() +
+  theme_bw() +
+  labs(
+    title = cli::format_inline(
+      "Training stopped after {col_att_model$actual_epochs} epoch{?s}, best results at {col_att_model$best_epoch}"
+    )
+  )
+
 # ------------------------------------------------------------------------------
 
-col_att_coefs <- col_att_model$model$parameters
-wt_1 <- format(as.matrix(col_att_coefs$fc1.weight), digits = 1)
-wt_1 <- gsub("^ ", "+", wt_1)
-wt_1[, 1] <- paste0(wt_1[, 1], "\\:A")
-wt_1[, 2] <- paste0(wt_1[, 2], "\\:B")
-lp_1 <-
-  cbind(
-    format(as.matrix(col_att_coefs$fc1.bias), digits = 2),
-    wt_1
+col_att_coefs <-
+  list(
+    fc1.bias = col_att_model$model$parameters$fc1.bias |> as.matrix(),
+    fc1.weight = col_att_model$model$parameters$fc1.weight |> as.matrix()
   )
-lp_1 <- apply(lp_1, 1, function(x) paste0(x, collapse = ""))
-lp_1 <- paste0("H_{", 1:4, "}&=", lp_1, " \\notag")
-
-cat("$$")
-cat("\\begin{align}")
-cat(paste0(lp_1, collapse = " \\\\ \n"))
-cat("\\end{align}")
-cat("$$")
 
 # ------------------------------------------------------------------------------
 
@@ -425,11 +426,11 @@ att_format(col_att_model$model, three_locations[3, , drop = FALSE]) |>
 location_tbl <- NULL
 for (i in 1:3) {
   tmp_loc <- att_format(col_att_model$model, three_locations[i, , drop = FALSE])
-  colnames(tmp_loc) <- (paste0("loc_", i, "_unit", 1:4))
+  colnames(tmp_loc) <- (paste0("loc_", i, "_unit", 1:ncol(tmp_loc)))
   tmp_loc <- as_tibble(tmp_loc)
   if (i == 1) {
     tmp_loc <- tmp_loc |>
-      mutate(Feature = recipes::names0(4, "Hidden Unit ")) |>
+      mutate(Feature = recipes::names0(nrow(tmp_loc), "Hidden Unit ")) |>
       relocate(Feature)
   }
   location_tbl <- bind_cols(location_tbl, tmp_loc)
@@ -437,7 +438,7 @@ for (i in 1:3) {
 
 library(gt)
 location_tbl |>
-  mutate(Feature = paste0("$$H_", 1:4, "$$")) |>
+  mutate(Feature = paste0("$$H_", 1:nrow(location_tbl), "$$")) |>
   gt() |>
   cols_add('spacr1' = '', .after = 'Feature') |>
   cols_add('spacr2' = '', .after = 5) |>
@@ -482,29 +483,30 @@ for (i in 1:nrow(grid_tens)) {
   before_after_grid <- bind_rows(before_after_grid, tmp_ba)
 }
 
-att_grid |>
-  ggplot(aes(A, B)) +
-  geom_tile(aes(fill = value), alpha = 3 / 4) +
-  geom_contour(
-    data = col_att_plot_grid,
-    aes(z = .pred_1),
-    breaks = 1 / 2,
-    col = "black",
-    linewidth = 1
-  ) +
-  geom_point(
-    data = location_df,
-    size = 4,
-    shape = 21,
-    fill = "white",
-    color = "black"
-  ) +
-  geom_text(data = location_df, aes(label = label), size = 2) +
-  facet_grid(row ~ col, switch = "y") +
-  scale_fill_gradient(low = "white", high = "#771434FF", limits = c(0, 1)) +
-  labs(fill = "Attention\nWeight") +
-  theme_bw()
-
+if (interactive()) {
+  att_grid |>
+    ggplot(aes(A, B)) +
+    geom_tile(aes(fill = value), alpha = 3 / 4) +
+    geom_contour(
+      data = col_att_plot_grid,
+      aes(z = .pred_1),
+      breaks = 1 / 2,
+      col = "black",
+      linewidth = 1
+    ) +
+    geom_point(
+      data = location_df,
+      size = 4,
+      shape = 21,
+      fill = "white",
+      color = "black"
+    ) +
+    geom_text(data = location_df, aes(label = label), size = 2) +
+    facet_grid(row ~ col, switch = "y") +
+    scale_fill_gradient(low = "white", high = "#771434FF", limits = c(0, 1)) +
+    labs(fill = "Attention\nWeight") +
+    theme_bw()
+}
 
 p_before <-
   before_after_grid |>
@@ -542,7 +544,19 @@ p_after <-
   ) +
   labs(title = "Attended")
 
-p_before / p_after
+if (interactive()) {
+  p_before / p_after
+}
 
-save(col_att_coefs, location_df, col_att_plot_grid, location_tbl, att_grid,
-     before_after_grid, file = "RData/col_att.RData")
+
+if (!interactive()) {
+  save(
+    col_att_coefs,
+    location_df,
+    col_att_plot_grid,
+    location_tbl,
+    att_grid,
+    before_after_grid,
+    file = "RData/col_att.RData"
+  )
+}
