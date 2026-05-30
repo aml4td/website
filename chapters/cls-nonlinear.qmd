@@ -9,7 +9,6 @@ knitr:
 ```{r}
 #| label: cls-nonlinear-setup
 #| include: false
-
 source("../R/_common.R")
 
 # ------------------------------------------------------------------------------
@@ -46,7 +45,7 @@ source("../R/compare_models.R")
 cls_mtr <- metric_set(brier_class, roc_auc, pr_auc, mn_log_loss)
 
 # ------------------------------------------------------------------------------
-# load data 
+# load data
 
 load("../RData/forested_data.RData")
 load("../RData/optimizers.RData")
@@ -137,7 +136,6 @@ These examples illustrate the potential advantage of kernel density estimation w
 #| fig-height: 3
 #| fig-cap: Parametric and nonparametric density estimates for the minimum vapor predictor, shown separately for the entire training set and then for each class. The blue line is the nonparametric estimate, and the orange curve is the traditional Gaussian estimate.
 #| fig-alt: "Faceted density plots for the minimum vapor predictor, with panels for the entire training set, non-forested locations, and forested locations. Each panel overlays a flexible kernel density estimate and a smooth parametric Gaussian curve on a histogram. The kernel estimate captures multimodal and skewed shapes the Gaussian misses, especially for the trimodal non-forested distribution and the right-skewed forested distribution."
-
 forested_dens <-
   forested_train |>
   dplyr::select(vapor_min, county) |>
@@ -201,7 +199,7 @@ Despite the potentially unrealistic assumption of conditional independence among
 ```{r}
 #| label: fewer-workers
 #| include: false
-# The naive Bayes calculations will use a lot of memory. We'll reduce 
+# The naive Bayes calculations will use a lot of memory. We'll reduce
 # the number of parallel workers for now so that we don't take up
 # too much system memory
 
@@ -289,7 +287,6 @@ One potential downside for this model is that there is a tendency for the class 
 #| fig-height: 4
 #| fig-cap: An example of how the probability estimates produced by naive Bayes can have poor calibration properties.
 #| fig-alt: "Two-panel figure. The left panel shows histograms of predicted forestation probabilities faceted by class, revealing a strongly bimodal distribution with most predictions concentrated near zero and one. The right panel shows a calibration curve that deviates severely from the diagonal, indicating that predicted probabilities do not match observed event rates."
-
 p_nb_prob <-
   forest_nb_pred |>
   ggplot(aes(.pred_Yes)) +
@@ -315,14 +312,13 @@ To address these calibration issues, an initial feature filter could be helpful.
 #| fig-height: 3
 #| fig-cap: Aggregate feature rankings using a random forest importance score on the forestation data. The bands reflect 90% confidence intervals computed using replicates over cross-validation.
 #| fig-alt: "Horizontal dot plot with error bars showing random forest importance scores for each predictor. Annual precipitation has by far the highest score. Maximum vapor and longitude form a second tier. Several predictors cluster at intermediate values, while county, year, eastness, and westness show low importance. Error bars represent 90% confidence intervals from cross-validation replicates."
-
 forest_nb_res |>
   collect_extracts() |>
   dplyr::select(-.config, -id) |>
   unnest(.extracts) |>
   distinct() |>
   inner_join(
-    select_best(forest_nb_res), 
+    select_best(forest_nb_res, metric = "brier_class"),
     by = c("smoothness", "prop_terms")
   ) |>
   summarize(
@@ -365,7 +361,7 @@ The predictions for the _best_ candidate are those shown in @fig-nb-probs. As no
 #| fig-cap: Naive Bayes tuning results for the forestation data.
 #| fig-alt: "Line plot of naive Bayes tuning results with Brier score on the y-axis and the proportion of predictors retained on the x-axis, with lines distinguished by kernel bandwidth. Both Brier score and ROC AUC are best when all predictors are retained, and performance degrades substantially at 20% retention. Smaller bandwidths are slightly favored across all thresholds."
 autoplot(forest_nb_res, metric = c("brier_class", "roc_auc")) +
-  labs(y = "Brier Score") + 
+  labs(y = "Brier Score") +
   scale_colour_paletteer_d("calecopal::eschscholzia") +
   theme(legend.position = "top")
 ```
@@ -782,7 +778,6 @@ The last condition triggered the training procedure to stop at `r nrow(fda_coefs
 ```{r}
 #| label: fda-coefs
 #| echo: false
-
 fda_coefs |>
   dplyr::select(1:2) |>
   gt() |>
@@ -808,9 +803,8 @@ To better understand what is driving the model, MARS has an _internal_ variable 
 #| fig-height: 3
 #| fig-cap: MARS feature importance for the final forested model.
 #| fig-alt: "Horizontal dot plot of MARS importance scores based on GCV reduction. Annual precipitation and annual maximum temperature are tied at the highest importance. Terrain roughness, annual mean temperature, and longitude also contribute substantially, while several predictors have zero importance and do not appear in the final model."
-
 fda_imp |>
-  ggplot(aes(gcv, reorder(text, gcv))) + 
+  ggplot(aes(gcv, reorder(text, gcv))) +
   geom_point() +
   labs(y = NULL, x = "MARS Importance (GCV)")
 ```
@@ -1014,7 +1008,6 @@ Outside of preprocessing methods, the primary tuning parameters are the number o
 #| label: forested-knn
 #| include: false
 #| cache: true
-
 knn_spec <-
   nearest_neighbor(
     neighbors = tune(),
@@ -1098,7 +1091,6 @@ How well does this technique work for the forestation data? To start, we used pr
 #| fig-height: 3
 #| fig-cap: K-nearest neighbors tuning results for the forestation data.
 #| fig-alt: "Multi-panel tuning plot for K-nearest neighbors classification on forestation data. Panels show Brier score versus the number of neighbors, Minkowski distance parameter, proportion of predictors retained, and kernel function. Poor results occur with fewer than twenty neighbors. The distance parameter favors small values around 0.5. No single kernel function dominates."
-
 knn_best_res <- show_best(forest_knn_res, metric = "brier_class")
 autoplot(forest_knn_res, metric = "brier_class") +
   labs(y = "Brier Score")
@@ -1217,12 +1209,17 @@ A Bayesian model was created using Gaussian priors to estimate the posterior dis
 ```{r}
 #| label: cls-nonlinear-compare
 #| include: false
-
 daemons(0)
 
-forest_knn_set_res <- as_workflow_set(KNN = forest_knn_res |> butcher::butcher())
-forest_nb_set_res <- as_workflow_set("naive Bayes" = forest_nb_res |> butcher::butcher())
-forest_fda_set_res <- as_workflow_set("FDA" = forest_fda_res |> butcher::butcher())
+forest_knn_set_res <- as_workflow_set(
+  KNN = forest_knn_res |> butcher::butcher()
+)
+forest_nb_set_res <- as_workflow_set(
+  "naive Bayes" = forest_nb_res |> butcher::butcher()
+)
+forest_fda_set_res <- as_workflow_set(
+  "FDA" = forest_fda_res |> butcher::butcher()
+)
 
 load("../RData/forest_linear_res.Rdata")
 load("../RData/forest_glmnet_set_res.Rdata")
@@ -1250,12 +1247,16 @@ nlin_compare
 
 nlin_best <- nlin_compare$model[is.na(nlin_compare$probability)]
 
-nlin_subset <- 
+nlin_subset <-
   nlin_compare |>
   slice_min(median, by = c(class, engine)) |>
   mutate(
     model = as.character(model),
-    model = ifelse(grepl("logistic_mle", model), "Logistic (unpenalized)", model),
+    model = ifelse(
+      grepl("logistic_mle", model),
+      "Logistic (unpenalized)",
+      model
+    ),
     model = ifelse(grepl("1L", model), "MLP (1 Layer)", model),
     model = ifelse(grepl("2L", model), "MLP (2 Layers)", model),
     model = gsub("glmnet", "Logistic (penalized)", model),
@@ -1275,7 +1276,6 @@ While the `r nlin_best` model currently has the smallest Brier score, there is a
 #| fig-height: 3.5
 #| fig-cap: "Comparisons of current forestation models. The intervals are 90% credible intervals. The bars on the right show the probability of practical equivalence to the current best model, assuming that a difference in Brier scores of +/- 0.01 is practical."
 #| fig-alt: "Two-panel figure comparing forestation models. The left panel is a dot-and-whisker plot of Brier scores with 90% credible intervals for each model, ordered from best to worst. A cluster of models including logistic regression and MLP have similar low Brier scores, while naive Bayes performs notably worse. The right panel shows horizontal bars for the probability of practical equivalence to the best model."
-
 p_brier <-
   nlin_subset |>
   ggplot(aes(median, model)) +
@@ -1286,13 +1286,13 @@ p_brier <-
     plot.margin = margin(t = 10, r = 2, b = 10, l = 10, unit = "pt")
   )
 
-p_brier_diff <- 
+p_brier_diff <-
   nlin_subset |>
-  filter(model != nlin_best) |> 
+  filter(model != nlin_best) |>
   ggplot(aes(pract_equiv, model)) +
   geom_bar(stat = "identity", aes(fill = pract_equiv), show.legend = FALSE) +
   labs(y = NULL, x = "Pr[Equiv]") +
-  scale_x_continuous(breaks = round((0:2)/2, 2),limits = 0:1) + 
+  scale_x_continuous(breaks = round((0:2) / 2, 2), limits = 0:1) +
   scale_fill_viridis_c(direction = -1) +
   theme(
     axis.text.y = element_blank(),
@@ -1300,7 +1300,7 @@ p_brier_diff <-
     plot.margin = margin(t = 10, r = 10, b = 10, l = 2, unit = "pt")
   )
 
-p_brier + p_brier_diff+ plot_layout(widths = c(4, 1))
+p_brier + p_brier_diff + plot_layout(widths = c(4, 1))
 ```
 
 ## Chapter References {.unnumbered}
@@ -1308,7 +1308,6 @@ p_brier + p_brier_diff+ plot_layout(widths = c(4, 1))
 ```{r}
 #| label: cls-nonlinear-save
 #| include: false
-
 # save(
 #  forest_knn_res, forest_knn_best,
 #   file = "../RData/forested_knn.Rdata"
