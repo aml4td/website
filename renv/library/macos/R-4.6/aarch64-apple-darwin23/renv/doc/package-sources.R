@@ -13,21 +13,14 @@ knitr::opts_chunk$set(
 # options(repos = repos)
 
 ## -----------------------------------------------------------------------------
-# # use packages as they were on 2024-01-15
-# renv::checkout(date = "2024-01-15")
-
-## -----------------------------------------------------------------------------
-# renv::checkout(date = "2024-01-15", actions = "snapshot")
-
-## -----------------------------------------------------------------------------
 # # use the latest-available Bioconductor release
 # renv::init(bioconductor = TRUE)
 # 
 # # use a specific version of Bioconductor
-# renv::init(bioconductor = "3.20")
+# renv::init(bioconductor = "3.14")
 
 ## -----------------------------------------------------------------------------
-# renv::settings$bioconductor.version("3.20")
+# renv::settings$bioconductor.version("3.14")
 
 ## -----------------------------------------------------------------------------
 # options(renv.bioconductor.repos = c(...))

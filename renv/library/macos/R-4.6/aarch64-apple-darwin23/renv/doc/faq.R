@@ -15,18 +15,5 @@ knitr::opts_chunk$set(
 # renv::settings$snapshot.type("explicit")
 
 ## -----------------------------------------------------------------------------
-# renv::lockfile_validate()
-
-## -----------------------------------------------------------------------------
 # renv::install()
-
-## -----------------------------------------------------------------------------
-# renv::settings$snapshot.dev(TRUE)
-
-## -----------------------------------------------------------------------------
-# # check all packages recorded in the lockfile
-# renv::vulns()
-# 
-# # check specific packages
-# renv::vulns(c("openssl==2.0.6", "curl==5.1.0"))
 
