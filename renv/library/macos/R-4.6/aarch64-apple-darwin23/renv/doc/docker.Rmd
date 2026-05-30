@@ -1,0 +1,203 @@
+---
+title: "Using renv with Docker"
+output: rmarkdown::html_vignette
+vignette: >
+  %\VignetteIndexEntry{Using renv with Docker}
+  %\VignetteEngine{knitr::rmarkdown}
+  %\VignetteEncoding{UTF-8}
+---
+
+```{r, include=FALSE}
+knitr::opts_chunk$set(
+  collapse = TRUE,
+  comment = "#>",
+  eval = FALSE
+)
+```
+
+While renv can help capture the state of your R library at some point in time, there are still other aspects of the system that can influence the runtime behavior of your R application. In particular, the same R code can produce different results depending on:
+
+- The operating system in use,
+- The compiler flags used when R and packages are built,
+- The LAPACK / BLAS system(s) in use,
+- The versions of system libraries installed and in use,
+
+and so on. [Docker](https://www.docker.com/) is a tool that can help solve this problem through the use of **containers**. Very roughly speaking, one can think of a container as a small, self-contained system within which different applications can be run. Using Docker, one can declaratively state how a container should be built, and then use that system to run applications. For more details, please see <https://solutions.posit.co/envs-pkgs/environments/docker/>.
+
+Using Docker and renv together, one can then ensure that both the underlying system, alongside the required R packages, are fixed and constant for a particular application.
+
+This vignette will assume you are already familiar with Docker; if you are not yet familiar with Docker, the [Docker Documentation](https://docs.docker.com/) provides a thorough introduction. To learn more about using Docker to manage R environments, visit [solutions.posit.co](https://solutions.posit.co/envs-pkgs/environments/docker/).
+
+We focus here on the most common case: you already have an existing renv project and want to build a Docker image from it. We assume that your project already contains `renv.lock`, `.Rprofile`, `renv/activate.R`, and `renv/settings.json`.
+
+The examples below use `<parent-image>` as a placeholder for the base image, which is assumed to provide R and the system libraries required by your project's packages. The [Rocker project](https://rocker-project.org/) provides widely-used R base images; for example, `rocker/r-ver:4.4` pins a specific R version. Using a version-tagged base image is recommended for reproducibility. See the [system dependencies](#system-dependencies) section for help identifying which system libraries your packages need.
+
+
+## Containerizing an existing renv project
+
+A good default is to copy the renv metadata first, restore packages, and only then copy the rest of the repository:
+
+```dockerfile
+FROM <parent-image>
+
+# initialize application project directory
+WORKDIR /project
+RUN mkdir -p renv
+
+# copy renv infrastructure
+COPY renv.lock renv.lock
+COPY .Rprofile .Rprofile
+COPY renv/activate.R renv/activate.R
+COPY renv/settings.json renv/settings.json
+
+# restore R project library
+RUN R -s -e "renv::restore()"
+
+# copy application files into image
+COPY . .
+```
+
+You should also add a `.dockerignore` file to prevent the host's project library and other renv working directories from being copied into the build context:
+
+```
+renv/*
+!renv/activate.R
+!renv/settings.json
+```
+
+This excludes everything inside `renv/` except the two files the Dockerfile needs. The project library, sandbox, and other working directories are either rebuilt by `renv::restore()` inside the container or are host-specific, so they should not be copied into the image.
+
+This is a good starting point for most projects. The image restore step uses the same project metadata that you already commit to version control, so the container can recreate the project library before the rest of the source tree is copied. Note that renv does not need to be pre-installed on the parent image: when R starts, it sources `.Rprofile`, which in turn sources `renv/activate.R`. The activate script automatically downloads and installs renv if it is not already available.
+
+If you need to customize the library path, set `RENV_PATHS_LIBRARY` before calling `renv::restore()`:
+
+```dockerfile
+ENV RENV_PATHS_LIBRARY=/renv/library
+RUN R -s -e "renv::restore()"
+```
+
+
+## Caching package installs
+
+If you rebuild the same image repeatedly, caching can make `renv::restore()` much faster. There are three common approaches.
+
+
+### Basic Docker layer cache
+
+The Dockerfile above already uses Docker's normal layer cache. Because `renv::restore()` happens before `COPY . .`, changes to application code do not invalidate the restore layer. Docker only needs to run `renv::restore()` again when the copied renv files change.
+
+
+### Cache mounts
+
+If you are using BuildKit, you can also mount a cache directory into the build. This allows `renv::restore()` to reuse previously cached packages even when the restore layer itself needs to be rebuilt.
+
+```dockerfile
+# syntax=docker/dockerfile:1
+FROM <parent-image>
+
+# initialize application project directory
+WORKDIR /project
+RUN mkdir -p renv
+
+# copy renv infrastructure
+COPY renv.lock renv.lock
+COPY .Rprofile .Rprofile
+COPY renv/activate.R renv/activate.R
+COPY renv/settings.json renv/settings.json
+
+# set path to the renv package cache
+ENV RENV_PATHS_CACHE=/renv/cache
+
+# ensure packages are copied, not symlinked
+ENV RENV_CONFIG_CACHE_SYMLINKS=FALSE
+
+# restore with mounted cache
+RUN --mount=type=cache,target=/renv/cache \
+    R -s -e "renv::restore()"
+
+# copy application files into the image
+COPY . .
+```
+
+The `RENV_PATHS_CACHE` environment variable tells renv where to find its package cache. The `RUN --mount=type=cache` line tells BuildKit to make a persistent build cache available at that path for the duration of the `RUN` instruction, so `renv::restore()` can reuse previously downloaded packages; see Docker's [`RUN --mount` documentation](https://docs.docker.com/reference/dockerfile/#run---mount) and [cache mount guide](https://docs.docker.com/build/cache/optimize/).
+
+Setting `RENV_CONFIG_CACHE_SYMLINKS=FALSE` is important here because the cache mount is not part of the final image. With symlinks enabled, renv could leave the project library pointing at packages in the mounted cache, and those symlinks would be broken once the build step finishes.
+
+This cache only helps on the specific machine or builder that created it. It is useful for repeated local builds, but it will not usually carry over to a different machine or a fresh CI runner.
+
+
+### Bind-mounted host caches
+
+If the host machine already has a populated renv cache, you can bind-mount that cache into the build and let `renv::restore()` reuse it. This is especially useful when the host cache is managed outside Docker.
+
+The Dockerfile can mount a host-provided cache context into the renv cache path:
+
+```dockerfile
+# syntax=docker/dockerfile:1
+FROM <parent-image>
+
+# initialize application project directory
+WORKDIR /project
+RUN mkdir -p renv
+
+# copy renv infrastructure
+COPY renv.lock renv.lock
+COPY .Rprofile .Rprofile
+COPY renv/activate.R renv/activate.R
+COPY renv/settings.json renv/settings.json
+
+# set path to the renv package cache
+ENV RENV_PATHS_CACHE=/renv/cache
+
+# ensure packages are copied, not symlinked
+ENV RENV_CONFIG_CACHE_SYMLINKS=FALSE
+
+# restore with mounted cache
+RUN --mount=type=bind,from=renv-cache,source=.,target=/renv/cache,rw \
+    R -s -e "renv::restore()"
+
+COPY . .
+```
+
+The `RUN --mount=type=bind` line tells BuildKit to mount the named build context `renv-cache` at the renv cache path for that one `RUN` instruction, with temporary write access; see Docker's [`RUN --mount` documentation](https://docs.docker.com/reference/dockerfile/#run---mount) and [named contexts documentation](https://docs.docker.com/build/building/context/#named-contexts).
+
+You can then provide that cache directory at build time with `docker buildx build`:
+
+```sh
+docker buildx build \
+  --build-context renv-cache=.cache/renv \
+  -t <image-name> .
+```
+
+This approach is most useful when `.cache/renv` has already been populated on the host, for example by running `renv::restore()` outside Docker.
+
+Bind mounts are read-only by default, so the example uses `rw` to avoid write failures if `renv::restore()` needs to update the cache during the build. Even with `rw`, writes to the bind mount are only available for the duration of that `RUN` instruction and are discarded afterwards, so the host-provided cache context is not modified. This helps keep repeated builds reproducible, including when multiple builds run sequentially or in parallel.
+
+`RENV_CONFIG_CACHE_SYMLINKS=FALSE` is needed here for the same reason as in the cache-mount example: the mounted cache is available during the build step, but it is not carried into the final image.
+
+This is often the preferred approach on ephemeral hosts such as GitHub Actions runners, because the host-side cache directory can be restored with the CI platform's native cache support before the build starts. GitHub Actions and Azure DevOps both provide native cache features that work well for this: [GitHub Actions cache](https://docs.github.com/actions/concepts/workflows-and-actions/dependency-caching) and [Azure DevOps Cache task](https://learn.microsoft.com/azure/devops/pipelines/release/caching?view=azure-devops).
+
+
+## System dependencies
+
+Many R packages require system libraries to compile (e.g. `libcurl`, `libxml2`). These need to be installed before `renv::restore()` runs. You can use [renv::sysreqs()] to compute the system packages required by your project:
+
+```r
+renv::sysreqs(distro = "ubuntu:24.04", report = TRUE, collapse = TRUE)
+```
+
+This reports the installation command needed for a given distribution, which you can then add to your Dockerfile before the restore step:
+
+```dockerfile
+RUN apt-get update && apt-get install -y --no-install-recommends \
+    libcurl4-openssl-dev \
+    libxml2-dev \
+    && rm -rf /var/lib/apt/lists/*
+```
+
+
+## Multi-stage builds
+
+For production images, a multi-stage build can separate the build environment (with compilers and development headers) from the final runtime image. This keeps the deployed image smaller by excluding tools that are only needed to compile packages. See Docker's [multi-stage build documentation](https://docs.docker.com/build/building/multi-stage/) for details.
+
+
