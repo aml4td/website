@@ -1503,7 +1503,7 @@ col_att_grid |>
   ggplot(aes(A, B)) +
   geom_point(data = dat_2d_train, aes(col = class), alpha = 1 / 3) +
   geom_contour(data = grid_pred, aes(z = .pred_one), breaks = 0.5, col = "black", alpha = 1 / 4) +
-  geom_contour(aes(z = prob), breaks = 0.5, col = "black") +
+  geom_contour(aes(z = prob), breaks = 0.5, col = "black", linewidth = 3/4) +
   geom_point(
     data = location_df,
     size = 6,
@@ -1526,32 +1526,57 @@ However, we are using column attention and the final estimates of the three $\bo
 ```{r}
 #| label: tbl-attention
 #| tbl-cap: "Attention weights at the three locations in @fig-attention-fit. The columns are the unattended model parameters from the hidden unit layer. The rows are the context-specific embeddings for the landmark locations; each attended variable is a linear combination of the original embeddings, mixed via their attention weights."
-#| eval: false
-location_tbl |>
-  mutate(Feature = paste0("$$Z_", 1:nrow(location_tbl), "$$")) |>
+grm_ramp <- colorRampPalette(RColorBrewer::brewer.pal(9, "Greens")[-c(1, 9)])(20)
+grm_ramp <- colorRampPalette(c("white", "#6EB245FF"))(20)
+location_df |>
+  select(label, starts_with("attn")) |>
+  pivot_longer(
+    cols = c(starts_with("attn_")),
+    names_to = "nm",
+    values_to = "weights"
+  ) |>
+  mutate(
+    split_up = map(nm, ~ strsplit(.x, split = "_")[[1]]),
+    embedding_number = map_chr(split_up, ~ paste0("H_", .x[3])),
+    Attended = map_chr(split_up, ~ paste0("$$Z_", .x[2], "$$"))
+  ) |>
+  select(location = label, weights, embedding_number, Attended) |>
+  pivot_wider(
+    id_cols = c(Attended),
+    names_from = c(location, embedding_number),
+    values_from = "weights"
+  ) |>
   gt() |>
-  cols_add('spacr2' = '', .after = 5) |>
-  cols_add('spacr3' = '', .after = 'loc_2_unit4') |>
+  cols_add('spacr2' = '', .after = "1_H_4") |>
+  cols_add('spacr3' = '', .after = "2_H_4") |>
   cols_label(
     'spacr2' = md('&emsp;&emsp;'),
     'spacr3' = md('&emsp;&emsp;')
   ) |>
-  fmt_markdown(columns = Feature) |>
-  fmt_number(columns = c(-Feature), decimals = 2) |>
+  fmt_markdown(columns = Attended) |>
+  fmt_number(columns = c(-Attended), decimals = 2) |>
   cols_label(
-    contains("unit1") ~ md("$H_1$"),
-    contains("unit2") ~ md("$H_2$"),
-    contains("unit3") ~ md("$H_3$"),
-    contains("unit4") ~ md("$H_4$"),
-    Feature ~ "Attended"
+    contains("H_1") ~ md("$H_1$"),
+    contains("H_2") ~ md("$H_2$"),
+    contains("H_3") ~ md("$H_3$"),
+    contains("H_4") ~ md("$H_4$")
   ) |>
-  tab_spanner(label = "Location 1", columns = c(contains("loc_1"))) |>
-  tab_spanner(label = "Location 2", columns = c(contains("loc_2"))) |>
-  tab_spanner(label = "Location 3", columns = c(contains("loc_3"))) |>
+  tab_spanner(label = "Location 1", columns = c(contains("1_"))) |>
+  tab_spanner(label = "Location 2", columns = c(contains("2_"))) |>
+  tab_spanner(label = "Location 3", columns = c(contains("3_"))) |>
   tab_style_body(style = cell_text(color = "gray70"), fn = function(x) {
     is.numeric(x) & x < 0.05
   }) |>
-  cols_width(Feature ~ pct(9))
+  cols_width(Attended ~ pct(9)) |> 
+  data_color(
+    columns = c(contains("_H_")),
+    palette = grm_ramp, 
+    alpha = 2/3, 
+    quantiles = 20, 
+    direction = "row",
+    method = "quantile"
+  ) |> 
+  opt_row_striping(row_striping = FALSE)
 ```
 
 
