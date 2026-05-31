@@ -1434,7 +1434,7 @@ Again, if the incoming embeddings are $n \times p$, the new embedding matrix is 
 
 Again, the three $\boldsymbol{W}^*$ matrices are _learned_ during training and, because they are estimated, attention embeddings are supervised, although indirectly. The outcome does _not_ affect the computation's attention during a forward pass; it isn't part of any of the equations above. The outcome data influences the parameters during the backpropagation phase of training (i.e., when the gradients are updated). 
 
-Attention for tabular data can occur in two different ways: column-attention and row-attention. Let's talk about each in turn. 
+The part of the network that encompasses these calculations is called _an attention head_.  Attention for tabular data can occur in two different ways: column-attention and row-attention. Let's talk about each in turn. 
 
 ### Column-wise Attention
 
@@ -1481,11 +1481,11 @@ To make this more concrete, let's return to the simple binary classification exa
 
 1. Adds a fully connected layer with 4 hidden units and ReLU activation (as before). 
 2. Batch normalization of the 4 hidden units. We'll label these embeddings as $H_j$, $j=1 \ldots 4$. 
-3. Column-wise self-attention with an embedding dimension of $m = 30$. The adjusted hidden units are denoted as $Z_j$.
+3. Column-wise self-attention with an embedding dimension of $m = 2$. The adjusted hidden units are denoted as $Z_j$.
 4. Linear activation to produce $C = 2$ estimates for each class.
 5. Softmax normalization. 
 
-We'll be most concerned with the details of the third operation, where the normalized embeddings enter the attention process. 
+We'll be most concerned with the details of the third operation, where the normalized embeddings enter the attention process. The chosen number of embeddings in the attention head (2) is very small for illustrative reasons. 
 
 The model was trained with a learning rate of 0.05, a batch size of 64, early stopping after 5 bad epochs, and a weight decay value of 0.01. After epochs, the model converged, and the fit is shown in @fig-attention-fit. The curve is similar to the original MLP fit but shows some additional nuance in the center of the data mainstream. Three locations in the predictor space are highlighted for future discussion. 
 
@@ -1574,6 +1574,7 @@ location_df |>
     alpha = 2/3, 
     quantiles = 20, 
     direction = "row",
+    domain = c(0, 0.9),
     method = "quantile"
   ) |> 
   opt_row_striping(row_striping = FALSE)
@@ -1680,6 +1681,26 @@ The next section expands more on how multiple attention heads can be added to th
 
 ### Multi-Head Attention {#sec-cls-multi-attention}
 
+```{r}
+#| label: auto-int-load
+load("../RData/forested_autoint.RData")
+```
+
+```{r}
+#| label: fig-auto-int-cls-tune
+#| echo: false
+#| warning: false
+#| message: false
+#| out-width: 80%
+#| fig-width: 8
+#| fig-height: 7
+#| fig-cap: AutoInt tuning results for the forestation data.
+autoplot(autoint_res, metric = "brier_class") + 
+  lims(y = c(0.077, 0.125)) + 
+  theme(legend.position = "top") +
+  labs(y = "Brier Score")
+```
+
 `r r_comp("cls-neural-nets.html#sec-cls-multi-attention")`
 
 ### Masking Mechanisms {#sec-cls-masking}
@@ -1688,7 +1709,126 @@ The next section expands more on how multiple attention heads can be added to th
 
 ## Foundational Models {#sec-cls-foundational}
 
+
+```{r}
+#| label: tab-pfn-load
+load("../RData/forested_tabpfn.RData")
+```
+
+```{r}
+#| label: fig-tab-pfn-cls-tune
+#| echo: false
+#| warning: false
+#| message: false
+#| out-width: 70%
+#| fig-width: 6
+#| fig-height: 3.25
+#| fig-cap: TabPFN tuning results for the forestation data.
+autoplot(tabpfn_tune_res, metric = "brier_class") + 
+  theme(legend.position = "top") +
+  labs(y = "Brier Score")
+```
+
+
 `r r_comp("cls-neural-nets.html#sec-cls-foundational")`
+
+## Comparisons to Previous Models {#sec-cls-nnet-compare}
+
+```{r}
+#| label: cls-nnet-compare
+#| include: false
+load("../RData/forest_fda_set_res.Rdata")
+load("../RData/forest_nb_set_res.Rdata")
+load("../RData/forest_knn_set_res.Rdata")
+load("../RData/forest_linear_res.Rdata")
+load("../RData/forest_glmnet_set_res.Rdata")
+load("../RData/forest_logistic_set_res.Rdata")
+load("../RData/forest_mlp_set_res.Rdata")
+load("../RData/forest_resnet_set_res.Rdata")
+
+forest_tabpfn_set_res <- as_workflow_set(TabPFN = tabpfn_tune_res)
+forest_autoint_set_res <- as_workflow_set(AutoInt = autoint_res)
+
+forest_resnet_set_res$wflow_id <- 
+  forest_resnet_set_res$wflow_id |> 
+  map_chr(~ cli::format_inline("ResNet ({.x})"))
+
+all_sets <-
+  dplyr::bind_rows(
+    forest_fda_set_res,
+    forest_nb_set_res,
+    forest_knn_set_res,
+    forest_glmnet_set_res,
+    forest_logistic_set_res,
+    forest_mlp_set_res, 
+    forest_tabpfn_set_res,
+    forest_autoint_set_res, 
+    forest_resnet_set_res
+  )
+
+
+set.seed(905)
+nnet_compare <- compare_models(all_sets, chains = 10, cores = 10, iter = 5000)
+nnet_compare
+
+nnet_best <- nnet_compare$model[is.na(nnet_compare$probability)]
+
+nnet_subset <-
+  nnet_compare |>
+  slice_min(median, by = c(class, engine)) |>
+  mutate(
+    model = as.character(model),
+    model = ifelse(grepl("basic_", model), "Oblique Tree", model),
+    model = ifelse(grepl("tab_pfn", model), "TabPFN", model),
+    model = ifelse(grepl("autoint", model), "AutoInt", model),
+    model = ifelse(
+      grepl("logistic_mle", model),
+      "Logistic (unpenalized)",
+      model
+    ),
+    model = ifelse(grepl("1L", model), "MLP (1 Layer)", model),
+    model = ifelse(grepl("2L", model), "MLP (2 Layers)", model),
+    model = gsub("glmnet", "Logistic (penalized)", model),
+    model = factor(model),
+    model = reorder(model, median)
+  )
+```
+
+
+```{r}
+#| label: fig-cls-nnet-compare
+#| echo: false
+#| warning: false
+#| out-width: 70%
+#| fig-width: 6
+#| fig-height: 3.5
+#| fig-cap: "Comparisons of current forestation models. The intervals are 90% credible intervals. The bars on the right show the probability of practical equivalence to the current best model, assuming that a difference in Brier scores of +/- 0.01 is practical."
+p_brier <-
+  nnet_subset |>
+  ggplot(aes(median, model)) +
+  geom_point() +
+  geom_errorbar(aes(xmin = lower, xmax = upper), width = 1 / 2) +
+  labs(y = NULL, x = "Brier Score") +
+  theme(
+    plot.margin = margin(t = 10, r = 2, b = 10, l = 10, unit = "pt")
+  )
+
+p_brier_diff <-
+  nnet_subset |>
+  # filter(model != nnet_best) |>
+  ggplot(aes(pract_equiv, model)) +
+  geom_bar(stat = "identity", aes(fill = pract_equiv), show.legend = FALSE) +
+  labs(y = NULL, x = "Pr[Equiv]") +
+  scale_x_continuous(breaks = round((0:2) / 2, 2), limits = 0:1) +
+  scale_fill_viridis_c(direction = -1) +
+  theme(
+    axis.text.y = element_blank(),
+    axis.ticks.y = element_blank(),
+    plot.margin = margin(t = 10, r = 10, b = 10, l = 2, unit = "pt")
+  )
+
+p_brier + p_brier_diff + plot_layout(widths = c(4, 1))
+```
 
 ## Chapter References {.unnumbered}
 
