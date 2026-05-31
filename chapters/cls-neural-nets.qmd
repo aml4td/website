@@ -1364,7 +1364,9 @@ resnet_tbl |>
 ```{r}
 #| label: col-att-start
 #| include: false
-load("../RData/col_att.RData")
+load("../RData/col_att_demo.RData")
+location_df <- col_att_grid |> slice(1:3) |> mutate(label = paste(1:3))
+col_att_grid <- col_att_grid |> slice(-(1:3))
 ```
 
 
@@ -1428,7 +1430,7 @@ $$
 \boldsymbol{Z} = \mathbb{A}(\boldsymbol{Q},\boldsymbol{K},\boldsymbol{V}) = \mathbb{S}(\boldsymbol{Q}\boldsymbol{K}')\boldsymbol{V}
 $$ {#eq-attended-embeddings}
 
-Again, if the incoming embeddings are $n \times p$, the new embedding matrix is $(n \times m)(m \times n)(n \times m) = p \times m$. Note that, for models that are optimized with stochastic gradient descent, $n$ in this scenario is the batch size, not the size of the training set. 
+Again, if the incoming embeddings are $n \times p$, the new embedding matrix is $(n \times m)(m \times n)(n \times m) = n \times m$. Note that, for models that are optimized with stochastic gradient descent, $n$ in this scenario is the batch size, not the size of the training set. 
 
 Again, the three $\boldsymbol{W}^*$ matrices are _learned_ during training and, because they are estimated, attention embeddings are supervised, although indirectly. The outcome does _not_ affect the computation's attention during a forward pass; it isn't part of any of the equations above. The outcome data influences the parameters during the backpropagation phase of training (i.e., when the gradients are updated). 
 
@@ -1453,7 +1455,7 @@ As a reminder, these matrices are ($n \times m$), and we are integrating via the
 Remember that, in these computations, $j$ is fixed. Using the values $s^{(j, j')}_i$, the attention weights for each of our $n$ samples is assembled into a $n \times p$ matrix $\boldsymbol{S}^{(j)}$. In other words, each column $j′$ of 
 $\boldsymbol{S}^{(j)}$ contains the $n$ scores $s^{(j, j')}_i$.
 
-Our scaled attention weights are then
+Our scaled attention weights for embedding $j$ are then
 
 $$
 \boldsymbol{A}^{(j)} = \mathbb{S}(\boldsymbol{S}^{(j)})
@@ -1497,10 +1499,11 @@ The model was trained with a learning rate of 0.05, a batch size of 64, early st
 #| warning: false
 #| fig-cap: "An alternate model is used to classify the data from @fig-nnet-ex. The model uses column attention after the four-unit hidden layer. Three points in the predictor spaces are shown and will be used as landmarks for the discussion."
 
-col_att_plot_grid |>
+col_att_grid |>
   ggplot(aes(A, B)) +
   geom_point(data = dat_2d_train, aes(col = class), alpha = 1 / 3) +
-  geom_contour(aes(z = .pred_1), breaks = 0.5, col = "black") +
+  geom_contour(data = grid_pred, aes(z = .pred_one), breaks = 0.5, col = "black", alpha = 1 / 4) +
+  geom_contour(aes(z = prob), breaks = 0.5, col = "black") +
   geom_point(
     data = location_df,
     size = 6,
@@ -1513,19 +1516,7 @@ col_att_plot_grid |>
   scale_color_manual(values = c("#007FFFFF", "#FF7F00FF"))
 ```
 
-After batch normalization, the equations for the hidden layers are: 
 
-```{r}
-#| label: attention-unattended
-#| echo: false
-#| results: "asis"
-align_equations(
-  cbind(col_att_coefs$fc1.bias, col_att_coefs$fc1.weight),
-  c("", "A", "B"),
-  paste0("H_{", 1:4, "}"),
-  ref = "unattended"
-)
-```
 
 The relationship between these embeddings and the original predictors is further visualized in the top of @fig-att-before-after. Note that the weights for the predictors in the first hidden units are both small; this feature, as-is, would have very little effect on the classification boundary. If there were no attention being applied to this model, the predictor values for the three points shown in @fig-attention-fit would be substituted into the four equations above, and they would be the incoming embeddings for the final layer before softmax.
 
@@ -1535,6 +1526,7 @@ However, we are using column attention and the final estimates of the three $\bo
 ```{r}
 #| label: tbl-attention
 #| tbl-cap: "Attention weights at the three locations in @fig-attention-fit. The columns are the unattended model parameters from the hidden unit layer. The rows are the context-specific embeddings for the landmark locations; each attended variable is a linear combination of the original embeddings, mixed via their attention weights."
+#| eval: false
 location_tbl |>
   mutate(Feature = paste0("$$Z_", 1:nrow(location_tbl), "$$")) |>
   gt() |>
@@ -1570,22 +1562,30 @@ When reading this visualization, the values in the contour plots along each row 
 ```{r}
 #| label: fig-attention-weights
 #| echo: false
-#| out-width: 75%
+#| out-width: 85%
 #| fig-width: 7.5
 #| fig-height: 7
+#| dev: "ragg_png"
 #| warning: false
 #| fig-cap: "The same data from @fig-nnet-ex using column attention. A visualization of the attention weights across the entire predictor space. The colors show how each of the four embeddings is mixed into the context-aware versions produced by the attention head."
 
-att_grid |>
+col_att_grid |>
+  select(A, B, starts_with("attn_")) |>
+  pivot_longer(
+    cols = c(starts_with("attn_")),
+    names_to = "nm",
+    values_to = "weights"
+  ) |>
   mutate(
-    row = gsub("hidden", "attended", row),
-    col = gsub("hidden", "unattended", col)
-  ) |> 
+    split_up = map(nm, ~ strsplit(.x, split = "_")[[1]]),
+    embedding_number = map_chr(split_up, ~ paste("Unattended", .x[3])),
+    attended_number = map_chr(split_up, ~ paste("Attended", .x[2]))
+  ) |>
   ggplot(aes(A, B)) +
-  geom_tile(aes(fill = value), alpha = 1) +
+  geom_tile(aes(fill = weights), show.legend = TRUE) +
   geom_contour(
-    data = col_att_plot_grid,
-    aes(z = .pred_1),
+    data = col_att_grid,
+    aes(z = prob),
     breaks = 1 / 2,
     col = "black",
     linewidth = 3 / 4
@@ -1598,8 +1598,9 @@ att_grid |>
     color = "black"
   ) +
   geom_text(data = location_df, aes(label = label), size = 2) +
-  facet_grid(row ~ col, switch = "y") +
-  scale_fill_gradient(low = "white", high = "#6EB245FF", limits = c(0, 1)) +
+  facet_grid(attended_number ~ embedding_number) +
+  scale_fill_gradient(low = "white", high = "#6EB245FF", limits = 0:1) +
+  coord_fixed() +
   labs(fill = "Attention\nWeights") +
   guides(fill = guide_colorbar(barwidth = unit(1, "cm"))) +
   theme_bw()
@@ -1612,50 +1613,38 @@ Now that we've seen the attention weights, how are the four attended embeddings 
 #| echo: false
 #| out-width: 85%
 #| fig-width: 8
-#| fig-height: 4.7
+#| fig-height: 3
+#| dev: "ragg_png"
 #| warning: false
 #| fig-cap: "A visualization of how column attention affects the embeddings just prior to the final layer of linear combinations. The top panel shows the relationship produced by @eq-unattended. The bottom panel illustrates how these variables are changed."
-p_before <-
-  before_after_grid |>
-  pivot_longer(cols = c(contains("hidden")), names_to = "unit") |>
-  filter(type == "Unattended") |>
+col_att_grid |>
+  select(A, B, starts_with("z_")) |>
+  pivot_longer(
+    cols = c(starts_with("z_")),
+    names_to = "nm",
+    values_to = "Attended"
+  ) |>
+  mutate(
+    split_up = map(nm, ~ strsplit(.x, split = "_")[[1]]),
+    embedding_number = map_chr(split_up, ~ paste("Embedding", .x[3])),
+    attended_number = map_chr(split_up, ~ paste("Attended", .x[2]))
+  ) |>
+  filter(embedding_number == "Embedding 1") |> 
   ggplot(aes(A, B)) +
-  geom_tile(aes(fill = value), show.legend = TRUE) +
-  geom_contour(aes(z = value), breaks = 0, col = "black") +
-  facet_wrap(~unit, nrow = 1) +
+  geom_tile(aes(fill = Attended), show.legend = TRUE) +
+  geom_contour(
+    data = col_att_grid,
+    aes(z = prob),
+    breaks = 1 / 2,
+    col = "black",
+    alpha = 1 / 5
+  ) +
+  geom_contour(aes(z = Attended), breaks = 0, col = "black", linewidth = 1) +
+  labs(fill = NULL) +
+  facet_wrap(~ attended_number, nrow = 1) +
   scale_fill_gradient2(high = "#5D74A5FF") +
   coord_fixed() +
-  theme_bw() +
-  theme(
-    legend.position = "right",
-    plot.title = element_text(hjust = 0.5),
-    legend.title = element_blank(), 
-    legend.box.margin = margin(t = 0, r = 0, b = 0, l = 10, unit = "pt")
-  ) +
-  labs(title = "Unattended") +
-  guides(fill = guide_colorbar(barwidth = unit(3 / 4 , "cm"))) 
-
-p_after <-
-  before_after_grid |>
-  pivot_longer(cols = c(contains("hidden")), names_to = "unit") |>
-  filter(type == "Attended") |>
-  ggplot(aes(A, B)) +
-  geom_tile(aes(fill = value), show.legend = TRUE) +
-  geom_contour(aes(z = value), breaks = 0, col = "black") +
-  facet_wrap(~unit, nrow = 1) +
-  scale_fill_gradient2(high = "#5D74A5FF") +
-  coord_fixed() +
-  theme_bw() +
-  theme(
-    legend.position = "right",
-    plot.title = element_text(hjust = 0.5),
-    legend.title = element_blank(), 
-    legend.box.margin = margin(t = 0, r = 0, b = 0, l = 10, unit = "pt")
-  ) +
-  labs(title = "Attended") +
-  guides(fill = guide_colorbar(barwidth = unit(3 / 4, "cm")))
-
-p_before / p_after
+  theme_bw()
 ```
 
 After the attention head, the network can include additional layers of hidden units or feed directly into the final linear layer. We'll describe a specific example soon and see how well it works with the forestation data. 
