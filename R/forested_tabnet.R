@@ -12,6 +12,10 @@ cls_mtr <- metric_set(brier_class, roc_auc, pr_auc, mn_log_loss)
 
 # ------------------------------------------------------------------------------
 
+tbnt_rec <- 
+  recipe(class ~ ., data = forested_train) |> 
+  step_normalize(all_numeric_predictors())
+
 tbnt_spec <- 
   tabnet(
     mode = "classification",
@@ -42,12 +46,13 @@ set.seed(458)
 forest_tbnt_res <-
   tbnt_spec |>
   tune_grid(
-    class ~ .,
+    tbnt_rec,
     resamples = forested_rs,
     grid = 25,
     control = control_grid(
       save_pred = TRUE,
-      save_workflow = TRUE
+      save_workflow = TRUE,
+      verbose = TRUE
     ),
     metrics = cls_mtr
   )
