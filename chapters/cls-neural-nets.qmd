@@ -1143,7 +1143,35 @@ A fair amount of research has been motivated by the observation that tree ensemb
 
 We previously noted that substantial preprocessing is required for our original predictors. @wiesler2014mean notes that the effects of this preprocessing can vanish as more layers are added to the network; there is no guarantee that the hidden units in later layers will have distributional properties that encourage convergence. Consider the example in  @sec-nnet-activation where, for a basic MLP model with ReLU activation, large portions of the parameter space have values of absolute zero. No matter the distribution entering the layer, the outputs are likely to have a large point mass at zero and perhaps a second distributional mode. 
 
-TODO show histograms for ReLU values
+For example, @fig-nnet-hidden-dist shows the distribution of a specific hidden unit in a model from @fig-nnet-ex, albeit with a larger batch size, showing how it changes over batches and epochs. The red bar shows how often absolute zero values occur. Within a batch, the point mass at zero can fluctuate over epochs. Given that the activated values must be non-negative, the distributions can become fairly skewed over epochs, although two of the distributions are somewhat bell-shaped for non-zero values. In any case, the values have certainly deviated from the centered and scaled distributions of the original predictor values.  
+
+```{r}
+#| label: fig-nnet-hidden-dist
+#| echo: false
+#| out-width: 80%
+#| fig-width: 5
+#| fig-height: 5
+#| warning: false
+#| fig-cap: "Histograms of a distribution of a hidden unit with ReLU activation across batches and epochs. The red bar indicates the frequency that absolute zero values occur. The model and data are from @fig-nnet-ex but with a larger batch size (225)."
+load("../RData/hidden_units_trace.RData")
+
+vert_format <- 
+ hidden_units_data |> 
+ pivot_longer(cols = c(starts_with("hidden_")), names_to = "embedding", values_to = "values") |> 
+ filter(epoch %in% c(1, 25, 50, 75, 100) & embedding == "hidden_2") 
+
+zeros <- vert_format |> 
+ filter(values > -.Machine$double.eps & values < .Machine$double.eps)
+non_zero <- vert_format |> 
+ filter(values > .Machine$double.eps | values < -.Machine$double.eps)
+
+non_zero |> 
+ ggplot(aes(values)) + 
+ geom_histogram(col = "white", bins = 15) + 
+ geom_histogram(data = zeros, col = "transparent", binwidth = 0.07, fill = "red", alpha = 1/2) +  
+ facet_grid(epoch ~ batch, labeller = "label_both") + 
+ labs(x = "Hidden Unit Value")
+```
 
 @wiesler2014mean suggested that standardizing the embeddings across different locations within the network could yield the same benefits for the model as initial standardization. Their solution was to use batches during SGD to compute a running mean of the model's internal features and to center the embeddings. 
 
