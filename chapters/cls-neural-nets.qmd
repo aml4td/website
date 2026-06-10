@@ -1442,17 +1442,21 @@ A database would `FILTER` on these values to find any rows that match the query.
 
 The mathematics of attention mechanisms differ in their tactics, but they pursue the same strategy as the database example above.  Attention computes a quantitative similarity score for the data, usually based on dot products, which are scaled to [0, 1]. This is more of a fuzzy-matching system than an exact match like SQL `FILTER` would produce. 
 
+::: {.mathy-box}
+There is a lot of linear algebra on the horizon. In the next section, we'll eventually bring things back down to Earth and demonstrate attention with a small-scale example. 
+:::
+
 Attention weights can be computed in different ways, but we'll focus on the most prevalent approach: *dot-product attention*. We'll represent a query containing $p$ features as the vector $\boldsymbol{q}$, and a database key as $\boldsymbol{k}$, also with $p$ entries. The dot-product attention weight for these values uses $\mathbb{a}(\boldsymbol{q}, \boldsymbol{k}) = \exp\left(\boldsymbol{q}'\boldsymbol{k}\right)$ as its kernel. We know that this dot product is non-negative, but generally not much more. 
 
 Most methods use _scaled attention_, which uses the softmax function to compute the attention weights:
 
 $$
-\mathbb{a}(\boldsymbol{q}, \boldsymbol{k}_i) = \frac{\exp(\boldsymbol{q}'\boldsymbol{k}_i / \sqrt{p})}{\sum_i\exp(\boldsymbol{q}'\boldsymbol{k}_i / \sqrt{p})}
+\mathbb{a}(\boldsymbol{q}, \boldsymbol{k}_i) = \frac{\exp(\boldsymbol{q}'\boldsymbol{k}_i / \sqrt{p})}{\sum_{i'}\exp(\boldsymbol{q}'\boldsymbol{k}_{i'} / \sqrt{p})}
 $$ {#eq-scaled-attention}
 
 where $p$ is the size of the keys and queries. The square-root terms in the divisors are there to help the numerical computations for cases where $p$ is very large; it stabilizes the resulting values. 
 
-$\mathbb{a}(\boldsymbol{q}, \boldsymbol{k}_i)$ bounds the attention weights to be on [0, 1]. Let's denote a function $\mathbb{S}(\boldsymbol{X})$ that performs row-wise softmax on $\boldsymbol{X}$, which is $(n \times p)$, and produces a matrix of the same size whose rows sum to one.
+$\mathbb{a}(\boldsymbol{q}, \boldsymbol{k}_i)$ bounds the attention weights to be on [0, 1]. Let's denote a function $\mathbb{S}(\boldsymbol{X})$ that performs row-wise softmax on a matrix $\boldsymbol{X}$ and produces a matrix of the same size whose rows sum to one.
 
 We'll denote original values as the vector $\boldsymbol{v}$. The values could be any characteristic of our data, and we will assume that these are numbers. For our book example, values could include quantities such as the number of pages, the publisher's recommended price, etc. Let's say that we are interested in the latter. Let's consider a query that affects a specific key and value pairing to produce an _attended value_: 
 
@@ -1472,11 +1476,11 @@ How is attention incorporated into neural networks? The attention mechanism take
 
 Attention can be usually followed by one or more layers of traditional MLP-type hidden units that take the preceding embedding and make it more predictive of the outcome. Many neural networks typically use _self-attention_ where $\boldsymbol{X}$ is the query, key, and value elements. 
 
-To be more formal, let's say that the matrix $\boldsymbol{X}$ represents the ($n \times p$) data coming into an attention block in the network. These data are probably a collection of embeddings generated from previous layers of the model. The output of the attention block is a different set of embeddings $\boldsymbol{Z}$ that are ($n \times m$). 
+To be more formal, let's describe the computation for a _single sample_. After the embedding layer, each of the $p$ predictors is represented by an $m$-dimensional embedding. Collecting these as rows, one sample's incoming data is a ($p \times m$) matrix $\boldsymbol{X}$: $p$ feature embeddings, each of length $m$. The attention block works on one sample at a time, and the $n$ samples are each processed the same way, so every matrix below describes a single sample^[In code, these per-sample ($p \times m$) matrices are stacked together and computed in one shot for speed, but the algebra is identical to handling them one at a time.]. The output of the attention block is a re-mixed set of embeddings $\boldsymbol{Z}$ of the same shape, ($p \times m$).
 
 Why does self-attention use $\boldsymbol{X}$ for the query, keys, and values? The idea is that, at some point in the network's architecture, we have the current set of embeddings (e.g., the computed hidden units). These are global in the sense that their parameters are the same across all samples predicted by the model. With attention, each sample's representation is informed by its own internal feature context. The only type of data used here is the embeddings; the outcome or any other data are not (directly) used. Attention will refocus our embeddings based on the context of each sample^[A shorter answer to the original question is that the individual embeddings are being compared to, and updated by, themselves.]. 
 
-The attention block sets up a series of matrix values that use $\boldsymbol{X}$ and estimates three sets of matrices of model parameters (a.k.a. weights), all of which are $p \times m$: 
+The attention block estimates three sets of weight matrices, all of which are $m \times m$, that project each feature embedding into a query, key, and value: 
 
 $$
 \begin{align}
@@ -1486,7 +1490,7 @@ $$
 \end{align}
 $$ {#eq-self-attention}
 
-$\boldsymbol{Q}$, $\boldsymbol{K}$ and $\boldsymbol{V}$ are all $(n \times p)(p \times m) = n \times m$ where $m$ is the outgoing embedding dimension. The $\boldsymbol{W}^*$ matrices are supervised weights that can be optimized for performance during gradient descent. 
+$\boldsymbol{Q}$, $\boldsymbol{K}$ and $\boldsymbol{V}$ are all $(p \times m)(m \times m) = p \times m$. The $\boldsymbol{W}^*$ matrices are _shared_ across the $p$ features (the same $\boldsymbol{W}^q$ is applied to every feature embedding) and are the supervised weights optimized during gradient descent. 
 
 To create the attended embeddings: 
 
@@ -1494,11 +1498,11 @@ $$
 \boldsymbol{Z} = \mathbb{A}(\boldsymbol{Q},\boldsymbol{K},\boldsymbol{V}) = \mathbb{S}(\boldsymbol{Q}\boldsymbol{K}')\boldsymbol{V}
 $$ {#eq-attended-embeddings}
 
-If the incoming embeddings are $n \times p$, the new embedding matrix is $(n \times m)(m \times n)(n \times m) = n \times m$. Note that, for models that are optimized with stochastic gradient descent, $n$ in this scenario is the batch size, not the size of the training set. 
+The score matrix $\boldsymbol{Q}\boldsymbol{K}'$ is $(p \times m)(m \times p) = p \times p$: one similarity for every ordered pair of features. After the row-wise softmax and the product with $\boldsymbol{V}$, the attended embeddings are $(p \times p)(p \times m) = p \times m$. The number of samples $n$ never enters these dimensions — there is simply one ($p \times p$) attention matrix per sample. This is exactly what lets attention adapt to each sample: every sample gets its own matrix of feature-to-feature weights. 
 
 Again, the three $\boldsymbol{W}^*$ matrices are _learned_ during training and, because they are estimated, attention embeddings are indirectly supervised. The target data do _not_ affect the computation's attention during a forward pass; it isn't part of any of the equations above. The target influences the parameters during the backpropagation phase of training (i.e., when the gradients are updated). 
 
-The part of the network that encompasses these calculations is called _an attention head_.  Attention for tabular data primarily occurs in two different ways: column-attention and row-attention. Let's talk about each in turn. 
+The part of the network that encompasses these calculations is called _an attention head_.  Attention for tabular data primarily occurs in two different ways: column-attention and row-attention. The derivation above, where the $p$ features attend to one another, is column attention. Row attention instead treats the $n$ samples as the units that attend to one another, so its attention matrix is ($n \times n$). Let's talk about each in turn. 
 
 ### Column-wise Attention
 
@@ -1506,32 +1510,43 @@ Column attention is intended to exploit relationships among predictors. In neura
 
 Operationally, the basics of attention shown above are applied in the most basic way. During training, $\boldsymbol{X}$ represents the incoming embedding data for the current batch. 
 
-There are some differences in how column attention works. Let's start by describing how attention operates during model training. 
+Because the attention matrix is built _per sample_, let's describe the computation for one sample $i$; every other sample in the batch is handled the same way, independently. 
 
-We will be attending feature-to-feature, meaning each feature has its own attention computation. To illustrate, let's describe the process for feature $j$ ($j = 1,\ldots, p$). For feature $j$, the dimensions of $\boldsymbol{Q}^{(j)}$ and $\boldsymbol{K}^{(j)}$ are ($n \times m$). 
-
-The attention weights for how feature $j$ attends feature $j^'$ are contained in the ($p\times p$) matrix $\boldsymbol{S}$. To compute its elements^[Both $j$ and $j^'$ go from $1\ldots p$.], we can perform a row-wise dot product for each sample:
+For sample $i$, write its feature-embedding matrix as $\boldsymbol{E}_i$ ($p \times m$), where row $j$ is the embedding of predictor $j$. Projecting with the shared weights gives the query, key, and value matrices:
 
 $$
-s^{(j, j')}_i = \frac{1}{\sqrt{m}} \sum_{\ell=1}^{m} \boldsymbol{Q}^{(j)}_{i,\ell} \cdot \boldsymbol{K}^{(j')}_{i,\ell}
+\begin{align}
+\boldsymbol{Q}_i = \boldsymbol{E}_i\boldsymbol{W}^q \notag \\
+\boldsymbol{K}_i = \boldsymbol{E}_i\boldsymbol{W}^k \notag \\
+\boldsymbol{V}_i = \boldsymbol{E}_i\boldsymbol{W}^v \notag
+\end{align}
+$$ {#eq-col-self-attention}
+
+each ($p \times m$). Row $j$ of $\boldsymbol{Q}_i$ is feature $j$'s query $\boldsymbol{q}_i^{(j)}$ ($m\times 1$), and likewise $\boldsymbol{k}_i^{(j)}$ and $\boldsymbol{v}_i^{(j)}$ for keys and values. 
+
+We attend feature-to-feature. The score for how feature $j$ attends feature $j'$ in sample $i$ is the scaled dot product of feature $j$'s query and feature $j'$'s key^[Both $j$ and $j^'$ go from $1\ldots p$.]:
+
+$$
+s_i^{(j, j')} = \frac{1}{\sqrt{m}}\, \boldsymbol{q}_i^{(j)} \cdot \boldsymbol{k}_i^{(j')} = \frac{1}{\sqrt{m}} \sum_{\ell=1}^{m} q^{(j)}_{i,\ell}\, k^{(j')}_{i,\ell}
 $$
 
-As a reminder, the $\boldsymbol{Q}$ and $\boldsymbol{K}$ matrices are ($n \times m$), and we are summing via the sum over the embedding dimension. Our score is then a vector that is ($n \times 1$). This gives us the scalar values that are the weight of how feature $j'$ is used to blend feature $j$. There are $n$ of these values since the blend is tailored to each sample. 
+These scores fill a ($p \times p$) matrix $\boldsymbol{S}_i$ for sample $i$. In this matrix, entry ($j, j'$) is $s_i^{(j, j')}$, which is exactly $\boldsymbol{Q}_i\boldsymbol{K}_i' / \sqrt{m}$. There is one such matrix per sample, since the blend is tailored to each sample. 
 
-TODO the dimensions and.or notation are still off
-
-Remember that, in these computations, $j$ is fixed. Using the values $s^{(j, j')}_i$, the attention weights for each of our $n$ samples is assembled into a $n \times p$ matrix $\boldsymbol{S}^{(j)}$. In other words, each column $j′$ of 
-$\boldsymbol{S}^{(j)}$ contains the $n$ scores $s^{(j, j')}_i$.
-
-Our scaled attention weights for embedding $j$ are then
+The scaled attention weights for sample $i$ come from a row-wise softmax:
 
 $$
-\boldsymbol{A}^{(j)} = \mathbb{S}(\boldsymbol{S}^{(j)})
+\boldsymbol{A}_i = \mathbb{S}(\boldsymbol{S}_i)
 $$ 
 
-Recall that $\mathbb{S}(\cdot)$ conducts a row-wise softmax transformation and scales by the square root of the dimension ($\sqrt{m}$, in this case). The rows will sum to 1.0. 
+Recall that $\mathbb{S}(\cdot)$ conducts a row-wise softmax transformation (the $\sqrt{m}$ scaling was already applied when forming the scores). Row $j$ of $\boldsymbol{A}_i$ sums to 1.0 and holds the weights describing how feature $j$ blends the others. 
 
-Let's demonstrate with $p = 4$ incoming embedding variables. For row $i$ of $\boldsymbol{A}^{(j)}$, four columns show how each of the four $H_j$ values is blended to make $Z_j$ (the outgoing embedding). 
+Let's demonstrate with $p = 4$ features. For sample $i$, row $j$ of $\boldsymbol{A}_i$ has four weights showing how the four value embeddings $\boldsymbol{v}_i^{(j')}$ ($j' = 1\ldots 4$) are blended to form feature $j$'s attended embedding: 
+
+$$
+\boldsymbol{Z}_i^{(j)} = \sum_{j'=1}^{p} \boldsymbol{A}_i^{(j, j')}\, \boldsymbol{v}_i^{(j')}
+$$
+
+Each $\boldsymbol{Z}_i^{(j)}$ is ($m\times 1$) and is the outgoing embedding for feature $j$. Stacking the $p$ of them gives the attended matrix $\boldsymbol{Z}_i = \boldsymbol{A}_i\boldsymbol{V}_i$ of shape ($p \times m$). With $p = 4$ and $m = 2$, each sample therefore has a $4 \times 4$ attention matrix $\boldsymbol{A}_i$ and a $4 \times 2$ matrix of attended embeddings $\boldsymbol{Z}_i$. 
 
 As a reminder, the attention weight matrices ($\boldsymbol{W}^*$) are initialized randomly and updated via gradient descent, optimizing the learned similarity over many gradient updates that improve the objective function. Shortly, we'll take the view that we are predicting several different data points after training, using the final estimates of the three $\boldsymbol{W}^*$ matrices.
 
@@ -1547,15 +1562,13 @@ However, it's also important to understand that attention's locality is learned 
 
 To make this more concrete, let's return to the simple binary classification example shown in @fig-nnet-ex. Let's fit a modified neural network that begins with our two numeric predictors, then: 
 
-TODO show the dimensions here
-
 1. Adds a fully connected layer with 4 hidden units and ReLU activation (as before). 
 2. Batch normalization of the 4 hidden units. We'll label these embeddings as $H_j$, $j=1 \ldots 4$. 
-3. Column-wise self-attention with an embedding dimension of $m = 2$. The adjusted hidden units are denoted as $Z_j$.
+3. Column-wise self-attention with an embedding dimension of $m = 2$. The adjusted hidden units are denoted as $Z_1$ and $Z_2$.
 4. Linear activation to produce $C = 2$ estimates for each class.
 5. Softmax normalization. 
 
-We'll be most concerned with the details of the third operation, where the normalized embeddings enter the attention process. The chosen number of embeddings in the attention head (2) is very small for illustrative reasons. 
+We'll be most concerned with the details of the third operation, where the normalized embeddings enter the attention process. The chosen number of embeddings in the attention head ($m=2$) is very small for illustrative reasons. 
 
 The model was trained with a learning rate of 0.05, a batch size of 64, early stopping after 5 bad epochs, and a weight decay value of 0.01. After epochs, the model converged, and the fit is shown in @fig-attention-fit. The curve is similar to the original MLP fit but shows some additional nuance in the center of the data mainstream. Three locations in the predictor space are highlighted for future discussion. 
 
@@ -1586,16 +1599,11 @@ col_att_grid |>
   scale_color_manual(values = c("#007FFFFF", "#FF7F00FF"))
 ```
 
-
-
-The relationship between these embeddings and the original predictors is further visualized in the top of @fig-att-before-after. Note that the weights for the predictors in the first hidden units are both small; this feature, as-is, would have very little effect on the classification boundary. If there were no attention being applied to this model, the predictor values for the three points shown in @fig-attention-fit would be substituted into the four equations above, and they would be the incoming embeddings for the final layer before softmax.
-
-However, we are using column attention and the final estimates of the three $\boldsymbol{W}^*$ matrices. From these, we can determine how the values of the four hidden units are modified (i.e., "attended"). @tbl-attention shows how each of the four hidden units is blended. The first location $Z_1$ is equally attended by the second and third hidden units, whereas $Z_2$ and $Z_3$ are functions of $H_1$ only. The last attended embedding is a nearly even mixture of all four of the original embeddings. The second location's $Z_2$ and $Z_3$ embeddings are mixtures of   $H_2$ and $H_3$.  $Z_1$ and $Z_4$ only use $H_4$. The third location's first three embeddings are just $H_4$, and the last only uses $H_2$.  
-
+To examine attention in action, let's focus on the three landmarks shown in the figure. For these specific data points, how does attention blend their initial embeddings? Recall that the attention weights for each data point is the $p\times p$ matrix $\boldsymbol{A}_i$. @tbl-attention shows the matrix's values for locations $i = 1, 2, 3$. The columns represent the incoming dimension and the rows are the outgoing values. To try to avoid confusion, the updated versions of the embeddings are labeled as $H_j^u$. 
 
 ```{r}
 #| label: tbl-attention
-#| tbl-cap: "Attention weights at the three locations in @fig-attention-fit. The columns are the unattended model parameters from the hidden unit layer. The rows are the context-specific embeddings for the landmark locations; each attended variable is a linear combination of the original embeddings, mixed via their attention weights."
+#| tbl-cap: "Attention weights at the three locations in @fig-attention-fit. The columns are the feature providing context from the original hidden unit layer. The rows are the feature being updated for the landmark locations. The rows values will be combined with the values to create the two attended embeddings $Z_1$ and $Z_2$."
 grm_ramp <- colorRampPalette(RColorBrewer::brewer.pal(9, "Greens")[-c(1, 9)])(20)
 grm_ramp <- colorRampPalette(c("white", "#6EB245FF"))(20)
 location_df |>
@@ -1608,11 +1616,11 @@ location_df |>
   mutate(
     split_up = map(nm, ~ strsplit(.x, split = "_")[[1]]),
     embedding_number = map_chr(split_up, ~ paste0("H_", .x[3])),
-    Attended = map_chr(split_up, ~ paste0("$$Z_", .x[2], "$$"))
+    Updated = map_chr(split_up, ~ paste0("$$H_", .x[2], "^u$$"))
   ) |>
-  select(location = label, weights, embedding_number, Attended) |>
+  select(location = label, weights, embedding_number, Updated) |>
   pivot_wider(
-    id_cols = c(Attended),
+    id_cols = c(Updated),
     names_from = c(location, embedding_number),
     values_from = "weights"
   ) |>
@@ -1623,8 +1631,8 @@ location_df |>
     'spacr2' = md('&emsp;&emsp;'),
     'spacr3' = md('&emsp;&emsp;')
   ) |>
-  fmt_markdown(columns = Attended) |>
-  fmt_number(columns = c(-Attended), decimals = 2) |>
+  fmt_markdown(columns = Updated) |>
+  fmt_number(columns = c(-Updated), decimals = 2) |>
   cols_label(
     contains("H_1") ~ md("$H_1$"),
     contains("H_2") ~ md("$H_2$"),
@@ -1637,7 +1645,7 @@ location_df |>
   tab_style_body(style = cell_text(color = "gray70"), fn = function(x) {
     is.numeric(x) & x < 0.05
   }) |>
-  cols_width(Attended ~ pct(9)) |> 
+  cols_width(Updated ~ pct(9)) |> 
   data_color(
     columns = c(contains("_H_")),
     palette = grm_ramp, 
@@ -1650,10 +1658,17 @@ location_df |>
   opt_row_striping(row_striping = FALSE)
 ```
 
+The results were: 
+
+- For the first location, the second updated value ($H^u_2$) is dominated by $H_2$. The other updated values are a nearly uniform mix of the previous embeddings. 
+
+- At location two, all of the updated values are fairly even mixtures of the original values, although $H_4$ appears to have slightly more influence than the others. 
+
+- The third location has two patterns. $H^u_1$ and $H^u_3$ are mostly equal blends of $H_1$ and $H_2$. Also, $H^u_2$ and $H^u_4$ are equal blends across their four antecedents. 
 
 The point of this table is to show how attention "recontextualizes" the global embedding values (i.e., the incoming hidden units) and adapts them on a per-sample basis. To understand this more globally, @fig-attention-weights shows this adjustment across the entire predictor space. The final class boundary and the three locations are shown for reference. The colored heatmap values are the final attention weights (after the weighted softmax operation). 
 
-When reading this visualization, the values in the contour plots along each row will sum to 1.0 at each location. A few of the patterns show that the hidden units have little impact on the attended versions, including cells $(H_1, Z_1)$, $(H_2, Z_2)$, and $(H_4, Z_4)$. Other hidden units have a broad influence on the new embeddings in large regions of the predictor space (e.g., $(H_4, Z_4)$). Embedding $H_1$ has a similar effect on $Z_2$, $Z_3$, and $Z_4$, and so on. 
+When reading this visualization, the values in the contour plots along each row will sum to 1.0 at each location. A few of the patterns show that the hidden units have little impact on the updated versions, including cells $(H_1, H^u_1)$, $(H_2, H^u_2)$, and $(H_4, H^u_4)$. Other hidden units have a broad influence on the new embeddings in large regions of the predictor space (e.g., $(H_4, H^u_4)$). 
 
 ```{r}
 #| label: fig-attention-weights
@@ -1663,7 +1678,7 @@ When reading this visualization, the values in the contour plots along each row 
 #| fig-height: 7
 #| dev: "ragg_png"
 #| warning: false
-#| fig-cap: "The same data from @fig-nnet-ex using column attention. A visualization of the attention weights across the entire predictor space. The colors show how each of the four embeddings is mixed into the context-aware versions produced by the attention head and the black line is the class boundary from @fig-attention-fit."
+#| fig-cap: "The same data from @fig-nnet-ex using column attention. A visualization of the attention weights across the entire predictor space. The colors show how each of the four embeddings is mixed into the context-aware versions produced by the attention head. The black line is the class boundary from @fig-attention-fit."
 
 col_att_grid |>
   select(A, B, starts_with("attn_")) |>
@@ -1674,8 +1689,8 @@ col_att_grid |>
   ) |>
   mutate(
     split_up = map(nm, ~ strsplit(.x, split = "_")[[1]]),
-    embedding_number = map_chr(split_up, ~ paste("Unattended", .x[3])),
-    attended_number = map_chr(split_up, ~ paste("Attended", .x[2]))
+    embedding_number = map_chr(split_up, ~ paste0("H[", .x[3], "]")),
+    updated_number = map_chr(split_up, ~ paste0("H[", .x[2], "]^{u}"))
   ) |>
   ggplot(aes(A, B)) +
   geom_tile(aes(fill = weights), show.legend = TRUE) +
@@ -1694,7 +1709,9 @@ col_att_grid |>
     color = "black"
   ) +
   geom_text(data = location_df, aes(label = label), size = 2) +
-  facet_grid(attended_number ~ embedding_number) +
+  facet_grid(updated_number ~ embedding_number,
+             labeller = label_parsed,
+             switch = "y") +
   scale_fill_gradient(low = "white", high = "#6EB245FF", limits = 0:1) +
   coord_fixed() +
   labs(fill = "Attention\nWeights") +
@@ -1702,7 +1719,9 @@ col_att_grid |>
   theme_bw()
 ```
 
-Now that we've seen the attention weights, how are the four attended embeddings different from the global values that preceded the attention? @fig-attended shows them before ($H_j$) and after attention ($Z_j$). In each case, the attended versions are similar to their original counterparts with small to medium changes. For example, attention places greater weight on the first embedding due to a negative space in the central east of the region. The second attended embedding also adds a similar negative component in the same area. The third and fourth attended embeddings also have more negative values and are vertically flipped versions of one another.  
+Now that we've seen how the attention weights have influenced the blending of the embeddings, let's also remember that the attention block produced $m = 2$ outputs. This number is abnormally small but was chosen to simplify the results and make them easier to understand. There is a numerical consequence for using a two-dimensional embedding: $Z_1$ and $Z_2$ are redundant^[Across the predictor space, the second coordinate is, to numerical precision, a fixed rescaling of the first: ($z_{j,2} \approx 1.42 z_{j,1}$ for every feature $j$, with perfect correlation. The model has learned a linear dependency. This is acceptable since the final linear layer is going to combine two elements that are effectively the same data.]. For this reason, we can visualize one of the embedding values to understand how they both work. 
+
+Let's examine how the updated hidden units $H_j^u$ affect one of the two outgoing embeddings. @fig-attended has heatmaps that show the relationships. The first updated embedding has a boundary (with zero values) that separates somewhat diagonal regions of the predictor space. $H_2^u$ has strong negative values in the lower right side of the predictor space, but its boundary substantially breaks that pattern when predictor $A \ge 1$. The other two updated embeddings exhibit similar patterns: mostly positive values in the regions where $B \ge 0$, with a slight downward dip at the center of the predictor space. Also, the boundary for $Z_3^u$ curves diagonally for $A \le -1$. 
 
 ```{r}
 #| label: fig-attended
@@ -1712,7 +1731,7 @@ Now that we've seen the attention weights, how are the four attended embeddings 
 #| fig-height: 3
 #| dev: "ragg_png"
 #| warning: false
-#| fig-cap: "A visualization of how column attention affects the embeddings just prior to the final layer of linear combinations. The top panel shows the relationship produced by @eq-unattended. The bottom panel illustrates how these variables are changed. The black line shows the contour where the values are zero and the grey line is the class boundary from @fig-attention-fit."
+#| fig-cap: "A visualization of how column attention affects the attended embeddings just prior to the final layer of linear combinations.  Each panel shows how the updated embeddings affect one of the attended values ($Z_1$). The black line shows the contour where the values are zero, and the grey line is the class boundary from @fig-attention-fit."
 col_att_grid |>
   select(A, B, starts_with("z_")) |>
   pivot_longer(
@@ -1723,7 +1742,7 @@ col_att_grid |>
   mutate(
     split_up = map(nm, ~ strsplit(.x, split = "_")[[1]]),
     embedding_number = map_chr(split_up, ~ paste("Embedding", .x[3])),
-    attended_number = map_chr(split_up, ~ paste("Attended", .x[2]))
+    updated_number = map_chr(split_up, ~ paste0("H[", .x[2], "]^{u}"))
   ) |>
   filter(embedding_number == "Embedding 1") |> 
   ggplot(aes(A, B)) +
@@ -1736,14 +1755,16 @@ col_att_grid |>
     alpha = 1 / 5
   ) +
   geom_contour(aes(z = Attended), breaks = 0, col = "black", linewidth = 1) +
-  labs(fill = NULL) +
-  facet_wrap(~ attended_number, nrow = 1) +
+  labs(fill = expression(Z[1])) +
+  facet_wrap(~ updated_number, nrow = 1, labeller = label_parsed) +
   scale_fill_gradient2(high = "#5D74A5FF") +
   coord_fixed() +
   theme_bw()
 ```
 
-After the attention head, the network can include additional layers of hidden units or feed directly into the final linear layer. We'll describe a specific example soon and see how well it works with the forestation data. 
+The final linear operation combines these patterns to produce the final class boundary. 
+
+Generally, after the attention head, the network can include additional layers of hidden units or feed directly into the final linear layer. We'll describe a specific model soon and see how well it works with the forestation data. 
 
 The next section expands more on how multiple attention heads can be added to the model. 
 
@@ -1807,6 +1828,7 @@ autoplot(tabpfn_tune_res, metric = "brier_class") +
 ```{r}
 #| label: cls-nnet-compare
 #| include: false
+#| cache: true
 load("../RData/forest_logistic_set_res.Rdata")
 load("../RData/forest_glmnet_set_res.Rdata")
 load("../RData/forest_linear_res.Rdata")
