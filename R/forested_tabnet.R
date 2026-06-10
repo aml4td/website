@@ -19,29 +19,39 @@ tbnt_rec <-
 tbnt_spec <- 
   tabnet(
     mode = "classification",
-    cat_emb_dim = NULL,
+    # cat_emb_dim = NULL,
     decision_width = tune(),
     attention_width = tune(),
     num_steps = tune(),
     # mask_type = tune(),
-    num_independent = NULL,
-    num_shared = NULL,
-    num_independent_decoder = NULL,
-    num_shared_decoder = NULL,
+    # num_independent = NULL,
+    # num_shared = NULL,
+    # num_independent_decoder = NULL,
+    # num_shared_decoder = NULL,
     penalty = tune(),
     momentum = tune(),
-    epochs = 100L,
+    epochs = 1000L,
     batch_size = tune(),
-    virtual_batch_size = NULL,
+    # virtual_batch_size = NULL,
     learn_rate = tune(),
     lr_scheduler = "reduce_on_plateau",
-    verbose = NULL,
-    early_stopping_patience = 5,
+    verbose = TRUE,
     skip_importance = TRUE
+  ) |> 
+  set_engine("torch", num_workers = 10) # , device = "mps"
+
+tbnt_param <- 
+  tbnt_spec |> 
+  extract_parameter_set_dials() |> 
+  update(
+    learn_rate = learn_rate(c(-4, -1/2)),
+    batch_size = batch_size(c(5, 9)),
+    momentum = momentum(c(0.01, 0.4))
   )
 
 # ------------------------------------------------------------------------------
 
+system.time({
 set.seed(458)
 forest_tbnt_res <-
   tbnt_spec |>
@@ -49,6 +59,7 @@ forest_tbnt_res <-
     tbnt_rec,
     resamples = forested_rs,
     grid = 25,
+    param_info = tbnt_param, 
     control = control_grid(
       save_pred = TRUE,
       save_workflow = TRUE,
@@ -56,6 +67,9 @@ forest_tbnt_res <-
     ),
     metrics = cls_mtr
   )
+})
+
+show_best(forest_tbnt_res, metric = "brier_class")
 
 # ------------------------------------------------------------------------------
 
