@@ -1476,11 +1476,13 @@ How is attention incorporated into neural networks? The attention mechanism take
 
 Attention can be usually followed by one or more layers of traditional MLP-type hidden units that take the preceding embedding and make it more predictive of the outcome. Many neural networks typically use _self-attention_ where $\boldsymbol{X}$ is the query, key, and value elements. 
 
-To be more formal, let's describe the computation for a _single sample_. After the embedding layer, each of the $p$ predictors is represented by an $m$-dimensional embedding. Collecting these as rows, one sample's incoming data is a ($p \times m$) matrix $\boldsymbol{X}$: $p$ feature embeddings, each of length $m$. The attention block works on one sample at a time, and the $n$ samples are each processed the same way, so every matrix below describes a single sample^[In code, these per-sample ($p \times m$) matrices are stacked together and computed in one shot for speed, but the algebra is identical to handling them one at a time.]. The output of the attention block is a re-mixed set of embeddings $\boldsymbol{Z}$ of the same shape, ($p \times m$).
+To be more formal, let's describe the computation for a _single sample_. It enters the attention block as $p$ columns, that is, $p$ scalar values (across the batch, an $n \times p$ matrix). These data might be the original predictors, or the hidden units from an earlier layer, depending on context.
+
+Because self-attention needs a vector per column to form dot products, the block first embeds each scalar column into an $m$-dimensional vector, turning one sample's $p$ scalars into a ($p \times m$) matrix $\boldsymbol{X}$. Everything below operates on this per-sample matrix; the $n$ samples are each processed the same way, independently^[In code, these per-sample ($p \times m$) matrices are computed together for speed, but the algebra is identical to handling them one at a time.]. The output of the attention block will a re-mixed set of embeddings $\boldsymbol{Z}$ of the same shape, ($p \times m$). 
 
 Why does self-attention use $\boldsymbol{X}$ for the query, keys, and values? The idea is that, at some point in the network's architecture, we have the current set of embeddings (e.g., the computed hidden units). These are global in the sense that their parameters are the same across all samples predicted by the model. With attention, each sample's representation is informed by its own internal feature context. The only type of data used here is the embeddings; the outcome or any other data are not (directly) used. Attention will refocus our embeddings based on the context of each sample^[A shorter answer to the original question is that the individual embeddings are being compared to, and updated by, themselves.]. 
 
-The attention block estimates three sets of weight matrices, all of which are $m \times m$, that project each feature embedding into a query, key, and value: 
+The attention block estimates three sets of weight matrices, all of which are $m \times m$, that project each column's embedding into a query, key, and value: 
 
 $$
 \begin{align}
@@ -1490,7 +1492,7 @@ $$
 \end{align}
 $$ {#eq-self-attention}
 
-$\boldsymbol{Q}$, $\boldsymbol{K}$ and $\boldsymbol{V}$ are all $(p \times m)(m \times m) = p \times m$. The $\boldsymbol{W}^*$ matrices are _shared_ across the $p$ features (the same $\boldsymbol{W}^q$ is applied to every feature embedding) and are the supervised weights optimized during gradient descent. 
+$\boldsymbol{Q}$, $\boldsymbol{K}$ and $\boldsymbol{V}$ are all $(p \times m)(m \times m) = p \times m$. The $\boldsymbol{W}^*$ matrices are _shared_ across the $p$ columns (the same $\boldsymbol{W}^q$ is applied to every column's embedding) and are the supervised weights optimized during gradient descent. 
 
 To create the attended embeddings: 
 
@@ -1498,11 +1500,11 @@ $$
 \boldsymbol{Z} = \mathbb{A}(\boldsymbol{Q},\boldsymbol{K},\boldsymbol{V}) = \mathbb{S}(\boldsymbol{Q}\boldsymbol{K}')\boldsymbol{V}
 $$ {#eq-attended-embeddings}
 
-The score matrix $\boldsymbol{Q}\boldsymbol{K}'$ is $(p \times m)(m \times p) = p \times p$: one similarity for every ordered pair of features. After the row-wise softmax and the product with $\boldsymbol{V}$, the attended embeddings are $(p \times p)(p \times m) = p \times m$. The number of samples $n$ never enters these dimensions — there is simply one ($p \times p$) attention matrix per sample. This is exactly what lets attention adapt to each sample: every sample gets its own matrix of feature-to-feature weights. 
+The score matrix $\boldsymbol{Q}\boldsymbol{K}'$ is $(p \times m)(m \times p) = p \times p$: one similarity for every ordered pair of columns. After the row-wise softmax and the product with $\boldsymbol{V}$, the attended embeddings are $(p \times p)(p \times m) = p \times m$. The number of samples $n$ never enters these dimensions — there is simply one ($p \times p$) attention matrix per sample. This is exactly what lets attention adapt to each sample: every sample gets its own matrix of column-to-column weights. 
 
 Again, the three $\boldsymbol{W}^*$ matrices are _learned_ during training and, because they are estimated, attention embeddings are indirectly supervised. The target data do _not_ affect the computation's attention during a forward pass; it isn't part of any of the equations above. The target influences the parameters during the backpropagation phase of training (i.e., when the gradients are updated). 
 
-The part of the network that encompasses these calculations is called _an attention head_.  Attention for tabular data primarily occurs in two different ways: column-attention and row-attention. The derivation above, where the $p$ features attend to one another, is column attention. Row attention instead treats the $n$ samples as the units that attend to one another, so its attention matrix is ($n \times n$). Let's talk about each in turn. 
+The part of the network that encompasses these calculations is called _an attention head_.  Attention for tabular data primarily occurs in two different ways: column-attention and row-attention. The derivation above, where the $p$ columns attend to one another, is column attention. Row attention instead treats the $n$ samples as the units that attend to one another, so its attention matrix is ($n \times n$). Let's talk about each in turn. 
 
 ### Column-wise Attention
 
@@ -1510,9 +1512,11 @@ Column attention is intended to exploit relationships among predictors. In neura
 
 Operationally, the basics of attention shown above are applied in the most basic way. During training, $\boldsymbol{X}$ represents the incoming embedding data for the current batch. 
 
-Because the attention matrix is built _per sample_, let's describe the computation for one sample $i$; every other sample in the batch is handled the same way, independently. 
+Because the attention matrix is built _per sample_, let's again describe the computation for one sample $i$; every other sample in the batch is handled the same way, independently. 
 
-For sample $i$, write its feature-embedding matrix as $\boldsymbol{E}_i$ ($p \times m$), where row $j$ is the embedding of predictor $j$. Projecting with the shared weights gives the query, key, and value matrices:
+For sample $i$, write its feature-embedding matrix as $\boldsymbol{E}_i$ ($p \times m$), where row $j$ is the embedding of predictor $j$. This is the per-sample version of $\boldsymbol{X}$.
+
+Projecting with the shared weights gives the query, key, and value matrices:
 
 $$
 \begin{align}
@@ -1524,7 +1528,7 @@ $$ {#eq-col-self-attention}
 
 each ($p \times m$). Row $j$ of $\boldsymbol{Q}_i$ is feature $j$'s query $\boldsymbol{q}_i^{(j)}$ ($m\times 1$), and likewise $\boldsymbol{k}_i^{(j)}$ and $\boldsymbol{v}_i^{(j)}$ for keys and values. 
 
-We attend feature-to-feature. The score for how feature $j$ attends feature $j'$ in sample $i$ is the scaled dot product of feature $j$'s query and feature $j'$'s key^[Both $j$ and $j^'$ go from $1\ldots p$.]:
+We attend column-to-column. The score for how column $j$ attends column $j'$ in sample $i$ is the scaled dot product of column $j$'s query and column $j'$'s key^[Both $j$ and $j^'$ go from $1\ldots p$.]:
 
 $$
 s_i^{(j, j')} = \frac{1}{\sqrt{m}}\, \boldsymbol{q}_i^{(j)} \cdot \boldsymbol{k}_i^{(j')} = \frac{1}{\sqrt{m}} \sum_{\ell=1}^{m} q^{(j)}_{i,\ell}\, k^{(j')}_{i,\ell}
@@ -1540,7 +1544,7 @@ $$
 
 Recall that $\mathbb{S}(\cdot)$ conducts a row-wise softmax transformation (the $\sqrt{m}$ scaling was already applied when forming the scores). Row $j$ of $\boldsymbol{A}_i$ sums to 1.0 and holds the weights describing how feature $j$ blends the others. 
 
-Let's demonstrate with $p = 4$ features. For sample $i$, row $j$ of $\boldsymbol{A}_i$ has four weights showing how the four value embeddings $\boldsymbol{v}_i^{(j')}$ ($j' = 1\ldots 4$) are blended to form feature $j$'s attended embedding: 
+Let's demonstrate with $p = 4$ columns. For sample $i$, row $j$ of $\boldsymbol{A}_i$ has four weights showing how the four value embeddings $\boldsymbol{v}_i^{(j')}$ ($j' = 1\ldots 4$) are blended to form column $j$'s attended embedding: 
 
 $$
 \boldsymbol{Z}_i^{(j)} = \sum_{j'=1}^{p} \boldsymbol{A}_i^{(j, j')}\, \boldsymbol{v}_i^{(j')}
