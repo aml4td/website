@@ -28,8 +28,6 @@ autoint_spec <-
   tabular_auto_int(
     epochs = 50L,
     num_embedding = tune(),
-    # hidden_units = tune(),
-    # hidden_activations = "relu",
     num_attn_feat = tune(),
     num_attn_heads = tune(),
     num_attn_blocks = tune(),
@@ -73,8 +71,9 @@ autoint_param <-
   autoint_wflow |>
   extract_parameter_set_dials() |>
   update(
-    num_attn_feat = num_attn_feat(c(2, 25)),
-    num_embedding = num_embedding(c(2, 25))
+    num_attn_feat = num_attn_feat(c(2, 50)),
+    num_embedding = num_embedding(c(2, 50)),
+    batch_size = batch_size(c(4, 9))
   )
 
 
