@@ -1442,10 +1442,6 @@ A database would `FILTER` on these values to find any rows that match the query.
 
 The mathematics of attention mechanisms differ in their tactics, but they pursue the same strategy as the database example above.  Attention computes a quantitative similarity score for the data, usually based on dot products, which are scaled to [0, 1]. This is more of a fuzzy-matching system than an exact match like SQL `FILTER` would produce. 
 
-::: {.mathy-box}
-There is a lot of linear algebra on the horizon. In the next section, we'll eventually bring things back down to Earth and demonstrate attention with a small-scale example. 
-:::
-
 Attention weights can be computed in different ways, but we'll focus on the most prevalent approach: *dot-product attention*. We'll represent a query containing $p$ features as the vector $\boldsymbol{q}$, and a database key as $\boldsymbol{k}$, also with $p$ entries. The dot-product attention weight for these values uses $\mathbb{a}(\boldsymbol{q}, \boldsymbol{k}) = \exp\left(\boldsymbol{q}'\boldsymbol{k}\right)$ as its kernel. We know that this dot product is non-negative, but generally not much more. 
 
 Most methods use _scaled attention_, which uses the softmax function to compute the attention weights:
@@ -1476,7 +1472,11 @@ How is attention incorporated into neural networks? The attention mechanism take
 
 Attention can be usually followed by one or more layers of traditional MLP-type hidden units that take the preceding embedding and make it more predictive of the outcome. Many neural networks typically use _self-attention_ where $\boldsymbol{X}$ is the query, key, and value elements. 
 
-To be more formal, let's describe the computation for a _single sample_. It enters the attention block as $p$ columns, that is, $p$ scalar values (across the batch, an $n \times p$ matrix). These data might be the original predictors, or the hidden units from an earlier layer, depending on context.
+::: {.mathy-box}
+There is a lot of linear algebra on the horizon. In the next section, we'll eventually bring things back down to Earth and demonstrate attention with a small-scale example. 
+:::
+
+To be more formal, let's describe the computation for a _single sample_. It enters the attention head as $p$ columns, that is, $p$ scalar values (across the batch, an $n \times p$ matrix). These data might be the original predictors, or the hidden units from an earlier layer, depending on context.
 
 Because self-attention needs a vector per column to form dot products, the block first embeds each scalar column into an $m$-dimensional vector, turning one sample's $p$ scalars into a ($p \times m$) matrix $\boldsymbol{X}$. Everything below operates on this per-sample matrix; the $n$ samples are each processed the same way, independently^[In code, these per-sample ($p \times m$) matrices are computed together for speed, but the algebra is identical to handling them one at a time.]. The output of the attention block will a re-mixed set of embeddings $\boldsymbol{Z}$ of the same shape, ($p \times m$). 
 
@@ -1506,9 +1506,9 @@ Again, the three $\boldsymbol{W}^*$ matrices are _learned_ during training and, 
 
 The part of the network that encompasses these calculations is called _an attention head_.  Attention for tabular data primarily occurs in two different ways: column-attention and row-attention. The derivation above, where the $p$ columns attend to one another, is column attention. Row attention instead treats the $n$ samples as the units that attend to one another, so its attention matrix is ($n \times n$). Let's talk about each in turn. 
 
-### Column-wise Attention
+### Column-wise Attention {#sec-cls-col-attention}
 
-Column attention is intended to exploit relationships among predictors. In neural networks, the embedding layers treat each predictor independently, representing each one without reference to the others in the same sample. However, for our forestation data, we know that some predictors are correlated with one another, and we've also seen that some interact. Neural networks are complex models that can capture such relationships. However, it does this with a _fixed_ set of global parameters. The model is not adapting to individual data points, so it cannot contextualize how to use their _local information_ to better predict the outcome. Column attention updates the incoming embeddings by blending them via a weighted average. The weights are determined by learned pairwise similarities among the feature embeddings.
+Column attention is intended to exploit relationships among features. In neural networks, the embedding layers treat each features independently, representing each one without reference to the others in the same sample. However, for our forestation data, we know that some predictors are correlated with one another, and we've also seen that some interact. Neural networks are complex models that can capture such relationships. However, it does this with a _fixed_ set of global parameters. The model is not adapting to individual data points, so it cannot contextualize how to use their _local information_ to better predict the outcome. Column attention updates the incoming embeddings by blending them via a weighted average. The weights are determined by learned pairwise similarities among the feature embeddings.
 
 Operationally, the basics of attention shown above are applied in the most basic way. During training, $\boldsymbol{X}$ represents the incoming embedding data for the current batch. 
 
@@ -1680,7 +1680,7 @@ When reading this visualization, the values in the contour plots along each row 
 #| fig-height: 7
 #| dev: "ragg_png"
 #| warning: false
-#| fig-cap: "The same data from @fig-nnet-ex using column attention. A visualization of the attention weights across the entire predictor space. The colors show how each of the four embeddings is mixed into the context-aware versions produced by the attention head. The black line is the class boundary from @fig-attention-fit."
+#| fig-cap: "A visualization of the attention weights across the entire predictor space. The colors show how each of the four embeddings is mixed into the context-aware versions produced by the attention head. The black line is the class boundary from @fig-attention-fit."
 
 col_att_grid |>
   select(A, B, starts_with("attn_")) |>
@@ -1721,9 +1721,9 @@ col_att_grid |>
   theme_bw()
 ```
 
-Now that we've seen how the attention weights have influenced the blending of the embeddings, let's also remember that the attention block produced $m = 2$ outputs. This number is abnormally small but was chosen to simplify the results and make them easier to understand. There is a numerical consequence for using a two-dimensional embedding: $Z_1$ and $Z_2$ are redundant^[Across the predictor space, the second coordinate is, to numerical precision, a fixed rescaling of the first: ($z_{j,2} \approx 1.42 z_{j,1}$ for every feature $j$, with perfect correlation. The model has learned a linear dependency. This is acceptable since the final linear layer is going to combine two elements that are effectively the same data.]. For this reason, we can visualize one of the embedding values to understand how they both work. 
+Now that we've seen how the attention weights have influenced the blending of the embeddings, let's also remember that the attention block produced $m = 2$ outputs. This number is unusually small but was chosen to simplify the results and make them easier to understand. Interestingly, there is a numerical consequence for using a two-dimensional embedding: $Z_1$ and $Z_2$ are redundant^[Across the predictor space, the second coordinate is, to numerical precision, a fixed rescaling of the first: ($z_{j,2} \approx 1.42 z_{j,1}$ for every feature $j$, with perfect correlation. The model has learned a linear dependency. This is acceptable since the final linear layer is going to combine two elements that are effectively the same data.]. For this reason, we can visualize one of the embedding values to understand how they both work. 
 
-Let's examine how the updated hidden units $H_j^u$ affect one of the two outgoing embeddings. @fig-attended has heatmaps that show the relationships. The first updated embedding has a boundary (with zero values) that separates somewhat diagonal regions of the predictor space. $H_2^u$ has strong negative values in the lower right side of the predictor space, but its boundary substantially breaks that pattern when predictor $A \ge 1$. The other two updated embeddings exhibit similar patterns: mostly positive values in the regions where $B \ge 0$, with a slight downward dip at the center of the predictor space. Also, the boundary for $H_3^u$ curves diagonally for $A \le -1$. 
+Let's examine how the updated hidden units $H_j^u$ affect the first outgoing embedding. @fig-attended has heatmaps that show the relationships. The first updated embedding has a boundary (with zero values) that separates somewhat diagonal regions of the predictor space. $H_2^u$ has strong negative values in the lower right side of the predictor space, but its boundary substantially breaks that pattern when predictor $A \le -1$. The other two updated embeddings exhibit similar patterns to one another: mostly positive values in the regions where $B \ge 0$, with a slight downward dip at the center of the predictor space. Also, the boundary for $H_3^u$ curves diagonally for $A \le -1$. 
 
 ```{r}
 #| label: fig-attended
@@ -1766,25 +1766,94 @@ col_att_grid |>
 
 The final linear operation combines these patterns to produce the final class boundary. 
 
-Generally, after the attention head, the network can include additional layers of hidden units or feed directly into the final linear layer. We'll describe a specific model soon and see how well it works with the forestation data. 
-
-The next section expands more on how multiple attention heads can be added to the model. 
+Attention can be incredibly powerful. For column attention, we can estimate relationships between embeddings. However, what if the data requires more complex joint relationships and perhaps a few _different_ joint representations? Our attention head can't do multiple representations. In the next section, we'll still focus on column attention, but scale it up by creating multiple attention heads. 
 
 `r r_comp("cls-neural-nets.html#sec-cls-attention")`
 
 ### Multi-Head Attention {#sec-cls-multi-attention}
 
+To scale up attention, we can expand in two different directions. _Multi-head attention_ is when there are multiple attention mechanisms that run in parallel to one another. The idea is to estimate different higher-order representations by having parallel estimates. Let's say that, in a data set, there were five underlying latent relationships that could be captured by attention. A single attention head would not be expressive enough to capture the patterns of multiple independent relationships. To increase the model's capacity, we can use multi-head attention. 
+
+We can also increase capacity by using several multi-head attention components arranged in sequence. We could consider an _attention block_ to be a set of operations that includes or centers on attention (multi-head or not). This term is often used to include other operations such as batch normalization, linear operations to create an embedding dimension, and so on. As we'll see with the SAINT model below, it includes attention blocks with batch normalization, nonlinear activations, residual components, and _both_ row and column attention.  
+
+Returning to column attention, AutoInt [@song2019autoint] is a model that uses multi-head column attention. The model natively incorporates qualitative predictors (if any), so there is no need to preprocess them into binary indicators or perform other external encoding operations. AutoInt begins with an initial layer that projects _each predictor_ into $p_{emb}$ dimensions via a learned linear operation. For example, in the forestation data, there are 16 predictors, and one is qualitative with 39 categories in the training set. If $p_{emb} = 7$, the embedding layer has 7(39 + 15) = 378 parameters and produces 16 embeddings of dimension 7, one per predictor.
+
+These features are passed to a multi-head column attention process. It begins with another linear operation so that attention can have its own embedding dimension (per head). The outputs of the column-attention processes are concatenated together to produce a broader set of attended embeddings. After this, a residual skip layer is added to the embeddings, and nonlinear activation is applied.
+
+Suppose that, for the forestation data, we specified seven initial embedding dimensions per predictor and used three attention blocks, each with two attention heads, each with an embedding size of 13. A summary of the AutoInt model, tracking the output feature dimensions and the number of learned parameters at each stage, would be:
+
+* **Embedding layer** that outputs 16 7-dimensional embeddings:
+  * Categorical predictor: ($39 \times 7$) embedding vectors using 273 parameters
+  * Numeric predictors: ($15 \times 7$) embedding vectors using 105 parameters
+  * Embedding parameters: 378
+
+* **Column self-attention**: 3 blocks, 2 heads of dimension 13, block output dimension ($2 \times 13 = 26$)
+  * Block 1: input dimension 7 to output dimension 26, yielding output shape ($16 \times 26$)
+    * Query/key/value projections: ($3 \times (2 \times 7 \times 13)) = 546$ parameters
+    * Residual projection: 7 to 26 with ($7 \times 26 = 182$) parameters
+    * Add residual, then ReLU
+    * Block parameters: 728
+  * Block 2: input dimension 26 to output dimension 26 with output shape ($16 \times 26$)
+    * Query/key/value projections: $(3 \times (2 \times 26 \times 13)) = 2,028$ parameters
+    * Residual projection 26 to 26: $(26 \times 26) = 676$ parameters
+    * Add residual, then ReLU
+    * Block parameters: 2,704
+  * Block 3: input dimension 26 to 26 with output shape ($16 \times 26$)
+    * Same structure as Block 2
+    * Block parameters: 2,704
+  * Flatten: ($16 \times 26) = 416$ values
+
+* **Output head** output shape is $C = 2$
+  * Linear operation from 416 to 2: $416 \times 2 + 2 = 834$ parameters (includes 2 bias terms)
+  * Softmax
+
+The total learned parameters is 378 + 728 + 2,704 + 2,704 + 834 = 7,348.
+
+There are numerous tuning parameters related to the architecture, primarily the embedding sizes and the number of attention iterations.
+
 ```{r}
 #| label: auto-int-load
 load("../RData/forested_autoint.RData")
+
+autoint_grid <- 
+  autoint_res |> 
+  collect_metrics() |> 
+  select(all_of(.get_tune_parameter_names(autoint_res))) |> 
+  distinct()
+
+autoint_rngs <-
+  autoint_grid |> 
+  map(range)
+
+scheds <- sort(unique(autoint_grid$rate_schedule))
+scheds[scheds == "decay_expo"] <- "Decay (expo)"
+scheds[scheds == "decay_time"] <- "Decay (expo)"
+scheds <- tools::toTitleCase(scheds)
+
+autoint_best <- show_best(autoint_res, metric = "brier_class", n = 1)
 ```
+
+An AutoInt model was tuned over `r nrow(autoint_grid)` unique candidate values for the following tuning parameters: 
+
+* Initial embedding dimension from `r autoint_rngs$num_embedding[1]` to  `r autoint_rngs$num_embedding[2]`.
+* Dropout rate for intial embedding from `r autoint_rngs$dropout_embedding[1]` to  `r autoint_rngs$dropout_embedding[2]`.
+* Attention embedding size from `r autoint_rngs$num_attn_feat[1]` to  `r autoint_rngs$num_attn_feat[2]`.
+* Number of attention heads from `r autoint_rngs$num_attn_heads[1]` to  `r autoint_rngs$num_attn_heads[2]`.
+* Number of attention blocks from `r autoint_rngs$num_attn_blocks[1]` to  `r autoint_rngs$num_attn_blocks[2]`.
+* Dropout rate for attention parameters from `r autoint_rngs$dropout_attn[1]` to  `r autoint_rngs$dropout_attn[2]`.
+* Learning rate from 10<sup>`r log10(autoint_rngs$learn_rate[1])`</sup> to 10<sup>`r log10(autoint_rngs$learn_rate[2])`</sup>.
+* Rate schedules of `r cli::format_inline("{scheds}")`.
+* Momentum from `r autoint_rngs$momentum[1]` to  `r autoint_rngs$momentum[2]`.
+* Batch size from `r autoint_rngs$batch_size[1]` to  `r autoint_rngs$batch_size[2]`.
+
+The results are shown in @fig-auto-int-cls-tune. There are a few definitive trends. The model appeared to favor initial embedding dimensions between 20 and 49 for these data. The dropout rate for attention was slightly improved when between 10% and 30%. Smaller batch sizes were preferred over larger ones. There did not appear to be patterns for the number of attention blocks or heads. 
 
 ```{r}
 #| label: fig-auto-int-cls-tune
 #| echo: false
 #| warning: false
 #| message: false
-#| out-width: 80%
+#| out-width: 90%
 #| fig-width: 8
 #| fig-height: 7
 #| fig-cap: AutoInt tuning results for the forestation data.
@@ -1794,7 +1863,11 @@ autoplot(autoint_res, metric = "brier_class") +
   labs(y = "Brier Score")
 ```
 
+The best results corresponded to a model using `r autoint_best$num_embedding` dimensions for its initial embedding with a dropout rate of `r round(autoint_best$dropout_embedding, 2)`. For attention, `r autoint_best$num_attn_blocks` blocks, each with `r autoint_best$num_attn_heads` and a dimension of `r autoint_best$num_attn_heads` was best and had an associated dropout rate of `r round(autoint_best$dropout_attn, 2)`. The best learning rate was 10<sup>`r round(log10(autoint_best$learn_rate), 2)`</sup> with a `r autoint_best$rate_schedule` schedule. The batch size was `r autoint_best$batch_size` samples and the best momentum value was  `r round(autoint_best$momentum, 2)`. The estimated Brier score for this configuration was `r signif(autoint_best$mean[1], 3)`, which is competitive but does not beat the current best model. 
+
 `r r_comp("cls-neural-nets.html#sec-cls-multi-attention")`
+
+### Row-wise Attention {#sec-cls-row-attention}
 
 ### Masking Mechanisms {#sec-cls-masking}
 
