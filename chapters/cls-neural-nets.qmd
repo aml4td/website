@@ -1822,8 +1822,17 @@ autoint_grid <-
   distinct()
 
 autoint_rngs <-
-  autoint_grid |> 
-  map(range)
+  autoint_res |> 
+  .get_tune_parameters() |> 
+  filter(id != "rate_schedule")
+
+autoint_nms <- autoint_rngs$id
+autoint_rngs <- 
+  autoint_rngs |> 
+  pluck("object") |> 
+  map(~ .x$range)
+
+names(autoint_rngs) <- autoint_nms
 
 scheds <- sort(unique(autoint_grid$rate_schedule))
 scheds[scheds == "decay_expo"] <- "Decay (expo)"
@@ -1835,16 +1844,18 @@ autoint_best <- show_best(autoint_res, metric = "brier_class", n = 1)
 
 An AutoInt model was tuned over `r nrow(autoint_grid)` unique candidate values for the following tuning parameters: 
 
-* Initial embedding dimension from `r autoint_rngs$num_embedding[1]` to  `r autoint_rngs$num_embedding[2]`.
-* Dropout rate for intial embedding from `r autoint_rngs$dropout_embedding[1]` to  `r autoint_rngs$dropout_embedding[2]`.
-* Attention embedding size from `r autoint_rngs$num_attn_feat[1]` to  `r autoint_rngs$num_attn_feat[2]`.
-* Number of attention heads from `r autoint_rngs$num_attn_heads[1]` to  `r autoint_rngs$num_attn_heads[2]`.
-* Number of attention blocks from `r autoint_rngs$num_attn_blocks[1]` to  `r autoint_rngs$num_attn_blocks[2]`.
-* Dropout rate for attention parameters from `r autoint_rngs$dropout_attn[1]` to  `r autoint_rngs$dropout_attn[2]`.
-* Learning rate from 10<sup>`r log10(autoint_rngs$learn_rate[1])`</sup> to 10<sup>`r log10(autoint_rngs$learn_rate[2])`</sup>.
+* Initial embedding dimension from `r autoint_rngs$num_embedding$lower` to  `r autoint_rngs$num_embedding$upper`.
+* Dropout rate for initial embedding from `r autoint_rngs$dropout_embedding$lower` to  `r autoint_rngs$dropout_embedding$upper`.
+* Attention embedding size from `r autoint_rngs$num_attn_feat$lower` to  `r autoint_rngs$num_attn_feat$upper`.
+* Number of attention heads from `r autoint_rngs$num_attn_heads$lower` to  `r autoint_rngs$num_attn_heads$upper`.
+* Number of attention blocks from `r autoint_rngs$num_attn_blocks$lower` to  `r autoint_rngs$num_attn_blocks$upper`.
+* Dropout rate for attention parameters from `r autoint_rngs$dropout_attn$lower` to  `r autoint_rngs$dropout_attn$upper`.
+* Learning rate from 10<sup>`r autoint_rngs$learn_rate$lower`</sup> to 10<sup>`r autoint_rngs$learn_rate$upper`</sup>.
 * Rate schedules of `r cli::format_inline("{scheds}")`.
-* Momentum from `r autoint_rngs$momentum[1]` to  `r autoint_rngs$momentum[2]`.
-* Batch size from `r autoint_rngs$batch_size[1]` to  `r autoint_rngs$batch_size[2]`.
+* Momentum from `r autoint_rngs$momentum$lower` to  `r autoint_rngs$momentum$upper`.
+* Batch size from `r 2^autoint_rngs$batch_size$lower` to  `r 2^autoint_rngs$batch_size$upper`.
+
+The models were trained for a maximum of 50 epochs of stochastic gradient decent with early stopping occurring after 10 poor results. 
 
 The results are shown in @fig-auto-int-cls-tune. There are a few definitive trends. The model appeared to favor initial embedding dimensions between 20 and 49 for these data. The dropout rate for attention was slightly improved when between 10% and 30%. Smaller batch sizes were preferred over larger ones. There did not appear to be patterns for the number of attention blocks or heads. 
 
@@ -1868,6 +1879,152 @@ The best results corresponded to a model using `r autoint_best$num_embedding` di
 `r r_comp("cls-neural-nets.html#sec-cls-multi-attention")`
 
 ### Row-wise Attention {#sec-cls-row-attention}
+
+Row attention, also called _intersample attention_, follows the same logic as column attention but in the other direction. It tries to address the question of 
+
+> Which other rows are most similar to me, and how should they influence my representation? 
+
+As we'll see, much of what was said about attention above also applies. There are some additional aspects to draw attention to that will be addressed in this section. We would usually place this operation in a network after any initial embedding operations and before the hidden-unit layers. Shortly, we'll discuss how a specific model, SAINT, uses row attention.
+
+Recall that with column attention: 
+
+- The data available during training is the current mini-batch of data. 
+- Attention is computed per-feature and is across samples. 
+
+The first bullet point does not change. However, by transposing the attention dimension to rows, we will compute per-sample and across features. We won't belabor the mathematics of row attention because, even though the unit of computation is different, the math is basically the same. 
+
+In some ways, row attention might be more understandable that column attention. Let's once again illustrate how it works with a low-dimensional example.
+
+```{r}
+#| label: row-attention-example
+#| include: false
+row_attn_landmark <- tibble(A = 1, B = 1, label = paste(4))
+landmark_mat <- as.matrix(row_attn_landmark |> select(A,B))
+landmark_vec <- landmark_mat[1,]
+
+x_seq <- seq(-3, 3, length.out = 10)
+x_n <- length(x_seq)
+grid <- crossing(A = x_seq, B = x_seq)
+grid_mat <- as.matrix(grid)
+
+landmark_orig <- 
+  row_attn_landmark |> 
+  select(A, B) |> 
+  set_names(c("A_orig", "B_orig"))
+
+# controlled sample from the training set
+batch_ex <- 
+  tibble::tribble(
+    ~A,                  ~B,
+    1,                   1,
+    0.606629100027197,   0.440379223736628,
+    1.69544006326477,   0.401582618295843,
+    0.213027111835879,   0.703020196990398,
+    0.296515475887749,   0.262404324764046,
+    -1.15664033209657, -0.0535785509566918,
+    -0.839225480909319,  0.0723110996271392,
+    2.26934656760537,    2.68829278918183
+  )
+  
+  batch_mat <- 
+    batch_ex |> 
+    select(A, B) |> 
+    as.matrix()
+  
+  lin <- kernlab::vanilladot()
+  lin_kern <- 
+    kernlab::kernelMatrix(lin, batch_mat, landmark_mat) |> 
+    as_tibble() |> 
+    set_names("dot_prod") |> 
+    mutate(
+      dot_prod = as.numeric(dot_prod),
+      expo = exp(dot_prod / sqrt(2)),
+      scaled_dot_prod = expo / sum(expo)
+    ) |> 
+    bind_cols(batch_ex) |> 
+    bind_cols(landmark_orig[rep(1, 8),]) |> 
+    mutate(
+      A_wt = scaled_dot_prod * A_orig,
+      B_wt = scaled_dot_prod * B_orig
+    )
+  
+  attended <- 
+    tibble(
+      A = weighted.mean(lin_kern$A, lin_kern$scaled_dot_prod),
+      B = weighted.mean(lin_kern$B, lin_kern$scaled_dot_prod)
+    )
+  
+  max_wt <- lin_kern |> slice_max(scaled_dot_prod, n = 1) |> select(A, B, wt = scaled_dot_prod)
+  self_wt <- lin_kern |> slice(1) |> select(A, B, wt = scaled_dot_prod)
+```
+
+Let's create a fourth landmark location in the data from @fig-attention-fit and combine it with a random sample of 7 data points to simulate a batch. To keep things simple, we'll use the original predictors without any dimension-expanding initial embedding operation. We can compute scaled dot-product attention for each sample across the two features. This produces an ($8\times8$) matrix of attention weights. If we were interested in how much each of the 8 samples in the batch attends to the landmark, @fig-row-attention shows the results. This batch has locations that tended to be larger than the mainstream of the data for both predictors. One sample at roughly (`r round(max_wt$A, 1)`, `r round(max_wt$B, 1)`) was in approximately the same direction as the landmark (i.e., angle) and fairly far away^[This is a good example of how dot products are different from Euclidean distances. The dot product for this point is much larger than that of another point that is equidistant from the landmark but is moving in the opposite direction. Angles count in dot products.]. This value accounted for `r round(max_wt$wt * 100, 1)`% of the new attended value, shown as the red square. The landmark attended itself with a percentage of `r round(self_wt$wt * 100, 1)`%. 
+
+```{r}
+#| label: fig-row-attention
+#| echo: false
+#| out-width: 60%
+#| fig-width: 5
+#| fig-height: 4.4
+#| warning: false
+#| fig-cap: "An example of how row attention can change the embedding (landmark number 4) based on the data in the current mini-batch.  The light grid points in the background represent the entire training set, while the solid black points are the randomly selected points in a batch of 8. The size of the batch points represents how much they attend to the landmark. The red diamond is the attended value of the landmark point. "
+
+col_att_grid |>
+  ggplot(aes(A, B)) +
+  geom_point(data = dat_2d_train, pch = 1, alpha = .1) +
+  geom_point(data = lin_kern,
+             aes(size = scaled_dot_prod),
+             alpha = 1) +
+  geom_point(
+    data = row_attn_landmark,
+    size = 6,
+    shape = 21,
+    fill = "white",
+    color = "black"
+  ) +
+  geom_text(data = row_attn_landmark, aes(label = label), size = 3) +
+  geom_point(
+    data = attended,
+    col = "red",
+    pch = 18,
+    size = 6
+  ) +
+  coord_fixed(ratio = 1) +
+  scale_size_area(max_size = 8) +
+  lims(x = c(-3, 3), y = c(-3, 3)) +
+  labs(size = "Scaled Dot\nProduct") +
+  theme_bw()
+```
+
+What happens at prediction time? After model training, how does row attention work? Consistent with the same operations, the sample(s) being predicted undergo row attention. If a single data point is predicted, that value attends itself. If multiple rows are being predicted, these attend to one another (as they would have done in training if they were in the same batch). This means that the predicted values change if the prediction is on a different collection of samples. Despite this fact, there is a belief that predictions are generally improved by row attention. 
+
+One could also envision other prediction-time strategies. First, we could find the $K$ nearest neighbors to the new sample being predicted and pass them along with it. In that way, similar samples from the training set can attend to one another. This could be made somewhat efficient by pre-computing the proper embeddings for the training set, making nearest-neighbor search the main computational cost. Another option, seen in the next section, is to pass the entire training set along with the new sample and use it to attend. This is a good option for a pre-trained foundational model that does not require further estimation to predict new samples.
+
+The SAINT (Self-Attention and Inter-sample Attention Transformer) model from @somepalli2021saint uses both column and row attention in its architecture. The model uses an initial embedding algorithm similar to the one described for AutoInt, with one exception noted below. 
+
+Next, it applied the _SAINT block_, which encompasses alternating attention applications. It begins with a column attention block with the following steps: 
+
+1. Multi-head column attention
+2. Add a residual connection from the initial embedding results.
+3. Layer normalization
+4. A linear embedding operation
+5. A residual connection from Step 3
+6. Layer normalization
+
+where layer normalization is a variant of batch normalization desribed in @ba2016layer. 
+
+After this block, an analogous row attention block takes the embeddings and applies the same process, but substitutes row attention in the first step. 
+
+The SAINT block can be repeated in sequence as many times as necessary. Optionally, additional hidden layers can be added to improve performance before passing the values to the final linear output layer (and softmax). 
+
+Returning to the initial embeddings, SAINT also adds a single "token" for the target value to the embedding (called a `[cls]` token in the paper). It adds a learnable value to the embedding vector. During column attention, every feature can attend to the target, and vice versa, so the target slot accumulates a contextual summary of the sample. During row attention, inter-sample attention sees the embedding sequence (plus the added token), so the target slot also exchanges information across samples in the batch.
+
+After the two attention blocks, the head reads only the final-layer embedding of the target token (at the first position) and passes it through the subsequent hidden layers and the output layer. From the paper: 
+
+> "We take the contextual embeddings from SAINT and pass only the embedding corresponding to the [target token] through an MLP to obtain the final prediction."
+
+At prediction time, row attention affects all of the samples being simultaneously predicted. 
+
 
 ### Masking Mechanisms {#sec-cls-masking}
 
