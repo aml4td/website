@@ -31,7 +31,6 @@ autoint_spec <-
     num_attn_feat = tune(),
     num_attn_heads = tune(),
     num_attn_blocks = tune(),
-    dropout = tune(),
     dropout_attn = tune(),
     dropout_embedding = tune(),
     penalty = 0,
@@ -39,11 +38,12 @@ autoint_spec <-
     rate_schedule = tune(),
     momentum = tune(),
     batch_size = tune(),
-    stop_iter = 5
+    stop_iter = 10L
   ) |>
   set_engine(
     "brulee",
     optimizer = "SGD",
+    device = "cpu"
   ) |>
   set_mode("classification")
 
@@ -62,7 +62,8 @@ ctrl <- control_grid(
   save_pred = TRUE,
   save_workflow = TRUE,
   parallel_over = "everything",
-  extract = pull_iter
+  extract = pull_iter, 
+  verbose = TRUE
 )
 
 # ------------------------------------------------------------------------------
@@ -95,7 +96,7 @@ system.time({
 
 save(
   autoint_res,
-  file = "RData/forested_autoint.Rdata"
+  file = "RData/forested_autoint.RData"
 )
 
 # ------------------------------------------------------------------------------

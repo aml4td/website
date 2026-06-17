@@ -22,17 +22,18 @@ pull_iter <- function(x) {
   require(tidymodels)
   require(brulee)
   fit <- extract_fit_engine(x)
-  tibble(epoch_actual = fit$best_epoch,
-         num_param = length(unlist(coef(fit))))
+  tibble(epoch_actual = fit$best_epoch, num_param = length(unlist(coef(fit))))
 }
 
 # fmt: skip
 extract_wflow <- function(x) x
 
-ctrl <- control_grid(parallel_over = "everything",
-                     save_pred = TRUE,
-                     save_workflow = TRUE,
-                     extract = pull_iter)
+ctrl <- control_grid(
+  parallel_over = "everything",
+  save_pred = TRUE,
+  save_workflow = TRUE,
+  extract = pull_iter
+)
 cls_mtr <- metric_set(brier_class, roc_auc, pr_auc, mn_log_loss)
 
 encode_rec <-
@@ -47,7 +48,7 @@ names(resnet_list) <- map_chr(1:6, ~ cli::format_inline("{.x} layer{?s}"))
 
 for (lyr in seq_along(resnet_list)) {
   cli::cli_inform(format(Sys.time()))
-  
+
   rn_spec <-
     tabular_resnet(
       hidden_units = tune(),
@@ -59,24 +60,29 @@ for (lyr in seq_along(resnet_list)) {
     set_mode("classification") |>
     set_engine(
       "brulee",
-      stop_iter = 5,
-      optimizer = "ADAMw",
+      stop_iter = 10,
+      optimizer = "SGD",
       verbose = FALSE,
       rate_schedule = tune(),
       batch_size = tune(),
       momentum = tune()
     )
-  
+
   rn_wflow <- workflow(encode_rec, rn_spec)
-  rn_param <- 
-    rn_wflow |> 
-    extract_parameter_set_dials() |> 
+  rn_param <-
+    rn_wflow |>
+    extract_parameter_set_dials() |>
     update(
       batch_size = batch_size(c(2, 7))
     )
-  
-  grd <- neural_net_grid_space_filling(rn_wflow, param_info = rn_param, num_layers = lyr, size = 25)
-  
+
+  grd <- neural_net_grid_space_filling(
+    rn_wflow,
+    param_info = rn_param,
+    num_layers = lyr,
+    size = 25
+  )
+
   set.seed(2937)
   rn_res <-
     rn_wflow |>
@@ -86,7 +92,7 @@ for (lyr in seq_along(resnet_list)) {
       control = ctrl,
       metrics = cls_mtr
     )
-  
+
   resnet_list[[lyr]] <- rn_res
 }
 
@@ -139,8 +145,10 @@ best_id <-
   resnet_ranks |>
   filter(.metric == "brier_class") |>
   slice_min(mean, n = 5) |>
-  inner_join(brier_and_params |> select(wflow_id, .config, num_param),
-             by = join_by(wflow_id, .config)) |>
+  inner_join(
+    brier_and_params |> select(wflow_id, .config, num_param),
+    by = join_by(wflow_id, .config)
+  ) |>
   slice_min(num_param, n = 1) |>
   pluck("wflow_id")
 
@@ -164,14 +172,14 @@ save(
   brier_and_params,
   resnet_best_mtr,
   epoch_actual,
-  file = "forested_resnet.Rdata"
+  file = "forested_resnet.RData"
 )
 
 forest_resnet_set_res <-
   forest_resnet_set_res |>
   butcher::butcher()
 
-save(forest_resnet_set_res, file = "forest_resnet_set_res.Rdata")
+save(forest_resnet_set_res, file = "forest_resnet_set_res.RData")
 
 # ------------------------------------------------------------------------------
 
