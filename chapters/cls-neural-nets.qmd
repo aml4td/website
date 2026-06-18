@@ -1874,7 +1874,7 @@ autoplot(autoint_res, metric = "brier_class") +
   labs(y = "Brier Score")
 ```
 
-The best results corresponded to a model using `r autoint_best$num_embedding` dimensions for its initial embedding with a dropout rate of `r round(autoint_best$dropout_embedding, 2)`. For attention, `r autoint_best$num_attn_blocks` blocks, each with `r autoint_best$num_attn_heads` and a dimension of `r autoint_best$num_attn_heads` was best and had an associated dropout rate of `r round(autoint_best$dropout_attn, 2)`. The best learning rate was 10<sup>`r round(log10(autoint_best$learn_rate), 2)`</sup> with a `r autoint_best$rate_schedule` schedule. The batch size was `r autoint_best$batch_size` samples and the best momentum value was  `r round(autoint_best$momentum, 2)`. The estimated Brier score for this configuration was `r signif(autoint_best$mean[1], 3)`, which is competitive but does not beat the current best model. 
+The best results corresponded to a model using `r autoint_best$num_embedding` dimensions for its initial embedding with a dropout rate of `r round(autoint_best$dropout_embedding, 2)`. For attention, `r autoint_best$num_attn_blocks` blocks, each with `r autoint_best$num_attn_heads` and a dimension of `r autoint_best$num_attn_heads` was best and had an associated dropout rate of `r round(autoint_best$dropout_attn, 2)`. The best learning rate was 10<sup>`r round(log10(autoint_best$learn_rate), 2)`</sup> with a `r autoint_best$rate_schedule` schedule. The batch size was `r autoint_best$batch_size` samples and the best momentum value was  `r round(autoint_best$momentum, 2)`. The estimated Brier score for this configuration was `r signif(autoint_best$mean[1], 3)`, which is competitive but does not beat the current best model.
 
 `r r_comp("cls-neural-nets.html#sec-cls-multi-attention")`
 
@@ -1958,7 +1958,7 @@ batch_ex <-
   self_wt <- lin_kern |> slice(1) |> select(A, B, wt = scaled_dot_prod)
 ```
 
-Let's create a fourth landmark location in the data from @fig-attention-fit and combine it with a random sample of 7 data points to simulate a batch. To keep things simple, we'll use the original predictors without any dimension-expanding initial embedding operation. We can compute scaled dot-product attention for each sample across the two features. This produces an ($8\times8$) matrix of attention weights. If we were interested in how much each of the 8 samples in the batch attends to the landmark, @fig-row-attention shows the results. This batch has locations that tended to be larger than the mainstream of the data for both predictors. One sample at roughly (`r round(max_wt$A, 1)`, `r round(max_wt$B, 1)`) was in approximately the same direction as the landmark (i.e., angle) and fairly far away^[This is a good example of how dot products are different from Euclidean distances. The dot product for this point is much larger than that of another point that is equidistant from the landmark but is moving in the opposite direction. Angles count in dot products.]. This value accounted for `r round(max_wt$wt * 100, 1)`% of the new attended value, shown as the red square. The landmark attended itself with a percentage of `r round(self_wt$wt * 100, 1)`%. 
+Let's create a fourth landmark location in the data from @fig-attention-fit and combine it with a random sample of 7 data points to simulate a batch. To keep things simple, we'll use the original predictors without any dimension-expanding initial embedding operation. We can compute scaled dot-product attention for each sample across the two features. This produces an ($8\times8$) matrix of attention weights. If we were interested in how much each of the 8 samples in the batch attends to the landmark, @fig-row-attention shows the results. This batch has locations that tended to be larger than the mainstream of the data for predictor B. One sample at roughly (`r round(max_wt$A, 1)`, `r round(max_wt$B, 1)`) was in approximately the same direction as the landmark (i.e., angle) and fairly far away^[This is a good example of how dot products are different from Euclidean distances. The dot product for this point is much larger than that of another point that is equidistant from the landmark but is moving in the opposite direction. Angles count in dot products.]. This value accounted for `r round(max_wt$wt * 100, 1)`% of the new attended value, shown as the red square. The landmark attended itself with a percentage of `r round(self_wt$wt * 100, 1)`%. 
 
 ```{r}
 #| label: fig-row-attention
@@ -2025,10 +2025,17 @@ After the two attention blocks, the head reads only the final-layer embedding of
 
 At prediction time, row attention affects all of the samples being simultaneously predicted. 
 
+### Masking {#sec-cls-masking}
 
-### Masking Mechanisms {#sec-cls-masking}
+There are a variety of other models and techniques that are useful for tabular deep learning that we don't have space to cover. We will briefly mention one that is relevant to future models: _masking_. 
 
-`r r_comp("cls-neural-nets.html#sec-cls-masking")`
+Masking is a technique that can be used for several purposes. A mask is the same size as the current data and is usually between [0, 1], though it can be binary. The mask can be applied to the data with element-wise multiplication. 
+
+One application for masks is feature selection. TabNet [@arik2021tabnet] is a tabular model that emulates the instance-wise feature selection of decision trees. Across several sequential decision steps, a learnable "attentive transformer" produces a sparse (i.e., binary) mask using the sparsemax activation function [@martins2016softmax].  The transformer selects which features each sample uses at each step, and the outputs of the steps are combined. The masks double as per-sample and global feature-importance explanations.
+
+Another is imputation. The GAIN [@yoon2018gain] and VIME [@yoon2020vime] models use a binary 0/1 mask to indicate missing values, and then the networks use learnable parameters to estimate them during training.  
+
+Finally, masks can be used in a general way to prevent data from being used at specific times during training. Recall that in row attention, we must decide how to attend to rows when predicting new samples. One strategy passes in the training set along with a new sample so that the former can attend to the latter. This would include the target column, which does not exist for the new samples. A mask can be applied to this column for the new data so that missing values are ignored (and can be estimated later). 
 
 ## Foundational Models {#sec-cls-foundational}
 
@@ -2069,7 +2076,6 @@ load("../RData/forest_fda_set_res.Rdata")
 load("../RData/forest_knn_set_res.Rdata")
 
 load("../RData/forest_mlp_set_res.Rdata")
-load("../RData/forest_tabnet.RData")
 
 forest_tabpfn_set_res <- as_workflow_set(TabPFN = tabpfn_tune_res)
 forest_autoint_set_res <- as_workflow_set(AutoInt = autoint_res)
@@ -2083,8 +2089,7 @@ all_sets <-
     forest_mlp_set_res, 
     forest_tabpfn_set_res,
     forest_autoint_set_res, 
-    forest_resnet_set_res,
-    forest_tbnt_set_res
+    forest_resnet_set_res
   )
 
 set.seed(905)
@@ -2113,7 +2118,7 @@ nnet_subset <-
     model = reorder(model, median)
   )
 
-knn_prob <- round(nnet_subset$pract_equiv[nnet_subset$model == "KNN"] * 100, 0)
+knn_prob <- round(nnet_subset$pract_equiv[nnet_subset$model == "KNN"] * 100, 0) 
 ```
 
 Let's revisit how well models are predicting the forestation data. So far, the KNN and two-layer MLP models have performed best. We'll replicate the previous Bayesian analysis to include more models: ResNet, AutoInt, and TabPFN. However, since the naive Bayes model performed so poorly, we'll exclude it from further analysis. @fig-cls-nnet-compare shows the results. Clearly, ResNet did not live up to the current standard of performance, and AutoInt did slightly better than a basic two-layer MLP model. TabPFN pulled into the lead with KNN trailing behind with a probability of practical equivalence of about `r knn_prob`%. 
