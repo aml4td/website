@@ -2039,6 +2039,151 @@ Finally, masks can be used in a general way to prevent data from being used at s
 
 ## Foundational Models {#sec-cls-foundational}
 
+```{r}
+#| label: load-icl-data
+#| include: false
+load("../RData/pfn_icl_bench.RData")
+load("../RData/icl_icl_bench.RData")
+
+icl_predictions <- bind_rows(pfn_icl_predictions, icl_icl_predictions)
+
+icl_predictions <-
+  icl_predictions |>
+  full_join(
+    icl_predictions |>
+      slice_max(sample, n = 1, by = c(model, .row)) |>
+      select(final = .pred_Yes, model, .row),
+    by = join_by(model, .row)
+  ) |>
+  mutate(
+    id = factor(.row),
+    id = reorder(id, final),
+    id = paste("Sample", as.integer(id))
+  )
+
+icl_corrs <-
+  icl_predictions |>
+  select(.pred_Yes, model, .row, sample) |>
+  pivot_wider(
+    id_cols = c(sample, .row),
+    names_from = model,
+    values_from = .pred_Yes
+  ) |>
+  group_nest(.row) |>
+  mutate(corr = map_dbl(data, ~ cor(.x$TabPFN, .x$TabICL))) |>
+  pluck("corr") |>
+  range() |>
+  round(2)
+```
+
+Foundational models are very large neural networks estimated on an immense amount of training data. They are developed not for any one particular task but to create a broad understanding of a problem domain. Large language models are a good example; they are very proficient at understanding and reproducing human textual communication but were not designed for any one task (e.g., language translation). They can be applied, with some context, to help solve many different problems. 
+
+For tabular data, foundational models have been developed using large amounts of simulated data and are highly effective at prediction. We'll focus on "prior fitted networks" (PFN) that emulate Bayesian inference using deep learning [@muller2021transformers]. 
+
+::: {.important-box}
+The models discussed in this section are pretrained. When we use them, no additional training or parameter estimation is required. We are applying a forward pass on a finalized model. The notion of the _training set_ is different. Training has already occurred. However, the training data for our specific data set is crucial to _set the context_ for the foundational model. 
+:::
+
+We'll focus on two implementations of this type of foundational model: TabPFN and TabICL. There is a substantial amount of engineering that goes into both models, and TabPFN has been on a rapid development trajectory. TabPFN is also a proprietary model, and we don't have all of the implementation details. For these reasons, some of the nuanced aspects of these models will be discussed here. We'll focus on the general process of how those models are trained and how they perform. These results will also lead us to describe certain parts of the architectures to gain additional intuition.
+
+Let's start by discussing the general process used to train a PFN. 
+
+## Developing a Tabular Foundational Model
+
+We've said that these models are trained on vast amounts of data. For the models under discussion here, the data are simulated. Existing, real data sets, such as those found on the UCI Machine Learning Database, are not used for training. That's where the "prior" in PFN comes in. 
+
+simulation of data; the prior is the data-generating mechanism.
+
+SGD where the data set is the batch. loss function. size of these models
+
+Once the PFN model is trained and finalized, its parameters are retained, and we can push new samples through it. The key idea at this point is that in-context learning, primarily via attention mechanisms, makes it work. When predicting new samples, our training data is passed along with the new sample(s) being predicted. As previously discussed in @sec-cls-row-attention, these data can influence the embeddings in ways that make predictions relevant to our specific data. 
+
+Let's start by discussing how the artificial data sets are generated for these models. 
+
+## Data Generation
+
+Our previous discussions on Bayesian estimation discussed that a prior distribution reflects our belief about what is possible for our model parameters before the data are observed. For example, in @sec-logistic-bayes, we illustrated Bayesian inference for two parameters in a logistic regression model, using two Gaussian priors.  Once the data are observed, the posterior distribution is a combination of our belief and our observed data. 
+
+For prior fitted networks, the priors define the characteristics of the data that the model can observe. This can include the data dimensions (e.g., number of features, classes, samples, etc.), distributional characteristics (e.g., Gaussian, uniform, etc.), relationships between predictors (multicollinearity), and the relationship with the outcome. For example, we might have a small probability that a predictor has extreme outliers or missing values. 
+
+All of this can come together using a structural causal model (SCM). This is a directed graph that uses randomness to generate the data and relationships. We start with the general notation of a _cause_; these can be predictors, the outcome, latent (unobserved) features, and so on. One way to combine them is to use an MLP with random weights and biases generated from some distributional prior. 
+
+For example, let's say that a sample from our prior was: 
+
+- Fifteen causes.
+- The outcome is a category with three classes.
+- Three are distributed as Gaussian and two are uniform. 
+- Ten hidden layers are used to combine them.
+- The model parameters were sampled from a mixture distribution where 5% are $N(0, \sigma_1^2)$, 80% are $N(0, \sigma_2^2)$, and 15% are absolute zero. 
+- $\sigma_1^2$ is distributed as $Expo(1)$ and $\sigma_2^2$ is $Expo(1/10)$. 
+- Threshold parameters are simulated such that the class prevalences are 20%, 50%, and 30%. 
+- One randomly selected cause is binned into seven categories using six cut-points that are uniformly distributed. 
+- One randomly selected cause has its value exponentiated by a value of 0.0123.
+
+and so on. The first six prior realizations define both the input data and the relationship between the 14 _potential_ causes and the outcome. The random parameter estimates will determine how, if at all, the causes related to the randomly selected cause influence the outcome. Nonlinear activation is used to produce the true model relationship. The parameter estimates are designed to be sparse; many of their values are either zero or small enough to be within the simulation's noise. For some prior realizations, many predictors affect the outcome, and for others, very few are relevant. Once we have simulated our data using these prior values, the last three operations in the list above are postprocessing operations that change the representation of the data to reflect how the priors believe the data will be _observed_. 
+
+Data-generating mechanisms can be created very quickly and do not require storage beyond the time they are used for training. The deep learning model takes these data sets as data points. Let's say that our stochastic gradient descent optimizer uses a batch size of 16. That translated into 16 randomly generated data sets of different types and sizes. Foundational models are trained on large numbers of these "data points". For @hollmann2025accurate reports that 100 million synthetic data sets were used for training, @grinsztajn2026tabpfn states that "8 trillion tokens" were used for verison 3 of TabPFN, and @qu2026tabiclv2 used 82 million datasets to train the first version of TabICL. 
+
+## Data Preprocessing
+
+## Model Training
+
+## In Context Learning
+
+
+To better understand, the training set was sampled in various sizes, and these data were used to initialize the model. To measure performance, out-of-sample predictions were generated^[Unfortunately, using the test set.], and the Brier score and the area under the ROC curve were computed. This was repeated 25 times, and the random numbers used to sample the training set were standardized so that both implementations used the same data in each replicate. 
+
+@fig-icl-metrics shows how the metrics changed over data size. The three lines correspond to the 0.05, 0.50, and 0.95 quantiles. We can see that performance on extremely small samples is at the no-information rate for each metric, with a high degree of replicate-to-replicate variation. As data size increases, performance improves, and variation shrinks considerably. The trajectories of both metrics appear to improve only marginally with larger sample sizes, suggesting that more data might slightly improve them. 
+
+```{r}
+#| label: fig-icl-metrics 
+#| echo: false
+#| out-width: 60%
+#| fig-width: 6
+#| fig-height: 4
+#| fig-cap: "Performance changes over 'training' set sizes. The lines represent estimated 5%, 50%, and 95% quantiles for the 25 replicates per sample size."
+
+bind_rows(pfn_icl_metrics, icl_icl_metrics) |>
+  ggplot(aes(samples, .estimate)) +
+  geom_point(alpha = 1 / 20, cex = 1)  +
+  scale_x_continuous(transform = log2_trans()) +
+  facet_grid(.metric ~ model, scales = "free_y") +
+  geom_quantile(quantiles = 0.5, linewidth = 1,
+                formula = y ~ splines::ns(x, df = 4), col = "#009F3FFF") +
+  geom_quantile(quantiles = c(0.05, 0.95), linewidth = 3/4,
+                formula = y ~ splines::ns(x, df = 4), col = "#8FDA04FF") +
+  labs(col = NULL, pch = NULL, x = "Training Set Size", y = NULL) +
+  theme(legend.position = "top")
+```
+
+It's also interesting to select a few out-of-sample data points to see how individual predictions vary with initialization size.  @fig-icl-predictions shows these patterns for both models with six different samples. The first two samples converge to very small probability estimates. The first oscillates between the extremes, quickly moving back and forth between very high and very low probability estimates. The second sample is drastically different. It decreases progressively but remains fairly consistent after about 100 samples. The other samples show similar patterns. Samples four and five exhibit moderate variation over sample size, while samples three and six move dynamically over data size. 
+
+One remarkable aspect of this visualization is that both implementations exhibit highly similar patterns across almost every sample. The random numbers were fixed so that, for each replicate and sample size, both models used the same data. Given this, the patterns for the two independent implementations follow each other over sample sizes. The correlations were computed for each sample, and these ranged from `r icl_corrs[1]` to `r icl_corrs[2]`. 
+
+```{r}
+#| label: fig-icl-predictions 
+#| echo: false
+#| out-width: 90%
+#| fig-width: 8
+#| fig-height: 5
+#| fig-cap: "The effect of 'training' set size on selected individual predictions. The same random numbers were used to sample from the training set for each point."
+
+icl_predictions |> 
+  ggplot(aes(sample, .pred_Yes, col = model, pch = model)) + 
+  geom_point() +
+  geom_line(alpha = 1/ 2) +
+  facet_wrap(~ id)  +
+  scale_x_continuous(transform = log2_trans()) + 
+  labs(col = NULL, pch = NULL, x = "Training Set Size", 
+       y = "Pr[Forested]") + 
+  scale_color_manual(values = c("#D84D16FF", "#132157FF")) +
+  theme(legend.position = "top")
+```
+
+## Resistance to Irrelevant Predictors
+
+
+## Application to the Forstation Data
 
 ```{r}
 #| label: tab-pfn-load
