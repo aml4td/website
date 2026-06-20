@@ -2084,11 +2084,11 @@ For tabular data, foundational models have been developed using large amounts of
 The models discussed in this section are pretrained. When we use them, no additional training or parameter estimation is required. We are applying a forward pass on a finalized model. The notion of the _training set_ is different. Training has already occurred. However, the training data for our specific data set is crucial to _set the context_ for the foundational model. 
 :::
 
-We'll focus on two implementations of this type of foundational model: TabPFN and TabICL. There is a substantial amount of engineering that goes into both models, and TabPFN has been on a rapid development trajectory. TabPFN is also a proprietary model, and we don't have all of the implementation details. For these reasons, some of the nuanced aspects of these models will be discussed here. We'll focus on the general process of how those models are trained and how they perform. These results will also lead us to describe certain parts of the architectures to gain additional intuition.
+We'll focus on two implementations of this type of foundational model: TabPFN [@grinsztajn2026tabpfn] and TabICL [@qu2026tabiclv2]. There is a substantial amount of engineering that goes into both models, and TabPFN has been on a rapid development trajectory. TabPFN is also a proprietary model, and we don't have all of the implementation details. For these reasons, some of the nuanced aspects of these models will be discussed here. We'll focus on the general process of how those models are trained and how they perform. These results will also lead us to describe certain parts of the architectures to gain additional intuition.
 
 Let's start by discussing the general process used to train a PFN. 
 
-## Developing a Tabular Foundational Model
+### Developing a Tabular Foundational Model
 
 We've said that these models are trained on vast amounts of data. For the models under discussion here, the data are simulated. Existing, real data sets, such as those found on the UCI Machine Learning Database, are not used for training. That's where the "prior" in PFN comes in. 
 
@@ -2100,13 +2100,13 @@ Once the PFN model is trained and finalized, its parameters are retained, and we
 
 Let's start by discussing how the artificial data sets are generated for these models. 
 
-## Data Generation
+### Data Generation
 
 Our previous discussions on Bayesian estimation discussed that a prior distribution reflects our belief about what is possible for our model parameters before the data are observed. For example, in @sec-logistic-bayes, we illustrated Bayesian inference for two parameters in a logistic regression model, using two Gaussian priors.  Once the data are observed, the posterior distribution is a combination of our belief and our observed data. 
 
 For prior fitted networks, the priors define the characteristics of the data that the model can observe. This can include the data dimensions (e.g., number of features, classes, samples, etc.), distributional characteristics (e.g., Gaussian, uniform, etc.), relationships between predictors (multicollinearity), and the relationship with the outcome. For example, we might have a small probability that a predictor has extreme outliers or missing values. 
 
-All of this can come together using a structural causal model (SCM). This is a directed graph that uses randomness to generate the data and relationships. We start with the general notation of a _cause_; these can be predictors, the outcome, latent (unobserved) features, and so on. One way to combine them is to use an MLP with random weights and biases generated from some distributional prior. 
+One way that all of this can come together is to use a structural causal model (SCM). This is a directed graph that uses randomness to generate the data and relationships. We start with the general notation of a _cause_; these can be predictors, the outcome, latent (unobserved) features, and so on. One way to combine them is to use an MLP with random weights and biases generated from some distributional prior. 
 
 For example, let's say that a sample from our prior was: 
 
@@ -2122,13 +2122,19 @@ For example, let's say that a sample from our prior was:
 
 and so on. The first six prior realizations define both the input data and the relationship between the 14 _potential_ causes and the outcome. The random parameter estimates will determine how, if at all, the causes related to the randomly selected cause influence the outcome. Nonlinear activation is used to produce the true model relationship. The parameter estimates are designed to be sparse; many of their values are either zero or small enough to be within the simulation's noise. For some prior realizations, many predictors affect the outcome, and for others, very few are relevant. Once we have simulated our data using these prior values, the last three operations in the list above are postprocessing operations that change the representation of the data to reflect how the priors believe the data will be _observed_. 
 
-Data-generating mechanisms can be created very quickly and do not require storage beyond the time they are used for training. The deep learning model takes these data sets as data points. Let's say that our stochastic gradient descent optimizer uses a batch size of 16. That translated into 16 randomly generated data sets of different types and sizes. Foundational models are trained on large numbers of these "data points". For @hollmann2025accurate reports that 100 million synthetic data sets were used for training, @grinsztajn2026tabpfn states that "8 trillion tokens" were used for verison 3 of TabPFN, and @qu2026tabiclv2 used 82 million datasets to train the first version of TabICL. 
+We can see the evolution of SCM simulated data sets for these foundational models in Section 4 and Appendix C of @hollmann2022tabpfn, Appendix C of @qu2025tabicl, Appendix E of @qu2026tabiclv2, and most recently Section 2.3 of @grinsztajn2026tabpfn. Additionally, @zhang2026mitra contains a history these data generation techniques and also proposes guiding principles for creating a data prior. @nagler2023statistical also takes a look at PFNs from a statistical perspective. Also, for some time, the underlying functional relationship between the predictors/causes and the target was smooth (via MLP structures). @breejen2024fine showed that unsmooth functions, specifically tree- and rule-based relationships can also improve the quality of the final models. Similar ideas were then adopted into TabPFN and TabICL. 
 
-## Data Preprocessing
+Data-generating mechanisms can be created very quickly and do not require storage beyond the time they are used for training. The deep learning model takes these data sets as data points. Let's say that our stochastic gradient descent optimizer uses a batch size of 64. That translates into 64 randomly generated data sets of different types and sizes. A good example comes from @hollmann2025accurate where they describe data sets with dimensional priors
 
-## Model Training
+- $n_{tr} \sim U[2,  2,048]$ 
+- $n_{val} = 128$
+- $p \sim Beta(0.95, 8.0)$, a right-skewed distribution, and is scaled to be between 1 and 160.
 
-## In Context Learning
+Training proceeded over 2 million iterations, each with a batch size of 64 data sets. This means that 128 million synthetic data sets were used for training. @qu2026tabiclv2 reports that 82 million datasets were used to train the second version of TabICL.  
+
+### Model Structure and Training
+
+### In Context Learning
 
 
 To better understand, the training set was sampled in various sizes, and these data were used to initialize the model. To measure performance, out-of-sample predictions were generated^[Unfortunately, using the test set.], and the Brier score and the area under the ROC curve were computed. This was repeated 25 times, and the random numbers used to sample the training set were standardized so that both implementations used the same data in each replicate. 
@@ -2180,10 +2186,10 @@ icl_predictions |>
   theme(legend.position = "top")
 ```
 
-## Resistance to Irrelevant Predictors
+### Resistance to Irrelevant Predictors
 
 
-## Application to the Forstation Data
+### Application to the Forstation Data
 
 ```{r}
 #| label: tab-pfn-load
