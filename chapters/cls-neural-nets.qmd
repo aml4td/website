@@ -2025,6 +2025,63 @@ After the two attention blocks, the head reads only the final-layer embedding of
 
 At prediction time, row attention affects all of the samples being simultaneously predicted. 
 
+
+```{r}
+#| label: tab-saint-load
+#| include: false
+
+load("../RData/forested_saint.RData")
+saint_prm_nms <- .get_tune_parameter_names(saint_res)
+saint_brier <-
+  collect_metrics(saint_res) |>
+  filter(.metric == "brier_class") |>
+  select(all_of(saint_prm_nms), mean) |>
+  mutate(
+    `Learning Rate (log-10)` = log10(learn_rate),
+    `Batch Size (log-2)` = log2(batch_size)
+  ) |> 
+  rename(
+    `# Embedding Dimensions` = num_embedding,
+    `Gradient Descent Momentum` = momentum,
+    `Learning Rate Scheduler` = rate_schedule, 
+    `Attention Dropout Rate` = dropout_attn, 
+    `# Attention Blocks` = num_attn_blocks,
+    `# Attention Heads` = num_attn_heads,
+     `Attention Type`= attention_type
+  ) |> 
+  select(-learn_rate, -batch_size) |> 
+  pivot_longer(
+    cols = c(-mean, -`Attention Type`, -`Learning Rate Scheduler`),
+    names_to = "parameter"
+  )
+
+saint_best <- show_best(saint_res, metric = "brier_class", n = 1)
+```
+
+
+A Saint model was tuned over 25 candidates. The parameter ranges were the same as the previous AutoInt model, as well as the type of attention: column only, row only, or both. The tuning results in @fig-saint-cls-tune show that TODO. Across the candidates, the best conditions were `r saint_best$num_embedding` dimensions for its initial embedding. For attention, `r saint_best$attention_type` attention was optimal with `r saint_best$num_attn_blocks` blocks, each with `r saint_best$num_attn_heads` and a dimension of and had an associated dropout rate of `r round(saint_best$dropout_attn, 2)`. The optimization favored a learning rate of 10<sup>`r round(log10(saint_best$learn_rate), 2)`</sup> with a `r saint_best$rate_schedule` schedule, a batch size of `r saint_best$batch_size` samples and momentum of `r round(saint_best$momentum, 2)`. This resulted in a Brier score of  `r signif(autoint_best$mean[1], 3)` TODO. 
+
+```{r}
+#| label: fig-saint-cls-tune
+#| echo: false
+#| warning: false
+#| message: false
+#| out-width: 90%
+#| fig-width: 8
+#| fig-height: 7
+#| fig-cap: Saint tuning results for the forestation data.
+saint_brier |>
+  ggplot(aes(value, mean, col = `Learning Rate Scheduler`, pch = `Attention Type`)) +
+  geom_point() +
+  facet_wrap( ~ parameter, scales = "free_x") +
+  theme(
+    legend.position = "top",
+    legend.box = "vertical"
+    # legend.direction = "vertical"
+  ) +
+  labs(x = NULL, y = "Brier Score")
+```
+
 ### Masking {#sec-cls-masking}
 
 There are a variety of other models and techniques that are useful for tabular deep learning that we don't have space to cover. We will briefly mention one that is relevant to future models: _masking_. 
@@ -2036,6 +2093,7 @@ One application for masks is feature selection. TabNet [@arik2021tabnet] is a ta
 Another is imputation. The GAIN [@yoon2018gain] and VIME [@yoon2020vime] models use a binary 0/1 mask to indicate missing values, and then the networks use learnable parameters to estimate them during training.  
 
 Finally, masks can be used in a general way to prevent data from being used at specific times during training. Recall that in row attention, we must decide how to attend to rows when predicting new samples. One strategy passes in the training set along with a new sample so that the former can attend to the latter. This would include the target column, which does not exist for the new samples. A mask can be applied to this column for the new data so that missing values are ignored (and can be estimated later). 
+
 
 ## Foundational Models {#sec-cls-foundational}
 
@@ -2126,7 +2184,7 @@ We can see the evolution of SCM simulated data sets for these foundational model
 
 Data-generating mechanisms can be created very quickly and do not require storage beyond the time they are used for training. The deep learning model takes these data sets as data points. Let's say that our stochastic gradient descent optimizer uses a batch size of 64. That translates into 64 randomly generated data sets of different types and sizes. A good example comes from @hollmann2025accurate where they describe data sets with dimensional priors
 
-- $n_{tr} \sim U[?,  2,048]$ 
+- $n_{tr} \sim U[L,  2,048]$ for some unknown lower limit $L$
 - $n_{val} = 128$
 - $p \sim Beta(0.95, 8.0)$, a right-skewed distribution, and is scaled to be between 1 and 160.
 
@@ -2253,6 +2311,7 @@ load("../RData/forest_mlp_set_res.Rdata")
 forest_tabpfn_set_res <- as_workflow_set(TabPFN = tabpfn_tune_res)
 forest_tabicl_set_res <- as_workflow_set(TabICL = tabicl_tune_res)
 forest_autoint_set_res <- as_workflow_set(AutoInt = autoint_res)
+forest_saint_set_res <- as_workflow_set(Saint = saint_res)
 
 all_sets <-
   dplyr::bind_rows(
@@ -2264,6 +2323,7 @@ all_sets <-
     forest_tabpfn_set_res,
     forest_tabicl_set_res,
     forest_autoint_set_res, 
+    forest_saint_set_res, 
     forest_resnet_set_res
   )
 
@@ -2342,5 +2402,6 @@ p_brier + p_brier_diff + plot_layout(widths = c(4, 1))
 save(forest_tabpfn_set_res, file = "../RData/forest_tabpfn_set_res.Rdata")
 save(forest_tabicl_set_res, file = "../RData/forest_tabicl_set_res.Rdata")
 save(forest_autoint_set_res, file = "../RData/forest_autoint_set_res.Rdata")
+save(forest_saint_set_res, file = "../RData/forest_saint_set_res.Rdata")
 ```
 
