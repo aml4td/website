@@ -12,6 +12,7 @@ load("~/content/website/RData/forested_data.RData")
 tidymodels_prefer()
 theme_set(theme_bw())
 options(pillar.advice = FALSE, pillar.min_title_chars = Inf)
+mirai::daemons(3)
 
 # ------------------------------------------------------------------------------
 
@@ -25,23 +26,29 @@ norm_rec <-
 
 saint_spec <-
  tabular_saint(
-  epochs = 50L,
   num_embedding = tune(),
+  
   num_attn_heads = tune(),
   num_attn_blocks = tune(),
   dropout_attn = tune(),
   attention_type = tune(),
+  
+  hidden_units = tune(), 
+  dropout_hidden = tune(), 
+  
   penalty = 0,
   learn_rate = tune(),
   rate_schedule = tune(),
   momentum = tune(),
   batch_size = tune(),
+  epochs = 50L,
   stop_iter = 10L
  ) |>
  set_engine(
   "brulee",
   optimizer = "SGD",
-  device = "cuda"
+  device = "mps",
+  row_attention_on_predict = TRUE, 
  ) |>
  set_mode("classification")
 
@@ -70,6 +77,7 @@ saint_param <-
  extract_parameter_set_dials() |>
  update(
   num_embedding = num_embedding(c(2, 50)),
+  hidden_units = hidden_units(c(2, 50)),
   batch_size = batch_size(c(4, 9))
  )
 
@@ -79,7 +87,7 @@ saint_res <-
  saint_wflow |>
  tune_grid(
   resamples = forested_rs,
-  grid = 25,
+  grid = 50,
   param_info = saint_param,
   metrics = cls_mtr,
   control = ctrl
