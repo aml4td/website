@@ -12,7 +12,7 @@ load("~/content/website/RData/forested_data.RData")
 tidymodels_prefer()
 theme_set(theme_bw())
 options(pillar.advice = FALSE, pillar.min_title_chars = Inf)
-mirai::daemons(3)
+mirai::daemons(2)
 
 # ------------------------------------------------------------------------------
 
@@ -35,6 +35,7 @@ saint_spec <-
   
   hidden_units = tune(), 
   dropout_hidden = tune(), 
+  target_token = tune(), 
   
   penalty = 0,
   learn_rate = tune(),
@@ -97,7 +98,7 @@ saint_res <-
 
 save(
  saint_res,
- file = "RData/forested_saint.RData"
+ file = "~/content/website/RData/forested_saint.RData"
 )
 
 # ------------------------------------------------------------------------------

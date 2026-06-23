@@ -1,18 +1,17 @@
 library(tidymodels)
-library(tdl)
+library(tabular)
 library(mirai)
 library(bestNormalize)
 library(spatialsample)
-library(finetune)
 
-load("RData/forested_data.RData")
+load("~/content/website/RData/forested_data.RData")
 
 # ------------------------------------------------------------------------------
 
 tidymodels_prefer()
 theme_set(theme_bw())
 options(pillar.advice = FALSE, pillar.min_title_chars = Inf)
-daemons(parallel::detectCores())
+mirai::daemons(2)
 
 # ------------------------------------------------------------------------------
 
@@ -43,7 +42,7 @@ autoint_spec <-
   set_engine(
     "brulee",
     optimizer = "SGD",
-    device = "cpu"
+    device = "mps"
   ) |>
   set_mode("classification")
 
@@ -96,7 +95,7 @@ system.time({
 
 save(
   autoint_res,
-  file = "RData/forested_autoint.RData"
+  file = "~/content/website/RData/forested_autoint.RData"
 )
 
 # ------------------------------------------------------------------------------
