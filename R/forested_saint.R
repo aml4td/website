@@ -88,7 +88,7 @@ saint_res <-
  saint_wflow |>
  tune_grid(
   resamples = forested_rs,
-  grid = 50,
+  grid = 25,
   param_info = saint_param,
   metrics = cls_mtr,
   control = ctrl
