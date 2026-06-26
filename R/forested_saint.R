@@ -21,88 +21,98 @@ cls_mtr <- metric_set(brier_class, roc_auc, pr_auc, mn_log_loss)
 # ------------------------------------------------------------------------------
 
 norm_rec <-
- recipe(class ~ ., data = forested_train) |>
- step_orderNorm(all_numeric_predictors())
+  recipe(class ~ ., data = forested_train) |>
+  step_orderNorm(all_numeric_predictors())
 
 saint_spec <-
- tabular_saint(
-  num_embedding = tune(),
-  
-  num_attn_heads = tune(),
-  num_attn_blocks = tune(),
-  dropout_attn = tune(),
-  attention_type = tune(),
-  
-  hidden_units = tune(), 
-  dropout_hidden = tune(), 
-  target_token = tune(), 
-  
-  penalty = 0,
-  learn_rate = tune(),
-  rate_schedule = tune(),
-  momentum = tune(),
-  batch_size = tune(),
-  epochs = 50L,
-  stop_iter = 10L
- ) |>
- set_engine(
-  "brulee",
-  optimizer = "SGD",
-  device = "mps",
-  row_attention_on_predict = TRUE, 
- ) |>
- set_mode("classification")
+  tabular_saint(
+    num_embedding = tune(),
+
+    num_attn_heads = tune(),
+    num_attn_blocks = tune(),
+    dropout_attn = tune(),
+    attention_type = tune(),
+
+    hidden_units = tune(),
+    dropout_hidden = tune(),
+    target_token = tune(),
+
+    penalty = 0,
+    learn_rate = tune(),
+    rate_schedule = tune(),
+    momentum = tune(),
+    batch_size = tune(),
+    epochs = 50L,
+    stop_iter = 10L
+  ) |>
+  set_engine(
+    "brulee",
+    optimizer = "SGD",
+    device = "mps",
+    row_attention_on_predict = TRUE,
+  ) |>
+  set_mode("classification")
 
 saint_wflow <- workflow(norm_rec, saint_spec)
 
 # ------------------------------------------------------------------------------
 
 pull_iter <- function(x) {
- require(tidymodels)
- require(brulee)
- fit <- extract_fit_engine(x)
- tibble(epoch_actual = fit$best_epoch, num_param = length(unlist(coef(fit))))
+  require(tidymodels)
+  require(brulee)
+  fit <- extract_fit_engine(x)
+  revived <- brulee:::revive_model(fit$model)
+  num_param <- 
+    lapply(revived$parameters, function(x) prod(dim(x))) |> 
+    as.integer() |> 
+    sum()
+
+  tibble(
+    epoch_best = length(fit$loss),
+    epoch_actual = fit$best_epoch,
+    num_param = num_param
+  )
 }
 
 ctrl <- control_grid(
- save_pred = TRUE,
- save_workflow = TRUE,
- parallel_over = "everything",
- extract = pull_iter
+  save_pred = TRUE,
+  save_workflow = TRUE,
+  parallel_over = "everything",
+  extract = pull_iter
 )
 
 # ------------------------------------------------------------------------------
 
 saint_param <-
- saint_wflow |>
- extract_parameter_set_dials() |>
- update(
-  num_embedding = num_embedding(c(2, 50)),
-  hidden_units = hidden_units(c(2, 50)),
-  batch_size = batch_size(c(4, 9))
- )
-
+  saint_wflow |>
+  extract_parameter_set_dials() |>
+  update(
+    num_embedding = num_embedding(c(2, 50)),
+    hidden_units = hidden_units(c(2, 50)),
+    batch_size = batch_size(c(4, 9))
+  )
 
 set.seed(12)
+torch::torch_manual_seed(12)
 saint_res <-
- saint_wflow |>
- tune_grid(
-  resamples = forested_rs,
-  grid = 25,
-  param_info = saint_param,
-  metrics = cls_mtr,
-  control = ctrl
- )
+  saint_wflow |>
+  tune_grid(
+    resamples = forested_rs,
+    grid = 25,
+    param_info = saint_param,
+    metrics = cls_mtr,
+    control = ctrl
+  )
 
 # ------------------------------------------------------------------------------
 
 save(
- saint_res,
- file = "~/content/website/RData/forested_saint.RData"
+  saint_res,
+  file = "~/content/website/RData/forested_saint.RData"
 )
 
 # ------------------------------------------------------------------------------
 
 if (!interactive()) {
- q("no")
+  q("no")
 }
