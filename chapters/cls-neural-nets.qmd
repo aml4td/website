@@ -1147,7 +1147,9 @@ A fair amount of research has been motivated by the observation that tree ensemb
 
 ### Batch Normalization {#sec-cls-batchnorm}
 
-We previously noted that substantial preprocessing is required for our original predictors. @wiesler2014mean notes that the effects of this initial preprocessing can vanish as more layers are added to the network; there is no guarantee that the hidden units in later layers will have distributional properties that encourage convergence. Consider the example in  @sec-nnet-activation where, for a basic MLP model with ReLU activation, large portions of the parameter space have values of absolute zero. No matter the distribution entering the layer, the outputs are likely to have a large point mass at zero and perhaps a second distributional mode. 
+We previously noted that substantial preprocessing is required for our original predictors. @wiesler2014mean notes that the effects of this initial preprocessing can vanish as more layers are added to the network; there is no guarantee that the hidden units in later layers will have distributional properties that encourage convergence. 
+
+Consider the example in  @sec-nnet-activation where, for a basic MLP model with ReLU activation, large portions of the parameter space have values of absolute zero. No matter the distribution entering the layer, the outputs are likely to have a large point mass at zero and perhaps a second distributional mode. 
 
 For example, @fig-nnet-hidden-dist shows the distribution of a specific hidden unit in a model from @fig-nnet-ex, albeit with a larger batch size, showing how it changes over batches and epochs. The red bar shows how often absolute zero values occur. Within a batch, the point mass at zero can fluctuate over epochs. Given that the activated values must be non-negative, the distributions can become fairly skewed over epochs, although two of the distributions are somewhat bell-shaped for non-zero values. In any case, the values have certainly deviated from the centered and scaled distributions of the original predictor values.  
 
@@ -1189,7 +1191,7 @@ non_zero |>
   labs(x = "Hidden Unit Value")
 ```
 
-@wiesler2014mean suggested that standardizing the embeddings across different locations within the network could yield the same benefits for the model as initial standardization. Their solution was to use batches during SGD to compute a running mean of the model's internal features and to center the embeddings. 
+@wiesler2014mean suggested that standardizing the embeddings at different points within the network could yield the same benefits for the model as initial standardization. Their solution was to use batches during SGD to compute a running mean of the model's internal features and to center the embeddings. 
 
 @ioffe2015batch took this idea a few steps further to minimize _covariate shifts_ between batches. Their approach, called _batch normalization_ (a.k.a. "BatchNorm"), standardizes the current embeddings with some extra parameters:
 
@@ -1197,7 +1199,7 @@ $$
 \tilde{H}_J = b\left(H_j\right) = \frac{H_j - \bar{H_j}}{\sqrt{s_j^2 + \epsilon}}\,  \theta_1 + \theta_2
 $$
 
-where $\epsilon$ is a small constant and $\bar{H_j}$ and $s_j^2$ are the estimated mean and variance of embedding $j$, respectively. Recall that during SGD, small batches of the training set are used. The sample mean and variance are computed on the current mini-batch of data and a moving average of their values is maintained. The extra term $\theta_1$ estimates a scale shift and $\theta_2$ estimates a location shift. These are learned parameters; they are estimated via gradient descent. After training, new samples being predicted are normalized by the final moving average statistics. 
+where $\epsilon$ is a small constant and $\bar{H_j}$ and $s_j^2$ are the estimated mean and variance of embedding $j$, respectively. Recall that during SGD, small batches of the training set are used. The sample mean and variance are computed on the current mini-batch of data and a moving average of their values is maintained. The extra term $\theta_1$ estimates a scale shift and $\theta_2$ estimates a location shift. These are learned parameters; they are estimated via gradient descent. After training, new samples being predicted are normalized by moving average statistics from the means and variances produced in the min-batches. 
 
 In @ioffe2015batch, batch normalization occurs between the formation of a new linear predictor transformation and the application of a nonlinear activation. For example, this would have occurred between the two rows of variables shown in @fig-nnet-ex-layer-1. However, @he2016deep showed that "pre-activation" works better for their model. This means normalization occurs before forming the linear combination, which is also what @gorishniy2021revisiting suggests for tabular data. 
 
@@ -1234,7 +1236,7 @@ A residual network, shown on the right-hand side of @eq-resid-net, takes the cur
 
  By adding the previous embeddings to this function, we've reframed the problem so that we are really learning $f_i(\boldsymbol{H}_{i-1}) = \boldsymbol{H}_i - \boldsymbol{H}_{i-1}$; a residual. 
 
-This process makes training easier, especially for models with many layers. Early practitioners assumed that performance could be increased simply by adding more layers. This was not the case. @he2016deep showed that large models paradoxically saw both training and test error increase as the number of layers increased. This isn't believed to be related to overfitting, but due to how gradients flow through the system during optimization. Residual connections address this by giving gradients a direct path back through the network: for layer $i$, the gradient is $f_i'(\boldsymbol{H}_{i-1}) + I$. If we add too much capacity to the model (e.g., more layers), it can simply estimate zero for the residual. Also, the extra term $I$ in the gradient prevents them from becoming too small across the network, even $f_i'(\boldsymbol{H}_{i-1})$ has elements that are approximately zero. We'll describe other potential benefits to this model towards the end of this section. 
+This process makes training easier, especially for models with many layers. Early practitioners assumed that performance could be increased simply by adding more layers. This was not the case. @he2016deep showed that large models paradoxically saw both training and test error increase as the number of layers increased. This isn't believed to be related to overfitting, but due to how gradients flow through the system during optimization. Residual connections address this by giving gradients a direct path back through the network: for layer $i$, the gradient is $f_i'(\boldsymbol{H}_{i-1}) + I$. If we add too much capacity to the model (e.g., more layers), it can simply estimate zero for the residual. Also, the extra term $I$ in the gradient prevents them from becoming too small across the network, even if $f_i'(\boldsymbol{H}_{i-1})$ has elements that are approximately zero. We'll describe other potential benefits to this model towards the end of this section. 
 
 @he2016deep is generally credited for the ResNet model. It showed significant improvements for convolutional neural networks for image analysis.  For tabular data, we'll focus on the formulation in Section 3.2 of @gorishniy2021revisiting. With this model, we'll refer to the elements being added as the "skip path" and the other components (e.g. nonlinear activation) as the "main path". 
 
@@ -1249,9 +1251,7 @@ We also need to project the inputs again for the main path, where activation is 
 - $\boldsymbol{P}_1\boldsymbol{x}$ should represent the original input as plainly as possible in order to produce an appropriate residual effect. 
 - $\boldsymbol{W}_1^{(1)}\boldsymbol{x}$ is designed and estimated to support the nonlinear activation via $f_1(\bullet)$ so that it can learn better outgoing embedding. 
 
-The elements of both of these matrices are learnable. 
-
-Now our residual block is: 
+The elements of both of these matrices are learnable. The first residual block is: 
 
 $$
 \boldsymbol{H}_1 = \boldsymbol{W}_1^{(2)}f_1\left(\boldsymbol{W}_1^{(1)}\boldsymbol{x}\right) + \boldsymbol{P}_1\boldsymbol{x}
@@ -1299,7 +1299,7 @@ A database would `FILTER` on these values to find any rows that match the query.
 
 The mathematics of attention mechanisms differ in their tactics, but they pursue the same strategy as the database example above.  Attention computes a quantitative similarity score for the data, usually based on dot products, which are scaled to [0, 1]. This is more of a fuzzy-matching system than an exact match like SQL `FILTER` would produce. 
 
-Attention weights can be computed in different ways, but we'll focus on the most prevalent approach: *dot-product attention*. We'll represent a query containing $p$ features as the vector $\boldsymbol{q}$, and a database key as $\boldsymbol{k}$, also with $p$ entries. The dot-product attention weight for these values uses $\mathbb{a}(\boldsymbol{q}, \boldsymbol{k}) = \exp\left(\boldsymbol{q}'\boldsymbol{k}\right)$ as its kernel. We know that this dot product is non-negative, but generally not much more. 
+Attention weights can be computed in different ways, but we'll focus on the most prevalent approach: *dot-product attention*. We'll represent a query containing $p$ features as the vector $\boldsymbol{q}$, and a database key as $\boldsymbol{k}$, also with $p$ entries. The dot-product attention weight for these values uses function $\mathbb{a}(\boldsymbol{q}, \boldsymbol{k}) = \exp\left(\boldsymbol{q}'\boldsymbol{k}\right)$ as its kernel. We know that this dot product is non-negative, but generally not much more. 
 
 Most methods use _scaled attention_, which uses the softmax function to compute the attention weights:
 
@@ -1317,10 +1317,10 @@ $$
 \mathbb{A}(\boldsymbol{q}, \boldsymbol{k}_i, \boldsymbol{v}_i) =  \sum_i \mathbb{a}(\boldsymbol{q}, \boldsymbol{k}_i) \boldsymbol{v}_i
 $$ {#eq-attention-values}
 
-Our "database" would contain many entries, say $i = 1, \ldots n$, so we would have $n$ attended values. For our French Canadian murder-mystery query, this would produce a weighted average of the prices of books with non-zero similarities. The weighting of multiple values can be thought of as _soft attention_ because it blends them. 
+Our "database" would contain many entries, say $i = 1, \ldots n$, so we would have $n$ **attended values**. For our French Canadian murder-mystery query, this would produce a weighted average of the prices of books with non-zero similarities. The weighting of multiple values can be thought of as _soft attention_ because it blends them. 
 
 :::{.important-box}
-In this database analogy, we have a potentially vast set of information (keys and values), and to do anything useful with it, we need a focusing mechanism that aligns with what we want to do. Our query does just that: it narrows the scope of the data so that our computations are only influenced by the relevant items in the database. In other words, the query provides context for our calculations. The literature often refers to the attended values as a "recontextualization of data."
+In this database analogy, we have a potentially vast set of information (keys and values), and to do anything useful with it, we need a focusing mechanism that aligns with what we want to do. Our query does just that: it narrows the scope of the data so that our computations are only influenced by the relevant items in the database. In other words, the query provides **context** for our calculations. The literature often refers to the attended values as a "recontextualization of data."
 :::
 
 In essence, we are updating our data on a per-query basis.  A different query would generate different weights. As we'll see shortly, attention weights focus the computations to be relevant for each individual query that is made. 
@@ -1333,11 +1333,11 @@ Attention can be usually followed by one or more layers of traditional MLP-type 
 There is a lot of linear algebra on the horizon. In the next section, we'll eventually bring things back down to Earth and demonstrate attention with a small-scale example. 
 :::
 
-To be more formal, let's describe the computation for a _single sample_. It enters the attention head as $p$ columns, that is, $p$ scalar values (across the batch, an $n \times p$ matrix). These data might be the original predictors, or the hidden units from an earlier layer, depending on context.
+To be more formal, let's describe the computation for a _single sample_. It enters the attention head as $p$ columns, that is, $p$ scalar values (across the batch, an $n \times p$ matrix). These might be the original $p$ predictors, or the hidden units from an earlier layer, depending on the situation.
 
 Because self-attention needs a vector per column to form dot products, the block first embeds each scalar column into an $m$-dimensional vector, turning one sample's $p$ scalars into a ($p \times m$) matrix $\boldsymbol{X}$. Everything below operates on this per-sample matrix; the $n$ samples are each processed the same way, independently^[In code, these per-sample ($p \times m$) matrices are computed together for speed, but the algebra is identical to handling them one at a time.]. The output of the attention block will a re-mixed set of embeddings $\boldsymbol{Z}$ of the same shape, ($p \times m$). 
 
-Why does self-attention use $\boldsymbol{X}$ for the query, keys, and values? The idea is that, at some point in the network's architecture, we have the current set of embeddings (e.g., the computed hidden units). These are global in the sense that their parameters are the same across all samples predicted by the model. With attention, each sample's representation is informed by its own internal feature context. The only type of data used here is the embeddings; the outcome or any other data are not (directly) used. Attention will refocus our embeddings based on the context of each sample^[A shorter answer to the original question is that the individual embeddings are being compared to, and updated by, themselves.]. 
+Why does self-attention use $\boldsymbol{X}$ for the query, keys, and values? The idea is that, at some point in the network's architecture, we have the current set of embeddings (e.g., the computed hidden units). These are fixed in the sense that their parameters are the same across all samples predicted by the model. With attention, each sample's representation is informed by its own internal feature context. The only type of data used here is the embeddings; the outcome or any other data are not (directly) used. Attention will refocus our embeddings based on the context of each sample^[A shorter answer to the original question is that the individual embeddings are being compared to, and updated by, themselves.]. 
 
 The attention block estimates three sets of weight matrices, all of which are $m \times m$, that project each column's embedding into a query, key, and value: 
 
@@ -1365,7 +1365,7 @@ The part of the network that encompasses these calculations is called _an attent
 
 ### Column-wise Attention {#sec-cls-col-attention}
 
-Column attention is intended to exploit relationships among features. In neural networks, the embedding layers treat each features independently, representing each one without reference to the others in the same sample. However, for our forestation data, we know that some predictors are correlated with one another, and we've also seen that some interact. Neural networks are complex models that can capture such relationships. However, it does this with a _fixed_ set of global parameters. The model is not adapting to individual data points, so it cannot contextualize how to use their _local information_ to better predict the outcome. Column attention updates the incoming embeddings by blending them via a weighted average. The weights are determined by learned pairwise similarities among the feature embeddings.
+Column attention is intended to exploit relationships among features. In neural networks, the embedding layers treat each features independently, representing each one without reference to the others in the same sample. However, for our forestation data, we know that some predictors are correlated with one another, and we've also seen that some interact. Neural networks are complex models that can capture such relationships. However, it does this with a _fixed_ set of parameters. The model is not adapting to individual data points, so it cannot contextualize how to use their _local information_ to better predict the outcome. Column attention updates the incoming embeddings by blending them via a weighted average. The weights are determined by learned pairwise similarities among the feature embeddings.
 
 Column attention might sound complex but, operationally, its results are simple: a new feature that is a linear combination of the original embedding set. For example,  for some sample $i$, the new feature $Z_1$ might be a combination of three previous embeddings: 
 
@@ -1373,13 +1373,13 @@ $$
 Z_{i1} = 0.15\, X_{i1} + 0.09\, X_{i2} + 0.76\, X_{i3}
 $$
 
-These coefficients always sum to one. 
+For column attention, these coefficients always sum to one and will be different from sample to sample.
 
 We've seen previous preprocessing techniques that created a new feature as a function of one or more others. For example, a $d$ degree spline term for predictor $x$ is a localized version of the original predictor. Taken together, the set of spline features can be used to capture nonlinear relationships between $x$ and the outcome. PCA is another good example. Leveraging the correlation structure of the predictors, the principal components are linear combinations of the original predictors that have desirable properties. 
 
 Operationally, the basics of attention shown above are applied in the most basic way. During training, $\boldsymbol{X}$ represents the incoming embedding data for the current batch. 
 
-Because the attention matrix is built _per sample_, let's again describe the computation for one sample $i$; every other sample in the batch is handled the same way, independently. For sample $i$, write its feature-embedding matrix as $\boldsymbol{E}_i$ ($p \times m$), where row $j$ is the embedding of predictor $j$. This is the per-sample version of $\boldsymbol{X}$.
+Because the column attention matrix is built _per sample_, let's again describe the computation for one sample $i$; every other sample in the batch is handled the same way, independently. For sample $i$, write its feature-embedding matrix as $\boldsymbol{E}_i$ ($p \times m$), where row $j$ is the embedding of predictor $j$. This is the per-sample version of $\boldsymbol{X}$.
 
 Projecting with the shared weights gives the query, key, and value matrices:
 
@@ -1432,14 +1432,14 @@ However, it's also important to understand that attention's locality is learned 
 To make this more concrete, let's return to the simple binary classification example shown in @fig-nnet-ex. Let's fit a modified neural network that begins with our two numeric predictors, then: 
 
 1. Adds a fully connected layer with 4 hidden units and ReLU activation (as before). 
-2. Batch normalization of the 4 hidden units. We'll label these embeddings as $H_j$, $j=1 \ldots 4$. 
+2. Batch normalization of the 4 hidden units.
 3. Column-wise self-attention with an embedding dimension of $m = 2$. The adjusted hidden units are denoted as $Z$'s.
 4. Linear activation to produce $C = 2$ estimates for each class.
 5. Softmax normalization. 
 
 We'll be most concerned with the details of the third operation, where the normalized embeddings enter the attention process. The chosen number of embeddings in the attention head ($m=2$) is very small for illustrative reasons. 
 
-The model was trained with a learning rate of 0.05, a batch size of 64, early stopping after 5 bad epochs, and a weight decay value of 0.01. After epochs, the model converged, and the fit is shown in @fig-attention-fit. The curve is similar to the original MLP fit but shows some additional nuance in the center of the data mainstream. Three locations in the predictor space are highlighted for future discussion. 
+The model was trained with a learning rate of 0.05, a batch size of 64, early stopping after 5 bad epochs, and a weight decay value of 0.01. After epochs, the model converged, and the fit is shown in @fig-attention-fit. The curve is similar to the original MLP fit^[Shown as the light grey line.] but shows some additional nuance in the center of the data mainstream. Three locations in the predictor space are highlighted for future discussion. 
 
 
 ```{r}
@@ -1745,13 +1745,13 @@ The results are shown in @fig-auto-int-cls-tune. There are a few definitive tren
 #| fig-width: 8
 #| fig-height: 7
 #| fig-cap: AutoInt tuning results for the forestation data.
-autoint_info <- 
-  autoint_res |> 
-  collect_extracts() |> 
+autoint_info <-
+  autoint_res |>
+  collect_extracts() |>
   mutate(
     epochs = map_int(.extracts, ~ .x$epoch_best),
     num_param = map_int(.extracts, ~ .x$num_param)
-    ) |>
+  ) |>
   summarize(
     `Mean Actual Epochs` = mean(epochs),
     `# Parameters (log-10)` = log10(mean(num_param)),
@@ -1765,7 +1765,12 @@ autoint_brier <-
   collect_metrics(autoint_res) |>
   filter(.metric == "brier_class") |>
   full_join(autoint_info, by = ".config") |>
-  select(all_of(autoint_prm_nms), mean, `Mean Actual Epochs`, `# Parameters (log-10)`) |>
+  select(
+    all_of(autoint_prm_nms),
+    mean,
+    `Mean Actual Epochs`,
+    `# Parameters (log-10)`
+  ) |>
   mutate(
     `Learning Rate (log-10)` = log10(learn_rate),
     `Batch Size (log-2)` = log2(batch_size)
@@ -1812,7 +1817,7 @@ autoint_brier <-
   mutate(parameter = factor(parameter, levels = autoint_nms_order))
 
 autoint_brier |>
-  filter(mean < 0.15) |> 
+  filter(mean < 0.15) |>
   ggplot(
     aes(
       value,
