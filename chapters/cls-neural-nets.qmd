@@ -1367,6 +1367,16 @@ The part of the network that encompasses these calculations is called _an attent
 
 Column attention is intended to exploit relationships among features. In neural networks, the embedding layers treat each features independently, representing each one without reference to the others in the same sample. However, for our forestation data, we know that some predictors are correlated with one another, and we've also seen that some interact. Neural networks are complex models that can capture such relationships. However, it does this with a _fixed_ set of global parameters. The model is not adapting to individual data points, so it cannot contextualize how to use their _local information_ to better predict the outcome. Column attention updates the incoming embeddings by blending them via a weighted average. The weights are determined by learned pairwise similarities among the feature embeddings.
 
+Column attention might sound complex but, operationally, its results are simple: a new feature that is a linear combination of the original embedding set. For example,  for some sample $i$, the new feature $Z_1$ might be a combination of three previous embeddings: 
+
+$$
+Z_{i1} = 0.15\, X_{i1} + 0.09\, X_{i2} + 0.76\, X_{i3}
+$$
+
+These coefficients always sum to one. 
+
+We've seen previous preprocessing techniques that created a new feature as a function of one or more others. For example, a $d$ degree spline term for predictor $x$ is a localized version of the original predictor. Taken together, the set of spline features can be used to capture nonlinear relationships between $x$ and the outcome. PCA is another good example. Leveraging the correlation structure of the predictors, the principal components are linear combinations of the original predictors that have desirable properties. 
+
 Operationally, the basics of attention shown above are applied in the most basic way. During training, $\boldsymbol{X}$ represents the incoming embedding data for the current batch. 
 
 Because the attention matrix is built _per sample_, let's again describe the computation for one sample $i$; every other sample in the batch is handled the same way, independently. For sample $i$, write its feature-embedding matrix as $\boldsymbol{E}_i$ ($p \times m$), where row $j$ is the embedding of predictor $j$. This is the per-sample version of $\boldsymbol{X}$.
@@ -1735,10 +1745,89 @@ The results are shown in @fig-auto-int-cls-tune. There are a few definitive tren
 #| fig-width: 8
 #| fig-height: 7
 #| fig-cap: AutoInt tuning results for the forestation data.
-autoplot(autoint_res, metric = "brier_class") +
-  lims(y = c(0.077, 0.125)) +
-  theme(legend.position = "top") +
-  labs(y = "Brier Score")
+autoint_info <- 
+  autoint_res |> 
+  collect_extracts() |> 
+  mutate(
+    epochs = map_int(.extracts, ~ .x$epoch_best),
+    num_param = map_int(.extracts, ~ .x$num_param)
+    ) |>
+  summarize(
+    `Mean Actual Epochs` = mean(epochs),
+    `# Parameters (log-10)` = log10(mean(num_param)),
+    .by = c(.config)
+  )
+
+autoint_prm_nms <- .get_tune_parameter_names(autoint_res)
+
+
+autoint_brier <-
+  collect_metrics(autoint_res) |>
+  filter(.metric == "brier_class") |>
+  full_join(autoint_info, by = ".config") |>
+  select(all_of(autoint_prm_nms), mean, `Mean Actual Epochs`, `# Parameters (log-10)`) |>
+  mutate(
+    `Learning Rate (log-10)` = log10(learn_rate),
+    `Batch Size (log-2)` = log2(batch_size)
+  ) |>
+  rename(
+    `# Embedding Dimensions` = num_embedding,
+    `# Embedding Dropout` = dropout_embedding,
+    `Gradient Descent Momentum` = momentum,
+    `Learning Rate Scheduler` = rate_schedule,
+    `Attention Dropout Rate` = dropout_attn,
+    `# Attention Blocks` = num_attn_blocks,
+    `# Attention Heads` = num_attn_heads,
+    `# Attention Features` = num_attn_feat
+  ) |>
+  select(
+    -learn_rate,
+    -batch_size
+  ) |>
+  pivot_longer(
+    cols = c(
+      -mean,
+      -`Learning Rate Scheduler`
+    ),
+    names_to = "parameter"
+  )
+
+autoint_nms_order <-
+  c(
+    "# Embedding Dimensions",
+    "# Embedding Dropout",
+    "# Attention Features",
+    "# Attention Heads",
+    "# Attention Blocks",
+    "Attention Dropout Rate",
+    "Gradient Descent Momentum",
+    "Learning Rate (log-10)",
+    "Batch Size (log-2)",
+    "Mean Actual Epochs",
+    "# Parameters (log-10)"
+  )
+
+autoint_brier <-
+  autoint_brier |>
+  mutate(parameter = factor(parameter, levels = autoint_nms_order))
+
+autoint_brier |>
+  filter(mean < 0.15) |> 
+  ggplot(
+    aes(
+      value,
+      mean,
+      col = `Learning Rate Scheduler`
+    )
+  ) +
+  geom_point(alpha = 3 / 4) +
+  facet_wrap(~parameter, scales = "free_x") +
+  theme(
+    legend.position = "top",
+    legend.box = "vertical"
+    # legend.direction = "vertical"
+  ) +
+  labs(x = NULL, y = "Brier Score")
 ```
 
 The best results corresponded to a model using `r autoint_best$num_embedding` dimensions for its initial embedding with a dropout rate of `r round(autoint_best$dropout_embedding, 2)`. For attention, `r autoint_best$num_attn_blocks` blocks, each with `r autoint_best$num_attn_heads` and a dimension of `r autoint_best$num_attn_heads` was best and had an associated dropout rate of `r round(autoint_best$dropout_attn, 2)`. The best learning rate was 10<sup>`r round(log10(autoint_best$learn_rate), 2)`</sup> with a `r autoint_best$rate_schedule` schedule. The batch size was `r autoint_best$batch_size` samples and the best momentum value was  `r round(autoint_best$momentum, 2)`. The estimated Brier score for this configuration was `r signif(autoint_best$mean[1], 3)`, which is competitive but does not beat the current best model.
@@ -1997,7 +2086,7 @@ saint_brier <-
     names_to = "parameter"
   )
 
-prm_order <-
+saint_prm_order <-
   c(
     "# Embedding Dimensions",
     "# Attention Heads",
@@ -2014,7 +2103,7 @@ prm_order <-
 
 saint_brier <-
   saint_brier |>
-  mutate(parameter = factor(parameter, levels = prm_order))
+  mutate(parameter = factor(parameter, levels = saint_prm_order))
 
 
 saint_best <- show_best(saint_res, metric = "brier_class", n = 1)
@@ -2147,7 +2236,7 @@ For example, let's say that a sample from our prior was:
 
 and so on. The first six prior realizations define both the input data and the relationship between the 14 _potential_ causes and the outcome. The random parameter estimates will determine how, if at all, the causes related to the randomly selected cause influence the outcome. Nonlinear activation is used to produce the true model relationship. The parameter estimates are designed to be sparse; many of their values are either zero or small enough to be within the simulation's noise. For some prior realizations, many predictors affect the outcome, and for others, very few are relevant. Once we have simulated our data using these prior values, the last three operations in the list above are postprocessing operations that change the representation of the data to reflect how the priors believe the data will be _observed_. 
 
-We can see the evolution of SCM simulated data sets for these foundational models in Section 4 and Appendix C of @hollmann2022tabpfn, Appendix C of @qu2025tabicl, Appendix E of @qu2026tabiclv2, and most recently Section 2.3 of @grinsztajn2026tabpfn. Additionally, @zhang2026mitra contains a history these data generation techniques and also proposes guiding principles for creating a data prior. @nagler2023statistical also takes a look at PFNs from a statistical perspective. Also, for some time, the underlying functional relationship between the predictors/causes and the target was smooth (via MLP structures). @breejen2024fine showed that unsmooth functions, specifically tree- and rule-based relationships can also improve the quality of the final models. Similar ideas were then adopted into TabPFN and TabICL. 
+We can see the evolution of SCM simulated data sets for these foundational models in Section 4 and Appendix C of @hollmann2022tabpfn, Appendix C of @qu2025tabicl, Appendix E of @qu2026tabiclv2, and most recently Section 2.3 of @grinsztajn2026tabpfn. Additionally, @zhang2026mitra contains a history these data generation techniques and also proposes guiding principles for creating a data prior. @nagler2023statistical also takes a look at PFNs from a statistical perspective. For some time, the underlying functional relationship between the predictors/causes and the target was smooth (via MLP structures). @breejen2024fine showed that unsmooth functions, specifically tree- and rule-based relationships can also improve the quality of the final models. Similar ideas were then adopted into TabPFN and TabICL.
 
 Data-generating mechanisms can be created very quickly and do not require storage beyond the time they are used for training. The deep learning model takes these data sets as data points. Let's say that our stochastic gradient descent optimizer uses a batch size of 64. That translates into 64 randomly generated data sets of different types and sizes. A good example comes from @hollmann2025accurate where they describe data sets with dimensional priors
 
@@ -2282,10 +2371,10 @@ load("../RData/forest_knn_set_res.Rdata")
 
 load("../RData/forest_mlp_set_res.Rdata")
 
-forest_tabpfn_set_res <- as_workflow_set(TabPFN = tabpfn_tune_res)
-forest_tabicl_set_res <- as_workflow_set(TabICL = tabicl_tune_res)
 forest_autoint_set_res <- as_workflow_set(AutoInt = autoint_res)
 forest_saint_set_res <- as_workflow_set(Saint = saint_res)
+forest_tabpfn_set_res <- as_workflow_set(TabPFN = tabpfn_tune_res)
+forest_tabicl_set_res <- as_workflow_set(TabICL = tabicl_tune_res)
 
 all_sets <-
   dplyr::bind_rows(
