@@ -1,5 +1,5 @@
 library(tidymodels)
-library(tabular)
+library(tabby)
 library(mirai)
 library(bestNormalize)
 library(spatialsample)
@@ -82,8 +82,9 @@ autoint_param <-
   extract_parameter_set_dials() |>
   update(
     num_attn_feat = num_attn_feat(c(2, 50)),
-    num_embedding = num_embedding(c(2, 50)),
-    batch_size = batch_size(c(4, 9))
+    num_embedding = num_embedding(c(5, 50)),
+    batch_size = batch_size(c(4, 9)),
+    rate_schedule = rate_schedule(values_scheduler[-3]) # No expo decay
   )
 
 set.seed(12)
