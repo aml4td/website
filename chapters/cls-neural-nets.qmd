@@ -2347,7 +2347,7 @@ With many columns, the grouped neighbors are genuinely nearby columns. This can 
 
 Either way, the point is the same: each cell is pre-loaded with a little local cross-feature context, so when attention and later operations run, every element already carries some information about its potential neighbors.
 
-#### Initial Cell Embedding
+#### Initial Cell and Target Embeddings
 
 After grouping, a linear operation created an embedding via
 
@@ -2355,11 +2355,193 @@ $$
 \boldsymbol{H}_{ij} = \boldsymbol{W}_{emb}\, \boldsymbol{x}_{ij} + \boldsymbol{b}_{emb}.
 $$
 
-where $\boldsymbol{W}_{emb}$ is (128 x 6) and there are 128 bias terms. 
+where $\boldsymbol{W}_{emb}$ is (128 x 6) and there are 128 bias terms. Note that this process is a linear projection from 6 columns to $p_{emb} = 128$. Both the predictor's _values_ and completness _indicators_ are blended in this projection; there is no separate indicator channel form this point on.
 
-#### Target-aware Embedding
+The influence of the target classes are added to the cell embedding, but only for the training data. 
+
+Each class is represented by a pre-learned 128-dimensional vector. These vectors are initialized to be orthonormal^[They have a length of one and have pairwise dot products of zero.], which keeps the classes maximally distinguishable at the start of training; they are then learned during pretraining. TabPFN has a hard limit on the number of classes, $C_{max}$ and creates a static table $\boldsymbol{Y}$ of size $C_{max} \times 128$. When the data have $C < C_{max}$ classes, only the $C$ corresponding rows are ever looked up.
+
+For the training data, the appropriate row of $\boldsymbol{Y}$  is added to every one of that row's cell embeddings (the same vector across all 128 columns), nudging them in the "direction" of the class. The test data are kept as-is. 
 
 #### Feature-Distribution Embedding
+
+The feature-distribution embedder serves several purposes. Before proceeding, recall that each cell in our $n \times p$ array is now a 128-dimensional vector, and that here a "feature" is one of the $p$ columns.
+
+First, it makes the model robust to arbitrary distributions in the current dataset. Because these foundation models are pretrained on a large number of synthetic datasets with widely varying distributions, the frozen model must represent a value by where it sits in its feature's distribution rather than by its raw magnitude. This achieves a normalization-like invariance. However, unlike the fixed centering/scaling used in preprocessing, it is achieved through a learned, nonlinear mechanism whose parameters were tuned during pretraining precisely because this improved predictions.
+
+Second, this process will use a version of row attention. This produces a learned co-representation for a single feature at a time. Each row's embedding is re-expressed as a learned function of the other rows in its column. The model will have to compare rows from the training set to rows from the test set. 
+This sets up an apples-to-apples comparison between the two that will occur during the in-context learning portion of the model.
+
+TODO process starts with ....
+
+The attention process used here is a little different from the one described in @sec-cls-attention. We previously focused on _self_-attention.  In our current situation, _cross-attention_ uses one data source for the queries and another for the keys and values. 
+
+The current TabPFN model uses three attention blocks in this section. Each has its own pretrained set of learned query inputs, denoted as $\boldsymbol{P}$, that is 128 x 128. These 128 rows are called the _inducing_ points, and we can think of them as representatives or prototype vectors for the data distributions^[That the number of inducing points ($n_{ind}=128$) equals the embedding dimension ($p_{emb}=128$) is coincidental.]. They are used as the query data for attention, while our embeddings serve as the keys and values (as we'll see shortly). 
+
+This stage uses row attention. Within a single feature (column), the rows attend to one another. This is done indirectly here by having the inducing points $\boldsymbol{P}$ attend to the training rows' embeddings for that feature. Our first action is to use cross-attention with the $n_{tr}$ training points. This produces an array of size $n_{ind} \times p_{emb}$ (128 x 128) containing the attended training rows influenced by the inducers. We'll label them $\boldsymbol{H}_{ind}$, and they can be thought of as distributional reference values. 
+
+@fig-cross-attention shows another simplified low-dimensional example. The left panel shows the training set from @fig-nnet-ex, along with 15 inducer points in red and a single test point in green. These computations are simplified by omitting the initial embedding process and setting the attention matrices to the identity matrix (i.e., $\boldsymbol{W}^{q} = \boldsymbol{I}$). 
+
+```{r}
+#| label: cross-attention
+#| include: false
+
+# overall data sets
+load("~/content/website/RData/dat_2d.RData")
+
+point_types <- c("Training", "Inducer", "Test")
+type_cols <- c("#088BBEFF", "#FF3F38FF", "#3CBC38FF")
+
+embd_train <- 
+  dat_2d_train |> 
+  select(-class) |> 
+  mutate(type = factor("Training", levels = point_types))
+embd_test <- 
+  tibble(A = 1, B = 0)  |> 
+  mutate(type = factor("Test", point_types)) 
+levels = 
+num_ind <- 15
+seq_a <- seq(-2, 2, length.out = num_ind)
+seq_b <- seq(-2, 2.5, length.out = num_ind)
+
+inducers <- 
+  sfd::get_design(2, num_ind) |> 
+  sfd::update_values(list(seq_a, seq_b)) |> 
+  set_names(LETTERS[1:2]) |> 
+  mutate(type = factor("Inducer", levels = point_types))
+
+p_0 <- 
+  embd_train |> 
+  ggplot(aes(A, B)) + 
+  geom_point(aes(pch = type, col = type), alpha = 0.15, cex = 1) + 
+  geom_point(aes(pch = type, col = type), data = inducers, cex = 2.5, alpha = 3/4) +
+  geom_point(aes(pch = type, col = type), data = embd_test, cex = 3) +
+  coord_fixed(ratio = 1.2) +
+  labs(color = NULL, pch = NULL, title = "Data") +
+  scale_color_manual(values = type_cols) +
+  scale_shape_manual(values = c(16, 16, 17)) +
+  theme_bw() +
+  theme(legend.position = "top")
+
+# ------------------------------------------------------------------------------
+# cross attention calcs
+
+# convert to matrices
+p_mat <- inducers |> select(1:2) |> as.matrix()
+tr_mat <- embd_train |> select(1:2) |> as.matrix()
+te_mat <- embd_test |> select(1:2) |> as.matrix()
+x_all   <- rbind(tr_mat, te_mat)
+
+softmax    <- function(x) exp(x - max(x)) / sum(exp(x - max(x)))
+scale_term <- sqrt(2)  # sqrt(p_emb), with p_emb = 2
+# queries = the 6 inducing points; keys/values = the n training rows
+S1 <- (p_mat %*% t(tr_mat)) / scale_term        # scores  (6 x 1000)
+attn_wts_1 <- t(apply(S1, 1, softmax))          # weights (6 x 1000), rows sum to 1
+Hd <- attn_wts_1 %*% tr_mat                     # panel   (6 x 1000)
+
+summary_mat <- Hd
+colnames(summary_mat) <- LETTERS[1:2]
+summary_df <- as_tibble(summary_mat)
+
+p_1 <- 
+  p_0 +
+  labs(color = NULL, pch = NULL, title = "Stage 1")
+
+for (i in 1:num_ind) {
+  dat_tmp <- bind_cols(
+    inducers |> slice(i), 
+    summary_df |> slice(i) |> set_names(c("A_sum", "B_sum"))
+  ) |> 
+    mutate(type = factor("Inducer", levels = point_types))
+  p_1 <- 
+    p_1 + 
+    geom_segment(
+      data = dat_tmp,
+      aes(xend = A_sum, yend = B_sum, col = type),
+      linewidth = 1 / 2,
+      alpha = 1 / 2, 
+      arrow = arrow(length = unit(0.15, "cm"), type = "closed"),
+      show.legend = FALSE
+    )
+}
+
+# ------------------------------------------------------------------------------
+# step 2
+
+# queries = all n+1 rows; keys/values = the 6 summaries in the panel
+S2  <- (x_all %*% t(Hd)) / scale_term   # scores  (1001 x 2)
+A2  <- t(apply(S2, 1, softmax))         # weights (1001 x 2), rows sum to 1
+O   <- A2 %*% Hd                        # attention output (1001 x 2)
+out <- x_all + O                        # residual add
+
+test_wts <- 
+  tibble(weight = A2[1001,], point = 1:15) |> 
+  bind_cols(
+    summary_mat |> as_tibble()
+  ) |> 
+  arrange(desc(weight)) |> 
+  mutate(type = factor("Inducer", levels = point_types))
+
+
+test_val <- out
+colnames(test_val) <- LETTERS[1:2]
+test_val <- 
+  as_tibble(test_val) |> 
+  slice_tail(n = 1)
+
+test_tmp <- bind_cols(
+  embd_test |> select(A, B), 
+  test_val |>  set_names(c("A_sum", "B_sum"))
+) |> 
+  mutate(type = factor("Test", levels = point_types))
+
+p_2 <- 
+  embd_train |> 
+  ggplot(aes(A, B)) + 
+  geom_point(aes(pch = type, col = type), alpha = 0.2, cex = 1,
+             show.legend = FALSE) + 
+  geom_point(data = embd_test, pch = 17, cex = 3, show.legend = FALSE, col = type_cols[3]) +
+  geom_point(data = test_wts, aes(A, B, size = weight),
+             alpha = 2 / 3, col = type_cols[2],
+             show.legend = FALSE) + 
+  geom_segment(
+    data = test_tmp,
+    aes(xend = A_sum, yend = B_sum),
+    linewidth = 1 / 2,
+    arrow = arrow(length = unit(0.15, "cm"), type = "closed"),
+    show.legend = FALSE, col = type_cols[3]
+  ) +
+  scale_color_manual(values = type_cols) +
+  scale_shape_manual(values = c(16, 16, 17)) +
+  coord_fixed(ratio = 1.2) +
+  theme_bw() +
+  labs(color = NULL, pch = NULL, title = "Stage 2") 
+```
+
+```{r}
+#| label: fig-cross-attention
+#| echo: false
+#| out-width: 95%
+#| fig-width: 8
+#| fig-height: 3
+#| dev: "ragg_png"
+#| warning: false
+#| fig-cap: "A demonstration of cross-attention"
+
+p_0 + p_1 + p_2 + 
+  plot_layout(guides = "collect") & 
+  theme(legend.position = "bottom")
+```
+
+The middle panel shows how cross-attention uses the training-set points to shift the 15 values in $\boldsymbol{H}_{ind}$, some of which were outside the mainstream of the training data, towards the center of the training data.  
+
+The second stage of cross-attention uses all data (train and test) as queries, with $\boldsymbol{H}_{ind}$ as keys and values. The right panel shows that the single test sample was shifted toward the upper-right of the distribution. The variable-sized red points indicate the attended inducer points, and their sizes reflect the extent to which the test sample attended to each reference point. Although not shown in this figure, the entire training set was also adjusted. That trend showed a moderate compression of the distribution towards the center, much like the effect observed in the induced samples. 
+
+This two-stage process repeats in each of the three blocks, with each block's output feeding the next.
+
+
+
+
 
 #### Column Aggregator
 
