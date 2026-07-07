@@ -2261,6 +2261,111 @@ Training proceeded over 2 million iterations, each with a batch size of 64 data 
 
 @bilovs2026mechanistic 
 
+For v3; this can change from version to version. Much of this descritption is from the source code; the intent is not always written down. 
+
+What is the structure of TabPFN's network? Keeping to the same convention used above, where is a summary for the forestation data: 
+
+* **Preprocessing** (no parameters): each of the 16 columns is mean-imputed and standardized, and a completeness indicator column is computed alongside each feature. Output: two 16$-wide tables (values and indicators).
+
+* **Feature grouping** (no parameters): each cell is replaced by a circular-shifted group of $g = 3$ sibling columns, concatenated with their 3 indicators, giving 6 values per cell.
+
+* **Cell embedding layer** maps each cell's 6 values to a 128-dimensional vector:
+  * Linear operation from 6 to 128: 6 × 128 + 128 = 896 parameters (includes 128 bias terms)
+  * Target-aware term: each training row's class label is added to all of its column tokens via a 10 × 128 orthogonal embedding table, using 1,280 parameters
+
+* **Feature-distribution embedder**: 3 identical induced-self-attention blocks, applied per column with shared weights, 8 attention heads (head dimension 16) and 128 inducing points. The output dimension is 128 for each column.
+  * Each block, using 289,872 parameters:
+    * 128 learnable inducing vectors (128 dimensions each) using 16,384 parameters
+    * Cross-attention block 1 (inducing points attend to training rows) using 142,032 parameters
+        * Query/key/value/output projections: 4 × (128 × 128) = 65,536 parameters
+        * Query-scaling MLP using 10,576 parameters
+        * GELU MLP with layer sizes [128, 256, 128] using 65,536 parameters
+        * 3 layer normalizations (128 dimensions) using 384 parameters
+    * Cross-attention block 2 (all rows attend to the inducing points) using 131,456 parameters (same as block 1, without the query-scaling MLP)
+  * Feature-distribution embedder parameters: 3 × 289,872 = 869,616
+
+* **Column aggregator** (cross-feature interaction): 4 learnable target tokens are prepended to each row's 16 column tokens, giving a sequence of 20 tokens; 3 transformer blocks with 8 heads and rotary positional embeddings, the last of which reads out only the 4 target tokens. The output shape is (4 × 128) per row.
+  * 4 target tokens (128 dimensions each) using 512 parameters
+  * Rotary positional embedding frequencies (fixed, non-learnable): 8 values
+  * Output layer normalization (128 dimensions) using 128 parameters
+  * Each block, using 131,328 parameters:
+      * Self-attention (query/key/value/output projections): 4 × (128 × 128) = 65,536 parameters
+      * GELU MLP with layer sizes [128, 256, 128] using 65,536 parameters
+      * 2 layer normalizations (128 dimensions) using 256 parameters
+  * Column aggregator parameters: 512 + 8 + 128 + 3 × 131,328 = 394,632
+
+* **Flatten to the ICL dimension** (no parameters): the 4 CLS vectors are concatenated into a per-row embedding of dimension $D = 4 \times 128 = 512$.
+
+* **In-context (ICL) target encoder**: each training row's class label is added to its pooled token via a 10 × 512 orthogonal embedding table, using 5,120 parameters.
+
+* **ICL transformer**: 24 identical blocks with 8 attention heads (head dimension 64), where test rows attend to training rows only. The output dimension is 512 for each row.
+  * Each block, using 2,139,904 parameters:
+      * Attention (query/key/value/output projections): 4 × (512 × 512) = 1,048,576 parameters
+      * Query-scaling MLP using 41,728 parameters
+      * GELU MLP with layer sizes [512, 1024, 512] using 1,048,576 parameters
+      * 2 layer normalizations (512 dimensions) using 1,024 parameters
+  * ICL transformer parameters: 24 × 2,139,904 = 51,357,696
+  * Followed by an output layer normalization (512 dimensions) using 512 parameters
+
+* **Output head** output shape is $C = 2$
+  * Many-class retrieval decoder with head dimension 64 and 6 heads:
+      * Query projection (test embeddings, 512 to 384): 512 × 384 + 384 = 196,992 parameters
+      * Key projection (train embeddings, 512 to 384): 512 × 384 + 384 = 196,992 parameters
+      * Attention retrieves a score-weighted average of the one-hot training labels (the values are the labels themselves, not learned), then takes the log to produce class logits.
+  * Output head parameters: 393,984
+
+In total, there are 53,023,736 learnable parameters that have already been estimated. This count is the same regardless of the number of predictors, the number of categorical levels, or the number of classes (as long as they are within the model's supported range).
+
+#### Initial Internal Preprocessing
+
+Initially, each entry of the predictor table is conceptualized as a _cell_. Every value is transformed into a two-element vector containing the predictor value and an integer indicating its completeness:
+
+- $0$ for finite and observed values
+- $-2$ when data are missing
+- $+2$ for positive infinity
+- $+4$ fpr negative infinity
+
+In other words, we begin with $n$ rows and $p$ columns, and each value is represented as a two-dimensional vector.
+
+Next, every non-finite value (i.e., missing and $\pm$infinite) is mean-imputed using the column means of the complete (finite) values from the training set. Only the predictor values are altered; the completeness integers are never imputed or rescaled.
+
+Finally, a centering-and-scaling step is applied using statistics from the imputed training set. Because the imputation mean equals the complete-case column mean, it is subtracted back out during centering, so every value that was originally non-finite ends up encoded as (approximately) zero.
+
+#### Feature Groupings
+
+TabPFN reorganizes the cells into groups whose values are reused across neighbors. Our data stay $n \times p$, but each cell — previously two numbers (value + completeness indicator) — now packs together $g = 3$ of the original cells, for a total of six numbers. Here $g$ is the number of features per group and defaults to 3; there are $p$ groups, one anchored at each column.
+
+To define each group, a circular shift gathers neighbors: for a column, it collects the values sitting a fixed number of positions to the right, wrapping past the last column back to the first. The offsets are $2^i$ for $i = 0, 1, 2$, i.e., 1, 2, and 4 positions. Illustrating the shift on predictors $A, B, C, D, E$:
+
+- shift 1: $B, C, D, E, A$
+- shift 2: $C, D, E, A, B$
+- shift 4: $E, A, B, C, D$
+
+These three shifted copies are stacked to form the groups. Take predictor $C$ in column 3: its group becomes $(D, E, B)$. _Positionally_, column 3 is still $C$'s cell and it now carries $C$'s neighbors. However, literally, it does not value $C$'s values^[However, for some values of $p$, the shifting might put a predictor back into its original position.]. $C$'s own value is reused in the groups of three other columns (1, 2, and 4).
+
+With many columns, the grouped neighbors are genuinely nearby columns. This can be very effective when the columns have a natural sequential or spatial ordering. For example, recall that the barley predictors in @sec-barley represented consecutive wavelengths in a spectra. For this type of data, this additional column-neighborhood data can be very effective. 
+
+Either way, the point is the same: each cell is pre-loaded with a little local cross-feature context, so when attention and later operations run, every element already carries some information about its potential neighbors.
+
+#### Initial Cell Embedding
+
+After grouping, a linear operation created an embedding via
+
+$$
+\boldsymbol{H}_{ij} = \boldsymbol{W}_{emb}\, \boldsymbol{x}_{ij} + \boldsymbol{b}_{emb}.
+$$
+
+where $\boldsymbol{W}_{emb}$ is (128 x 6) and there are 128 bias terms. 
+
+#### Target-aware Embedding
+
+#### Feature-Distribution Embedding
+
+#### Column Aggregator
+
+#### Many-class Retrieval Decoder
+
+
 ### In Context Learning
 
 To better understand, the training set was sampled in various sizes, and these data were used to initialize the model. To measure performance, out-of-sample predictions were generated^[Unfortunately, using the test set.], and the Brier score and the area under the ROC curve were computed. This was repeated 25 times, and the random numbers used to sample the training set were standardized so that both implementations used the same data in each replicate. 
