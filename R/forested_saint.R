@@ -1,6 +1,6 @@
 # pak::pak(c("tidymodels/tabular@saint"), ask = FALSE)
 library(tidymodels)
-library(tabular)
+library(tabby)
 library(bestNormalize)
 library(spatialsample)
 library(finetune)
@@ -87,9 +87,11 @@ saint_param <-
   saint_wflow |>
   extract_parameter_set_dials() |>
   update(
-    num_embedding = num_embedding(c(2, 50)),
-    hidden_units = hidden_units(c(2, 50)),
-    batch_size = batch_size(c(4, 9))
+    num_embedding = num_embedding(c(5, 50)),
+    hidden_units = hidden_units(c(5, 50)),
+    batch_size = batch_size(c(4, 9)),
+    momentum = momentum(c(0.5, 0.95)),
+    rate_schedule = rate_schedule(values_scheduler[-3]) # No expo decay
   )
 
 set.seed(12)
