@@ -2263,9 +2263,19 @@ Training proceeded over 2 million iterations, each with a batch size of 64 data 
 
 @bilovs2026mechanistic 
 
-For v3; this can change from version to version. Much of this descritption is from the source code; the intent is not always written down. Key constants: $p_{emb} = 128$, $C_{max} = 10$, $p_{agg} = 512$
+For v3; this can change from version to version. Much of this descritption is from the source code; the intent is not always written down. Key constants: 
 
-What is the structure of TabPFN's network? Keeping to the same convention used above, where is a summary for the forestation data: 
+TabPFN3 has a few constants for parameters that could potentially change in the future. These are: 
+
+- The maximum number of classes: $C_{max} = 10$
+- The default embedding dimension: $p_{emb} = 128$
+- The standardized aggregation dimension: $p_{agg} = 512$
+- The number of aggregation tokens: $k = 4$
+- The number of distribution prototype vectors: $p_{proto} = 128$
+
+These numbers will be used in the details below, but may change in future versions. 
+
+What is the structure of TabPFN's network? Keeping to the same convention used above, here is a summary for the forestation data: 
 
 1. **Preprocessing** (no parameters):
    * Each of the 16 columns is mean-imputed and standardized
@@ -2274,74 +2284,76 @@ What is the structure of TabPFN's network? Keeping to the same convention used a
 2. **Feature grouping** (no parameters)
    * Each cell is replaced by a circular-shifted group of $g = 3$ sibling columns, concatenated with their 3 indicators, giving 6 values per cell.
 3. **Cell embedding layer** maps each cell's 6 values to a 128-dimensional vector:
-   * Linear operation from 6 to 128: 6 × 128 + 128 = 896 parameters (includes 128 bias terms)
+   * Linear operation from 6 to 128: 896 parameters
    * Target-aware term: each training row's class label is added to all of its column tokens via a 10 × 128 orthogonal embedding table, using 1,280 parameters
-4. **Feature-distribution embedder**: 3 identical induced-self-attention blocks (each time 2 stages). The output dimension is 128 for each column.
+4. **Feature-distribution embedder**: 3 identical induced-self-attention blocks (each time 2 stages). The output dimension is 128 per column.
    * Each block, using 289,872 parameters:
-    * 128 learnable inducing vectors (128 dimensions each) using 16,384 parameters
-    * Cross-attention stage 1 (inducing points attend to training rows) using 142,032 parameters
-        * Query/key/value/output projections: 4 × (128 × 128) = 65,536 parameters
-        * Quaery multiplier via MLI using 10,576 parameters
+    * 128 learned prototype vectors (128 dimensions each) using 16,384 parameters
+    * Cross-attention Stage 1
+        * QKV projections: 65,536 parameters
+        * Query multiplier via MLP: 10,576 parameters
         * GELU MLP with layer sizes [128, 256, 128] using 65,536 parameters
-        * 3 layer normalizations (128 dimensions) using 384 parameters
-    * Cross-attention stage 2 (all rows attend to the inducing points) using 131,456 parameters
-   * Feature-distribution embedder parameters: 3 × 289,872 = 869,616
-5. **Column aggregator** (cross-feature interaction): 4 learnable pooling tokens are prepended to each row's 16 column tokens, giving a sequence of 20 tokens; 3 transformer blocks with 8 heads and rotary positional embeddings, the last of which reads out only the 4 pooling tokens. The output shape is (4 × 128) per row.
-   * 4 pooling tokens (128 dimensions each) using 512 parameters
+        * 3-layer normalizations (128 dimensions) using 384 parameters
+    * Cross-attention Stage 2 
+   * Feature-distribution embedder parameters: 869,616
+5. **Column aggregator** (cross-feature interaction): 4 learned aggregation tokens are prepended to each row's 16 column tokens, giving a sequence of 20 tokens; 3 transformer blocks with 8 heads. The output shape is (4 × 128) per row.
+   * 4 aggregation tokens (128 dimensions each) using 512 parameters
    * Rotary positional embedding frequencies (fixed, non-learnable): 8 values
    * Output layer normalization (128 dimensions) using 128 parameters
    * Each block, using 131,328 parameters:
-      * Self-attention (query/key/value/output projections): 4 × (128 × 128) = 65,536 parameters
+      * Self-attention QKV projections:  65,536 parameters
       * GELU MLP with layer sizes [128, 256, 128] using 65,536 parameters
-      * 2 layer normalizations (128 dimensions) using 256 parameters
-   * Column aggregator parameters: 512 + 8 + 128 + 3 × 131,328 = 394,632
-   * Flatten to the ICL dimension (no parameters): the 4 CLS vectors are concatenated into a per-row embedding of dimension $D = 4 \times 128 = 512$.
+      * 2-layer normalizations (128 dimensions) using 256 parameters
+   * Column aggregator parameters:  394,632
+   * Flatten to the ICL dimension (no parameters): the 4 pooling vectors are concatenated into a per-row embedding of dimension k = 4 x 128 = 512.
 7. **In-context (ICL) target encoder**: each training row's class label is added to its pooled token via a 10 × 512 orthogonal embedding table, using 5,120 parameters.
 8. **ICL transformer**: 24 identical blocks with 8 attention heads (head dimension 64), where test rows attend to training rows only. The output dimension is 512 for each row.
    * Each block, using 2,139,904 parameters:
-      * Attention (query/key/value/output projections): 4 × (512 × 512) = 1,048,576 parameters
+      * Cross-attention QKV projections: 1,048,576 parameters
       * Query-scaling MLP using 41,728 parameters
       * GELU MLP with layer sizes [512, 1024, 512] using 1,048,576 parameters
-      * 2 layer normalizations (512 dimensions) using 1,024 parameters
-   * ICL transformer parameters: 24 × 2,139,904 = 51,357,696
+      * 2-layer normalizations (512 dimensions) using 1,024 parameters
+   * ICL transformer parameters: 51,357,696
    * Followed by an output layer normalization (512 dimensions) using 512 parameters
-9. **Output head** output shape is $C = 2$
+9. **Output head** output shape is $n_{te} \times C$
    * Many-class retrieval decoder with head dimension 64 and 6 heads:
-      * Query projection (test embeddings, 512 to 384): 512 × 384 + 384 = 196,992 parameters
-      * Key projection (train embeddings, 512 to 384): 512 × 384 + 384 = 196,992 parameters
-      * Attention retrieves a score-weighted average of the one-hot training labels (the values are the labels themselves, not learned), then takes the log to produce class logits.
+      * Query projection (test embeddings, 512 to 384): 196,992 parameters
+      * Key projection (train embeddings, 512 to 384): 196,992 parameters
+      * Initial class probability estimates.
+      * Logit transformation
+      * Softmax
    * Output head parameters: 393,984
 
-In total, there are 53,023,736 learnable parameters that have already been estimated. This count is the same regardless of the number of predictors, the number of categorical levels, or the number of classes (as long as they are within the model's supported range).
+In total, there are 53,023,736 learned parameters that have already been estimated. This count is the same regardless of the number of predictors, the number of categorical levels, or the number of classes (as long as $C \le C_{max}$).
 
 #### Initial Internal Preprocessing {#sec-cls-pfn-preprocessing}
 
 Initially, each entry of the predictor table is conceptualized as a _cell_. Every value is transformed into a two-element vector containing the predictor value and an integer indicating its completeness:
 
-- $0$ for finite and observed values
-- $-2$ when data are missing
-- $+2$ for positive infinity
-- $+4$ fpr negative infinity
+- 0 for finite and observed values
+- -2 when data are missing
+- +2 for positive infinity
+- +4 for negative infinity
 
-In other words, we begin with $n$ rows and $p$ columns, and each value is represented as a two-dimensional vector.
+In other words, we begin with $n$ rows and $p$ columns, and each cell is represented as a two-dimensional vector.
 
 Next, every non-finite value (i.e., missing and $\pm$infinite) is mean-imputed using the column means of the complete (finite) values from the training set. Only the predictor values are altered; the completeness integers are never imputed or rescaled.
 
-Finally, a centering-and-scaling step is applied using statistics from the imputed training set. Because the imputation mean equals the complete-case column mean, it is subtracted back out during centering, so every value that was originally non-finite ends up encoded as (approximately) zero.
+Finally, a centering-and-scaling step is applied using statistics from the imputed training set. Because the imputation mean equals the complete-case column mean, it is subtracted back out during centering, so every value that was originally missing or infinite ends up encoded as (approximately) zero.
 
 #### Feature Groupings {#sec-cls-pfn-feature-grouping}
 
-TabPFN reorganizes the cells into groups whose values are reused across neighbors. Our data stay $n \times p$, but each cell — previously two numbers (value + completeness indicator) — now packs together $g = 3$ of the original cells, for a total of six numbers. Here $g$ is the number of features per group and defaults to 3; there are $p$ groups, one anchored at each column.
+TabPFN reorganizes the cells into groups whose values are reused across neighboring columns. Our data stays $n \times p$, but each cell — previously two numbers (value + completeness indicator) — now packs together $g = 3$ of the original cells, for a total of six numbers. Here $g$ is the number of features per group and defaults to 3; there are $p$ groups, one anchored at each column.
 
-To define each group, a circular shift gathers neighbors: for a column, it collects the values sitting a fixed number of positions to the right, wrapping past the last column back to the first. The offsets are $2^i$ for $i = 0, 1, 2$, i.e., 1, 2, and 4 positions. Illustrating the shift on predictors $A, B, C, D, E$:
+To define each group, a circular shift gathers neighboring columns: for a given column, it collects the values a fixed number of positions to the right, wrapping around the last column(s) back to the first. The offsets are $2^i$ for $i = 0, 1, 2$, i.e., 1, 2, and 4 positions. Illustrating the shift on predictors `A`, `B`, `C`, `D`, `E`:
 
-- shift 1: $B, C, D, E, A$
-- shift 2: $C, D, E, A, B$
-- shift 4: $E, A, B, C, D$
+- shift 1: `B`, `C`, `D`, `E`, `A`
+- shift 2: `C`, `D`, `E`, `A`, `B`
+- shift 4: `E`, `A`, `B`, `C`, `D`
 
-These three shifted copies are stacked to form the groups. Take predictor $C$ in column 3: its group becomes $(D, E, B)$. _Positionally_, column 3 is still $C$'s cell and it now carries $C$'s neighbors. However, literally, it does not value $C$'s values^[However, for some values of $p$, the shifting might put a predictor back into its original position.]. $C$'s own value is reused in the groups of three other columns (1, 2, and 4).
+These three shifted copies are stacked to form the groups. Take predictor `C` in column 3: its group becomes (`D`, `E`, `B`). _Positionally_, column 3 is still `C`'s cell, and it now carries `C`'s neighbors. However, _literally_, it does not contain `C`'s values^[However, for some values of $p$, the shifting might put a predictor back into its original position.]. `C`'s own value is reused in the groups of three other columns (1, 2, and 4).
 
-With many columns, the grouped neighbors are genuinely nearby columns. This can be very effective when the columns have a natural sequential or spatial ordering. For example, recall that the barley predictors in @sec-barley represented consecutive wavelengths in a spectra. For this type of data, this additional column-neighborhood data can be very effective. 
+With many columns, the grouped neighbors are genuinely nearby columns. This can be very effective when the columns have a natural sequential or spatial ordering. For example, recall that the barley predictors in @sec-barley represented 550 consecutive wavelengths in a spectrum. For this type of data, this additional column-neighborhood data can be very effective. 
 
 Either way, the point is the same: each cell is pre-loaded with a little local cross-feature context, so when attention and later operations run, every element already carries some information about its potential neighbors.
 
@@ -2353,37 +2365,42 @@ $$
 \boldsymbol{H}_{ij} = \boldsymbol{W}_{emb}\, \boldsymbol{x}_{ij} + \boldsymbol{b}_{emb}.
 $$
 
-where $\boldsymbol{W}_{emb}$ is (128 x 6) and there are 128 bias terms. Note that this process is a linear projection from 6 columns to $p_{emb} = 128$. Both the predictor's _values_ and completness _indicators_ are blended in this projection; there is no separate indicator channel form this point on.
+where $\boldsymbol{W}_{emb}$ is (128 x 6) and there are 128 bias terms. Note that this process is a linear projection from 6 columns to $p_{emb} = 128$. Both the predictor's _values_ and completeness _indicators_ are blended in this projection; there is no separate indicator channel from this point on.
 
-The influence of the target classes are added to the cell embedding, but only for the training data. 
+The influence of the target classes is added to the cell embedding, but only for the training data. 
 
-Each class is represented by a pre-learned 128-dimensional vector. These vectors are initialized to be orthonormal^[They have a length of one and have pairwise dot products of zero.], which keeps the classes maximally distinguishable at the start of training; they are then learned during pretraining. TabPFN has a hard limit on the number of classes, $C_{max}$ and creates a static table $\boldsymbol{Y}$ of size $C_{max} \times 128$. When the data have $C < C_{max}$ classes, only the $C$ corresponding rows are ever looked up.
+Each outcome class is represented by a pre-learned 128-dimensional vector. These vectors are initialized to be orthonormal^[They have a length of one and have pairwise dot products of zero.], which keeps the classes maximally distinguishable at the start of training; they are then learned during pretraining. TabPFN has a hard limit on the number of classes, $C_{max}$, and creates a static table $\boldsymbol{Y}_{emb}$ of size $C_{max} \times 128$. 
 
-For the training data, the appropriate row of $\boldsymbol{Y}$  is added to every one of that row's cell embeddings (the same vector across all 128 columns), nudging them in the "direction" of the class. The test data are kept as-is. 
+For the training data, the appropriate row of $\boldsymbol{Y}_{emb}$ is added to each cell embedding in that row (the same vector across all 128 columns), nudging them toward the class associated with that row. The test data are kept as-is. 
 
-#### Feature-Distribution Embedding {#sec-cls-pfn-distirbution}
+#### Feature-Distribution Embedding {#sec-cls-pfn-distribution}
 
-Before proceeding, recall that each cell in our $n \times p$ array is now a 128-dimensional vector, and that here a "feature" is one of the $p$ columns.
+Before proceeding, recall that each cell in our $n \times p$ array is now a 128-dimensional vector/ From this point on, we'll refer to a single column as a feature.
 
 The feature-distribution embedder serves several purposes. First, it makes the model robust to arbitrary distributions in the current dataset. Because these foundation models are pretrained on a large number of synthetic datasets with widely varying distributions, the frozen model must represent a value by where it sits in its feature's distribution rather than by its raw magnitude. This achieves a normalization-like invariance. However, unlike the fixed centering/scaling used in preprocessing, it is achieved through a learned, nonlinear mechanism whose parameters were tuned during pretraining precisely because this improved predictions.
 
-Second, this process will use a version of row attention. This produces a learned co-representation for a single feature at a time. Each row's embedding is re-expressed as a learned function of the other rows in its column. The model will have to compare rows from the training set to rows from the test set. This sets up an apples-to-apples comparison between the two that will occur during the in-context learning portion of the model.
+Second, this process will use a version of row attention. This produces a learned co-representation for a single feature at a time. Each row's embedding is re-expressed as a learned function of the other rows in its column. The model will eventually have to compare rows from the training set to rows from the test set. This sets up an apples-to-apples comparison between the two that will occur during the in-context learning portion of the model.
 
-The attention process used here is a little different from the one described in @sec-cls-attention. We previously focused on _self_-attention.  In our current situation, _cross-attention_ uses one data source for the queries and another for the keys and values. 
+The attention process used here is a little different from the one described in @sec-cls-attention. We previously focused on _self_-attention.  In our current situation, *cross-attention* uses one data source for the queries and another for the keys and values. 
 
-The cross-attention block has many moving parts. Before we get deep into the minutiae, let's illustrate the primary computations using an extremely simplified scenario. For example, the real process has many supervised components and a high dimensionality (128). The example shown below is unsupervised and in two raw dimensions. This will give us a sense of what this part of the network is doing without getting buried in details. This illustration will be inaccurate, but hopefully helpful. We'll follow this with a description of the actual process. 
+The cross-attention block has many moving parts, and we'll see its pattern applied repeatedly later in the network. Before we get deep into the minutiae, let's illustrate the primary computations using an extremely simplified scenario. For example, the real process has many supervised components and a high dimensionality (128). The example shown below is unsupervised and in two raw dimensions. This will give us a sense of what this part of the network is doing without getting buried in details. This illustration won't have perfect fidelity to the actual process, but will demonstrate the goal of cross-attention. We'll follow this with a description of the complete process. 
 
-The current TabPFN model uses three attention blocks in this section. Each has its own pretrained set of learned query inputs, denoted as $\boldsymbol{P}$, that is 128 x 128. These 128 rows are called the _inducing_ points, and we can think of them as representatives or prototype vectors for the data distributions^[That the number of inducing points ($n_{ind}=128$) equals the embedding dimension ($p_{emb}=128$) is coincidental.]. They are used as the query data for attention, while our embeddings serve as the keys and values (as we'll see shortly). 
+The current TabPFN model uses three attention blocks for its feature-distribution embedding. Each cross-attention block contains two stages: 
 
-This stage uses row attention. Within a single feature (column), the rows attend to one another. This is done indirectly here by having the inducing points $\boldsymbol{P}$ attend to the training rows' embeddings for that feature. Our first action is to use cross-attention with the $n_{tr}$ training points. This produces an array of size $n_{ind} \times p_{emb}$ (128 x 128) containing the attended training rows influenced by the inducers. We also add a residual connection back to the original inducer data. We'll label the results as $\boldsymbol{H}_{ind}$, and they can be thought of as distributional reference values. 
+* Stage 1, where prototype points attend to training rows.
+* Stage 2, where all rows attend to the prototype points.
 
-@fig-cross-attention shows a simplified low-dimensional example. The left panel shows the training set from @fig-nnet-ex, along with 16 inducer points^[We chose these inducers to be a regular grid not because they are realistic but to show how the resulting values change during this process.] in red and a single test point in green. These computations are simplified by omitting the initial embedding process, setting the attention matrices to the identity matrix (such as $\boldsymbol{W}^{q} = \boldsymbol{I}$, etc.), and omits a few ancillary steps.
+Stage 1 has its own pretrained set of learned query inputs, denoted as $\boldsymbol{P}$, that is 128 x 128. These 128 rows are prototype vectors^[That the number of prototype vectors ($n_{prot}=128$) equals the embedding dimension ($p_{emb}=128$) is coincidental.]. Prototypes in machine learning are vectors chosen or estimated to represent a distribution [@HastieEtAl2017; chapt. 13]. These can be data points selected from a sample or estimated. We've seen a primative version of this in @sec-centroids where the centroids of a multivariate distribution for each class could be used as supplementary features. K-means clustering [@steinley2006k], learned vector quantization [@kohonen1995learning], and mixture discriminant analysis [@hastie1996discriminant] are more conventional methods that use multiple vectors to represent a more general distribution. The values in $\boldsymbol{P}$ are used as the query data for attention, while our embeddings serve as the keys and values (as we'll see shortly). 
+
+Both stages use row attention. Within a single feature (column), the rows attend to one another. This is done indirectly here by having the prototype points $\boldsymbol{P}$ attend to the training rows' embeddings for that feature. Our first action is to use cross-attention with the $n_{tr}$ training points. This produces an array of size $n_{prot} \times p_{emb}$ (128 x 128) containing the attended training rows influenced by the prototypes. We also add a residual connection back to the original prototype vectors. We'll label the results as $\boldsymbol{H}_{prot}$, and they can be thought of as distributional reference values. 
+
+@fig-cross-attention shows a simplified low-dimensional example. The left panel shows the training set from @fig-nnet-ex, along with 16 prototype points^[We chose these prototypes to be a regular grid, not because they are realistic, but to show how the resulting values change during this process.] in red and a single test point in black. These computations are simplified by omitting the initial embedding process, setting the attention matrices to the identity matrix (such as $\boldsymbol{W}^{q} = \boldsymbol{I}$, etc.), and omitting a few ancillary steps.
 
 ```{r}
 #| label: cross-attention
 #| include: false
-point_types <- c("Training", "Inducer", "Test")
-type_cols <- c("#088BBEFF", "#FF3F38FF", "#3CBC38FF")
+point_types <- c("Training", "Prototype", "Test")
+type_cols <- c("#088BBEFF", "#FF3F38FF", "#252525")
 
 embd_train <-
   dat_2d_train |>
@@ -2396,26 +2413,26 @@ embd_test <-
   mutate(type = factor("Test", point_types))
 
 seq_4 <- seq(-3, 3, length.out = 4)
-inducers <-
+prototypes <-
   crossing(A = seq_4, B = seq_4) |>
   scale() |>
   as_tibble() |>
-  mutate(type = factor("Inducer", levels = point_types))
+  mutate(type = factor("Prototype", levels = point_types))
 
-num_ind <- nrow(inducers)
+num_ind <- nrow(prototypes)
 
 # ------------------------------------------------------------------------------
 # cross attention calcs
 
 # convert to matrices
-p_mat <- inducers |> select(1:2) |> as.matrix()
+p_mat <- prototypes |> select(1:2) |> as.matrix()
 tr_mat <- embd_train |> select(1:2) |> as.matrix()
 te_mat <- embd_test |> select(1:2) |> as.matrix()
 x_all <- rbind(tr_mat, te_mat) |> scale()
 
 softmax <- function(x) exp(x - max(x)) / sum(exp(x - max(x)))
 scale_term <- sqrt(2) # sqrt(p_emb), with p_emb = 2
-# queries = the 6 inducing points; keys/values = the n training rows
+# queries = the 6 prototype points; keys/values = the n training rows
 S1 <- (p_mat %*% t(tr_mat)) / scale_term # scores  (num_ind x 1000)
 attn_wts_1 <- t(apply(S1, 1, softmax)) # weights (num_ind x 1000), rows sum to 1
 Hd <- p_mat + (attn_wts_1 %*% tr_mat) # panel   (num_ind x 1000)
@@ -2441,7 +2458,7 @@ test_wts <-
     summary_mat |> as_tibble()
   ) |>
   arrange(desc(weight)) |>
-  mutate(type = factor("Inducer", levels = point_types))
+  mutate(type = factor("Prototype", levels = point_types))
 
 test_val <- out
 colnames(test_val) <- LETTERS[1:2]
@@ -2457,8 +2474,8 @@ test_tmp <- bind_cols(
 
 # ------------------------------------------------------------------------------
 
-crs_att_x <- extendrange(c(inducers$A, test_wts$A))
-crs_att_y <- extendrange(c(inducers$B, test_wts$B))
+crs_att_x <- extendrange(c(prototypes$A, test_wts$A))
+crs_att_y <- extendrange(c(prototypes$B, test_wts$B))
 
 p_0 <-
   embd_train |>
@@ -2466,7 +2483,7 @@ p_0 <-
   geom_point(aes(pch = type, col = type), alpha = 0.15, cex = 1) +
   geom_point(
     aes(pch = type, col = type),
-    data = inducers,
+    data = prototypes,
     cex = 2.5,
     alpha = 3 / 4
   ) +
@@ -2485,10 +2502,10 @@ p_1 <-
 
 for (i in 1:num_ind) {
   dat_tmp <- bind_cols(
-    inducers |> slice(i),
+    prototypes |> slice(i),
     summary_df |> slice(i) |> set_names(c("A_sum", "B_sum"))
   ) |>
-    mutate(type = factor("Inducer", levels = point_types))
+    mutate(type = factor("Prototype", levels = point_types))
   p_1 <-
     p_1 +
     geom_segment(
@@ -2546,7 +2563,7 @@ p_2 <-
 #| out-width: 100%
 #| fig-width: 10
 #| fig-height: 3.5
-#| fig-cap: An simplified illustration of cross-attention. The data are scaled versions of the values in @fig-nnet-ex.
+#| fig-cap: A simplified illustration of cross-attention. The data are scaled versions of the values in @fig-nnet-ex.
 
 p_0 +
   p_1 +
@@ -2555,30 +2572,32 @@ p_0 +
   theme(legend.position = "bottom")
 ```
 
-The middle panel shows how cross-attention uses the training-set points to shift the 16 inducer points to $\boldsymbol{H}_{ind}$. The result is that the points are emulating the correlation structure in the original data, albeit with larger variances. The induced values occupy a space larger than the training data mainstream. 
+The middle panel shows how cross-attention uses the training-set points to shift the 16 prototype points to $\boldsymbol{H}_{prot}$. The result is that the points emulate the correlation structure of the original data, albeit with larger variances. The prototype values occupy a space larger than the training data mainstream. 
 
-The second stage of cross-attention uses all data (train and test) as queries, with $\boldsymbol{H}_{ind}$ as keys and values. The resulting attended values are also combined with their original values via a residual connection. 
+The second stage of cross-attention uses all data (train and test) as queries, with $\boldsymbol{H}_{prot}$ as keys and values. The resulting attended values are also combined with their original values via a residual connection. 
 
-The right panel shows that the single test sample was shifted toward the upper-right of the distribution. The variable-sized red points indicate the attended inducer points, and their sizes reflect the extent to which the test sample attended to each reference point^[Again, keep in mind that this has been an unsupervised example of how cross-attention works. The effect shown here isn't necessarily indicative of how cross-attention functions in the wild.]. 
+The right panel shows that the single test sample was shifted toward the upper-right of the distribution. The variable-sized red points indicate the attended prototype vectors, and their sizes reflect the extent to which the test sample attended to each reference point^[Again, keep in mind that this has been an unsupervised example of how cross-attention works. The effect shown here isn't necessarily indicative of how cross-attention functions in the wild.]. While not shown, the training set maintains its shape but with a wider distribution than before. 
 
-The literature often describes operations like these as "distributionally aware." Beyond the anthropomorphizing, this term doesn't really describe what is occurring. The inducing points are learned during pretraining and function as prototype vectors. Prototypes are learned vectors that act as "stand-ins" for a larger set of data. Since $\boldsymbol{P}$ is optimized by the objective function, it also serves as a prototype that carries some supervised tilt. In other words that are the best prototypes that encourage predictive accuracy. 
+The literature often describes operations like these as "distributionally aware." Beyond the anthropomorphizing, this term doesn't really describe what is occurring. The prototype points are learned during pretraining and function as prototype vectors. Prototypes are learned vectors that act as "stand-ins" for a larger dataset. Since $\boldsymbol{P}$ is optimized by the objective function, it also serves as a prototype that carries some supervised information. In other words that are the best prototypes that encourage predictive accuracy. 
 
-The first stage of cross-attention pulled our example prototypes into the mainstream of the data. It recontextualized the inducing points to _our_ data. 
+::: {.important-box}
+The first stage of cross-attention pulled our example prototypes into the mainstream of the data. It recontextualized the prototype points to _our_ data. 
 
-The second stage does the same thing but in reverse, and with our observed data. It pulls our data to the more realistic prototypes. The blended values are added to the row's own vector (the residual connection). This keeps the original information and gains information describing which prototypes it resembled and how strongly.
+The second stage does the same thing but in reverse, and with our observed data. It pulls our data to the more realistic prototypes. The blended values are added to the row's own vector (the residual connection). This preserves the original information and adds more information about which prototypes it resembled and how strongly.
+:::
 
-In reality, the process starts by normalizing the inducing points and our observed features. TabPFN uses RMSnorm to do this. Later on, we'll use some of the original values for a residual connection. 
+Now we will describe the actual process and all of its operations. The process starts by normalizing the prototype points and our observed features. TabPFN uses RMSnorm to do this. Later on, we'll use some of the original values for a residual connection. 
 
-After normalization, our previously described first stage of cross-attention occurs. The inducing points and the attention parameter matrices have all been estimated during pretraining. Operationally, the attention process is split into 8 attention heads, each taking 16 features from the full collection of 128, and coupling them with their corresponding columns of the attention $\boldsymbol{W}$ matrices. From this process, we have estimated the attention weights for the inducing points. 
+After normalization, our previously described first stage of cross-attention occurs. The prototype points and the attention parameter matrices have all been estimated during pretraining. Operationally, the attention process is split into 8 attention heads, each taking 16 features from the full collection of 128, and coupling them with their corresponding columns of the attention $\boldsymbol{W}$ matrices. From this process, we have estimated the attention weights for the prototype points. 
 
-However, the model takes an extra step to alter the attention weights. The concern is that the row-wise softmax operation, which coerces the attention weights to sum to 1, can lose focus when the training set is large. A multiplier for the queries is computed from two different MLP submodels adn then softmax is used. After this, the row-wise weights are coerced to sum to 1, and the attended inducing points are computed. These are denoted as $\boldsymbol{P}_a$
+However, the model takes an extra step to alter the attention weights. The concern is that the row-wise softmax operation, which coerces the attention weights to sum to 1, can lose focus when the training set is large. A multiplier for the queries is computed from two different MLP submodels, and then softmax is used. After this, the row-wise weights are coerced to sum to 1, and the attended prototype points are computed. These are denoted as $\boldsymbol{P}_a$
 
-The newly adjusted inducing points $\boldsymbol{P}_a$ are then combined with a residual connection to their values (pre-normalization), producing $\boldsymbol{P}_r$ . These values are then used in an MLP that first re-normalizes them, then uses layer sizes of (256, 128) and GELU activation (see @fig-relu-activations). The resulting features are then added back to $\boldsymbol{P}_r$ to produce our new prototypes previously labeled as $\boldsymbol{H}_{ind}$. Thus concludes the actual first stage of cross-attention. 
+The newly adjusted prototype points $\boldsymbol{P}_a$ are then combined with a residual connection to their values (pre-normalization), producing $\boldsymbol{P}_r$. These values are then used in an MLP that first re-normalizes them, then uses layer sizes of (256, 128) and GELU activation (see @fig-relu-activations). The resulting features are then added back to $\boldsymbol{P}_r$ to produce our new prototypes previously labeled as $\boldsymbol{H}_{prot}$. Thus concludes the first stage of cross-attention. 
 
 The second stage is the same as the first except that: 
 
 - The combined training and test data serve as queries.
-- $\boldsymbol{H}_{ind}$ plas the roles of keys and values. 
+- $\boldsymbol{H}_{prot}$ plas the roles of keys and values. 
 - There is no extra multiplier to improve the softmax since the dimensions are fixed at 128 due to the role changes.
 
 This two-stage process repeats in each of the three blocks, with each block's output feeding the next.
@@ -2588,29 +2607,29 @@ This two-stage process repeats in each of the three blocks, with each block's ou
 The two primary goals of the column aggregator module are: 
 
 - Enact columnar self-attention to add more model capacity.
-- Regardless of the original dimensions of the data, pool/flatten the data to a smaller but standardized size.
+- Regardless of the original dimensions of the data, pool/flatten the data to a smaller but standardized dimension.
 
-The second point is interesting. In our data, the number of columns $p$ will vary from dataset to dataset. However, the foundational model has been trained with specific fixed dimensions. This part of the network is here to rectify this discontinuity. 
+The second point is interesting. In our data, the number of columns $p$ will vary across datasets. However, the foundational model has been trained with specific fixed dimensions. This part of the network is here to rectify this discontinuity. 
 
 Data-wise, let's look at where we currently are. Coming into this module, our embedding data are still $n \times p$ where each cell in that array is a 128-dimensional vector. For each row, the embedding data are
 
 $$
-\boldsymbol{E}_i = \bigl[\boldsymbol{e}_{i,1}, \dots, \boldsymbol{e}_{i,p} \bigr] \quad (p \times p_{emb})
+\boldsymbol{E}_i = \bigl[\boldsymbol{e}_{i1}, \dots, \boldsymbol{e}_{ip} \bigr] \quad (p \times p_{emb})
 $$
 
 where each $\boldsymbol{e}$ is a vector of size $p_{emb} = 128$. 
 
-The column aggregator will not augment that data structure with some pretrained values that we'll call pooling tokens^[Historically, these would be called "CLS tokens" where CLS was an abbreviation for the target classes. To avoid the connotation of being cupervised, we'll call these pooling tokens.] and denote them as $\boldsymbol{t}$. For TabPFN version 3, there are $p_{agg} = 4$ tokens, each with a pretrained vector of $p_{emb} = 128$ learned parameter estimates. Now, for a given row, we have 
+The column aggregator will now augment that data structure with some pretrained values that we'll call aggregation tokens^[Historically, these would be called "CLS tokens" where CLS was an abbreviation for the target classes. To avoid the connotation of being cupervised, we'll call these aggregation tokens.] and denote them as $\boldsymbol{t}$. For TabPFN version 3, there are $p_{agg} = 4$ tokens, each with a pretrained vector of $p_{emb} = 128$ learned parameter estimates. Now, for a given row, we have 
 
 $$
-\boldsymbol{E}_i^+ = \bigl[\, \underbrace{\boldsymbol{t}_1, \dots, \boldsymbol{t}_4}_{k \text{ CLS tokens}},\ \underbrace{\boldsymbol{h}_{i1}, \dots, \boldsymbol{h}_{ip}}_{p \text{ embedding tokens}} \,\bigr]  \quad ((p + p_{agg}) \times p_{emb}).
+\boldsymbol{E}_i^+ = \bigl[\, \underbrace{\boldsymbol{t}_1, \dots, \boldsymbol{t}_4}_{k \text{ CLS tokens}},\ \underbrace{\boldsymbol{e}_{i1}, \dots, \boldsymbol{e}_{ip}}_{p \text{ embedding tokens}} \,\bigr]  \quad ((p + p_{agg}) \times p_{emb}).
 $$
 
-The same values are added to each row. These columns will come into play during the attention process in this block. They are designed to help summarize features within a row of data in order to reduce and standardize the feature dimension. They are not unlike the induced values in the previous block. The pooling tokens are designed to help aggregate the current data more effectively.  
+The same values are added to each row. These columns will come into play during the attention process in this block. They are designed to help summarize features within a row of data in order to reduce and standardize the feature dimension. They are not unlike the prototype vectors in the previous block. The aggregation tokens are designed to help aggregate the current data more effectively.  
 
-RoPE dicussion
+TODO RoPE discussion
 
-The primary operation in this module is a sequence of three column attention blocks. The first two are identical and very similar to previous discussions. The third is a bit different. 
+The primary operation in this module is a sequence of three column attention blocks. The first two are identical to one another and very similar to previous discussions. The third is a bit different. 
 
 The two traditional attention blocks have a straightforward set of steps: 
 
@@ -2621,19 +2640,24 @@ The two traditional attention blocks have a straightforward set of steps:
 5. A standard MLP architecture with two layers with (256, 128) units and GELU activation. 
 6. Another residual connection to the data produced by Step 3. 
  
-The final block uses columnar cross-attention where the pooling tokens $\boldsymbol{t}_1, \dots, \boldsymbol{t}_4$ are the queries and the augmented data $\boldsymbol{E}_i^+$ are the keys and values. Since there are $p_{agg}=4$ queries, the output of this process is also reducing the embeddings down to $p_{agg}$ vectors. This is where the utility of the pooling tokens comes into play. If the pretraining worked well, this cross-attention block will have designed the $\boldsymbol{t}$ parameters very effective at projecting the set of feature columns to a potentially much smaller space. 
+The final block uses **columnar cross-attention** where the aggregation tokens $\boldsymbol{t}_1, \dots, \boldsymbol{t}_4$ are the queries and the augmented data $\boldsymbol{E}_i^+$ are the keys and values. Since there are $p_{agg}=4$ queries, the output of this process is also reducing the embeddings down to $p_{agg}$ vectors. This is where the utility of the aggregation tokens comes into play. If the pretraining worked well, this cross-attention block will have designed the $\boldsymbol{t}$ parameters to be very effective at projecting the set of feature columns to a potentially much smaller space. 
 
 After cross-attention, LayerNorm is used on the reduced set. 
 
-Prior to this point, the embedding dimension has been specific to the data set. After cross-attention, we have a smaller standard dimension. Now our data are $n \times p_{agg}$, TODO and each cell still contains 128-dimensional vectors. The last step is to flatten the data within each row into a single vector of $p_{agg} = 512$ scalars. 
+Prior to this point, the embedding dimension has been specific to the data set. After cross-attention, we have a smaller standard dimension. Now our data are $n \times p_{agg}$, TODO, and each cell still contains 128-dimensional vectors. The last step is to flatten the data within each row into a single vector of $p_{agg} = 512$ scalars. 
 
 #### In-Context Learning Blocks {#sec-cls-pfn-icl}
 
-This block is the core of how this foundational model operates. Its process is very similar to past blocks, but the scale changes dramatically. It will apply _24 cross-attention blocks in sequence_. These attention blocks will use the combined training and test data as queries, with the training rows serving as keys and values. This identifies the training rows that the test rows most resemble and reweights them accordingly. 
+This block is the core of how this foundational model operates. Its process is very similar to past blocks, but the scale changes dramatically. It will apply _24 cross-attention blocks in sequence_. These attention blocks will use:
 
-Recall that, in @sec-pfn-initial-embeddings, the training rows received additional terms that encoded the target information (labeled as $\boldsymbol{Y}$). During these attention steps,  these additional terms project the test samples in a supervised direction. 
+* The combined training and test data as queries
+* The training rows serve as keys and values. 
 
-The details of this cross-attention process most resemble the one shown in @sec-cls-pfn-distirbution: 
+This identifies the training rows that the test rows most resemble and reweights them accordingly. 
+
+Recall that, in @sec-cls-pfn-initial-embedding, the training rows received additional terms that encoded the target information (labeled as $\boldsymbol{Y}_{emb}$). During these attention steps,  these additional terms project the test samples in a supervised direction. 
+
+The details of this cross-attention process most resemble the one shown in @sec-cls-pfn-distribution: 
 
 1. RMSNorm is used for normalization of the 512 scalars.
 2. Rowwise cross-attention
@@ -2644,7 +2668,7 @@ The details of this cross-attention process most resemble the one shown in @sec-
 7. Added residual connection from the pre-normalized values. 
 8. Apply an MLP with sizes (1024, 512) and GELU activation.
 
-Now that we have reduced the embedding dimension to a static value of 512, the 8 attention heads use a subset size of 64. 
+Since we previously reduced the embedding dimension to a static value of 512, the 8 attention heads use a subset size of 64. 
 As before, the outputs of these 8 heads are concatenated before step 5 is applied. 
 
 After 24 iterations of cross-attention, RMSENorm is applied to the results. 
@@ -2653,24 +2677,24 @@ The output of this ICL block is the $n_{test} \times 512$ array of test values. 
 
 #### Output Head {#sec-cls-pfn-output}
 
-At this point, we are ready to translate our embeddings to class probability estimates for the test samples. For a more conventional model, we would cast the embeddings down to $C$ columns and then apply softmax to obtain probability-like outputs. 
+At this point, we are ready to translate our embeddings to class probability estimates for the test samples. For a more conventional model, we would linearly project embeddings down to $C$ columns and then apply softmax to obtain probability-like outputs. 
 
 Although the ICL process has indirectly used our target embeddings (via the training rows), we'll use cross-attention again to solve the problem. 
 
 TabPFN uses separate linear operations with different pretrained weights to transform the $n_{te}$ rows and the $n_{tr}$ rows from 512 to 386 dimensions. Cross-attention is applied in a new way: 
 
-- The test rows serve as the queries
-- The training rows are the keys.
+- The $n_{te}$ test rows serve as the queries 
+- The $n_{tr}$ training rows are the keys.
 - The values are a matrix of binary indicators generated from a one-hot encoding of the training outcome column, assuming that there are $C_{max}$ class levels. 
 
 This time, there are 6 attention heads, each using 64 separate columns. 
 
-Since the values are binary and attention produces a weighted average of the values, we can view the attended values as rough probability estimates [REFS]. These are produced for each head, and an overall average of the probability estimates is used for each row. At this point, we have an array of $n_{te} \times C_{max}$ probability estimates. However, if our data has fewer than $C_{max}$ classes, all indicators for the extra classes have zero entries in every row of the value matrix. These produce probability estimates of absolute zero and can be discarded.
+Since the values are binary and attention produces a weighted average of them, we can view the attended values as probability estimates [@watson1964smooth;@nadaraya1964estimating;@wang2022flexible]. These are produced for each head, and an overall average of the probability estimates is used for each row. At this point, we have an array of $n_{te} \times C_{max}$ probability estimates. However, if our data has fewer than $C_{max}$ classes, all indicators for the extra classes have zero entries in every row of the value matrix. These produce probability estimates of absolute zero and can be discarded.
 
 The remaining initial estimates are converted to be logit-like via
 
 $$
-\eta_{ic} \;=\; \log\bigl(\max(\hat{p}_{ic}, \epsilon) + \epsilon\bigr).
+\eta_{ic} \;=\; \log\bigl(\max(\hat{p}_{ic}, \epsilon) + 3\epsilon\bigr).
 $$
 
 where $\epsilon = 10^{-5}$ is used to avoid division by zero. A final softmax estimate is used to produce the final class probability estimates. 
