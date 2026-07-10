@@ -1647,32 +1647,32 @@ These features are passed to a multi-head column attention process. It begins wi
 
 Suppose that, for the forestation data, we specified seven initial embedding dimensions per predictor and used three attention blocks, each with two attention heads, each with an embedding size of 13. A summary of the AutoInt model, tracking the output feature dimensions and the number of learned parameters at each stage, would be:
 
-* **Embedding layer** that outputs 16 sets of 7-dimensional embeddings:
-  * Categorical predictor: (39 × 7) embedding vectors using 273 parameters
-  * Numeric predictors: (15 × 7) embedding vectors using 105 parameters
-  * Embedding parameters: 378
+1. **Embedding layer** that outputs 16 sets of 7-dimensional embeddings:
+   * Categorical predictor: (39 × 7) embedding vectors using 273 parameters
+   * Numeric predictors: (15 × 7) embedding vectors using 105 parameters
+   * Embedding parameters: 378
 
-* **Column self-attention**: 3 blocks, 2 heads of dimension 13, block output dimension (2 head × 13 dimensions = 26)
-  * Block 1: input dimension 7 to output dimension 26, yielding output shape (16 × 26)
-    * Query/key/value projections: (3 × (2 × 7 × 13)) = 546 parameters
-    * Residual projection: 7 to 26 with (7 × 26 = 182) parameters
-    * Add residual
-    * ReLU activation
-    * Block parameters: 728
-  * Block 2: input dimension 26 to output dimension 26 with output shape (16 × 26)
-    * Query/key/value projections: (3 × (2 × 26 × 13)) = 2,028 parameters
-    * Residual projection 26 to 26: (26 × 26) = 676 parameters
-    * Add residual
-    * ReLU activation
-    * Block parameters: 2,704
-  * Block 3: input dimension 26 to 26 with output shape (16 × 26)
-    * Same as Block 2
-    * Block parameters: 2,704
-  * Flatten: (16 × 26) = 416 values
+2. **Column self-attention**: 3 blocks, 2 heads of dimension 13, block output dimension (2 head × 13 dimensions = 26)
+   * Block 1: input dimension 7 to output dimension 26, yielding output shape (16 × 26)
+     * QKV projections: (3 × (2 × 7 × 13)) = 546 parameters
+     * Residual projection: 7 to 26 with (7 × 26 = 182) parameters
+     * Add residual
+     * ReLU activation
+     * Block parameters: 728
+   * Block 2: input dimension 26 to output dimension 26 with output shape (16 × 26)
+     * QKV projections: (3 × (2 × 26 × 13)) = 2,028 parameters
+     * Residual projection 26 to 26: (26 × 26) = 676 parameters
+     * Add residual
+     * ReLU activation
+     * Block parameters: 2,704
+   * Block 3: input dimension 26 to 26 with output shape (16 × 26)
+     * Same as Block 2
+     * Block parameters: 2,704
+   * Flatten: (16 × 26) = 416 values
 
-* **Output head** output shape is $C = 2$
-  * Linear operation projecting the 416 dimensions of the required $C = 2$. This uses 416 × 2 + 2 = 834 parameters (includes 2 bias terms)
-  * Softmax
+3. **Output head** output shape is $C = 2$
+   * Linear operation projecting the 416 dimensions of the required $C = 2$. This uses 416 × 2 + 2 = 834 parameters (includes 2 bias terms)
+   * Softmax
 
 In total, there are 7,348 learned parameters.
 
@@ -1923,12 +1923,22 @@ Let's create a fourth landmark location in the data from @fig-attention-fit and 
 #| fig-width: 5
 #| fig-height: 4.4
 #| warning: false
-#| fig-cap: "An example of how row attention can change the embedding (landmark number 4) based on the data in the current mini-batch.  The light open circles in the background represent the entire training set, while the solid black points are the randomly selected points in a batch of 8. The size of the batch points represents how much they attend to the landmark. The red diamond is the attended value of the landmark point. "
+#| fig-cap: "An example of how row attention can change the embedding (landmark number 4) based on the data in the current mini-batch.  The light open circles in the background represent the entire training set, while the solid black points are the randomly selected points in a batch of 8. The size of the batch points represents how much they attend to the landmark. The red line points to the attended value of the landmark point. "
 
 col_att_grid |>
   ggplot(aes(A, B)) +
   geom_point(data = dat_2d_train, pch = 1, alpha = .1) +
   geom_point(data = lin_kern, aes(size = scaled_dot_prod), alpha = 1) +
+  geom_segment(
+    data = bind_cols(
+      row_attn_landmark,
+      attended |>
+        rename(A_att = A, B_att = B)
+    ),
+    aes(xend = A_att, yend = B_att),
+    col = "red",
+    arrow = arrow(length = unit(0.3, "cm"), type = "closed"),
+  ) +
   geom_point(
     data = row_attn_landmark,
     size = 6,
@@ -1937,12 +1947,6 @@ col_att_grid |>
     color = "black"
   ) +
   geom_text(data = row_attn_landmark, aes(label = label), size = 3) +
-  geom_point(
-    data = attended,
-    col = "red",
-    pch = 18,
-    size = 6
-  ) +
   coord_fixed(ratio = 1) +
   scale_size_area(max_size = 8) +
   lims(x = c(-3, 3), y = c(-3, 3)) +
@@ -2013,24 +2017,24 @@ saint_fit |>
 
 Let's look at the details of a Saint model using an initial; embedding size of 10 and two repeats of the attention transformer. 
 
-* **Embedding layer** starts with:
-  * Categorical predictor: 29 country levels mapped to 10 embedding vectors using 390 parameters
-  * Numeric predictors: each of the 15 are embedded via an MLP block with layer sizes [1, 100, 10], using 18,150 parameters. 
-* **Transformer**: 2 identical blocks with 8 attention heads (column and row). The output dimension is 10 for each.  
-  * Each Block: input dimension 10 to output dimension 26, yielding output shape of 10
-	  * Layer normalization (10 embeddings) using 20 parameters
-	  * Column Attention using 5,130 parameters
-	  * Layer normalization (10 embeddings) using 20 parameters
-	  * MLP with 10 dimensions (1,290 params)
-	  * Layer normalization using 170 embeddings (10 dimensions for each of 16 predictors plus the target token) using 340 parameters
-	  * Row Attention using 348,330 parameters
-	  * Layer normalization (170 embeddings) using 340 parameters
-	  * MLP with 170 dimensions projecting to 10 dimensions (348,330 params)
-* **Hidden Layer** ingests 10 and outputs 20 embeddings
-	* Linear operation followed by ReLU activation, with 220 parameters. 
-* **Output head** output shape is $C = 2$
-  * Linear operation from 20 to 2: 42 parameters (includes 2 bias terms)
-  * Softmax
+1. **Embedding layer** starts with:
+   * Categorical predictor: 29 country levels mapped to 10 embedding vectors using 390 parameters
+   * Numeric predictors: each of the 15 are embedded via an MLP block with layer sizes [1, 100, 10], using 18,150 parameters. 
+2. **Transformer**: 2 identical blocks with 8 attention heads (column and row). The output dimension is 10 for each.  
+   * Each Block: input dimension 10 to output dimension 26, yielding output shape of 10
+	   * Layer normalization (10 embeddings) using 20 parameters
+	   * Column Attention using 5,130 parameters
+	   * Layer normalization (10 embeddings) using 20 parameters
+	   * MLP with 10 dimensions (1,290 params)
+	   * Layer normalization using 170 embeddings (10 dimensions for each of 16 predictors plus the target token) using 340 parameters
+	   * Row Attention using 348,330 parameters
+	   * Layer normalization (170 embeddings) using 340 parameters
+	   * MLP with 170 dimensions projecting to 10 dimensions (348,330 params)
+3. **Hidden Layer** ingests 10 and outputs 20 embeddings
+	 * Linear operation followed by ReLU activation, with 220 parameters. 
+4. **Output head** output shape is $C = 2$
+   * Linear operation from 20 to 2: 42 parameters (includes 2 bias terms)
+   * Softmax
 
 In total, there are 1,426,412 learnable parameters. 
 
@@ -2305,7 +2309,7 @@ What is the structure of TabPFN's network? Keeping to the same convention used a
       * GELU MLP with layer sizes [128, 256, 128] using 65,536 parameters
       * 2-layer normalizations (128 dimensions) using 256 parameters
    * Column aggregator parameters:  394,632
-   * Flatten to the ICL dimension (no parameters): the 4 pooling vectors are concatenated into a per-row embedding of dimension k = 4 x 128 = 512.
+   * Flatten to the ICL dimension (no parameters): the 4 pooling vectors are concatenated into a per-row embedding of dimension k = 4 × 128 = 512.
 7. **In-context (ICL) target encoder**: each training row's class label is added to its pooled token via a 10 × 512 orthogonal embedding table, using 5,120 parameters.
 8. **ICL transformer**: 24 identical blocks with 8 attention heads (head dimension 64), where test rows attend to training rows only. The output dimension is 512 for each row.
    * Each block, using 2,139,904 parameters:
@@ -2365,7 +2369,7 @@ $$
 \boldsymbol{H}_{ij} = \boldsymbol{W}_{emb}\, \boldsymbol{x}_{ij} + \boldsymbol{b}_{emb}.
 $$
 
-where $\boldsymbol{W}_{emb}$ is (128 x 6) and there are 128 bias terms. Note that this process is a linear projection from 6 columns to $p_{emb} = 128$. Both the predictor's _values_ and completeness _indicators_ are blended in this projection; there is no separate indicator channel from this point on.
+where $\boldsymbol{W}_{emb}$ is (128 × 6) and there are 128 bias terms. Note that this process is a linear projection from 6 columns to $p_{emb} = 128$. Both the predictor's _values_ and completeness _indicators_ are blended in this projection; there is no separate indicator channel from this point on.
 
 The influence of the target classes is added to the cell embedding, but only for the training data. 
 
@@ -2390,9 +2394,9 @@ The current TabPFN model uses three attention blocks for its feature-distributio
 * Stage 1, where prototype points attend to training rows.
 * Stage 2, where all rows attend to the prototype points.
 
-Stage 1 has its own pretrained set of learned query inputs, denoted as $\boldsymbol{P}$, that is 128 x 128. These 128 rows are prototype vectors^[That the number of prototype vectors ($n_{prot}=128$) equals the embedding dimension ($p_{emb}=128$) is coincidental.], sometimes called "inducing points." Prototypes in machine learning are vectors chosen or estimated to represent a distribution [@HastieEtAl2017, chapt. 13]. These can be data points selected from a sample or estimated. We've seen a primative version of this in @sec-centroids where the centroids of a multivariate distribution for each class could be used as supplementary features. K-means clustering [@steinley2006k], learned vector quantization [@kohonen1995learning], and mixture discriminant analysis [@hastie1996discriminant] are more conventional methods that use multiple vectors to represent a more general distribution. The values in $\boldsymbol{P}$ are used as the query data for attention, while our embeddings serve as the keys and values (as we'll see shortly). Since there are three attention blocks, there are distinct $\boldsymbol{P}$ matrices for each. 
+Stage 1 has its own pretrained set of learned query inputs, denoted as $\boldsymbol{P}$, that is 128 × 128. These 128 rows are prototype vectors^[That the number of prototype vectors ($n_{prot}=128$) equals the embedding dimension ($p_{emb}=128$) is coincidental.], sometimes called "inducing points." Prototypes in machine learning are vectors chosen or estimated to represent a distribution [@HastieEtAl2017, chapt. 13]. These can be data points selected from a sample or estimated. We've seen a primative version of this in @sec-centroids where the centroids of a multivariate distribution for each class could be used as supplementary features. K-means clustering [@steinley2006k], learned vector quantization [@kohonen1995learning], and mixture discriminant analysis [@hastie1996discriminant] are more conventional methods that use multiple vectors to represent a more general distribution. The values in $\boldsymbol{P}$ are used as the query data for attention, while our embeddings serve as the keys and values (as we'll see shortly). Since there are three attention blocks, there are distinct $\boldsymbol{P}$ matrices for each. 
 
-Both stages use row attention. Within a single feature (column), the rows attend to one another. This is done indirectly here by having the prototype points $\boldsymbol{P}$ attend to the training rows' embeddings for that feature. Our first action is to use cross-attention with the $n_{tr}$ training points. This produces an array of size $n_{prot} \times p_{emb}$ (128 x 128) containing the attended prototype vectors. There is one vector per prototype, each a weighted average of the training rows' embeddings for that feature, with weights reflecting how strongly each training row matched that prototype. We'll label the results as $\boldsymbol{H}_{prot}$, and they can be thought of as distributional reference values. 
+Both stages use row attention. Within a single feature (column), the rows attend to one another. This is done indirectly here by having the prototype points $\boldsymbol{P}$ attend to the training rows' embeddings for that feature. Our first action is to use cross-attention with the $n_{tr}$ training points. This produces an array of size $n_{prot} \times p_{emb}$ (128 × 128) containing the attended prototype vectors. There is one vector per prototype, each a weighted average of the training rows' embeddings for that feature, with weights reflecting how strongly each training row matched that prototype. We'll label the results as $\boldsymbol{H}_{prot}$, and they can be thought of as distributional reference values. 
 
 @fig-cross-attention shows a simplified low-dimensional example. The left panel shows the training set from @fig-nnet-ex, along with 16 prototype points^[We chose these prototypes to be a regular grid, not because they are realistic, but to show how the resulting values change during this process.] in red and a single test point in black. These computations are simplified by omitting the initial embedding process, setting the attention matrices to the identity matrix (such as $\boldsymbol{W}^{q} = \boldsymbol{I}$, etc.), and omitting a few ancillary steps.
 
@@ -2640,7 +2644,7 @@ The two traditional attention blocks have a straightforward set of steps:
 5. A standard MLP architecture with a layers containing 256 units and GELU activation. 
 6. Another residual connection to the data produced by Step 3. 
 
-The final block uses **columnar cross-attention** where the queries are the 4 aggregation-token positions of the sequence as it stands after the two self-attention blocks. By this point the aggregation tokens have already absorbed information from the feature columns, so these are updated vectors rather than the original pretrained $\boldsymbol{t}_1, \dots, \boldsymbol{t}4$. The keys and values are the entire processed sequence (all $p + p{agg}$ token positions).
+The final block uses **columnar cross-attention** where the queries are the 4 aggregation-token positions of the sequence as it stands after the two self-attention blocks. By this point the aggregation tokens have already absorbed information from the feature columns, so these are updated vectors rather than the original pretrained $\boldsymbol{t}_1, \dots, \boldsymbol{t}4$. The keys and values are the entire processed sequence (all $p + p_{agg}$ token positions).
 
 This final block is not bare attention; it has the same internal structure as the previous two. The cross-attention output is added to the aggregation tokens through a residual connection, followed by the usual MLP sub-layer: RMSNorm, an MLP with one hidden layer of 256 units (128 to 256 to 128) with GELU activation, and a second residual connection. After this, one final RMSNorm is applied to the reduced set of $p_{agg}$ vectors.
 
@@ -2675,7 +2679,7 @@ The details of this cross-attention process most resemble the one shown in @sec-
 Since we previously reduced the embedding dimension to a static value of 512, the 8 attention heads use a subset size of 64. 
 As before, the outputs of these 8 heads are concatenated before step 5 is applied. 
 
-After 24 iterations of cross-attention, RMSENorm is applied to the results. 
+After 24 iterations of cross-attention, RMSNorm is applied to the results. 
 
 The output of this ICL block are the arrays of training and test values. These are sent to the next block to produce the class probabilities for our unknown samples. 
 
