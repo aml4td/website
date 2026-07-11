@@ -1145,7 +1145,7 @@ A fair amount of research has been motivated by the observation that tree ensemb
 
 @gorishniy2021revisiting, @borisov2022deep, and @shwartz2022tabular have good summaries of available models. We'll describe several here that highlight some of the current trends. 
 
-### Batch Normalization {#sec-cls-batchnorm}
+### In-Network Normalization {#sec-in-network-normalization}
 
 We previously noted that substantial preprocessing is required for our original predictors. @wiesler2014mean notes that the effects of this initial preprocessing can vanish as more layers are added to the network; there is no guarantee that the hidden units in later layers will have distributional properties that encourage convergence. 
 
@@ -1204,6 +1204,8 @@ where $\epsilon$ is a small constant and $\bar{H_j}$ and $s_j^2$ are the estimat
 In @ioffe2015batch, batch normalization occurs between the formation of a new linear predictor transformation and the application of a nonlinear activation. For example, this would have occurred between the two rows of variables shown in @fig-nnet-ex-layer-1. However, @he2016deep showed that "pre-activation" works better for their model. This means normalization occurs before forming the linear combination, which is also what @gorishniy2021revisiting suggests for tabular data. 
 
 BatchNorm doesn't increase the model's predictive capacity; it generally lowers the difficulty level of SGD. It is unclear how. There is some dispute as to whether the correction for covariate shifts is the reason for its effectiveness. There is some belief that BatchNorm smooths the objective function [@santurkar2018does;@peng2023re]. 
+
+Two other in-network normalizations to mention are LayerNorm [@ba2016layer] and RMSNorm [@zhang2019root]. Both of these normalize across the embeddings per sample. For example, LayerNorm computes a mean and standard deviation across features for a single row. RMSNorm also operates across features, but divides them by the square root of the sum of the squared values. Note that, if the features have a distribution centered around zero, this is the same as the spatial-sign transformation [@eq-spatial-sign] that projects the data to a hypersphere of radius $\sqrt{p}$ (instead of 1.0). As such, RMSNorm imparts some robustness against unusually large feature values and constrains the range of the normalized values. 
 
 ### Residual Networks {#sec-cls-resnet}
 
@@ -1958,7 +1960,9 @@ What happens at prediction time? After model training, how does row attention wo
 
 One could also envision other prediction-time strategies. First, we could find the $K$ nearest neighbors to the new sample being predicted and pass them along with it. In that way, similar samples from the training set can attend to one another. This could be made somewhat efficient by pre-computing the proper embeddings for the training set, making nearest-neighbor search the main computational cost. Another option, seen in the next section, is to pass the entire training set along with the new sample and use it to attend. This is a good option for a pre-trained foundational models. See @kossen2021self, @gorishniy2024tabr, and the discussion in @sec-cls-foundational for strategies to use row attention for _in context learning_. 
 
-As an example, the SAINT (Self-Attention and Inter-sample Attention Transformer) model from @somepalli2021saint uses both column and row attention in its architecture. The model uses an initial embedding algorithm similar to the one described for AutoInt, with one exception noted below. 
+As an example, the SAINT (Self-Attention and Inter-sample Attention Transformer) model from @somepalli2021saint uses both column and row attention in its architecture. 
+
+Apart from the target token, SAINT takes a different approach to the initial embedding than AutoInt. SAINT produces the same number of embeddings for both categorical and numeric predictors. For categorical columns, there is a linear embedding that connects each level of each categorical predictor to $p_{emb}$ dimensions. Numeric predictors also generate $p_{emb}$ dimensions, but these are produced by a single MLP layer. There is one other difference, the addition of a target token, that will be described below. 
 
 Next, it applied the _SAINT block_, which encompasses alternating attention applications. It begins with a column attention block with the following steps: 
 
@@ -1982,11 +1986,6 @@ After the two attention blocks, the head reads only the final-layer embedding of
 > "We take the contextual embeddings from SAINT and pass only the embedding corresponding to the [target token] through an MLP to obtain the final prediction."
 
 At prediction time, row attention affects all of the samples being simultaneously predicted. 
-
-TODO common dimension for initial embedding and attention blocks
-
-TODO say what a transformer was and is now
-
 
 ```{r}
 #| label: saint-example
@@ -2219,7 +2218,7 @@ We'll focus on two implementations of this type of foundational model: TabPFN [@
 
 Let's start by discussing the general process used to train a PFN. 
 
-### Developing a Tabular Foundational Model
+### Developing a Tabular Foundational Model  {#sec-cls-pfn-development}
 
 We've said that these models are trained on vast amounts of data. For the models under discussion here, the data are simulated. Existing, real data sets, such as those found on the UCI Machine Learning Database, are not used for training. That's where the "prior" in PFN comes in. 
 
@@ -2231,7 +2230,7 @@ Once the PFN model is trained and finalized, its parameters are retained, and we
 
 Let's start by discussing how the artificial data sets are generated for these models. 
 
-### Data Generation
+### Data Generation  {#sec-cls-pfn-training-data}
 
 Our previous discussions on Bayesian estimation discussed that a prior distribution reflects our belief about what is possible for our model parameters before the data are observed. For example, in @sec-logistic-bayes, we illustrated Bayesian inference for two parameters in a logistic regression model, using two Gaussian priors.  Once the data are observed, the posterior distribution is a combination of our belief and our observed data. 
 
@@ -2659,7 +2658,7 @@ This block is the core of how this foundational model operates. Its process is v
 
 This identifies the training rows that the test rows most resemble and reweights them accordingly. 
 
-Before the first ICL block is applied, the target information is injected a second time. Recall from Section @sec-cls-pfn-initial-embedding that each training row's class vector (a row of the $C_{max} \times 128$ table $\boldsymbol{Y}{emb}$) was added to its cell embeddings; that signal has since been pooled into each training row's 512-dimensional summary by the column aggregator. A second, separate table of size $C_{max} \times 512$, denoted as $\boldsymbol{Y}{icl}$, now re-asserts the outcome at the row level: the appropriate row of $\boldsymbol{Y}{icl}$ is added to each training row's summary vector. Like $\boldsymbol{Y}{emb}$, this table was initialized to be orthonormal and then learned during pretraining (it accounts for the 5,120 target-encoder parameters counted earlier). The test rows again receive nothing.
+Before the first ICL block is applied, the target information is injected a second time. Recall from Section @sec-cls-pfn-initial-embedding that each training row's class vector (a row of the $C_{max} \times 128$ table $\boldsymbol{Y}_{emb}$) was added to its cell embeddings; that signal has since been pooled into each training row's 512-dimensional summary by the column aggregator. A second, separate table of size $C_{max} \times 512$, denoted as $\boldsymbol{Y}_{icl}$, now re-asserts the outcome at the row level: the appropriate row of $\boldsymbol{Y}_{icl}$ is added to each training row's summary vector. Like $\boldsymbol{Y}_{emb}$, this table was initialized to be orthonormal and then learned during pretraining (it accounts for the 5,120 target-encoder parameters counted earlier). The test rows again receive nothing.
 
 These label terms are what make the attention steps below informative. The test rows never carry target information themselves. Instead, when a test row attends to the training rows it most resembles, the content it retrieves includes those rows' label terms; the label information flows from the training rows to the test rows through the attention weights.
 
@@ -2707,7 +2706,7 @@ $$
 
 where $\epsilon = 10^{-5}$ is used to avoid $log(0)$. A final softmax estimate is used to produce the final class probability estimates. 
 
-#### In Context Learning
+### In Context Learning Rate {#sec-cls-icl-rate}
 
 To better understand, the training set was sampled in various sizes, and these data were used to initialize the model. To measure performance, out-of-sample predictions were generated^[Unfortunately, using the test set.], and the Brier score and the area under the ROC curve were computed. This was repeated 25 times, and the random numbers used to sample the training set were standardized so that both implementations used the same data in each replicate. 
 
@@ -2765,10 +2764,46 @@ icl_predictions |>
   theme(legend.position = "top")
 ```
 
-### Resistance to Irrelevant Predictors
+### Resistance to Irrelevant Predictors  {#sec-cls-pfn-features}
 
+### Ensembling  {#sec-cls-pfn-ensembles}
 
-### Application to the Forstation Data
+These foundational models are sensitive to data ordering. For example, one can generate different results if the order of the predictor columns or the class levels of the data (outcome or predictor) changes from run to run. This causes a slight increase in _model variance_. As we will discuss in @sec-cls-ensembles and @sec-ensembles, one way to improve unstable models is to create multiple realizations of the model and then average their outputs to produce the final prediction. Bagging, boosting, and random forests are examples of this strategy. 
+
+These models can produce ensemble predictions by repeatedly shuffling the data order and averaging the resulting outputs. There is sometimes an option to average the logit-like values or the final class probabilities. 
+
+How much do the predictions change over different data configurations? To assess this, we used the forestation data with reshuffled target-value orders and the levels of the sole qualitative predictor (county), trained a TabPFN model, and then predicted the data. This was performed twelve times. From here, we examined many randomly selected prediction replicates across ensemble sizes of 2 to 12. For each distinct row of the predicted data, we can compute the mean and standard deviation of its values for each sample size. @fig-cls-tabpfn-ensemble shows a smoothing spline fit to standard deviation as a function of the mean, per ensemble size. The shape of the curves is as expected and mirrors the shape of the relationship between the Bernoulli mean and standard deviation. However, there is no meaningful change in the data when multiple models are averaged; the curves for these data show significant overlap.  We'll also see in @sec-cls-pfn-forestation that there is no benefit in tuning the number of estimators for TabPFN and TabICL.
+
+```{r}
+#| label: fig-cls-tabpfn-ensemble
+#| echo: false
+#| warning: false
+#| message: false
+#| out-width: 70%
+#| fig-width: 7
+#| fig-height: 3.5
+#| fig-cap: Variation in TabPFN predictions for different number of estimators in an ensemble. 
+load("../RData/tab_pfn_replicates.RData")
+
+summarized |>
+  mutate(num_estimators = format(num_estimators)) |>
+  ggplot(aes(mean, sd, col = num_estimators, group = num_estimators)) +
+  geom_line(
+    stat = "smooth",
+    se = FALSE,
+    method = "loess",
+    formula = y ~ x,
+    linewidth = 1.2,
+    alpha = 1 / 2
+  ) +
+  theme_bw() +
+  scale_color_viridis_d() +
+  labs(x = "Mean Estimate", y = "Estimate Std. Dev", color = "# Estimators")
+```
+
+However, this may not be the case for other data sets with more class levels and more qualitative predictors.
+
+### Application to the Forstation Data  {#sec-cls-pfn-forestation}
 
 ```{r}
 #| label: tab-pfn-load
