@@ -619,9 +619,11 @@ For non-numeric data, the tools described in @sec-categorical-predictors can be 
 
 If the non-numeric predictors are not complex, a layer could be added early in the network, enabling the model to derive encodings based on the data when training. @guo2016entity describes a relatively simple architecture for doing this. While LLMs are better at creating embeddings overall, they are unaware of the _context_ in your data. Estimating the parameters associated with a simple embedding layer may be more effective, as it is optimized for your dataset. 
 
-For numeric predictors, we suggest avoiding irrelevant predictors and highly collinear feature sets^[Although the need for preprocessing features prior to training a neural network has long been recognized, @lecun2002efficient and @wiesler2014mean re-emphasized that standardization (i.e., centering and scaling) and decorrelating are critical for the optimization algorithm to converge within a reasonable time. ]. @fig-irrelevant-predictors in @sec-feature-selection demonstrated the harm of including predictors unrelated to the outcome in a neural network. Multicollinearity can also affect these models, even if we do not invert the feature matrix or use the Hessian during optimization. Highly redundant predictors can result in the loss function having difficult characteristics and a large number of unnecessary parameters. Using an L<sub>2</sub> penalty or a feature extraction method can be very helpful. 
+For numeric predictors, we suggest avoiding irrelevant predictors and highly collinear feature sets^[Although the need for preprocessing features prior to training a neural network has long been recognized, @lecun2002efficient and @wiesler2014mean re-emphasized that standardization (i.e., centering and scaling) and decorrelating are critical for the optimization algorithm to converge within a reasonable time. ]. Multicollinearity can also affect these models, even if we do not invert the feature matrix or use the Hessian during optimization. Highly redundant predictors can result in the loss function having difficult characteristics and a large number of unnecessary parameters. Using an L<sub>2</sub> penalty or a feature extraction method can be very helpful. 
 
 Also, predictors with highly skewed distributions might benefit from a transformation to make their distribution more symmetric. If not, outlying values can exert significant influence in computations, potentially preventing the generation of high-quality parameter estimates. 
+
+A critical preprocessing technique is to help ensure that only informative predictors are present in the training set. Looking back at @fig-irrelevant-predictors, the simulation results show that including a moderate number of noisy predictors in the training set can substantially reduce performance. In this simulation, performance fell by up to 40% compared with results where all predictors were relevant. 
 
 Finally, since the networks use random initialization, we should ensure that our predictors are standardized to have the same units. If there are only numeric predictors, centering/scaling or orderNorm operations can be very effective^[orderNorm is perhaps more attractive since it standardizes the predictors and coerces them to a symmetric distribution.]. Using this approach, we must also apply the same standardization to binary indicators created from categorical predictors.  Alternatively, we could leave 0/1 indicators as-is, but _range_ scale our predictors to also be between zero and one. This may have a disadvantage; the range will be common across predictors, but the mean and variance can be quite different. 
 
@@ -2331,7 +2333,16 @@ In total, there are 53,023,736 learned parameters that have already been estimat
 
 #### Initial Internal Preprocessing {#sec-cls-pfn-preprocessing}
 
-Initially, each entry of the predictor table is conceptualized as a _cell_. Every value is transformed into a two-element vector containing the predictor value and an integer indicating its completeness:
+There are a variety of ways that TabPFN preprocesses data. The specific depends on how many estimators are used (see @sec-cls-pfn-ensembles). 
+
+For a single model estimator, the preprocessing can include: 
+
+- For numeric predictors, center by the median and scale by the inter-quartile range. Also, it truncates values beyond $\pm 3$ to these values. 
+- It computes a PCA-like linear embedding across the predictors and retains a small number of the resulting components, which is a function of the number of predictors and training set samples. 
+
+When two or more estimators are used, the preprocessing is deterministic but designed to induce variation in the data to maximize the ensemble's effect. For example, instead of using a robust centering/scaling approach, the numeric predictors can be coerced to a uniform distribution (not unlike the ordered quantile normalization from @sec-skewness).
+
+Subsequentially, each entry of the predictor table is conceptualized as a _cell_. Every value is transformed into a two-element vector containing the predictor value and an integer indicating its completeness:
 
 - 0 for finite and observed values
 - -2 when data are missing
@@ -2698,7 +2709,7 @@ This time, there are 6 attention heads, each using 64 separate columns.
 
 Since the values are binary and attention produces a weighted average of them, we can view the attended values as probability estimates [@watson1964smooth;@nadaraya1964estimating;@wang2022flexible]. These are produced for each head, and an overall average of the probability estimates is used for each row. At this point, we have an array of $n_{te} \times C_{max}$ probability estimates. However, if our data has fewer than $C_{max}$ classes, all indicators for the extra classes have zero entries in every row of the value matrix. These produce probability estimates of absolute zero and can be discarded.
 
-The remaining initial estimates are converted to be logit-like via
+The remaining initial estimates are converted to be log-probabilities
 
 $$
 \eta_{ic} \;=\; \log\bigl(\max(\hat{p}_{ic}, \epsilon) + 3\epsilon\bigr).
@@ -2766,13 +2777,38 @@ icl_predictions |>
 
 ### Resistance to Irrelevant Predictors  {#sec-cls-pfn-features}
 
+Recall that, for simpler MLP models, @sec-nnet-preprocessing emphasized the need to remove irrelevant predictors from the training. A simulation study was presented in @sec-irrelevant-predictors, in which the performance of MLP models fell by about 40% when multiple noise columns were present in the data. 
+
+Interestingly, two other neural network models are shown in @fig-irrelevant-predictors: TabNet and TabPFN. TabNet is a tabular deep learning model that "uses sequential attention to choose which features to reason from at each decision step." This happens separately for each row in the data. "Feature selection" generally refers to removing original predictors from a model to make it more parsimonious and improve performance by eliminating extraneous predictors. TabNet's procedure is more akin to _embedding selection_ since it occurs midway through the network and cannot make the prediction process functionally independent of any of the original predictors. We can see from @fig-irrelevant-predictors that TabNet also suffers when noise columns are added to the training data. 
+
+TabPFN (versions 2 and 3), however, is not compromised in the same way. The reason is somewhat unclear since none of the traditional mechanisms for supervised feature selection are incorporated into the model. We can postulate a few reasons why this might be the case. 
+
+One idea is that the algorithm used to generate the simulated data for training biases the final model towards a sparser feature set. In @hollmann2025accurate, they note that 
+
+> "Disjoint subgraphs lead to features that are marginally
+independent of the target if they are not connected to the target node, reflecting real-world scenarios with uninformative predictors."
+
+They also show evidence of version 2's resistance to irrelevant columns. 
+
+With a very large corpus of simulated data sets used to train the model, it is possible that adding a percentage of noisy (or barely supervised) features has imparted some degree of immunity to the model. 
+
+
+
+
+<hr> 
+
+While not shown in @fig-irrelevant-predictors, TabICL also has resistance to uninformative predictors. Since this is an open-source model, we have more definitive information regarding how it was trained. The prior for the model's supervised structure assigns a 70% probability to an MLP-type equation and a 30% probability to a tree-based structure. It also induces uninformative predictors by initializing weights to zero in blocks, thereby eliminating the effects of one or more predictors. 
+
+
 ### Ensembling  {#sec-cls-pfn-ensembles}
 
 These foundational models are sensitive to data ordering. For example, one can generate different results if the order of the predictor columns or the class levels of the data (outcome or predictor) changes from run to run. This causes a slight increase in _model variance_. As we will discuss in @sec-cls-ensembles and @sec-ensembles, one way to improve unstable models is to create multiple realizations of the model and then average their outputs to produce the final prediction. Bagging, boosting, and random forests are examples of this strategy. 
 
-These models can produce ensemble predictions by repeatedly shuffling the data order and averaging the resulting outputs. There is sometimes an option to average the logit-like values or the final class probabilities. 
+In addition to using different data orders to induce variation, TabPFN preprocesses the data differently when multiple estimators are requested. 
 
-How much do the predictions change over different data configurations? To assess this, we used the forestation data with reshuffled target-value orders and the levels of the sole qualitative predictor (county), trained a TabPFN model, and then predicted the data. This was performed twelve times. From here, we examined many randomly selected prediction replicates across ensemble sizes of 2 to 12. For each distinct row of the predicted data, we can compute the mean and standard deviation of its values for each sample size. @fig-cls-tabpfn-ensemble shows a smoothing spline fit to standard deviation as a function of the mean, per ensemble size. The shape of the curves is as expected and mirrors the shape of the relationship between the Bernoulli mean and standard deviation. However, there is no meaningful change in the data when multiple models are averaged; the curves for these data show significant overlap.  We'll also see in @sec-cls-pfn-forestation that there is no benefit in tuning the number of estimators for TabPFN and TabICL.
+Once each row has multiple estimates under different configurations, the values are averaged to produce the final prediction. 
+
+How much do the predictions change over different data configurations? To assess this, we used the forestation data with reshuffled target-value orders and the levels of the sole qualitative predictor (county), trained a TabPFN model, and then predicted the data. This was performed twelve times. From here, we examined many randomly selected prediction replicates across ensemble sizes of 2 to 12. For each distinct row of the predicted data, we saved the individual probability estimates for each estimator and converted them into a logit format. @fig-cls-tabpfn-ensemble shows a smoothing spline fit to logit's standard deviation as a function of the mean, per ensemble size. There is no meaningful shift in variation as ensemble members are added; the curves for these data show significant overlap.  
 
 ```{r}
 #| label: fig-cls-tabpfn-ensemble
@@ -2783,25 +2819,34 @@ How much do the predictions change over different data configurations? To assess
 #| fig-width: 7
 #| fig-height: 3.5
 #| fig-cap: Variation in TabPFN predictions for different number of estimators in an ensemble. 
-load("../RData/tab_pfn_replicates.RData")
+load("../RData/ensemble_estimates.RData")
 
-summarized |>
-  mutate(num_estimators = format(num_estimators)) |>
-  ggplot(aes(mean, sd, col = num_estimators, group = num_estimators)) +
+ensemble_estimates |>
+  summarise(
+    mean = mean(logit),
+    sd = sd(logit),
+    std_err = sd / sqrt(length(logit)),
+    .by = c(.row, num_estimators)
+  ) |>
+  mutate(
+    `# Estimators` = format(num_estimators)
+  ) |>
+  ggplot(aes(mean, sd, col = `# Estimators`)) +
   geom_line(
     stat = "smooth",
     se = FALSE,
     method = "loess",
     formula = y ~ x,
     linewidth = 1.2,
-    alpha = 1 / 2
+    alpha = 3 / 4,
+    span = 1 / 2
   ) +
   theme_bw() +
   scale_color_viridis_d() +
-  labs(x = "Mean Estimate", y = "Estimate Std. Dev", color = "# Estimators")
+  labs(x = "Mean Logit", y = "Logit Std. Dev", color = "# Estimators")
 ```
 
-However, this may not be the case for other data sets with more class levels and more qualitative predictors.
+Ensembls thrive on propagating variation via prediction replicates. This figure indicates that the multiple estimates do not increase prediction diversity as new replicates are added. Therefore, adding multiple estimators does not help much for this data set. We'll also see in @sec-cls-pfn-forestation that there is no benefit in tuning the number of estimators for TabPFN and TabICL. However, this may not be the case for other data sets with more class levels and more qualitative predictors.
 
 ### Application to the Forstation Data  {#sec-cls-pfn-forestation}
 
