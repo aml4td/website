@@ -2266,11 +2266,11 @@ Training proceeded over 2 million iterations, each with a batch size of 64 data 
 
 ### Model Structure and Training  {#sec-cls-pfn-model}
 
-@bilovs2026mechanistic 
+What is the architecture of the pretrained model? This depends on the implementation. In this section, the details are driven by version 3 of TabPFN. While we probably have the least information about how this model was trained, most of the details below are based on inspecting the source code (circa July 2026)^[Keep in mind that the rate of change for these models is high; the details are likely to change over time, but the core operations should be stable.]. This means that some of our discussions about why the architecture is the way it is reflect our supposition about the author's intent. In some cases, there is very little written on why things are done as they are. For the remainer of this section, our use of "TabPFN" should be assume to be version 3, unless otherwise noted. 
 
-For v3; this can change from version to version. Much of this descritption is from the source code; the intent is not always written down. Key constants: 
+For a broader perspective on these models, see  @bilovs2026mechanistic. 
 
-TabPFN3 has a few constants for parameters that could potentially change in the future. These are: 
+TabPFN has a few constants for parameters that could potentially change in the future. These are: 
 
 - The maximum number of classes: $C_{max} = 10$
 - The default embedding dimension: $p_{emb} = 128$
@@ -2280,9 +2280,10 @@ TabPFN3 has a few constants for parameters that could potentially change in the 
 
 These numbers will be used in the details below, but may change in future versions. 
 
-What is the structure of TabPFN's network? Keeping to the same convention used above, here is a summary for the forestation data: 
+What is the structure of TabPFN's network? Keeping to the same convention used above, here is a summary for the forestation data, the details of which are discussed in the subsequent sections: 
 
 1. **Preprocessing** (no parameters):
+   * General preprocessing
    * Each of the 16 columns is mean-imputed and standardized
    * A completeness indicator column is computed alongside each feature. 
    * Output: two (16 × 2)-wide tables (values and indicators).
@@ -2654,7 +2655,7 @@ The two traditional attention blocks have a straightforward set of steps:
 5. A standard MLP architecture with a layers containing 256 units and GELU activation. 
 6. Another residual connection to the data produced by Step 3. 
 
-The final block uses **columnar cross-attention** where the queries are the 4 aggregation-token positions of the sequence as it stands after the two self-attention blocks. By this point the aggregation tokens have already absorbed information from the feature columns, so these are updated vectors rather than the original pretrained $\boldsymbol{t}_1, \dots, \boldsymbol{t}4$. The keys and values are the entire processed sequence (all $p + p_{agg}$ token positions).
+The final block uses **columnar cross-attention** where the queries are the 4 aggregation-token positions of the sequence as it stands after the two self-attention blocks. By this point the aggregation tokens have already absorbed information from the feature columns, so these are updated vectors rather than the original pretrained $\boldsymbol{t}_1, \dots, \boldsymbol{t}_4$. The keys and values are the entire processed sequence (all $p + p_{agg}$ token positions).
 
 This final block is not bare attention; it has the same internal structure as the previous two. The cross-attention output is added to the aggregation tokens through a residual connection, followed by the usual MLP sub-layer: RMSNorm, an MLP with one hidden layer of 256 units (128 to 256 to 128) with GELU activation, and a second residual connection. After this, one final RMSNorm is applied to the reduced set of $p_{agg}$ vectors.
 
@@ -2721,7 +2722,7 @@ where $\epsilon = 10^{-5}$ is used to avoid $log(0)$. A final softmax estimate i
 
 To better understand, the training set was sampled in various sizes, and these data were used to initialize the model. To measure performance, out-of-sample predictions were generated^[Unfortunately, using the test set.], and the Brier score and the area under the ROC curve were computed. This was repeated 25 times, and the random numbers used to sample the training set were standardized so that both implementations used the same data in each replicate. 
 
-@fig-icl-metrics shows how the metrics changed over data size. The three lines correspond to the 0.05, 0.50, and 0.95 quantiles. We can see that performance on extremely small samples is at the no-information rate for each metric, with a high degree of replicate-to-replicate variation. As data size increases, performance improves, and variation shrinks considerably. The trajectories of both metrics appear to improve only marginally with larger sample sizes, suggesting that more data might slightly improve them. 
+@fig-icl-metrics shows how the metrics changed over data size. The 0.05, 0.50, and 0.95 quantiles of the relpicate runs are reflected in the center line and shaded regions. We can see that performance on extremely small samples is at the no-information rate for each metric, with a high degree of replicate-to-replicate variation. As data size increases, performance improves, and variation shrinks considerably. The trajectories of both metrics appear to improve only marginally with larger sample sizes, suggesting that more data might slightly improve them. 
 
 ```{r}
 #| label: fig-icl-metrics 
@@ -2729,24 +2730,81 @@ To better understand, the training set was sampled in various sizes, and these d
 #| out-width: 60%
 #| fig-width: 6
 #| fig-height: 4
-#| fig-cap: "Performance changes over 'training' set sizes. The lines represent estimated 5%, 50%, and 95% quantiles for the 25 replicates per sample size."
+#| fig-cap: "Performance changes over 'training' set sizes. The line represents the estimated median performance value and the shaded regions indicate the 5% and 95% quantiles for the 25 replicates per sample size."
+
+library(splines)
+qr_brier_pfn <-
+  quantreg::rq(
+    .estimate ~ ns(log2(samples), df = 3),
+    tau = c(0.05, 0.5, 0.95),
+    data = pfn_icl_metrics |> filter(.metric == "brier_class")
+  )
+qr_roc_pfn <-
+  quantreg::rq(
+    .estimate ~ ns(log2(samples), df = 5),
+    tau = c(0.05, 0.5, 0.95),
+    data = pfn_icl_metrics |> filter(.metric == "roc_auc")
+  )
+qr_brier_icl <-
+  quantreg::rq(
+    .estimate ~ ns(log2(samples), df = 5),
+    tau = c(0.05, 0.5, 0.95),
+    data = icl_icl_metrics |> filter(.metric == "brier_class")
+  )
+qr_roc_icl <-
+  quantreg::rq(
+    .estimate ~ ns(log2(samples), df = 5),
+    tau = c(0.05, 0.5, 0.95),
+    data = icl_icl_metrics |> filter(.metric == "roc_auc")
+  )
+
+log_n_grid <- tibble(samples = 2^seq(2, 12, length.out = 100))
+icl_ranges <-
+  bind_rows(
+    predict(qr_brier_pfn, log_n_grid) |>
+      as_tibble() |>
+      set_names(c("lower", "median", "upper")) |>
+      mutate(.metric = "brier_class", model = "TabPFN") |>
+      bind_cols(log_n_grid),
+    predict(qr_roc_pfn, log_n_grid) |>
+      as_tibble() |>
+      set_names(c("lower", "median", "upper")) |>
+      mutate(.metric = "roc_auc", model = "TabPFN") |>
+      bind_cols(log_n_grid),
+    predict(qr_brier_icl, log_n_grid) |>
+      as_tibble() |>
+      set_names(c("lower", "median", "upper")) |>
+      mutate(.metric = "brier_class", model = "TabICL") |>
+      bind_cols(log_n_grid),
+    predict(qr_roc_icl, log_n_grid) |>
+      as_tibble() |>
+      set_names(c("lower", "median", "upper")) |>
+      mutate(.metric = "roc_auc", model = "TabICL") |>
+      bind_cols(log_n_grid)
+  ) |>
+  mutate(
+    .metric = ifelse(.metric == "brier_class", "Brier Score", "ROC AUC")
+  )
 
 bind_rows(pfn_icl_metrics, icl_icl_metrics) |>
-  ggplot(aes(samples, .estimate)) +
-  geom_point(alpha = 1 / 20, cex = 1) +
+  mutate(
+    .metric = ifelse(.metric == "brier_class", "Brier Score", "ROC AUC")
+  ) |>
+  ggplot(aes(samples)) +
+  geom_point(aes(y = .estimate), alpha = 1 / 20, cex = 1) +
   scale_x_continuous(transform = log2_trans()) +
   facet_grid(.metric ~ model, scales = "free_y") +
-  geom_quantile(
-    quantiles = 0.5,
-    linewidth = 1,
-    formula = y ~ splines::ns(x, df = 4),
-    col = "#009F3FFF"
+  geom_line(
+    aes(y = median),
+    data = icl_ranges,
+    col = "#009F3FFF",
+    linewidth = 1
   ) +
-  geom_quantile(
-    quantiles = c(0.05, 0.95),
-    linewidth = 3 / 4,
-    formula = y ~ splines::ns(x, df = 4),
-    col = "#8FDA04FF"
+  geom_ribbon(
+    aes(ymax = upper, ymin = lower),
+    data = icl_ranges,
+    fill = "#8FDA04FF",
+    alpha = 1 / 4
   ) +
   labs(col = NULL, pch = NULL, x = "Training Set Size", y = NULL) +
   theme(legend.position = "top")
@@ -2754,12 +2812,10 @@ bind_rows(pfn_icl_metrics, icl_icl_metrics) |>
 
 It's also interesting to select a few out-of-sample data points to see how individual predictions vary with initialization size.  @fig-icl-predictions shows these patterns for both models with six different samples. The first two samples converge to very small probability estimates. The first oscillates between the extremes, quickly moving back and forth between very high and very low probability estimates. The second sample is drastically different. It decreases progressively but remains fairly consistent after about 100 samples. The other samples show similar patterns. Samples four and five exhibit moderate variation over sample size, while samples three and six move dynamically over data size. 
 
-One remarkable aspect of this visualization is that both implementations exhibit highly similar patterns across almost every sample. The random numbers were fixed so that, for each replicate and sample size, both models used the same data. Given this, the patterns for the two independent implementations follow each other over sample sizes. The correlations were computed for each sample, and these ranged from `r icl_corrs[1]` to `r icl_corrs[2]`. 
-
 ```{r}
 #| label: fig-icl-predictions 
 #| echo: false
-#| out-width: 90%
+#| out-width: 8-%
 #| fig-width: 8
 #| fig-height: 5
 #| fig-cap: "The effect of 'training' set size on selected individual predictions. The same random numbers were used to sample from the training set for each point."
@@ -2774,6 +2830,8 @@ icl_predictions |>
   scale_color_manual(values = c("#D84D16FF", "#132157FF")) +
   theme(legend.position = "top")
 ```
+
+One remarkable aspect of this visualization is that both implementations exhibit highly similar patterns across almost every sample. The random numbers were fixed so that, for each replicate and sample size, both models used the same data. Given this, the patterns for the two independent implementations follow each other over sample sizes. The correlations were computed for each sample, and these ranged from `r icl_corrs[1]` to `r icl_corrs[2]`. 
 
 ### Resistance to Irrelevant Predictors  {#sec-cls-pfn-features}
 
@@ -2791,11 +2849,6 @@ independent of the target if they are not connected to the target node, reflecti
 They also show evidence of version 2's resistance to irrelevant columns. 
 
 With a very large corpus of simulated data sets used to train the model, it is possible that adding a percentage of noisy (or barely supervised) features has imparted some degree of immunity to the model. 
-
-
-
-
-<hr> 
 
 While not shown in @fig-irrelevant-predictors, TabICL also has resistance to uninformative predictors. Since this is an open-source model, we have more definitive information regarding how it was trained. The prior for the model's supervised structure assigns a 70% probability to an MLP-type equation and a 30% probability to a tree-based structure. It also induces uninformative predictors by initializing weights to zero in blocks, thereby eliminating the effects of one or more predictors. 
 
