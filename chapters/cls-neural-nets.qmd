@@ -2851,8 +2851,6 @@ They also show evidence of version 2's resistance to irrelevant columns.
 With a very large corpus of simulated data sets used to train the model, it is possible that adding a percentage of noisy (or barely supervised) features has imparted some degree of immunity to the model. 
 
 While not shown in @fig-irrelevant-predictors, TabICL also has resistance to uninformative predictors. Since this is an open-source model, we have more definitive information regarding how it was trained. The prior for the model's supervised structure assigns a 70% probability to an MLP-type equation and a 30% probability to a tree-based structure. It also induces uninformative predictors by initializing weights to zero in blocks, thereby eliminating the effects of one or more predictors. 
-
-
 ### Ensembling  {#sec-cls-pfn-ensembles}
 
 These foundational models are sensitive to data ordering. For example, one can generate different results if the order of the predictor columns or the class levels of the data (outcome or predictor) changes from run to run. This causes a slight increase in _model variance_. As we will discuss in @sec-cls-ensembles and @sec-ensembles, one way to improve unstable models is to create multiple realizations of the model and then average their outputs to produce the final prediction. Bagging, boosting, and random forests are examples of this strategy. 
@@ -2899,25 +2897,45 @@ ensemble_estimates |>
   labs(x = "Mean Logit", y = "Logit Std. Dev", color = "# Estimators")
 ```
 
-Ensembls thrive on propagating variation via prediction replicates. This figure indicates that the multiple estimates do not increase prediction diversity as new replicates are added. Therefore, adding multiple estimators does not help much for this data set. We'll also see in @sec-cls-pfn-forestation that there is no benefit in tuning the number of estimators for TabPFN and TabICL. However, this may not be the case for other data sets with more class levels and more qualitative predictors.
+Ensembles thrive on propagating model variation via prediction replicates. This figure indicates that the multiple estimates do not significantly increase prediction diversity as new replicates are added. Therefore, adding multiple estimators may not help much, at least for this data set. We'll also see in @sec-cls-pfn-forestation that there is a weak signal in a very low-noise setting when adding estimators for both TabPFN and TabICL. There is a very small, measurable improvement, much smaller than we see when ensembling high-variance models (e.g., trees).  However, this may not be the case for other data sets with more class levels and additional qualitative predictors. 
 
 ### Application to the Forstation Data  {#sec-cls-pfn-forestation}
+
+Both TabPFN and TabICL were used to predict the probability of forestation. Each was tuned over the number of estimators. @fig-foundational-cls-tune shows that TabPFN performs better; it has a slight edge over TabICL, given the tight variation in the results. As we'll see in the next section, they are practically equivalent. These results are also the best seen so far. 
 
 ```{r}
 #| label: tab-pfn-load
 load("../RData/forested_tabpfn.RData")
 load("../RData/forested_tabicl.RData")
 
-brier_rng <-
-  c(
-    collect_metrics(tabpfn_tune_res) |>
-      filter(.metric == "brier_class") |>
-      pluck("mean"),
-    collect_metrics(tabicl_tune_res) |>
-      filter(.metric == "brier_class") |>
-      pluck("mean")
-  ) |>
-  extendrange()
+pfn_brier <- 
+  bind_rows(
+    collect_metrics(tabpfn_tune_res) |> 
+      filter(.metric == "brier_class") |> 
+      select(mean, num_estimators) |> 
+      mutate(Model = "TabPFN"),
+    collect_metrics(tabicl_tune_res) |> 
+      filter(.metric == "brier_class") |> 
+      select(mean, num_estimators) |> 
+      mutate(Model = "TabICL")
+  )
+
+pfn_brier <-  
+  full_join(
+    pfn_brier, 
+    pfn_brier |> 
+      filter(num_estimators == 1) |> 
+      select(baseline = mean, Model), 
+    by = "Model"
+  ) |> 
+  mutate(
+    pct_imp = (baseline - mean) / baseline  * 100,
+    pct_imp = round(pct_imp, 1)
+  )
+
+multi_imp <- 
+  pfn_brier |> 
+  slice_max(pct_imp, n = 1, by = c(Model), with_ties = FALSE)
 ```
 
 ```{r}
@@ -2926,23 +2944,22 @@ brier_rng <-
 #| warning: false
 #| message: false
 #| out-width: 70%
-#| fig-width: 6
-#| fig-height: 6
-#| fig-cap: TabPFN and TabICL tuning results for the forestation data. The y-axis range has been standardized in each plot.
+#| fig-width: 7
+#| fig-height: 4.25
+#| fig-cap: TabPFN and TabICL tuning results for the forestation data. 
 
-p_pfn <-
-  autoplot(tabpfn_tune_res, metric = "brier_class") +
-  lims(y = brier_rng) +
-  labs(y = "Brier Score", title = "TabPFN") +
-  theme(legend.position = "bottom")
-p_icl <-
-  autoplot(tabicl_tune_res, metric = "brier_class") +
-  labs(y = "Brier Score", title = "TabICL") +
-  lims(y = brier_rng)
-
-p_pfn / p_icl
+pfn_brier |> 
+  ggplot(aes(x = num_estimators, y = mean, col = Model)) + 
+  geom_point() + 
+  geom_smooth(se = FALSE, method = "gam", formula = y ~ s(x, bs = "cs")) + 
+  labs(x = "# Estimators", y = "Brier Score", color = NULL) + 
+  theme_bw() + 
+  theme(legend.position = "top")
 ```
 
+Also, there is a trend in the number of estimators. TabICL shows limited improvement after two estimators, and its best configuration results in a `r multi_imp$pct_imp[multi_imp$Model == "TabICL"]`% improvement over a single estimator. TabPFN shows a greater difference but also demonstrates that adding more estimators does not monotonically improve the situation. Its best configuration is `r multi_imp$pct_imp[multi_imp$Model == "TabPFN"]`% better than a single value. Ensembling doesn't seem to buy us much here, and that's good news; the model variance is low even when we perturb the data ordering and preprocessing methods. 
+
+Let's close the chapter by reassessing the leaderboard for our example data. 
 
 `r r_comp("cls-neural-nets.html#sec-cls-foundational")`
 

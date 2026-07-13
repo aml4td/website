@@ -16,12 +16,6 @@ mirai::daemons(2) # without a gpu, running in parallel requires significant amou
 
 # ------------------------------------------------------------------------------
 
-tabicl_wflow <- workflow(
-  class ~ .,
-  tabular_icl(mode = "classification", num_estimators = tune()) |>
-    set_engine("brulee", device = "cuda")
-)
-
 ctrl <- control_resamples(
   save_pred = TRUE,
   save_workflow = TRUE
@@ -29,8 +23,17 @@ ctrl <- control_resamples(
 
 cls_mtr <- metric_set(brier_class, roc_auc, pr_auc, mn_log_loss)
 
+
+icl_spec <- tabular_icl(
+  mode = "classification",
+  num_estimators = tune()
+) |>
+  set_engine("brulee", device = "cuda")
+
+tabicl_tune_wflow <- workflow(class ~ ., icl_spec)
+
 tabicl_tune_res <-
-  tabicl_wflow |>
+  tabicl_tune_wflow |>
   tune_grid(
     resamples = forested_rs,
     control = ctrl,
