@@ -22,7 +22,8 @@ cls_mtr <- metric_set(brier_class, roc_auc, pr_auc, mn_log_loss)
 pfn_spec <- tabular_pfn(
   mode = "classification",
   num_estimators = tune()
-)
+) |> 
+  set_engine("tabpfn", version = "v3")
 tabpfn_tune_wflow <- workflow(class ~ ., pfn_spec)
 
 tabpfn_tune_res <-
