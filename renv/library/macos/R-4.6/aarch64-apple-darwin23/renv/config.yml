@@ -1,0 +1,373 @@
+
+- name: "activate.prompt"
+  type: "logical[1]"
+  default: true
+  description: >
+    Automatically prompt the user to activate the current project, if it does
+    not appear to already be activated? This is mainly useful to help ensure
+    that calls to `renv::snapshot()` and `renv::restore()` use the project
+    library. See `?renv::activate` for more details.
+
+- name: "autoloader.enabled"
+  type: "logical[1]"
+  default: true
+  description: >
+    Enable the renv auto-loader? When `FALSE`, renv will not
+    automatically load a project containing an renv autoloader within
+    its `.Rprofile`. In addition, renv will not write out the project
+    auto-loader in calls to `renv::init()`.
+
+- name: "auto.snapshot"
+  type: "logical[1]"
+  default: false
+  description: >
+    Automatically snapshot changes to the project library when the project
+    dependencies change?
+
+- name: "bitbucket.host"
+  type: "character[1]"
+  default: "api.bitbucket.org/2.0"
+  description: >
+    The default Bitbucket host to be used during package retrieval.
+
+- name: "copy.method"
+  type: "*"
+  default: "auto"
+  description: >
+    The method to use when attempting to copy directories. See **Copy Methods**
+    for more information.
+
+- name: "connect.timeout"
+  type: "integer[1]"
+  default: 20
+  description: >
+    The amount of time to spend (in seconds) when attempting to download
+    a file. Only applicable when the `curl` downloader is used.
+
+- name: "connect.retry"
+  type: "integer[1]"
+  default: 3
+  description: >
+    The number of times to attempt re-downloading a file, when transient
+    download errors occur. Only applicable when the `curl` downloader is used.
+
+- name: "cache.enabled"
+  type: "logical[1]"
+  default: true
+  description: >
+    Enable the global renv package cache? When active, renv will install
+    packages into a global cache, and link or copy packages from the cache
+    into your \R library as appropriate. This can greatly save on disk space
+    and install time when \R packages are shared across multiple projects in
+    the same environment.
+
+- name: "cache.symlinks"
+  type: "logical[1]"
+  code: >
+    .Platform$OS.type == "unix"
+  description: >
+    Symlink packages from the global renv package cache into your project
+    library? When `TRUE`, renv will use symlinks (or, on Windows, junction
+    points) to reference packages installed in the cache. Set this to `FALSE`
+    if you'd prefer to copy packages from the cache into your project library.
+    Enabled by default, except on Windows where this feature is only enabled
+    if the project library and global package cache are on the same volume.
+
+- name: "dependency.errors"
+  type: "character[1]"
+  default: "reported"
+  description: >
+    Many renv APIs require the enumeration of your project's \R package
+    dependencies. This option controls how errors that occur during this enumeration
+    are handled. By default, errors are reported but are non-fatal. Set this to `"fatal"`
+    to force errors to be fatal, and `"ignored"` to ignore errors altogether. See
+    [`dependencies()`] for more details.
+
+- name: "dependencies.limit"
+  type: "integer[1]"
+  default: 1000
+  description: >
+    By default, renv reports if it discovers more than this many files when
+    looking for dependencies, as that may indicate you are running
+    `dependencies()` in the wrong place. Set to `Inf` to disable this warning.
+
+- name: "exported.functions"
+  type: "character[*]"
+  default: "*"
+  description: >
+    When `library(renv)` is called, should its exports be placed on the search
+    path? Set this to `FALSE` to avoid issues that can arise with, for example,
+    `renv::load()` masking `base::load()`. In general, we recommend referencing
+    renv functions from its namespace explicitly; e.g. prefer
+    `renv::snapshot()` over `snapshot()`.
+
+    By default, all exported renv functions are attached and placed on the
+    search path, for backwards compatibility with existing scripts using renv.
+
+
+- name: "external.libraries"
+  type: "character[*]"
+  default: ~
+  description: >
+    A character vector of external libraries, to be used in tandem with
+    your projects. Be careful when using external libraries: it's possible that things
+    can break within a project if the version(s) of packages used in your project
+    library happen to be incompatible with packages in your external libraries; for
+    example, if your project required `xyz 1.0` but `xyz 1.1` was present and loaded
+    from an external library. Can also be an \R function that provides the paths to
+    external libraries. Library paths will be expanded via [`.expand_R_libs_env_var()`]
+    as necessary.
+
+- name: "filebacked.cache"
+  type: "logical[1]"
+  default: true
+  description: >
+    Enable the renv file-backed cache? When enabled, renv will cache the
+    contents of files that are read (e.g. DESCRIPTION files) in memory, thereby
+    avoiding re-reading the file contents from the filesystem if the file has
+    not changed. renv uses the file `mtime` to determine if the file has
+    changed; consider disabling this if `mtime` is unreliable on your system.
+
+- name: "github.host"
+  type: "character[1]"
+  default: "api.github.com"
+  description: >
+    The default GitHub host to be used during package retrieval.
+
+- name: "gitlab.host"
+  type: "character[1]"
+  default: "gitlab.com"
+  description: >
+    The default GitLab host to be used during package retrieval.
+
+- name: "hydrate.libpaths"
+  type: "character[*]"
+  default: ~
+  description: >
+    A character vector of library paths, to be used by [hydrate()]
+    when attempting to hydrate projects. When empty, the default set of library paths
+    (as documented in `?renv::hydrate`) are used instead. See [`hydrate()`] for more details.
+
+- name: "install.build"
+  type: "logical[1]"
+  default: false
+  description: >
+    Should downloaded package archives be built (via `R CMD build`) before installation?
+    When TRUE, package vignettes will also be built as part of package installation.
+    Because building packages before installation may require packages within 'Suggests'
+    to be available, this option is not enabled by default.
+
+- name: "install.remotes"
+  type: "logical[1]"
+  default: true
+  description: >
+    Should renv read a package's `Remotes:` field when determining how
+    package dependencies should be installed?
+
+- name: "install.shortcuts"
+  type: "logical[1]"
+  default: true
+  description: >
+    Allow for a set of 'shortcuts' when installing packages with renv? When
+    enabled, if renv discovers that a package to be installed is already
+    available within the user or site libraries, then it will install a
+    local copy of that package.
+
+- name: "install.staged"
+  type: "logical[1]"
+  default: true
+  description: >
+    DEPRECATED: Please use `renv.config.install.transactional` instead.
+
+- name: "install.transactional"
+  type: "logical[1]"
+  default: true
+  description: >
+    Perform a transactional install of packages during install and restore? When
+    enabled, renv will first install packages into a temporary library, and later
+    copy or move those packages back into the project library only if all packages
+    were successfully downloaded and installed. This can be useful if you'd like to
+    avoid mutating your project library if installation of one or more packages fails.
+
+- name: "install.verbose"
+  type: "logical[1]"
+  default: false
+  description: >
+    Be verbose when installing R packages from sources? When `TRUE`, renv will
+    stream any output generated during package build + installation to the console.
+
+- name: "locking.enabled"
+  type: "logical[1]"
+  default: false
+  description: >
+    Use interprocess locks when invoking methods which might mutate the project
+    library? Enable this to allow multiple processes to use the same renv
+    project, while minimizing risks relating to concurrent access to the
+    project library. Disable this if you encounter locking issues. Locks are stored
+    as files within the project at `renv/lock`; if you need to manually remove a
+    stale lock you can do so via `unlink("renv/lock", recursive = TRUE)`.
+
+- name: "mran.enabled"
+  type: "logical[1]"
+  default: false
+  description: >
+    DEPRECATED: MRAN is no longer maintained by Microsoft.
+
+- name: "pak.enabled"
+  type: "logical[1]"
+  default: false
+  description: >
+    Use the [pak](https://pak.r-lib.org/) package to install packages?
+
+- name: "ppm.enabled"
+  type: "logical[1]"
+  default: true
+  description: >
+    Boolean; enable [Posit Package Manager](https://packagemanager.posit.co/)
+    integration in renv projects? When `TRUE`, renv will attempt to transform
+    repository URLs used by PPM into binary URLs as appropriate for the
+    current Linux platform. Set this to `FALSE` if you'd like to continue using
+    source-only PPM URLs, or if you find that renv is improperly transforming
+    your repository URLs. You can still set and use PPM repositories with this
+    option disabled; it only controls whether renv tries to transform source
+    repository URLs into binary URLs on your behalf.
+
+- name: "ppm.default"
+  type: "logical[1]"
+  default: true
+  description: >
+    Boolean; should new projects use the
+    [Posit Public Package Manager](https://packagemanager.posit.co/)
+    instance by default? When `TRUE` (the default), projects initialized with
+    `renv::init()` will use the P3M instance if the `repos` R option has not
+    already been set by some other means (for example, in a startup `.Rprofile`).
+
+- name: "ppm.url"
+  type: "character[1]"
+  default: "https://packagemanager.posit.co/cran/latest"
+  description: >
+    The default PPM URL to be used for new renv projects. Defaults to the
+    CRAN mirror maintained by Posit at <https://packagemanager.posit.co/>.
+    This option can be changed if you'd like renv to use an alternate package manager instance.
+
+- name: "repos.override"
+  type: "character[*]"
+  default: ~
+  description: >
+    Override the R package repositories used during [`restore()`]? Primarily
+    useful for deployment / continuous integration, where you might want to enforce
+    the usage of some set of repositories over what is defined in `renv.lock` or otherwise
+    set by the R session.
+
+- name: "rspm.enabled"
+  type: "logical[1]"
+  default: true
+  description: >
+    DEPRECATED: Please use `renv.config.ppm.enabled` instead.
+
+- name: "sandbox.enabled"
+  type: "logical[1]"
+  default: true
+  description: >
+    Enable sandboxing for renv projects? When active, renv will attempt
+    to sandbox the system library, preventing non-system packages installed in the
+    system library from becoming available in renv projects. (That is, only packages
+    with priority `"base"` or `"recommended"`, as reported by `installed.packages()`,
+    are made available.)
+
+    Sandboxing is done by linking or copying system packages into a separate
+    library path, and then instructing R to use that library path as the system
+    library path. In some environments, this action can take a large amount of
+    time -- in such a case, you may want to disable the renv sandbox.
+
+- name: "shims.enabled"
+  type: "logical[1]"
+  default: true
+  description: >
+    Should renv shims be installed on package load? When enabled, renv
+    will install its own shims over the functions `install.packages()`, `update.packages()`
+    and `remove.packages()`, delegating these functions to [`renv::install()`],
+    [`renv::update()`] and [`renv::remove()`] as appropriate.
+
+- name: "snapshot.inference"
+  type: "logical[1]"
+  default: true
+  description: >
+    For packages which were installed from local sources, should renv try to infer the
+    package's remote from its DESCRIPTION file? When `TRUE`, renv will check and prompt
+    you to update the package's DESCRIPTION file if the remote source can be ascertained.
+    Currently, this is only implemented for packages hosted on GitHub. Note that this
+    check is only performed in interactive R sessions.
+
+- name: "snapshot.validate"
+  type: "logical[1]"
+  default: true
+  description: >
+    Validate \R package dependencies when calling snapshot? When `TRUE`,
+    renv will attempt to diagnose potential issues in the project library before
+    creating `renv.lock` -- for example, if a package installed in the project library
+    depends on a package which is not currently installed.
+
+- name: "startup.quiet"
+  type: "logical[1]"
+  default: ~
+  description: >
+    Be quiet during startup? When set, renv will not display the typical
+    `Project <path> loaded. [renv <version>]` banner on startup.
+
+- name: "synchronized.check"
+  type: "logical[1]"
+  default: true
+  description: >
+    Check that the project library is synchronized with the lockfile on load?
+
+- name: "sysreqs.check"
+  type: "logical[1]"
+  default: true
+  description: >
+    Check whether the requisite system packages are installed during package
+    installation and restore? This feature uses the R System Requirements
+    database maintained at <https://github.com/rstudio/r-system-requirements>.
+
+- name: "updates.check"
+  type: "logical[1]"
+  default: false
+  description: >
+    Check for package updates when the session is initialized? This can
+    be useful if you'd like to ensure that your project lockfile remains up-to-date
+    with packages as they are released on CRAN.
+
+- name: "updates.parallel"
+  type: "*"
+  default: 2
+  description: >
+    Check for package updates in parallel? This can be useful when a large
+    number of packages installed from non-CRAN remotes are installed, as these packages
+    can then be checked for updates in parallel.
+
+- name: "user.environ"
+  type: "logical[1]"
+  default: true
+  description: >
+    Load the user R environ (typically located at `~/.Renviron`) when renv
+    is loaded?
+
+- name: "user.library"
+  type: "logical[1]"
+  default: false
+  description: >
+    Include the system library on the library paths for your projects? Note
+    that this risks breaking project encapsulation and is not recommended for projects
+    which you intend to share or collaborate on with other users. See also the caveats
+    for the `renv.config.external.libraries` option.
+
+- name: "user.profile"
+  type: "logical[1]"
+  default: false
+  description: >
+    Load the user R profile (typically located at `~/.Rprofile`) when renv
+    is loaded? This is disabled by default, as running arbitrary code from
+    the the user `~/.Rprofile` could risk breaking project encapsulation.
+    If your goal is to set environment variables that are visible within all
+    renv projects, then placing those in `~/.Renviron` is often a better
+    choice.

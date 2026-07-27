@@ -1,0 +1,44 @@
+activate                Activate or deactivate a project
+autoload                Auto-load the active project
+checkout                Checkout a repository
+clean                   Clean a project
+config                  User-level settings
+consent                 Consent to usage of renv
+dependencies            Find R package dependencies in a project
+diagnostics             Print a diagnostics report
+embed                   Capture and re-use dependencies within a '.R',
+                        '.Rmd' or '.qmd'
+history                 View and revert to a historical lockfile
+imbue                   Imbue an renv Installation
+init                    Use renv in a project
+install                 Install packages
+isolate                 Isolate a project
+load                    Load a project
+lockfiles               Lockfiles
+migrate                 Migrate a project from packrat to renv
+modify                  Modify a Lockfile
+paths                   Path for storing global state
+project                 Retrieve the active project
+purge                   Purge packages from the cache
+rebuild                 Rebuild the packages in your project library
+record                  Update package records in a lockfile
+refresh                 Refresh the local cache of available packages
+rehash                  Re-hash packages in the renv cache
+remote                  Resolve a Remote
+remove                  Remove packages
+renv-package            Project-local Environments for R
+repair                  Repair a project
+restore                 Restore project library from a lockfile
+retrieve                Retrieve packages
+run                     Run a script
+sandbox                 The default library sandbox
+scaffold                Generate project infrastructure
+settings                Project settings
+snapshot                Record current state of the project library in
+                        the lockfile
+status                  Report inconsistencies between lockfile,
+                        library, and dependencies
+sysreqs                 R System Requirements
+update                  Update packages
+upgrade                 Upgrade renv
+use_python              Use python
