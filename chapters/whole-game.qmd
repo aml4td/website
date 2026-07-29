@@ -593,7 +593,7 @@ nnet_spec <-
     "brulee",
     stop_iter = 10,
     rate_schedule = "cyclic",
-    batch_size = 64L,
+    batch_size = 256L,
     optimizer = "ADAMw"
   )
 
@@ -609,6 +609,7 @@ nnet_wflow <-
 nnet_grid <- tibble(hidden_units = 3:100)
 
 set.seed(388)
+torch::torch_manual_seed(388)
 nnet_res <-
   tune_grid(
     nnet_wflow,
@@ -621,11 +622,6 @@ nnet_res <-
 ```{r}
 #| label: nnet-fit-descr
 #| include: false
-final_hidden_units <-
-  nnet_res |>
-  select_by_pct_loss(hidden_units, metric = "mae", limit = 1) |>
-  pluck("hidden_units")
-
 best_nnet <- select_best(nnet_res, metric = "mae")
 
 nnet_mae_vals <-
@@ -639,7 +635,7 @@ nnet_mae_vals <-
 nnet_mae <-
   nnet_res |>
   collect_metrics() |>
-  filter(.metric == "mae" & hidden_units == final_hidden_units) |>
+  filter(.metric == "mae" & hidden_units == best_nnet$hidden_units) |>
   pluck("mean")
 
 nnet_mae_median <-
@@ -647,8 +643,8 @@ nnet_mae_median <-
   collect_metrics() |>
   filter(
     .metric == "mae" &
-      hidden_units >= final_hidden_units - 5 &
-      hidden_units <= final_hidden_units + 5
+      hidden_units >= best_nnet$hidden_units - 5 &
+      hidden_units <= best_nnet$hidden_units + 5
   ) |>
   pluck("mean") |>
   median()
@@ -656,7 +652,7 @@ nnet_mae_median <-
 set.seed(466)
 nnet_fit <-
   nnet_wflow |>
-  finalize_workflow(tibble(hidden_units = final_hidden_units)) |>
+  finalize_workflow(tibble(hidden_units = best_nnet$hidden_units)) |>
   fit(data = delivery_train)
 
 nnet_param <-
@@ -670,12 +666,12 @@ nnet_cap <-
   paste(
     "A scatter plot of the  validation set observed and predicted delivery times",
     "from a neural network with",
-    final_hidden_units,
+    best_nnet$hidden_unit,
     "hidden units."
   )
 ```
 
-One question about this model is: how many hidden units should we use^[This model description is deliberately vague (so as not to confuse readers who are new to this model). Other details: each model could be trained for up to `r nnet_args$epochs` epochs. However, a small amount of the training set was randomly set aside to monitor the sums of squared errors at each epoch. Early stopping was triggered when this out-of-sample loss degraded for `r nnet_args$stop_iter` consecutive epochs. A rectified linear unit activation function was used between the predictor and hidden layers. A `r nnet_args$rate_schedule` learning rate scheduler was used with a maximum rate of `r nnet_args$learn_rate` and a weight decay value of `r nnet_args$penalty` was applied. The ADAMw optimizer was used with a batch size of 64 data points. In a more complete analysis, all of these values would also be tuned.]? This decision will determine the complexity of the model. As models become model complex, they have more capacity to find complicated relationships between the predictors and response. However, added complexity increases the risk of overfitting. This situation, discussed in @sec-complexity, occurs when a model fits exceptionally well to the training data but fails for new data when it finds patterns in the training data that are artifacts (i.e., do not generalize for other data sets). How should we choose the number of hidden units?
+One question about this model is: how many hidden units should we use^[This model description is deliberately vague (so as not to confuse readers who are new to this model). Other details: each model could be trained for up to `r nnet_args$epochs` epochs. However, a small amount of the training set was randomly set aside to monitor the sums of squared errors at each epoch. Early stopping was triggered when this out-of-sample loss degraded for `r nnet_args$stop_iter` consecutive epochs. A rectified linear unit activation function was used between the predictor and hidden layers. A `r nnet_args$rate_schedule` learning rate scheduler was used with a maximum rate of `r nnet_args$learn_rate` and a weight decay value of `r nnet_args$penalty` was applied. The ADAMw optimizer was used with a batch size of 256 data points. In a more complete analysis, all of these values would also be tuned.]? This decision will determine the complexity of the model. As models become model complex, they have more capacity to find complicated relationships between the predictors and response. However, added complexity increases the risk of overfitting. This situation, discussed in @sec-complexity, occurs when a model fits exceptionally well to the training data but fails for new data when it finds patterns in the training data that are artifacts (i.e., do not generalize for other data sets). How should we choose the number of hidden units?
 
 Unfortunately, no equation can directly compute an estimate of the number of units from the data. Values such as these are referred to as tuning parameters or hyperparameters. However, one solution is to extend the validation process previously shown for the linear regression and Cubist models. We will consider a candidate set of tuning parameter values ranging from `r min(nnet_grid$hidden_units)` to `r max(nnet_grid$hidden_units)` hidden units. We'll fit a model to the training set for each of these `r nrow(nnet_grid)` values and use the validation set MAE values to select an appropriate value. The results of this process is shown in @fig-delivery-nnet-tune. 
 
@@ -687,15 +683,17 @@ Unfortunately, no equation can directly compute an estimate of the number of uni
 #| fig-align: "center"
 #| out-width: "60%"
 #| fig-cap: "The relationship between the number of hidden units and the mean absolute deviation from the validation set data."
-#| fig-alt: "Scatter plot of the number of hidden units on the horizontal axis versus validation set MAE on the vertical axis. MAE is high for very few hidden units, drops steeply as units increase, then plateaus with noisy fluctuations once enough complexity is reached. A smooth trend line highlights the overall decreasing-then-flat pattern."
+#| fig-alt: "Scatter plot of the number of hidden units on the horizontal axis versus validation set MAE on the vertical axis. MAE is high for very few hidden units, drops steeply as units increase, then slightly decreases with a very noisy trend. A smooth trend line highlights the overall decreasing-then-flat pattern."
 nnet_mae_vals |>
   ggplot(aes(hidden_units, mean)) +
   geom_point() +
-  geom_smooth(se = FALSE, span = 1 / 4) +
+  geom_smooth(se = FALSE) +
   labs(x = hidden_units()$label, y = "MAE")
 ```
 
-A small number of hidden units performs poorly due to underfitting (i.e., insufficient complexity). Adding more improves the situation and, while the numerically best result corresponds to a value of `r  best_nnet$hidden_units`, there is appreciable noise in the MAE values^[The noisy profile suggests that our validation set might not be large enough to differentiate between subtle differences within or between models. If the problem required more precision in the performance statistics, a more thorough resampling method would be appropriate, such as cross-validation. These are described in Chapter @sec-resampling.] . Eventually, adding too much complexity will either result in the MAE values becoming larger due to overfitting or will drastically increase the time to fit each model. The MAE pattern in @fig-delivery-nnet-tune shows a plateau of values with a similar MAE once enough hidden units are added. Given the noise in the system, we'll select a value of `r final_hidden_units` hidden units, by determining the least complex model that is within 1% of the numerically best MAE. The MAE associated with the selected candidate value^[To some degree, this is an artificially optimistic estimate since we are using the same data to pick the best result and estimate the model's overall performance. This is called optimization bias and it is discussed more in @sec-nested-resampling. For the characteristics of these data, the optimism is likely to be small, especially compared to the noise in the MAE results.] was `r dec_to_time(nnet_mae)` (but is likely to be closer to `r dec_to_time(nnet_mae_median)`, given the noise in @fig-delivery-nnet-tune). 
+A small number of hidden units performs poorly due to underfitting (i.e., insufficient complexity). Adding more improves the situation and, while the numerically best result corresponds to a value of `r  best_nnet$hidden_units`, there is appreciable noise in the MAE values^[The noisy profile suggests that our validation set might not be large enough to differentiate between subtle differences within or between models. If the problem required more precision in the performance statistics, a more thorough resampling method would be appropriate, such as cross-validation. These are described in Chapter @sec-resampling.] . Eventually, adding too much complexity will either result in the MAE values becoming larger due to overfitting or will drastically increase the time to fit each model. The MAE pattern in @fig-delivery-nnet-tune shows a plateau of values with a similar MAE once 25ish hidden units are added, then there is a very slight decrease in performance. 
+
+The MAE associated with the selected candidate value^[To some degree, this is an artificially optimistic estimate since we are using the same data to pick the best result and estimate the model's overall performance. This is called optimization bias and it is discussed more in @sec-nested-resampling. For the characteristics of these data, the optimism is likely to be small, especially compared to the noise in the MAE results.] was `r dec_to_time(nnet_mae)`. 
 
 @fig-delivery-nnet-obs-pred shows the familiar plot of the observed and predicted delivery times. There are fewer large residuals than the Cubist model but the underfitting for longer delivery times appears more pronounced. 
 
@@ -710,7 +708,9 @@ A small number of hidden units performs poorly due to underfitting (i.e., insuff
 #| fig-cap: !expr nnet_cap
 #| fig-alt: "Scatter plot of observed versus predicted delivery times for the neural network model on the validation set. Points follow the diagonal reference line well for most deliveries. The smooth trend line departs below the diagonal for longer delivery times, indicating systematic under-prediction for slow deliveries, though there are fewer extreme outliers than in the Cubist results."
 nnet_res |>
-  collect_predictions(parameters = tibble(hidden_units = final_hidden_units)) |>
+  collect_predictions(
+    parameters = tibble(hidden_units = best_nnet$hidden_units)
+  ) |>
   ggplot(aes(time_to_delivery, .pred)) +
   geom_abline(col = "green", lty = 2) +
   geom_point(alpha = 0.4, cex = 1) +
@@ -719,7 +719,7 @@ nnet_res |>
   labs(x = "Observed Delivery Time", y = "Predicted Delivery Time")
 ```
 
-These results suggest that the Cubist and neural network models have roughly equivalent performance^[We will revisit this statement in @sec-compare-holdout, where methods for estimating confidence intervals for validation and test results are presented.]. Like Cubist, the finalized model is very complex; it is a highly nonlinear regression with `r format(nnet_param, big.mark = ",")` model parameters (i.e., slopes and intercepts). 
+These results suggest that the Cubist and neural network models have roughly equivalent performance. Like Cubist, the finalized model is very complex; it is a highly nonlinear regression with `r format(nnet_param, big.mark = ",")` model parameters (i.e., slopes and intercepts). 
 
 `r r_comp("whole-game.html#neural-network")`
 
