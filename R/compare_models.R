@@ -14,7 +14,7 @@ compare_models <- function(set,
   # Get workflows and models
   combos <-
     set$wflow_id |>
-    purrr::map( ~ extract_workflow(all_sets, id = .x)) |>
+    purrr::map( ~ extract_workflow(set, id = .x)) |>
     purrr::map(extract_spec_parsnip) |>
     purrr::map_dfr( ~ dplyr::tibble(class = class(.x)[1], engine = .x$engine))
   combos$label <- set$wflow_id
