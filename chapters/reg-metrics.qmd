@@ -1,0 +1,162 @@
+---
+knitr:
+  opts_chunk:
+    cache.path: "../_cache/reg-metrics/"
+---
+
+# Evaluating Regression Models {#sec-reg-metrics}
+
+```{r}
+#| label: reg-metrics-setup
+#| include: false
+source("../R/_common.R")
+source("../R/_themes.R")
+source("../R/_themes_ggplot.R")
+
+# ------------------------------------------------------------------------------
+
+library(tidymodels)
+library(probably)
+library(patchwork)
+library(kableExtra)
+library(cli)
+library(gt)
+
+# ------------------------------------------------------------------------------
+# set options
+
+tidymodels_prefer()
+theme_set(thm_lt)
+mirai::daemons(10)
+set_options()
+
+# ------------------------------------------------------------------------------
+# load data
+
+source("../R/setup_weightlifting.R")
+```
+
+
+
+## Example Data: Weightlifting Competitions {#sec-weightlifting}
+
+Powerlifting is a competitive sport where athletes strive to lift the most weight in three different competitions: 
+
+- _Squats_: The standing lifter takes a loaded barbell across their upper back, bends at the hips and knees until the hip joint drops below the top of the knee, then attempts to stand up.
+- _Bench press_: The lifter lies on a flat bench, lowers the barbell to their chest, pauses until it's motionless, and presses it back to straight arms.
+- _Deadlift_: The barbell rests on the floor, and the lifter picks it up in one continuous motion until standing upright with knees and hips locked.
+
+Generally, each athlete has three chances to complete the lift. The score is the largest weight among all the successful attempts. 
+
+Rubén Gil compiled a large data ^[The data were pulled from [`https://github.com/rubengil-dev/power_lifting_analisis`](https://github.com/rubengil-dev/power_lifting_analisis) on 2026-07-24. Our data ingestion code can be found at [`https://github.com/aml4td/powerlifting_data`](https://github.com/aml4td/powerlifting_data)] set for this sport to 
+
+> "Analyze the performance of powerlifting athletes in official, drug-tested competitions to answer 5 specific questions regarding age, progression, failed attempts, and specialization."
+
+To demonstrate regression models, we'll try to predict a lifter's best weight using data from 2000-01-01 to 2026-07-20. The data were filtered to include competitors with complete data for age, body weight, country, and division. We restricted the data to sanctioned data and eliminated disqualifying data, competitors less than 10 years old, and those with at least one successful attempt. 
+
+The data are: 
+
+ - The bench pressed weight (in kg). 
+ - The athlete's body weight (kg), age, sex, and country.
+ - The (decimal) date of the best lift. There is a noticeable gap in the data corresponding to the COVID-19 pandemic. 
+ - The event type. Athletes can compete in any or all of the three types of lifts. This field is coded so that each of the three competitions is represented by "S", "B", and "D". The field concatenates the corresponding values. For example, "SB" indicates that the athletes competed in squat and bench press. We are focused on the bench press data, so there are four possible values. However, across the entire dataset of best weights, less than 0.02% of the events were "BD" or "SB"; the majority (about 75%) were "SBD".
+ - The federation that hosted the meet. There were `r vctrs::vec_unique_count(weight_lifting$federation)` in our data. The country of the meet was also recorded (with `r vctrs::vec_unique_count(weight_lifting$meet_country)` unique values). 
+ - The division of the competition, such as "Juniors" or "Amateur Masters 40-49," and there were `r vctrs::vec_unique_count(weight_lifting$division)` in our data. 
+ - Lifters can use sanctioned equipment. Possible values were: "Raw", "Wraps", "Single-ply suits", "Multi-ply suits", "Unlimited", and "Straps". The lifter may not have used their equipment for the lift. 
+ - The data prior to the best lift were used to determine: 
+	 - The number of previous attempts. 
+	 - The best prior Wilks coefficient, which normalizes the lift weight by the athlete's body weight. 
+
+ Our goal is to predict an athlete's best bench press weight based on other data. A sample of `r nrow(weight_lifting)` athletes was created. Before splitting the data, we should investigate the properties of the target data. @fig-bench-weight shows the data.  The data appear to have two modes and a slight right skew. As we'll see later, these modes can be explained by a sex difference in the athletes. There is not enough skew in the data to warrant applying a transformation, so the natural units (kg) will be used. The bimodality of the data is not a major concern for modeling, but we will split the data into training and testing sets using completely random sampling within 10 quantiles of the data set. 
+ 
+```{r}
+#| label: fig-bench-weight
+#| echo: false
+#| out-width: 70%
+#| fig-width: 6
+#| fig-height: 4.25
+#| fig-cap: The distribution of the best bench press weight for all athelets.
+bind_rows(weight_train, weight_test) |> 
+  ggplot(aes(bench_weight)) + 
+  geom_histogram(col = "white", bins = 25) + 
+  labs(x = "Best Weight (kg)")
+```
+ 
+This produces training (`r format(nrow(weight_train), big.mark = ",")`) and test sets (`r format(nrow(weight_test), big.mark = ",")`). A similarly stratified 10-fold cross-validation scheme was created from the training set. The assessment sets contained about `r floor(mean(map_int(weight_rs$splits, ~ nrow(assessment(.x)))))` data points across the folds. 
+
+These data will be investigated in greater detail in the next chapter. Here, we'll consider a set of predictions produced by a multivariate adaptive regression spline (MARS) model. These were created by resampling the model and pooling the predictions from the assessment set.  
+
+residuals and their convention
+
+## Visualizations of Results
+
+
+```{r}
+#| label: mars-fit
+#| include: false
+
+ctrl_rs <- control_resamples(
+  save_pred = TRUE,
+  save_workflow = TRUE,
+  parallel_over = "everything"
+)
+
+mars_res <- 
+  parsnip::mars(mode = "regression") |> 
+  fit_resamples(
+    encoded_rec, 
+    resamples = weight_rs,
+    control = ctrl_rs
+  )
+
+mars_pred <- 
+  collect_predictions(mars_res) |> 
+  mutate(.resid = bench_weight - .pred)
+```
+```{r}
+#| label: fig-mars-cal-plot
+#| echo: false
+#| out-width: 100%
+#| fig-width: 12
+#| fig-height: 4
+#| fig-cap: A plot of the observed and predicted bench press weights created by pooling the assessment sets of a MARS model. The blue line is a natural spline smoother. 
+#| message: false
+p_cal <- 
+  mars_pred |> 
+  ggplot(aes(bench_weight, .pred)) + 
+  geom_abline(col = "green", lty = 2) +
+  geom_point(cex = 2, alpha = 1 / 2) + 
+  geom_smooth(se = FALSE) + 
+  coord_obs_pred() +
+  labs(x = "Observed Bench Weight (kg)", y = "Predicted Bench Weight (kg)")
+p_resid_pred <- 
+  mars_pred |> 
+  ggplot(aes(.pred, .resid)) + 
+  geom_hline(col = "green", yintercept = 0) +
+  geom_point(cex = 2, alpha = 1 / 2) + 
+  geom_smooth(se = FALSE) + 
+  labs(y = "Residual", x = "Predicted")
+p_resid <- 
+  mars_pred |> 
+  ggplot(aes(.resid)) +
+  geom_histogram(col = "white", bins = 25) +
+  geom_rug() + 
+  labs(x = "Residual (observed - predicted)")
+
+p_cal + p_resid + p_resid_pred
+```
+
+
+## Regression Metrics
+
+
+
+## Quantile Regression Metrics
+
+
+## Calibration
+
+
+
+
+
