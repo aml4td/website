@@ -28,6 +28,7 @@ library(DALEXtra)
 library(discrim)
 library(spatialsample)
 library(leaflet)
+library(plsmod)
 
 # ------------------------------------------------------------------------------
 # set options
@@ -1944,6 +1945,216 @@ While these approaches do regularize parameters toward zero, it is important to 
 The _posterior predictive distribution_ is used to generate predictions for new data. When predicting a new observation at $x_0$, this distribution incorporates both uncertainty in the model parameters (as reflected in the posterior) and uncertainty in the new observation itself, represented by $Pr[X = x_0]$, where $X$ denotes the random predictor variable. Samples from the posterior predictive distribution are used to estimate class probabilities. Although it is common to report a single predictive summary---such as the posterior mean or mode---we can also report credible intervals that quantify uncertainty in these predictions. This ability to directly characterize predictive uncertainty is a key advantage of Bayesian estimation for these models.
 
 `r r_comp("cls-linear.html#sec-logistic-bayes")`
+
+## Partial Least Squares {#sec-cls-pls}
+
+As we saw in @sec-logistic-multicollinearity, multicollinearity poses a fundamental problem for estimating the coefficients of a logistic regression model. Multicollinearity occurs when two or more predictors are highly correlated or, more generally, when a linear combination of predictors is strongly correlated with another predictor or with another combination of predictors. The root of the problem is mathematical.  Specifically, solving for the coefficients requires inverting the covariance matrix of the predictors. When two predictors are perfectly correlated, this matrix is singular and cannot be inverted, so no unique set of coefficient estimates exists.  When predictors are highly collinear but not perfectly correlated, the inversion is possible but numerically unstable, which inflates the variance of the coefficient estimates and produces models that are unreliable for both interpretation and prediction. A closely related difficulty arises when the number of predictors exceeds the number of observations; in this case the covariance matrix is singular, and the usual estimation procedure fails. Regularization, as demonstrated above, is one effective solution to these problems.
+
+Another solution is to reduce the dimension of the predictor space before fitting the model. Suppose that we have a data set with two predictors and a response, and that the two predictors are perfectly correlated. Although the data set has two dimensions, the information it contains is effectively one-dimensional. We could reduce the dimension of the data by applying a correlation filter to remove one of the two predictors, as described above. This approach works well when collinearity is primarily pairwise, but it does not guarantee that the remaining predictors are free of redundant structure.  That is, linear combinations of the retained predictors may still be strongly correlated with one another, and the instability would still exist. A more general approach is to use a dimension reduction technique such as principal component analysis (PCA) or partial least squares (PLS), which replace the original predictors with a small set of new variables constructed from linear combinations of the original predictors.
+
+Principal component analysis was described in @sec-pca PCA is an unsupervised technique, meaning that the dimension reduction of the predictors is performed independently of the response. This property provides two operational advantages. First, the new variables, or scores, produced by PCA are uncorrelated by construction, so they can be used directly as inputs to logistic regression without the numerical difficulties described above. Second, because the scores are derived to capture maximal predictor variability, the first few scores typically retain a large portion of the information contained in the original data.
+
+The primary limitation of using PCA for dimension reduction is that the resulting scores may not be predictive of the response. Because the scores are derived without any knowledge of the response, PCA simply chases the variability present in the predictor space. If the directions of maximal variability happen to align with the class structure, the leading scores will be useful for classification; but if the classes are separated along directions of low variability, the leading scores can be entirely uninformative, even when a strongly predictive direction actually exists in the data. In short, the subspace that best summarizes the predictors is not necessarily the subspace that best separates the classes.
+
+This observation raises a natural question: what if the dimension reduction could be performed in such a way that the new scores were optimally related to the response? This is the essence of PLS. Rather than selecting directions that maximize predictor variance alone, PLS selects directions that maximize the covariance between the predictors and the response. The resulting scores therefore summarize the predictor space while simultaneously providing optimal separation between the classes.  Therefor, PLS is a supervised dimension reduction technique, and it strikes a deliberate compromise between the goals of dimension reduction and prediction.
+
+### PCA versus PLS in the Classification Setting
+
+To build intuition for why PLS naturally extends to the classification setting, it is helpful to contrast it directly with principal component analysis. Both methods construct new features as linear combinations of the original predictors, and both are used to reduce the dimension of the predictor space. The crucial difference lies in the optimization criteria for each.
+
+PCA is an **unsupervised** procedure. Its linear combinations are chosen to maximally summarize the variability in the predictor space, without any reference to the response. If that variability happens to be related to the class structure, then a classifier built on the principal components has a good chance of identifying a predictive relationship. If, however, the directions of maximal predictor variability are unrelated to the class structure, then the leading principal components may not be effectively informative for classification, even when the samples can be effectively classified in the predictor space.
+
+PLS, by contrast, is a **supervised** dimension reduction procedure. Its linear combinations are chosen to maximally summarize the covariance with the response. This means that PLS finds components that summarize the variation of the predictors while simultaneously requiring these components to have maximum correlation with the response. PLS therefore strikes a compromise between the objectives of predictor-space dimension reduction and a predictive relationship with the response. Because the class information is considered while the dimension of the predictor space is being reduced, PLS is steered toward the subspace that is actually useful for classification.
+
+Let's examine a simple example to contrast the objectives of PCA and PLS. Consider the data in @fig-pca-pls-directions, which contain two correlated predictors and a binary response. In this example, the two predictors are highly correlated.  The first PCA component points in the direction of maximum variability.  However, the classes are partitioned along the boundary of maximum variance which is nearly orthogonal to the direction that will provide optimal classification. The right-hand panel of @fig-pca-pls-directions shows the first PLS direction for the same data. Because PLS utilizes the class information, it identifies the direction that best separates the classes while reducing dimension, even though this direction accounts for a lower proportion of the total predictor variability.
+
+```{r}
+#| label: cls-pca-pls-comparison
+#| include: false
+
+set.seed(816)
+n <- 60
+x1 <- 10 * runif(n)
+x2 <- x1 + rnorm(n, sd = 2.5)
+
+example_data <- tibble(x1 = x1, x2 = x2)
+
+trans_data <- scale(example_data) |> as.matrix()
+
+# PCA rotation (unsupervised directions)
+pca_rot <- prcomp(trans_data)$rotation
+
+# Class separation lies along the LOW-variance (PC2) direction, so that the
+# first principal component carries essentially no class information.
+pc1 <- as.numeric(trans_data %*% pca_rot[, 1])
+pc2 <- as.numeric(trans_data %*% pca_rot[, 2])
+
+set.seed(816)
+class_bin <- ifelse(pc2 > median(pc2), 1, 0)
+# A small amount of label noise
+flip <- sample(seq_len(n), size = round(0.03 * n))
+class_bin[flip] <- 1 - class_bin[flip]
+
+y_class <- factor(
+  ifelse(class_bin == 1, "A", "B"),
+  levels = c("A", "B")
+)
+
+pls_example <- tibble(
+  x1 = trans_data[, 1],
+  x2 = trans_data[, 2],
+  Class = y_class
+)
+
+# First PLS direction (supervised weights): covariance of each predictor with
+# the 0/1 class indicator, normalized to unit length.
+y01 <- as.numeric(y_class) - 1
+pls_w <- as.numeric(t(trans_data) %*% y01)
+pls_w <- pls_w / sqrt(sum(pls_w^2))
+
+# Component scores
+pc1_score  <- as.numeric(trans_data %*% pca_rot[, 1])
+pls1_score <- as.numeric(trans_data %*% pls_w)
+
+scores_df <- tibble(
+  PC1  = pc1_score,
+  PLS1 = pls1_score,
+  Class = y_class
+)
+```
+
+```{r}
+#| label: fig-pca-pls-directions
+#| echo: false
+#| out-width: 80%
+#| fig-width: 8
+#| fig-height: 6
+#| fig-cap: An example contrasting first PCA and PLS directions for a simple data set with two predictors and a binary response.
+#| fig-alt: "An example contrasting first PCA and PLS directions for a simple data set with two predictors and a binary response. **Left**: The first principal component direction (arrow) follows the maximal predictor variability, which is ineffective in partitioning the groups. **Right**: The first PLS direction (arrow) effectively separates the groups, even though it accounts for less of the total predictor variability."
+
+plot_df <- tibble(x1 = trans_data[, 1], x2 = trans_data[, 2], Class = y_class)
+
+# Scale arrows for visibility
+arrow_len <- 1.6
+pca_arrow <- tibble(
+  x = 0, y = 0,
+  xend = arrow_len * pca_rot[1, 1],
+  yend = arrow_len * pca_rot[2, 1]
+)
+pls_arrow <- tibble(
+  x = 0, y = 0,
+  xend = arrow_len * pls_w[1],
+  yend = arrow_len * pls_w[2]
+)
+
+x_pad <- 0.9
+y_pad <- 1.1
+
+p_pca <- ggplot(plot_df, aes(x = x1, y = x2, color = Class, shape = Class)) +
+  geom_point(size = 2.2, alpha = 0.85) +
+  scale_color_manual(values= c("A" = "#DF91A3FF",
+                               "B" = "#A3AD62FF"))+
+  scale_shape_manual(values = c("A" = 17, 
+                                "B" = 16)) +
+  geom_segment(
+    data = pca_arrow,
+    aes(x = x, y = y, xend = xend, yend = yend),
+    inherit.aes = FALSE,
+    arrow = arrow(length = unit(0.25, "cm")),
+    linewidth = 1.2, linetype = "solid", color = "black"
+  ) +
+  annotate("text",
+           x = pca_arrow$xend, y = pca_arrow$yend,
+           label = "PCA direction", fontface = "bold", size = 3.6,
+           hjust = -0.15, vjust = -0.6) +
+  coord_equal(xlim = range(plot_df$x1) + c(-x_pad, x_pad),
+              ylim = range(plot_df$x2) + c(-y_pad, y_pad)) +
+  labs(x = "Predictor 1", y = "Predictor 2", title = "PCA") +
+  theme(legend.position = "none")
+
+p_pls <- ggplot(plot_df, aes(x = x1, y = x2, color = Class, shape = Class)) +
+  geom_point(size = 2.2, alpha = 0.85) +
+  scale_color_manual(values= c("A" = "#DF91A3FF",
+                               "B" = "#A3AD62FF"))+
+  scale_shape_manual(values = c("A" = 17, 
+                                "B" = 16)) +
+  geom_segment(
+    data = pls_arrow,
+    aes(x = x, y = y, xend = xend, yend = yend),
+    inherit.aes = FALSE,
+    arrow = arrow(length = unit(0.25, "cm")),
+    linewidth = 1.2, color = "black"
+  ) +
+  annotate("text",
+           x = pls_arrow$xend, y = pls_arrow$yend,
+           label = "PLS direction", fontface = "bold", size = 3.6,
+           hjust = -0.15, vjust = -0.6) +
+  coord_equal(xlim = range(plot_df$x1) + c(-x_pad, x_pad),
+              ylim = range(plot_df$x2) + c(-y_pad, y_pad)) +
+  labs(x = "Predictor 1", y = "Predictor 2", title = "PLS") +
+  theme(legend.position = "right")
+
+p_pca + p_pls
+```
+
+@fig-pca-pls-separation helps contrast one of the key differences between PCA and PLS. The left-hand panel displays the class-conditional distribution of the first principal component score. Because the first PCA direction was chosen without knowledge of the class labels, the two classes overlap entirely along this component.  This means that the first principal component contains essentially no predictive information about the response. The right-hand panel shows the corresponding distribution of the first PLS component score. Here the two classes are shifted apart, reflecting the fact that the PLS direction was constructed to be maximally correlated with the classification outcome. The same two predictors therefore yield a useless first PCA component but a useful first PLS, simply because PLS was allowed to utilize the response.
+
+```{r}
+#| label: fig-pca-pls-separation
+#| echo: false
+#| out-width: 80%
+#| fig-width: 8
+#| fig-height: 6
+#| fig-cap: Class separation achieved by the first component of each method.
+#| fig-alt:  "Class separation achieved by the first component of each method. **Left**: The first principal component shows almost no separation between the classes. **Right**: The first PLS component shows substantially better separation."
+
+scores_long <- scores_df |>
+  pivot_longer(cols = c(PC1, PLS1), names_to = "Component", values_to = "Score") |>
+  mutate(Component = recode(Component,
+                            PC1  = "First PCA component",
+                            PLS1 = "First PLS component"))
+
+ggplot(scores_long, aes(x = Score, fill = Class)) +
+  geom_density(alpha = 0.6, color = NA) +
+  geom_rug(aes(color = Class), alpha = 0.5, length = unit(0.05, "npc")) +
+  scale_color_manual(values= c("A" = "#DF91A3FF",
+                               "B" = "#A3AD62FF")) +
+  scale_fill_manual(values= c("A" = "#DF91A3FF",
+                               "B" = "#A3AD62FF"))+
+  facet_wrap(~Component, scales = "free_x") +
+  labs(x = "Component score", y = "Density") +
+  theme(legend.position = "top",
+        strip.text = element_text(face = "bold"))
+```
+
+Clearly this example is designed to highlight an important flaw of unsupervised dimension reduction for classification. In practice, PCA usually does not fail this drastically.  However, PLS will perform as well as or better than PCA for classification.  Based on our experience, the number of components retained via cross-validation using PCA is always equal to or greater than the number retained by PLS. This is because the dimensions retained by PLS have been chosen to be optimally related to the response, while those chosen by PCA have not.
+
+### Mathematical Formulation {#sec-pls-math}
+
+PLS originated with Herman Wold's non-linear iterative partial least squares (NIPALS) algorithm [@wold1966estimation; @wold1982soft], which linearized models that were non-linear in the parameters. Subsequently, @Wold1983 adapted the NIPALS method for the regression setting with correlated predictors and called this adaptation "partial least squares." The application of PLS to a classification problem dates back to at least the mid-1980s [@berntsson1986comparison]. Not surprisingly, the chemometrics community, which developed and refined the original algorithm, also explored and extended the use of PLS to the classification setting, terming the technique PLS discriminant analysis (PLSDA).
+
+To describe the method, we first must address a practical matter: the coding of the response. For a two-group problem, the classes are encoded into a set of 0/1 dummy variables. With $C$ classes, the result is a set of $C$ dummy variables, where each sample has a one in the column representing its corresponding class.[^Mathematically, if we know $C - 1$ of the dummy variables, then the value of the last dummy variable is directly implied. Hence, it is also possible to use only $C - 1$ dummy variables.] As a result, the response is represented by a *matrix* of dummy variables, $\mathbf{Y}$, rather than by a single vector. Because of this, the problem cannot be solved by the PLS regression approach for a univariate response and must move to the paradigm for a multivariate response.
+
+Briefly, the NIPALS algorithm iteratively seeks to find underlying, or *latent*, relationships among the predictors that are highly correlated with the response. Each iteration of the algorithm assesses the relationship between the predictors ($\mathbf{X}$) and the response ($\mathbf{Y}$), and numerically summarizes this relationship with a vector of weights ($\mathbf{w}$); this vector is also known as a *direction*. The predictor data are then orthogonally projected onto the direction to generate scores ($\mathbf{t}$). The scores are used to generate loadings ($\mathbf{p}$), which measure the correlation of the score vector to the original predictors. At the end of each iteration, the predictors and the response are "deflated" by subtracting the current estimate of the predictor and response structure, respectively. The deflated predictor and response information are then used to generate the next set of weights, scores, and loadings. These quantities are sequentially stored in matrices $\mathbf{W}$, $\mathbf{T}$, and $\mathbf{P}$, and are used for predicting new samples and computing predictor importance. A thorough explanation of the algorithm can be found in @Geladi1986.
+
+To obtain a better understanding of the algorithm's function, @stone1990continuum linked it to the well-known statistical concepts of covariance and regression. In particular, Stone and Brooks showed that, like PCA, PLS finds linear combinations of the predictors. These linear combinations are commonly called *components* or latent variables. While the PCA linear combinations are chosen to maximally summarize predictor-space variability, the PLS linear combinations are chosen to maximally summarize covariance with the response. Formally, the first PLS direction is the vector of weights $\mathbf{w}_1$ that solves
+
+$$
+\mathbf{w}_1 = \arg\max_{\mathbf{w}} \; \operatorname{cov}^2\!\left(\mathbf{X}\mathbf{w},\, \mathbf{Y}\right)
+\quad \text{subject to} \quad \|\mathbf{w}\| = 1,
+$$
+
+and the corresponding component scores are $\mathbf{t}_1 = \mathbf{X}\mathbf{w}_1$. Subsequent directions are found by applying the same maximization to the deflated predictor and response matrices, subject to the constraint that each new score vector is orthogonal to those already extracted. In the classification setting, where $\mathbf{Y}$ is the matrix of class dummy variables, this objective is to find the linear combination of the predictors whose scores have optimal covariance with the classification response. This is how PLS components are constructed using *both* predictor variability and response information.
+
+Applying PLS in the classification setting with a multivariate response has strong mathematical connections to both canonical correlation analysis and linear discriminant analysis (see @barker2003partial for technical details). Assuming the coding structure described above for the outcome, @barker2003partial showed that the PLS directions in this context are the eigenvectors of a slightly perturbed between-groups covariance matrix (i.e., $\mathbf{B}$ from LDA).[^The perturbed covariance structure is due to the optimality constraints for the response matrix. @barker2003partial astutely recognized that the response optimality constraint in this setting did not make sense, removed the constraint, and re-solved the problem. Without the response-space constraint, the PLS solution is one that involves exactly the between-groups covariance matrix.] PLS is therefore seeking to find optimal group separation while being guided by between-groups information. In contrast, PCA seeks to reduce dimension using the total variation as directed by the overall covariance matrix of the predictors, which mixes together the between-group and within-group variation without distinguishing between them.
+
+This research provides a clear rationale for choosing PLS over PCA when dimension reduction is required for classification. However, @Liu2007b point out that if dimension reduction is *not* necessary and classification is the goal, then LDA will always provide a lower misclassification rate than PLS. Hence, LDA still has a necessary place in the classification toolbox.
+
+Prior to performing PLS, the predictors should be centered and scaled, especially if the predictors are on scales of differing magnitude. As described above, PLS seeks directions of maximum variation while simultaneously considering correlation with the response. Even with the constraint of correlation with the response, it will be more naturally drawn toward predictors with large variation. Therefore, predictors should be adequately pre-processed prior to performing PLS.
+
+### Forestation Modeling
+
+`r r_comp("cls-linear.html#sec-cls-pls")`
 
 ## Multinomial Regression {#sec-multinomial-reg}
 
