@@ -162,8 +162,27 @@ Scope: every generated figure at or above 1 MB -- 22 figures across 9 chapters,
   remaining SVGs *while keeping them vector*. But it shifts font metrics (so
   layouts can move), does not support every cairo feature, and invalidates all
   27 `_freeze` entries.
-- **Reclaiming `.git`.** These blobs are already in history; only a
-  `git filter-repo` rewrite recovers that 2.3 GB.
+- **Reclaiming `.git` is *not* a figure problem.** Git is append-only, so
+  deleting these SVGs does not shrink `.git` -- earlier commits still reference
+  the blobs. But measuring the pack shows figures were never the bulk of it. Of
+  2.11 GB of blob data: `RData/*.RData` + `*.Rdata` is **1.47 GB (70%, 306
+  blobs)**, `.tgz` 221 MB, `.data` 122 MB, `.gz` 103 MB, `.gif` 54 MB, and
+  **every `.svg` ever committed is 46 MB (2%, 419 blobs)** -- the 22 figures
+  converted here are only 21.3 MB across 37 historical versions, since git
+  compresses text SVG ~12x and deltas successive re-renders well.
+
+  The cost driver is `RData/`: gzip-compressed R serializations that git can
+  neither compress nor delta, so each re-save stores a full fresh copy
+  (`forest_logistic_set_res.Rdata` alone is 6 versions x ~34.5 MB = 207 MB;
+  `forested_obl_set_res.RData` is 8 x ~18 MB = 144 MB). A `git filter-repo`
+  pass aimed at figures would reclaim ~2%; aimed at `RData/` it would reclaim
+  ~1.4 GB, but those files are load-bearing inputs at HEAD (212 MB in the
+  working tree), so that needs its own issue and a real plan.
+
+  What this change *does* fix is the growth rate: re-rendering a chapter no
+  longer appends tens of MB of figure blobs per pass. It is also why the
+  `RData/` rewrites were left out of this commit -- adding ~37 MB of
+  undeltifiable blobs is exactly the pattern that accumulated the 1.47 GB.
 
 ## Results
 
