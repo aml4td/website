@@ -404,7 +404,6 @@ The top of @fig-nnet-ex-layer-1 displays a heatmap illustrating how these four a
 #| out-width: 80%
 #| fig-width: 7
 #| fig-height: 5
-#| dev: "ragg_png"
 #| warning: false
 #| fig-cap: "Heatmaps of the four linear predictors and their ReLU values across the predictor space. The black line emphasizes the location where the linear predictor is zero."
 #| fig-alt: "Two rows of four heatmaps each. The top row shows the raw linear predictor values for four hidden units across the A-B predictor space, each with a black contour line at zero dividing positive and negative regions. The bottom row shows the same values after ReLU activation, where negative regions are set to zero, and positive regions retain their values."
@@ -483,7 +482,6 @@ align_equations(
 
 ```{r}
 #| label: fig-nnet-ex-layer-2
-#| dev: "ragg_png"
 #| echo: false
 #| out-width: 80%
 #| fig-width: 7
@@ -538,7 +536,6 @@ A second related issue is saddle points. These are locations where all gradients
 ::::: {.figure-content}
 ```{r}
 #| label: stationary
-#| dev: "ragg_png"
 #| echo: false
 #| out-width: 60%
 #| fig-width: 5.5
@@ -671,7 +668,6 @@ where $x = |(i/r) - (2\,cycle) + 1|$. This is a good option when we are unsure h
 #| out-width: 85%
 #| fig-width: 8
 #| fig-height: 2.8
-#| dev: "ragg_png"
 #| fig-cap: "The effect of different schedulers on the rate and success of convergence."
 #| fig-alt: "Faceted heatmap with four panels for constant, cyclic, decay, and stepwise learning rate schedulers. Each panel shows the loss surface in two parameter dimensions with overlaid optimization paths from two starting points. The constant rate path oscillates near the optimum. The cyclic and decay schedules converge more smoothly, while the stepwise schedule shows mixed results depending on starting location."
 
@@ -739,7 +735,6 @@ Values of $\phi$ typically range from 0.8 to 0.99, representing a weighted avera
 #| out-width: 85%
 #| fig-width: 8
 #| fig-height: 2.8
-#| dev: "ragg_png"
 #| warning: false
 #| fig-cap: "Examples of four different optimizers for the loss surface previously shown in @fig-schedulers."
 #| fig-alt: "Faceted heatmap with four panels for Momentum, AdaGrad, RMSprop with Nesterov, and ADAM optimizers. Each panel shows optimization paths from two starting points overlaid on the same two-dimensional loss surface. Momentum and ADAM converge effectively toward the minimum. AdaGrad stalls before reaching the optimum due to the accumulation of squared gradients. RMSprop with Nesterov converges smoothly."
@@ -1765,7 +1760,7 @@ autoint_info <-
   autoint_res |>
   collect_extracts() |>
   mutate(
-    epochs = map_int(.extracts, ~ .x$epoch_best),
+    epochs = map_int(.extracts, ~ .x$epoch_actual),
     num_param = map_int(.extracts, ~ .x$num_param)
   ) |>
   summarize(
@@ -1775,7 +1770,6 @@ autoint_info <-
   )
 
 autoint_prm_nms <- .get_tune_parameter_names(autoint_res)
-
 
 autoint_brier <-
   collect_metrics(autoint_res) |>
@@ -2072,7 +2066,7 @@ saint_epochs <-
   saint_res |>
   collect_extracts() |>
   mutate(
-    epochs = map_int(.extracts, ~ .x$epoch_best),
+    epochs = map_int(.extracts, ~ .x$epoch_actual),
     num_param = map_int(.extracts, ~ .x$num_param)
   ) |>
   summarize(
@@ -2251,18 +2245,60 @@ For prior-fitted networks, the priors define the characteristics of the data tha
 
 One way that all of this can come together is to use a structural causal model (SCM). This is a directed graph that uses randomness to generate the data and relationships. We start with the general notation of a _cause_; these can be predictors, the outcome, latent (unobserved) features, and so on. One way to combine them is to use an MLP with random weights and biases generated from some distributional prior. Another method might be to randomly generate a tree-like structure of conditional statements.  
 
-For example, let's say that a sample from our prior was: 
+Since TabICL is a completely open-source model, let's walk through an example in which it generated a classification dataset containing 1,024 data points using a specific random seed. 
 
-- Fifteen causes.
-- The outcome is a category with three classes.
-- Three are distributed as Gaussian and two are uniform. 
-- Ten hidden layers are used to combine them.
-- The model parameters were sampled from a mixture distribution where 5% are $N(0, \sigma_1^2)$, 80% are $N(0, \sigma_2^2)$, and 15% are absolute zero. 
-- Threshold parameters are simulated such that the class prevalences are 20%, 50%, and 30%. 
-- One randomly selected cause is binned into seven categories using six cut-points that are uniformly distributed. 
-- One randomly selected cause has its value exponentiated by a value of 0.0123.
+Initially, some specific details about the simulated data are randomly determined. For our example:  
 
-and so on. The first six prior realizations define both the input data and the relationship between the 14 _potential_ causes and the outcome. The random parameter estimates will determine how, if at all, the causes related to the randomly selected cause influence the outcome. When an MLP model is used to define the supervised structure, nonlinear activation is used to produce the true model relationship. The parameter estimates are designed to be sparse; many of their values are either zero or small enough to be within the simulation's noise. For some prior realizations, many predictors affect the outcome, and for others, very few are relevant. Once we have simulated our data using these prior values, the last three operations in the list above are postprocessing steps that change the data's representation to reflect how the priors would expect the data to be _observed_. 
+ - 594 of 1,024 data points are randomly assigned to training. 
+ - A set of thirteen latent variables ($Z_1 \ldots Z_{13}$) will be used to generate the predictors and outcome.
+ - There will be three predictors: $x_1$ (numeric), $x_2$ (categorical with 7 categories), and $x_3$ (categorical but with 9 categories). 
+ - Three classes for the outcome. 
+
+TabICL generated a random causal graph that contains nodes and directed edges. A node is not a single variable: it holds a matrix with one row per observation and latent columns.
+
+@fig-scm-example shows an overview of the quantities being generated. The prior sampled a five-node graph but randomly assigned every observed column to Node $N_2$. This leaves three of the five (Nodes $N_3$, $N_4$, and $N_5$) with nothing downstream. Those were pruned and never evaluated. What remained were two nodes, $N_1$ feeding $N_2$. This realization of the graph is fairly simple for this model, but it does help illustrate how the process works.
+
+```{r}
+#| label: fig-scm-example
+#| echo: false
+#| out-width: 70%
+#| fig-width: 6
+#| fig-height: 6
+#| fig-cap: An overview of the process that the structural causal model used to generate a random data set for classification.
+
+knitr::include_graphics("../premade/dag_combined.png")
+```
+
+The process begins when 1,024 random uniform values were generated, which were then transformed in Node $N_1$ by a randomly chosen function. The eight possible transformations were: multilayer perceptrons, ensembles of decision trees, nearest-neighbor discretization, linear maps, quadratic forms, Gaussian processes, soft cluster assignment, and products of two simpler functions. For this example, $N_1$ used a randomly constructed quadratic form: 
+
+$$
+\tilde{u}_i = 0.999  -0.801\,u_i -0.595\,u_i^2
+$$ 
+As we'll see, all subsequent simulated relationships were born from these rowwise values. 
+
+Node $N_2$ did the majority of the work for this realization. First, it selected another randomly chosen function^[From the previous list of eight functional families] to project $\tilde{u}_i$ onto 13 latent variables. Here, a Gaussian process (with randomly generated coefficients) was chosen to create the projection. Being functions of a single random variable, the thirteen variables are _not independent_ of each other, and none of them carries any information that the first number did not already have. 
+
+The 13 latent variables were then preprocessed (centering, scaling, etc.) and also rescaled with a randomly determined importance value to modulate their effect on the outcome column. After this, the mapping between latent variables and the observed data was generated: 
+
+- $x_1$ is to be created solely on $Z_1$.
+- $x_2$ is a function of variables $Z_2, \dots, Z_8$.
+- $x_3$ is a transformation of $Z_9$.
+- The outcome is based on $Z_{10}$ and $Z_{11}$.
+- $Z_{12}$ and $Z_{13}$ will not used to generate any observed data. 
+
+For the numeric predictor, it was transformed using the method of @kumaraswamy1980generalized using: 
+
+$$
+x_{i1} = 1 - \left(1 - t_i^{\,2.26}\right)^{0.362}
+$$
+
+where $t_i = \mathrm{clip}\!\left(\frac{Z_{i1} + 1.268}{2.45},\, 0,\, 1\right)$. 
+
+The other three observed variables are all categorical and computed using nearest-neighbor discretization. For each, the observed variable is created by randomly selecting $C$ rows of the data to serve as prototypes for the $C$ possible categories.  From these, the other data are assigned to categories by finding their nearest prototype value. 
+
+For example, $x_2$ selects representative points for each category in seven-dimensional space while $x_3$ randomly selects prototypes from a single latent variable ($Z_9$).
+
+Note that the system does not generate predictors and then manufacture a fixed functional relationship with the outcome. All variables in the data are simultaneously generated, and the supervised component is "baked in" from the start. 
 
 We can see the evolution of SCM simulated data sets for these foundational models in Section 4 and Appendix C of @hollmann2022tabpfn, Appendix C of @qu2025tabicl, Appendix E of @qu2026tabiclv2, and most recently, Section 2.3 of @grinsztajn2026tabpfn. Additionally, @zhang2026mitra contains a history of these data generation techniques and also proposes guiding principles for creating a data prior. @nagler2023statistical also examines PFNs from a statistical perspective. For some time, the underlying functional relationship between the predictors/causes and the target was smooth (via MLP structures). @breejen2024fine showed that unsmooth functions, specifically tree- and rule-based relationships, can also improve the quality of the final models. Similar ideas were then adopted into TabPFN and TabICL.
 
