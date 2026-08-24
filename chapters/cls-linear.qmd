@@ -1948,13 +1948,81 @@ The _posterior predictive distribution_ is used to generate predictions for new 
 
 `r r_comp("cls-linear.html#sec-logistic-bayes")`
 
+## Generalized Additive Models {#sec-cls-gam}
+
+We've seen the use of logistic regression in this chapter, coupled with spline terms, in order to model nonlinear effects of predictors. Two strategies were shown: one in which we tuned the number of spline terms, and another in which we set the number of terms to be large and let regularization help demphasize or eliminate excess complexity in the splines.  Statistically, the downside of these methods is that we never measure the noise in the amount of nonlinearity used; we specify it instead of directly estimating it. For that reason, any inferential estimates that we might want (e.g., confidence intervals, p-values, etc.) are optimistic to some degree
+
+Another avenue is to use _generalized additive models_ [@wood2006generalized]. GAMs are a specialized class of models that have effective, relatively low-maintenance methods for adding nonlinearity. When training the model, we specify which predictors should be modeled nonlinearly and the type of spline to use. GAMs can be used to directly estimate the degree of nonlinearity in the relationships. 
+
+The "additive" in their name is due to the linear predictor having a functional form of: 
+
+$$
+log\left(\frac{\pi_i}{1 - \pi_i}\right) = \beta_0 + \sum_{j=1}^{p_{l}} x_{ij} \beta_{j} + \sum_{j'= p_l + 1}^{p_l + p_{s}} f_{j'}\left(x_{ij'}\right)
+$$ {#eq-gam}
+
+where there are $p_l$ feature that enter the model linearly and $p_s$ that are nonlinear as defined by the function $f_{j'}(\cdot)$. This isn't very different from our previous logistic models with nonlinear terms. ADDITIVE ASSUMPTION
+
+What separates GAM models from the previously described techniques is the manner in which the parameters are estimated. For GAMs, the most common training method is penalized maximum likelihood estimation, which is very similar to the L<sub>2</sub> penalty shown for logistic regression. However, GAMs can also estimate how complex the nonlinear terms should be (rather than assigning a specific value to them or tuning them) by directly estimating the penalty parameter^[@marra2012coverage and @wood2013p also make the case that using the plug-in generalized cross-validation (GCV) estimate can also produce valid inference.].  This has tremendous value when the model needs to be statistically interrogated, such as measuring statistical significance or assigning uncertainty to model parameters or predictions. 
+
+Regarding penalized maximum likelihood estimation, the penalty is slightly more complex than in the previous logistic case. We want to penalize complexity, which is often called the "wiggliness" of the curve. For splines, the penalty is more than the squared coefficient: 
+
+$$
+\mathcal{P}_{gam}(\boldsymbol{S}; \boldsymbol{\beta}, \lambda) =  \lambda\boldsymbol{\beta}'\boldsymbol{S}\boldsymbol{\beta}
+$$ {#eq-gam-penalty}
+
+where $\boldsymbol{S}$ is a symmetric matrix of known values that are derived from the integral of squared second derivatives across the range of the basis functions. This matrix encapsulates the overall wiggliness of the nonlinear terms. To illustrate, the 9 × 9 $\boldsymbol{S}$ matrix for the fit shown in @fig-longitude is below in @fig-gam-matrix. 
+
+```{r}
+#| label: fig-gam-matrix
+#| echo: false
+#| out-width: 50%
+#| fig-width: 5
+#| fig-height: 5
+#| dev: "ragg_png"
+#| fig-cap: "The smoothing matrix $\boldsymbol{S}$ for the 9 non-intercept terms corresponding to the fit shown in @fig-longitude. Larger values indicate larger overall curvature."
+
+mgcv_fit <-
+  mgcv::gam(class ~ s(longitude), data = forested_train, 
+            family = stats::binomial(link = "logit"), method = "REML")
+
+nms <- recipes::names0(mgcv_fit$smooth[[1]]$bs.dim - 1, "spline_")
+
+s_matrix <- mgcv_fit$smooth[[1]]$S[[1]]
+colnames(s_matrix) <- nms
+s_matrix <- 
+  s_matrix |> 
+  as_tibble() |> 
+  mutate(.row = rev(seq_along(nms))) |> 
+  pivot_longer(cols = c(-.row)) |> 
+  mutate(
+    .col = as.numeric(factor(name))
+  )
+
+s_matrix |> 
+  ggplot(aes(.col, .row)) + 
+  geom_tile(aes(fill = value)) + 
+  scale_fill_gradient(low = "white", high = "darkred") + 
+  coord_fixed(ratio = 1) +
+  labs(x = "Term", y = "Term", fill = NULL) +
+  scale_x_continuous(
+    breaks = seq_along(nms),
+    labels = seq_along(nms)
+  ) +
+  scale_y_continuous(
+    breaks = seq_along(nms),
+    labels = rev(seq_along(nms))
+  )
+```
+
+Without penalization, the number of degrees of freedom for a set of splines^[Without an intercept term.] is the same as the number of terms. With penalization, each spline feature has varying amounts of influence. The _effective degrees of freedom_ (edf) reflects the overall nonlinearly of the set, where the maximum is the number of terms. For our fit in @fig-longitude, the optimal penalization was light; out of `r ceiling(sum(mgcv_fit$edf1))` possible degrees of freedom^[While there are `r ceiling(sum(mgcv_fit$edf1))` possible, one is the intercept, which is not penalized.], the model used `r round(sum(mgcv_fit$edf1), 4)`. 
+
+It is also worth noting that the work of @marra2011practical enables the model to shrink to absolute zero, thereby removing model terms (and perhaps entire features) from the model fit. 
+
+`r r_comp("cls-linear.html#sec-cls-gam")`
+
 ## Multinomial Regression {#sec-multinomial-reg}
 
 `r r_comp("cls-linear.html#sec-multinomial-reg")`
-
-## Generalized Additive Models {#sec-cls-gam}
-
-`r r_comp("cls-linear.html#sec-cls-gam")`
 
 ## Chapter References {.unnumbered}
 
