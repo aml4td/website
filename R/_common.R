@@ -245,6 +245,10 @@ pval <- function(x, format = "html", max_zeros = 4) {
   res
 }
 
+commas <- function(x) {
+  format(x, scientific = FALSE, big.mark = ",")
+} 
+
 # ------------------------------------------------------------------------------
 # From recipes::names0 and used in shinylive chunks; see https://github.com/aml4td/website/pull/80
 

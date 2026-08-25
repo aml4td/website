@@ -1948,13 +1948,134 @@ The _posterior predictive distribution_ is used to generate predictions for new 
 
 `r r_comp("cls-linear.html#sec-logistic-bayes")`
 
-## Multinomial Regression {#sec-multinomial-reg}
-
-`r r_comp("cls-linear.html#sec-multinomial-reg")`
 
 ## Generalized Additive Models {#sec-cls-gam}
 
 `r r_comp("cls-linear.html#sec-cls-gam")`
+
+## Linear Support Vector Machines {#sec-cls-svm-lin}
+
+We'll first introduce them here and constrain ourselves to linear models. This will help introduce how the model's loss function operates and how that affects the model and its predictions. Later, in @sec-cls-svm-nlin, we'll see the best-known version of the model that uses the "kernel trick" to make it nonlinear. 
+
+To explain hinge loss, we conceptualize our observed outcome data, still assuming two classes, not as zero/one but as $\tilde{y} \in \pm 1$. This means that we should also translate our predictions onto the real line, for example, when the probabilities are in their logit form. Given this encoding for our labels, what should the loss be when our prediction is at least 1.0? Hinge loss assigns it a value of zero. We predicted it correctly, so why should there be any loss at all? When we are incorrect (less than 1), hinge loss assigns a linearly increasing function so that the worse our prediction is, the more our loss increases. Mathematically, the loss is $max(0, 1 - $\tilde{y}\,\eta)$ where $\eta$ is our prediction on the real line. We'll denote the predicted score function as $\eta =\beta_0 + \boldsymbol{x}_{i}'\boldsymbol{\beta}$. 
+
+```{r}
+#| label: fig-svm-loss
+#| echo: false
+#| out-width: 60%
+#| fig-width: 5
+#| fig-height: 3.5
+#| dev: "ragg_png"
+#| fig-cap: "Three loss functions shown against a score value on the real line, denoted as $\\eta$. For some models, this could be the logit value or a general linear predictor."
+losses <- 
+  tibble(probability =  seq(0.001, 0.999, length.out = 100)) |>
+  mutate(
+    Logit = log(probability / (1 - probability)),
+    Brier = (1 - probability)^2,
+    `Cross-Entropy` = -log(probability),
+    Hinge = pmax(0, 1 - log(probability / (1 - probability)))
+  ) |>
+  pivot_longer(
+    cols = c(-probability, -Logit),
+    names_to = "Metric",
+    values_to = "Loss"
+  )
+
+losses |>
+  filter(Logit >= -3 & Logit <= 3) |> 
+  ggplot(aes(Logit, Loss, group = Metric, col = Metric)) +
+  geom_vline(xintercept = c(-1, 1), lty = 3) + 
+  geom_path() +
+  labs(x = expression(eta)) +
+  theme(legend.position = "top")
+```
+
+
+estimator is $sign(\eta)$,  no probabilities being directly estimated. 
+
+
+This loss function is often used in the form of:
+
+$$
+L($\tilde{y}; \beta_0, \boldsymbol{\beta}) = \frac{\mathcal{C}}{n_{tr}}\sum_{i=1}^{n_{tr}}\Big( max\left[0, 1 - $\tilde{y}_i \left(\beta_0 + \boldsymbol{x}_{i}'\boldsymbol{\beta}\right)\right]\Big) + ||\boldsymbol{\beta}||^2 
+$$
+
+Let's think about the left-hand side of this equation. The summand contains the observed value (±1) times the predicted score. There are three regions of interest for this product:
+
+ - Correct prediction: $\tilde{y}\eta > 1$, no loss, $1 - \tilde{y}\eta < 0$
+ - No correct enough: $0 \le \tilde{y}\eta \le 1$, small loss, $1 - \tilde{y}\eta \in (0, 1)$
+ - Incorrect: $\tilde{y}\eta < 0$, large loss, , $1 - \tilde{y}\eta > 1$
+
+The left-hand term is computing an average value that reflects how poorly the model agrees with the prediction. The constant $\mathcal{C}$ is the _cost value_. If we want a high-complexity model, we would choose a large value of $\mathcal{C}$ to strongly penalize inaccurate predictions. Tuning this value enables us to modulate model complexity. 
+
+The second term summarizes the overall magnitude of the model parameters, apart from the intercept. This acts as a regularizing term, similar to the ridge penalty^[In fact, some representations of this equation divide both terms by $\gamma = 1/\mathcal{C}$, so that the tuning parameter is a coefficient for the squared norm of the parameters.]. 
+ 
+point to the overfitting graph
+
+now show how the model's functional form plays out and how some points just don't matter. 
+
+$$
+\hat{\eta} = \hat{\beta}_0+\sum_{i=1}^{n_{tr}} \hat{\alpha}_i \left(\sum_{j=1}^p x_{ij} u_j \right) = \hat{\beta}_0+\sum_{i=1}^{n_{tr}} \hat{\alpha}_i \boldsymbol{x}_i'\boldsymbol{u}_i
+$$ {#eq-svm-linear}
+
+If we wanted to write this as a familiar slope/intercept model, the $p$ coefficients for the features are be
+
+$$
+\hat{\boldsymbol{\beta}} = \boldsymbol{X}'\hat{\boldsymbol{\alpha}}
+$$
+
+where $\boldsymbol{X}$ does not contain an intercept column. 
+
+
+explain multiclass
+
+```{r}
+#| label: forestation-svm-linear
+#| include: false
+#| cache: true
+svm_spec <- 
+  svm_linear(mode = "classification") |> 
+  set_engine("kernlab")
+
+forest_svm_set <-
+  workflow_set(
+    preproc = list(
+      simple = bare_rec,
+      "encoded + transformations" = transformed_rec,
+      encoded = forest_rec,
+      "encoded + interactions" = forest_int_rec,
+      "encoded + transformations + splines" = forest_spline_rec
+    ),
+    model = list(`SVM (linear)` = svm_spec)
+  )
+
+forest_svm_res <-
+  forest_svm_set |>
+  workflow_map(
+    fn = "fit_resamples",
+    resamples = forested_rs,
+    control = control_resamples(save_pred = TRUE, save_workflow = TRUE),
+    metrics = cls_mtr,
+    seed = 693,
+    verbose = FALSE
+  )
+
+set.seed(83672)
+svm_linear_fit <- fit_best(forest_svm_res)
+ksvm_fit <- svm_linear_fit |> extract_fit_engine()
+num_sv <- commas(ksvm_fit@nSV)
+plat_coef <- signif(unlist(ksvm_fit@prob.model), 3)
+```
+
+If we were to fit this model on the training set, we'd find that there were `r num_sv` (out of `r commas(nrow(forested_train))`) support vectors (and non-zero $\alpha_i$ values). The equation used by Platt scaling to convert the $\eta$ scores to probability-like values was: 
+
+$$
+\hat{\pi}_i = \Big[1 + \exp(`r plat_coef[["B"]]` `r plat_coef[["A"]]`\, \hat{\eta}) \Big]^{-1}
+$$
+
+## Multinomial Regression {#sec-multinomial-reg}
+
+`r r_comp("cls-linear.html#sec-multinomial-reg")`
 
 ## Chapter References {.unnumbered}
 
@@ -1987,6 +2108,9 @@ save(
 
 forest_logistic_set_res <- forest_res |> butcher::butcher()
 save(forest_logistic_set_res, file = "../RData/forest_logistic_set_res.Rdata")
+
+forest_svm_set_res <- forest_svm_res |> butcher::butcher()
+save(forest_logistic_set_res, file = "../RData/forest_svm_set_res.Rdata")
 
 forest_glmnet_set_res <- as_workflow_set(
   "glmnet" = glmn_res |> butcher::butcher()
