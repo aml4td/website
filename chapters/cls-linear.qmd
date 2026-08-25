@@ -1955,9 +1955,13 @@ The _posterior predictive distribution_ is used to generate predictions for new 
 
 ## Linear Support Vector Machines {#sec-cls-svm-lin}
 
-We'll first introduce them here and constrain ourselves to linear models. This will help introduce how the model's loss function operates and how that affects the model and its predictions. Later, in @sec-cls-svm-nlin, we'll see the best-known version of the model that uses the "kernel trick" to make it nonlinear. 
+Support vector machines (SVMs) have been a staple in machine learning for the last few decades.  @cristianini2000introduction is a good resource for beginners.  We'll first introduce them here and constrain ourselves to linear classifiers. This will help concentrate on the model's loss function and a basic classifier. Later, in @sec-cls-svm-nlin, we'll see the well-known version of the model that uses the "kernel trick" to enable nonlinear class boundaries. 
 
-To explain hinge loss, we conceptualize our observed outcome data, still assuming two classes, not as zero/one but as $\tilde{y} \in \pm 1$. This means that we should also translate our predictions onto the real line, for example, when the probabilities are in their logit form. Given this encoding for our labels, what should the loss be when our prediction is at least 1.0? Hinge loss assigns it a value of zero. We predicted it correctly, so why should there be any loss at all? When we are incorrect (less than 1), hinge loss assigns a linearly increasing function so that the worse our prediction is, the more our loss increases. Mathematically, the loss is $max(0, 1 - $\tilde{y}\,\eta)$ where $\eta$ is our prediction on the real line. We'll denote the predicted score function as $\eta =\beta_0 + \boldsymbol{x}_{i}'\boldsymbol{\beta}$. 
+SVMs are driven by an objective function called **hinge loss**. For now, we'll assume that there are two outcome class levels. We'll also recode the target variable so that these two classes are represented as $\tilde{y} \in \pm 1$ (as opposed to the standard 0/1 encoding). SVMs are _not_ designed to naturally generate class probability estimates. Instead, they generate a predictive score on the real line, with zero as the default threshold for differentiating between the two classes. We'll denote the prediction function for the score as $\eta$, recycling notation from @eq-logit. While SVMs do not automatically create logit values, the linear classifiers are parameterized with a linear predictor function $\eta =\beta_0 + \boldsymbol{x}_{i}'\boldsymbol{\beta}$.
+
+Let's briefly recall a different loss function for a binary classifier. The Brier score estimates the squared error between the probability estimate ($\pi$) and the observed classes (0/1). Let's focus on the first class, say the event of interest, being predicted. When the model is perfect, both the estimate and the observed values are zero. However, as the accuracy of the probability estimates decreases from 1.0 to 0.5, the loss increases quadratically, reaching a maximum of 0.25. If we have a probability of 0.75, the Brier score does assign some loss to the data point. Its hard classification is still correct, but the probability estimate is not perfect, and the loss reflects this. 
+
+Hinge loss treats any predicted score that is greater than 1.0 as perfect and assigns 0.0 loss. If the hard class prediction is still correct but not perfect (i.e., $0.0 \le \eta \le 1.0$), a loss is assigned that is increasingly linear as the values become closer to 0.0. This is also the loss for incorrect hard class predictions ($\eta \lt 0.0$). Mathematically, the loss is $max(0, 1 - \tilde{y}\eta)$
 
 ```{r}
 #| label: fig-svm-loss
@@ -1990,44 +1994,34 @@ losses |>
   theme(legend.position = "top")
 ```
 
-
-estimator is $sign(\eta)$,  no probabilities being directly estimated. 
-
-
-This loss function is often used in the form of:
+SVM models are based on the objective function: 
 
 $$
-L($\tilde{y}; \beta_0, \boldsymbol{\beta}) = \frac{\mathcal{C}}{n_{tr}}\sum_{i=1}^{n_{tr}}\Big( max\left[0, 1 - $\tilde{y}_i \left(\beta_0 + \boldsymbol{x}_{i}'\boldsymbol{\beta}\right)\right]\Big) + ||\boldsymbol{\beta}||^2 
-$$
+L(\tilde{y}; \beta_0, \boldsymbol{\beta}) = \frac{\mathcal{C}}{n_{tr}}\sum_{i=1}^{n_{tr}}\Big( max\left[0, 1 - \tilde{y}_i \left(\beta_0 + \boldsymbol{x}_{i}'\boldsymbol{\beta}\right)\right]\Big) + ||\boldsymbol{\beta}||^2 
+$$ {#eq-svm-cls-loss}
 
-Let's think about the left-hand side of this equation. The summand contains the observed value (±1) times the predicted score. There are three regions of interest for this product:
+The summation is the accumulation of hinge loss values. Again, note that well-predicted data points ($\eta \ge 0$) contribute nothing to this statistic. The constant $\mathcal{C}$ is the _cost value_. This is a tuning parameter that modulates how much effort the model should exert to predict all training set values as well as possible. Tuning this value enables us to modulate model complexity. For linear SVM classifiers, the cost function does not significantly affect the computations. However, we'll see in @sec-cls-svm-nlin that this parameter has a profound effect on the model's quality. Linear classifiers have a much higher bias than their nonlinear counterparts and simply lack the flexibility to overfit at unreasonably large cost values. 
 
- - Correct prediction: $\tilde{y}\eta > 1$, no loss, $1 - \tilde{y}\eta < 0$
- - No correct enough: $0 \le \tilde{y}\eta \le 1$, small loss, $1 - \tilde{y}\eta \in (0, 1)$
- - Incorrect: $\tilde{y}\eta < 0$, large loss, , $1 - \tilde{y}\eta > 1$
+The second term summarizes the overall magnitude of the model parameters, apart from the intercept. This acts as a regularizing term, similar to the ridge penalty^[In fact, some representations of this equation divide both terms by $\gamma = 1/\mathcal{C}$, so that the tuning parameter is a coefficient for the squared norm of the parameters.]. Note that the intercept is not used in this norm. Since this term sums the squared coefficients, SVM models require all numeric predictors to have the same mean and standard deviation, or to be on at least the same scale. 
 
-The left-hand term is computing an average value that reflects how poorly the model agrees with the prediction. The constant $\mathcal{C}$ is the _cost value_. If we want a high-complexity model, we would choose a large value of $\mathcal{C}$ to strongly penalize inaccurate predictions. Tuning this value enables us to modulate model complexity. 
-
-The second term summarizes the overall magnitude of the model parameters, apart from the intercept. This acts as a regularizing term, similar to the ridge penalty^[In fact, some representations of this equation divide both terms by $\gamma = 1/\mathcal{C}$, so that the tuning parameter is a coefficient for the squared norm of the parameters.]. 
- 
-point to the overfitting graph
-
-now show how the model's functional form plays out and how some points just don't matter. 
+The linear SVM prediction equation can be derived from this objective function. When predicting an unknown sample $\boldsymbol{u}$, it is: 
 
 $$
 \hat{\eta} = \hat{\beta}_0+\sum_{i=1}^{n_{tr}} \hat{\alpha}_i \left(\sum_{j=1}^p x_{ij} u_j \right) = \hat{\beta}_0+\sum_{i=1}^{n_{tr}} \hat{\alpha}_i \boldsymbol{x}_i'\boldsymbol{u}_i
-$$ {#eq-svm-linear}
+$$ {#eq-svm-linear-model}
 
-If we wanted to write this as a familiar slope/intercept model, the $p$ coefficients for the features are be
+where the $\alpha_i$ values ($i = 1, \ldots, n_{tr}$) that are non-negative. For a linear SVM classifier, we can write this equation as a familiar slope/intercept model:
 
 $$
-\hat{\boldsymbol{\beta}} = \boldsymbol{X}'\hat{\boldsymbol{\alpha}}
+\hat{\eta} = \hat{\beta}_0 + (\boldsymbol{X}'\hat{\boldsymbol{\alpha}}) \boldsymbol{u}_i = \hat{\beta}_0 + \boldsymbol{u}_i'\hat{\boldsymbol{\beta}}
 $$
+where neither $\boldsymbol{X}$ nor $\boldsymbol{u}$ contain elements for the intercept. 
 
-where $\boldsymbol{X}$ does not contain an intercept column. 
+One interesting aspect of this result is that training-set points with score predictions greater than 1.0 are assigned $\alpha_i = 0$. This means that the most confidently predicted samples have no direct effect on the prediction equation. The training set points with strictly positive values are called the _support vectors_ since the prediction equation is composed of these values. This result indicates that some portion of the training set must be stored by the model, which can make it unattractive for large training sets.
 
+Again, SVMs only produce predictive score values. To convert them to class probabilities, Platt scaling [@platt1999probabilistic] is used to estimate a slope and intercept for a logistic function that takes $\hat{\eta}$ as input and produces probability-like estimates.  
 
-explain multiclass
+For multiclass SVM models, a set of distinct $C$ "one-versus-all" binary SVM models is created and trained separately. The hard class predictions are assigned to whichever model predicted the largest value of $\hat{\eta}_{ij}$ (across $j$). Platt scaling is again used to create class probability estimates. An alternative is to use a collection of $C(C-1)/2$ pairwise SVM models. 
 
 ```{r}
 #| label: forestation-svm-linear
@@ -2037,7 +2031,7 @@ svm_spec <-
   svm_linear(mode = "classification") |> 
   set_engine("kernlab")
 
-forest_svm_set <-
+forest_svm_linear_set <-
   workflow_set(
     preproc = list(
       simple = bare_rec,
@@ -2049,8 +2043,8 @@ forest_svm_set <-
     model = list(`SVM (linear)` = svm_spec)
   )
 
-forest_svm_res <-
-  forest_svm_set |>
+forest_svm_linear_res <-
+  forest_svm_linear_set |>
   workflow_map(
     fn = "fit_resamples",
     resamples = forested_rs,
@@ -2061,17 +2055,60 @@ forest_svm_res <-
   )
 
 set.seed(83672)
-svm_linear_fit <- fit_best(forest_svm_res)
+svm_linear_fit <- fit_best(forest_svm_linear_res)
 ksvm_fit <- svm_linear_fit |> extract_fit_engine()
 num_sv <- commas(ksvm_fit@nSV)
 plat_coef <- signif(unlist(ksvm_fit@prob.model), 3)
 ```
 
-If we were to fit this model on the training set, we'd find that there were `r num_sv` (out of `r commas(nrow(forested_train))`) support vectors (and non-zero $\alpha_i$ values). The equation used by Platt scaling to convert the $\eta$ scores to probability-like values was: 
+Let's see how this model performed on the forestation data. The same set of preprocessing options used for the logistic model was applied to the SVM model, with a fixed cost of $\mathcal{C} = 1.0$. The results were very similar to those of the unpenalized logistic model, as seen in @fig-forest-logistic-svm. 
+
+```{r}
+#| label: fig-forest-logistic-svm
+#| echo: false
+#| out-width: 70%
+#| fig-width: 6
+#| fig-height: 3.1
+#| fig-cap: Cross-validated Brier scores for several stages of feature engineering of the forestation data using basic logistic regression and linear SVMs. 
+bind_rows(
+  forest_res |>
+    rank_results(rank_metric = "brier_class") |>
+    filter(.metric == "brier_class") |>
+    mutate(
+      pipeline = gsub("_logistic_mle", "", wflow_id),
+      pipeline = factor(pipeline),
+      pipeline = reorder(pipeline, -mean),
+      ci_pm = qnorm(0.95) * std_err,
+      Model = "Logistic Regresison"
+    ),
+  forest_svm_linear_res |>
+    rank_results(rank_metric = "brier_class") |>
+    filter(.metric == "brier_class") |>
+    mutate(
+      pipeline = gsub("_SVM (linear)", "", wflow_id, fixed = TRUE),
+      pipeline = factor(pipeline),
+      pipeline = reorder(pipeline, -mean),
+      ci_pm = qnorm(0.95) * std_err,
+      Model = "SVM (Linear)"
+    )
+) |>
+  ggplot(aes(mean, pipeline, col = Model)) +
+  geom_point(position = position_dodge(width = 0.5)) +
+  geom_errorbar(
+    aes(xmin = mean - ci_pm, xmax = mean + ci_pm),
+    width = 1 / 3,
+    position = position_dodge(width = 0.5)
+  ) +
+  labs(x = "Brier Score", y = NULL) +
+  theme(legend.position = "top")
+```
+
+As before, the most complex feature-engineering strategy yielded the best performance. If we were to fit that pipeline on the training set, we'd find that there were `r num_sv` (out of `r commas(nrow(forested_train))`) support vectors (and non-zero $\alpha_i$ values). For this fit, the equation used by Platt scaling to convert the $\eta$ scores to probability-like values for the forested class level was: 
 
 $$
 \hat{\pi}_i = \Big[1 + \exp(`r plat_coef[["B"]]` `r plat_coef[["A"]]`\, \hat{\eta}) \Big]^{-1}
 $$
+We'll delve into more details of these models in the next chapter, including more on preprocessing requirements. 
 
 ## Multinomial Regression {#sec-multinomial-reg}
 
@@ -2109,8 +2146,8 @@ save(
 forest_logistic_set_res <- forest_res |> butcher::butcher()
 save(forest_logistic_set_res, file = "../RData/forest_logistic_set_res.Rdata")
 
-forest_svm_set_res <- forest_svm_res |> butcher::butcher()
-save(forest_logistic_set_res, file = "../RData/forest_svm_set_res.Rdata")
+forest_svm_linear_set_res <- forest_svm_linear_res |> butcher::butcher()
+save(forest_svm_linear_set_res, file = "../RData/forest_svm_linear_set_res.Rdata")
 
 forest_glmnet_set_res <- as_workflow_set(
   "glmnet" = glmn_res |> butcher::butcher()
