@@ -11,7 +11,7 @@ load("~/content/website/RData/forested_data.RData")
 tidymodels_prefer()
 theme_set(theme_bw())
 options(pillar.advice = FALSE, pillar.min_title_chars = Inf)
-mirai::daemons(2)
+mirai::daemons(3)
 
 # ------------------------------------------------------------------------------
 
