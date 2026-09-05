@@ -144,6 +144,18 @@ save_obj <- function(x, verbose = FALSE) {
   invisible(file.exists(nm))
 }
 
+save_if_missing <- function(x) {
+  cl <- match.call()
+  nm <- as.character(cl$x)
+  assign(nm, x)
+  file_nm <- glue::glue("../RData/{nm}.RData")
+  nm_exists <- file.exists(file_nm)
+  if (!nm_exists) {
+    save(x, file = file_nm)
+  }
+  invisible(x)
+}
+
 export_resamples <- function(x, label = NULL) {
   if (inherits(x, "tune_results")) {
     cl <- match.call()
