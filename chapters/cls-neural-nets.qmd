@@ -2216,23 +2216,23 @@ icl_corrs <-
   round(2)
 ```
 
-Foundational models are very large neural networks trained on an immense amount of training data. They are developed not for any one particular task but to create a broad understanding of a problem domain. Large language models are a good example; they are very proficient at understanding and reproducing human textual communication but were not designed for any one task (e.g., language translation). They can be applied, with some context, to help solve many different problems. 
+Foundational models are very large neural networks trained on an immense amount of training data. They are not developed for any one particular task but to create a broad understanding of a **problem domain**. Large language models are a good example; they are very proficient at understanding and reproducing human textual communication but were not designed for any one task (e.g., language translation). They can be applied, with some context, to help solve many different problems. 
 
 For tabular data, foundational models have been developed using large amounts of simulated data and are highly effective at prediction. We'll focus on "prior fitted networks" (PFN) that emulate Bayesian inference using deep learning [@muller2021transformers]. 
 
 ::: {.important-box}
-The models discussed in this section are pretrained. When we use them, no additional training or parameter estimation is required. We are applying a forward pass on a finalized model. The notion of the _training set_ is different. Training has already occurred. However, the training data for our specific data set is crucial to _set the context_ for the foundational model. 
+The models discussed in this section are pretrained. When we use them, no additional training or parameter estimation is required. We are applying a forward pass on a finalized model. The notion of the _training set_ is different. Training has already occurred and, for these models, there were millions of training sets. However, the training data for **our** specific data set is crucial to _set the context_ for the foundational model. 
 :::
 
-We'll focus on two implementations of this type of foundational model: TabPFN [@grinsztajn2026tabpfn] and TabICL [@qu2026tabiclv2]. There is substantial engineering effort in both models, and TabPFN has been on a rapid development trajectory. TabPFN is also a proprietary model, and we don't have all of the implementation details. For these reasons, some of the nuanced aspects of these models will be discussed here. We'll focus on the general process of how those models are trained and how they perform. These results will also lead us to describe certain parts of the architectures to gain additional intuition.
+We'll focus on two implementations of this type of foundational model: TabPFN [@grinsztajn2026tabpfn] and TabICL [@qu2026tabiclv2]. There is substantial engineering effort for both models, and TabPFN has been on a rapid development trajectory. TabPFN is also a proprietary model, and we don't have all of the implementation details. For these reasons, only some of the nuanced aspects of these models will be discussed here. We'll focus on the general process of how those models are trained and how they perform. These results will also lead us to describe certain parts of the architectures to gain additional intuition.
 
-Let's start by discussing the general process for training a PFN. 
+Let's start by discussing the general process for training a prior fitted network. 
 
 ### Developing a Tabular Foundational Model {#sec-cls-pfn-development}
 
 We've said that these models are trained on vast amounts of data. For the models under discussion here, all training data are simulated. Existing, real data sets, such as those found on the UCI Machine Learning Database, are not used for training. That's where the "prior" in PFN comes in. We'll discuss the nature of the simulated data sets in the next section, followed by the model structure. For now, let's assume we have generated a large number of distinct data sets and want to train our model. 
 
-The general idea for this training regimen starts with @muller2021transformers. They determined that if a sufficiently advanced neural network was trained on sufficient relevant data, it could produce results that approximate the posterior of a Bayesian model. They went about showing this using Gaussian Process models.  In their case, classification models were optimized using cross-entropy (e.g., multinomial negative log-likelihood), and they showed a theoretical justification for this choice. 
+The general idea for this training regimen starts with @muller2021transformers. They determined that if a sufficiently advanced neural network was trained on sufficient relevant data, it could produce results that approximate the posterior of a Bayesian model. They went about proving this using Gaussian Process models.  In their case, classification models were optimized using cross-entropy (e.g., multinomial negative log-likelihood), and they showed a theoretical justification for this choice. 
 
 A more concrete example comes from Appendix E.1 of the @qu2025tabicl, which describes the different phases of training the model. For example, during the first 160K optimization steps, they use a batch size of 4, with each batch containing 1,024 data points. After this, they use single batches of randomly sampled sizes in different phases. They also used the Adam optimizer, learning rate schedules, and so on. 
 
@@ -2242,13 +2242,13 @@ Let's start by discussing how the artificial data sets can be generated for thes
 
 ### Data Generation {#sec-cls-pfn-training-data}
 
-Our previous discussions on Bayesian estimation discussed that a prior distribution reflects our belief about what is possible for our model parameters before the data are observed. For example, in @sec-logistic-bayes, we illustrated Bayesian inference for two parameters in a logistic regression model, using two Gaussian priors.  Once the data are observed, the posterior distribution combines our prior belief with the observed data. 
+Our previous discussions on Bayesian estimation discussed that a prior distribution reflects our belief about what is possible for our _model parameters_ before the data are observed. For example, in @sec-logistic-bayes, we illustrated Bayesian inference for two parameters in a logistic regression model, using two Gaussian priors.  Once the data are observed, the posterior distribution combines our prior belief with the observed data. 
 
-For prior-fitted networks, the priors define the characteristics of the data that the model can observe, not strictly the model parameters. This can include data dimensions (e.g., number of features, classes, samples), distributional characteristics (e.g., Gaussian, uniform), relationships among predictors (e.g., multicollinearity), and relationships with the outcome. For example, we might have a small probability that a predictor has extreme outliers or missing values. 
+For prior-fitted networks, the priors also define the characteristics of the data that the model can observe, not strictly the model parameters. This can include data dimensions (e.g., number of features, classes, samples), distributional characteristics (e.g., Gaussian, uniform), relationships among predictors (e.g., multicollinearity), and relationships with the outcome. For example, we might have a small probability that a predictor has extreme outliers or missing values. 
 
-One way that all of this can come together is to use a structural causal model (SCM). This is a directed graph that uses randomness to generate the data and relationships. We start with the general notation of a _cause_; these can be predictors, the outcome, latent (unobserved) features, and so on. One way to combine them is to use an MLP with random weights and biases generated from some distributional prior. Another method might be to randomly generate a tree-like structure of conditional statements.  
+One way that all of this can come together is to use a structural causal model (SCM). This is a directed graph that uses randomness to generate the data and relationships. We start with the general notation of a _cause_; these are nodes on the graph that are latent factors that influence the joint distributions of what will be our observed data (e.g., predictors and outcome). The causes are represented as nodes on a directed graph that starts with a set of random numbers and ends with out observed columns. The causal node are not often univariate. They will modify the joint distribution of intermediate variables. 
 
-Since TabICL is a completely open-source model, let's walk through an example in which it generated a classification dataset containing 1,024 data points using a specific random seed. 
+Since TabICL is a completely open-source model, let's walk through an example in which it generated a classification data set containing 1,024 data points using a specific random seed. For simplicity, we picked an example that, effectively, uses a fairly direct causal pathway. 
 
 Initially, some specific details about the simulated data are randomly determined. For our example:  
 
@@ -2257,9 +2257,7 @@ Initially, some specific details about the simulated data are randomly determine
  - There will be three predictors: $x_1$ (numeric), $x_2$ (categorical with 7 categories), and $x_3$ (categorical but with 9 categories). 
  - Three classes for the outcome. 
 
-TabICL generated a random causal graph that contains nodes and directed edges. A node is not a single variable: it holds a matrix with one row per observation and latent columns.
-
-@fig-scm-example shows an overview of the quantities being generated. The prior sampled a five-node graph but randomly assigned every observed column to Node $N_2$. This leaves three of the five (Nodes $N_3$, $N_4$, and $N_5$) with nothing downstream. Those were pruned and never evaluated. What remained were two nodes, $N_1$ feeding $N_2$. This realization of the graph is fairly simple for this model, but it does help illustrate how the process works.
+TabICL generated a random causal graph that contains nodes and directed edges. @fig-scm-example shows an overview of the quantities being generated. The prior sampled a five-node graph but only node $N_2$ directly affects the observed data. This leaves three of the five (Nodes $N_3$, $N_4$, and $N_5$) with nothing downstream. Those were pruned and never evaluated. What remained were two nodes, $N_1$ feeding $N_2$. 
 
 ```{r}
 #| label: fig-scm-example
@@ -2272,14 +2270,15 @@ TabICL generated a random causal graph that contains nodes and directed edges. A
 knitr::include_graphics("../premade/dag_combined.png")
 ```
 
-The process begins when 1,024 random uniform values were generated, which were then transformed in Node $N_1$ by a randomly chosen function. The eight possible transformations were: multilayer perceptrons, ensembles of decision trees, nearest-neighbor discretization, linear maps, quadratic forms, Gaussian processes, soft cluster assignment, and products of two simpler functions. For this example, $N_1$ used a randomly constructed quadratic form: 
+The process begins when 1,024 random uniform values were generated (the "u" node in the figure), which were then transformed in Node $N_1$ by a randomly chosen function. The eight possible transformations were: multilayer perceptrons, ensembles of decision trees, nearest-neighbor discretization, linear maps, quadratic forms, Gaussian processes, soft cluster assignment, and products of two simpler functions. For this example, $N_1$ used a randomly constructed quadratic form: 
 
 $$
 \tilde{u}_i = 0.999  -0.801\,u_i -0.595\,u_i^2
 $$ 
+
 As we'll see, all subsequent simulated relationships were born from these rowwise values. 
 
-Node $N_2$ did the majority of the work for this realization. First, it selected another randomly chosen function^[From the previous list of eight functional families] to project $\tilde{u}_i$ onto 13 latent variables. Here, a Gaussian process (with randomly generated coefficients) was chosen to create the projection. Being functions of a single random variable, the thirteen variables are _not independent_ of each other, and none of them carries any information that the first number did not already have. 
+Node $N_2$ did the majority of the work for this realization. First, it selected another randomly chosen function^[From the previous list of eight functional families.] to project $\tilde{u}_i$ onto 13 latent variables. Here, a Gaussian process (with randomly generated coefficients) was chosen to create the projection. Being functions of a single random variable, the thirteen variables are _not independent_ of each other, and none of them carries any information that the first number did not already have. 
 
 The 13 latent variables were then preprocessed (centering, scaling, etc.) and also rescaled with a randomly determined importance value to modulate their effect on the outcome column. After this, the mapping between latent variables and the observed data was generated: 
 
@@ -2299,7 +2298,7 @@ where $t_i = \mathrm{clip}\!\left(\frac{Z_{i1} + 1.268}{2.45},\, 0,\, 1\right)$.
 
 The other three observed variables are all categorical and computed using nearest-neighbor discretization. For each, the observed variable is created by randomly selecting $C$ rows of the data to serve as prototypes for the $C$ possible categories.  From these, the other data are assigned to categories by finding their nearest prototype value. 
 
-For example, $x_2$ selects representative points for each category in seven-dimensional space while $x_3$ randomly selects prototypes from a single latent variable ($Z_9$).
+For example, $x_2$ selects random points for each category in seven-dimensional space while $x_3$ randomly selects prototypes from a single latent variable ($Z_9$).
 
 Note that the system does not generate predictors and then manufacture a fixed functional relationship with the outcome. All variables in the data are simultaneously generated, and the supervised component is "baked in" from the start. 
 
@@ -2313,7 +2312,7 @@ Data-generating mechanisms can be created very quickly and do not require storag
 
 Training proceeded over 2 million iterations, each with a batch size of 64 data sets. This means that 128 million synthetic data sets were used for training. @qu2026tabiclv2 reports that 82 million datasets were used to train the second version of TabICL.
 
-We'll discuss how these models can include non-informative or very weakly informative predictors in @sec-cls-pfn-features.  
+We'll discuss how these models can handle non-informative or very weakly informative predictors in @sec-cls-pfn-features.  
 
 ### Model Structure and Training {#sec-cls-pfn-model}
 
@@ -2331,13 +2330,13 @@ TabPFN has a few constants for parameters that could potentially change in the f
 
 These numbers will be used in the details below, but may change in future versions. 
 
-What is the structure of TabPFN's network? Keeping to the same convention used above, here is a summary of the forestation data, the details of which are discussed in the subsequent sections: 
+What is the structure of TabPFN's network? Keeping to the same convention used previously, here is a summary of the forestation data, the details of which are discussed in the subsequent sections: 
 
 1. **Preprocessing** (no parameters):
    - General preprocessing
    - Each of the 16 columns is mean-imputed and standardized
    - A completeness indicator column is computed alongside each feature. 
-   - Output: two (16 × 2)-wide tables (values and indicators).
+   - Output: two (16 × 2)-wide tables (values and indicators) per data point.
 2. **Feature grouping** (no parameters)
    - Each cell is replaced by a circular-shifted group of $g = 3$ sibling columns, concatenated with their 3 indicators, giving 6 values per cell.
 3. **Cell embedding layer** maps each cell's 6 values to a 128-dimensional vector:
@@ -2347,11 +2346,11 @@ What is the structure of TabPFN's network? Keeping to the same convention used a
    - Each block, using 289,872 parameters:
      - 128 learned prototype vectors (128 dimensions each) using 16,384 parameters
      - Cross-attention Stage 1
-     - QKV projections: 65,536 parameters
-     - Query multiplier via MLP: 10,576 parameters
-     - GELU MLP with layer sizes [128, 256, 128] using 65,536 parameters
-     - 3-layer normalizations (128 dimensions) using 384 parameters
-       - Cross-attention Stage 2 
+       - QKV projections: 65,536 parameters
+       - Query multiplier via MLP: 10,576 parameters
+       - GELU MLP with layer sizes [128, 256, 128] using 65,536 parameters
+       - 3-layer normalizations (128 dimensions) using 384 parameters
+     - Cross-attention Stage 2 
    - Feature-distribution embedder parameters: 869,616
 5. **Column aggregator** (cross-feature interaction): 4 learned aggregation tokens are prepended to each row's 16 column tokens, giving a sequence of 20 tokens; 3 transformer blocks with 8 heads. The output shape is (4 × 128) per row.
    - 4 aggregation tokens (128 dimensions each) using 512 parameters
@@ -2383,13 +2382,16 @@ What is the structure of TabPFN's network? Keeping to the same convention used a
 
 In total, there are 53,023,736 learned parameters that have already been estimated. This count is the same regardless of the number of predictors, the number of categorical levels, or the number of classes (as long as $C \le C_{max}$).
 
+The next set of sebsections go into more detail for each phase of the model. 
+
+
 #### Initial Internal Preprocessing {#sec-cls-pfn-preprocessing}
 
 There are a variety of ways that TabPFN preprocesses data. The specific depends on how many estimators are used (see @sec-cls-pfn-ensembles). 
 
-For a single model estimator, the preprocessing can include: 
+For a single model estimator, the preprocessing _can_ include: 
 
-- For numeric predictors, center by the median and scale by the interquartile range. Also, it truncates values beyond $\pm 3$ to $ \ pm 3$. 
+- For numeric predictors, center by the median and scale by the interquartile range. Also, it truncates values beyond $\pm 3$ to $\pm 3$. 
 - It computes a PCA-like linear embedding across the predictors and retains a small number of the resulting components, which is a function of the number of predictors and training set samples. 
 
 When two or more estimators are used, the preprocessing is deterministic but designed to induce variation in the data to maximize the ensemble's effect. For example, instead of using a robust centering/scaling approach, the numeric predictors can be coerced to a uniform distribution (not unlike the ordered quantile normalization from @sec-skewness).
@@ -2411,7 +2413,7 @@ Finally, a centering-and-scaling step is applied using statistics from the imput
 
 TabPFN reorganizes the cells into groups whose values are reused across neighboring columns. Our data stays $n \times p$, but each cell, previously two numbers (value + completeness indicator), now packs together $g = 3$ of the original cells for a total of six numbers. Here, $g$ is the number of features per group and defaults to 3; there are $p$ groups, one anchored at each column.
 
-To define each group, a circular shift gathers neighboring columns: for a given column, it collects the values a fixed number of positions to the right, wrapping around the last column(s) back to the first. The offsets are $2^i$ for $i = 0, 1, 2$, i.e., 1, 2, and 4 positions. Illustrating the shift on predictors `A`, `B`, `C`, `D`, `E`:
+To define each group, a circular shift gathers neighboring columns: for a given column, it collects the values a fixed number of positions to the right, wrapping around the last column(s) back to the first. The offsets are $2^i$ for $i = 0, 1, 2$, i.e., positions 1, 2, and 4. Illustrating the shift on predictors `A`, `B`, `C`, `D`, `E`:
 
 - shift 1: `B`, `C`, `D`, `E`, `A`
 - shift 2: `C`, `D`, `E`, `A`, `B`
@@ -2421,7 +2423,7 @@ These three shifted copies are stacked to form the groups. Take predictor `C` in
 
 With many columns, the grouped neighbors are genuinely nearby columns. This can be very effective when the columns have a natural sequential or spatial ordering. For example, recall that the barley predictors in @sec-barley represented 550 consecutive wavelengths in a spectrum. For this type of data, this additional column-neighborhood data can be very effective. 
 
-Either way, the point is the same: each cell is pre-loaded with a little local cross-feature context, so when attention and later operations run, every element already carries some information about its potential neighbors.
+Either way, the point is the same: each cell is pre-loaded with a small amount of local cross-feature context, so when attention and later operations run, every element already carries some information about its potential neighbors.
 
 #### Initial Cell and Target Embeddings {#sec-cls-pfn-initial-embedding}
 
@@ -2431,13 +2433,13 @@ $$
 \boldsymbol{H}_{ij} = \boldsymbol{W}_{emb}\, \boldsymbol{x}_{ij} + \boldsymbol{b}_{emb}.
 $$
 
-where $\boldsymbol{W}_{emb}$ is (128 × 6) and there are 128 bias terms. Note that this process is a linear projection from 6 columns to $p_{emb} = 128$. Both the predictor's _values_ and completeness _indicators_ are blended in this projection; there is no separate indicator channel from this point on.
+where $\boldsymbol{W}_{emb}$ is (128 × 6) and there are 128 bias terms. The 6 columns in the weight matrix correspond to the values and indicators for the $g = 3$ groups. Note that this process is a linear projection from 6 columns to $p_{emb} = 128$. Both the predictor's _values_ and completeness _indicators_ are blended in this projection; there is no separate indicator channel from this point on.
 
 The influence of the target classes is added to the cell embedding, but only for the training data. 
 
 Each outcome class is represented by a pre-learned 128-dimensional vector. These vectors are initialized to be orthonormal^[They have a length of one and have pairwise dot products of zero.], which keeps the classes maximally distinguishable at the start of training; they are then learned during pretraining. TabPFN has a hard limit on the number of classes, $C_{max}$, and creates a table $\boldsymbol{Y}_{emb}$ of size $C_{max} \times 128$. 
 
-For the training data, the appropriate row of $\boldsymbol{Y}_{emb}$ is added to each cell embedding in that row (the same vector across all $p$ columns), nudging them toward the class associated with that row. The test data are kept as-is. 
+For the training data, the appropriate row of $\boldsymbol{Y}_{emb}$ is added to each cell embedding in that row (the same vector across all $p$ columns), nudging them toward the class associated with that row. The test data are kept as-is since their outcome values hould be unknown.
 
 #### Feature-Distribution Embedding {#sec-cls-pfn-distribution}
 
