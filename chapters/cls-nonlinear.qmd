@@ -210,7 +210,7 @@ daemons(6)
 ```{r}
 #| label: forested-nb
 #| include: false
-#| cache: false
+#| cache: true
 #| warning: false
 nb_rec <-
   recipe(class ~ ., data = forested_train) |>
@@ -1197,7 +1197,380 @@ The vector associated with the largest dot product would move in the same direct
 
 We'll see the dot product again in @sec-cls-attention where it is intended to measure the similarity of two embedding vectors within a neural network, and again in @sec-cls-svm where it is the computational backbone of support vector machines. 
 
-## Support Vector Machines {#sec-cls-svm}
+## Nonlinear Support Vector Machines {#sec-cls-svm-nonlin}
+
+
+In @sec-cls-svm-lin, we described the loss function for support vector machines and, in @eqn-svm-pred, we showed the prediction function: 
+
+$$
+\hat{\eta} = \hat{\beta}_0+\sum_{i=1}^{n_{tr}} \tilde{y}_i\hat{\alpha}_i \boldsymbol{x}_i'\boldsymbol{u}
+$$ 
+
+where the $\alpha_i$ values ($i = 1, \ldots, n_{tr}$) that are non-negative model coefficients, $\boldsymbol{x}$ and $\boldsymbol{u}$ are numeric vectors of predictors, and $\tilde{y}_i \in \pm 1$. Recall that the $\alpha_i$ are zero for some training set rows. 
+
+For each support vector ($\alpha_i \ne 0$), the dot product is weighted by the corresponding model parameter, multiplied by the sign of the class indicator. The sum of these values defines what side of the default class boundary ($\eta = 0$) the new data point lies. 
+
+Without feature engineering, the prediction boundary is linear in the predictors. This is due to the dot product $\boldsymbol{x}_i'\boldsymbol{u}$ being a linear operation. If there were $p=2$ predictors, the dot produce is simply $x_{i1}u_{i1} + x_{i2}u_{i2}$. REFERENCE DOT PROB section. 
+
+Previously, we used feature engineering (natural splines) to add terms to make the linear predictor $\eta$ nonlinear in the parameters. These basis expansions created new column in the data. We'll call this an _explicit_ basis expansion since we generated additional columns. 
+
+If we were to use a quadratic basis expansion (as in @sec-polynomials), we could define a function  $\phi(\boldsymbol{x})$ where, for $p = 2$ predictors, would be: 
+
+$$
+\phi(\boldsymbol{x}) = \left(1, \sqrt{2}x_1,  \sqrt{2}x_2,  \sqrt{2}x_1x_2, x_1^2, x_2^2\right)
+$$
+
+so that $\phi(\boldsymbol{x}_i)'\phi(\boldsymbol{u})$ would generate a dot product containing a full quadratic basis expansion. 
+
+However, support vector machines can also naturally induce nonlinear class boundaries by using _implicit_ nonlinear functions like $\phi()$ that are computed within the model (i.e., without materializing actual columns in the data). In this case, the prediction equation is expanded to be: 
+
+$$
+\hat{\eta} = \hat{\beta}_0+\sum_{i=1}^{n_{tr}} \tilde{y}_i\hat{\alpha}_i \phi(\boldsymbol{x}_i)'\phi(\boldsymbol{u})= \hat{\beta}_0+\sum_{i=1}^{n_{tr}} \tilde{y}_i\hat{\alpha}_i K(\boldsymbol{x}_i, \boldsymbol{u})
+$$ {#eq-svm-nonlinear-model}
+
+where $K()$ is a kernel function^[We've previously seen nonlinear SVMs in action in @sec-barley-svm and, in that same chapter, the radial basis function kernel and its utility as a covariance function in Gaussian process models.]. For example, an equivalent polynomial kernel for the vector form shown above is $K(\boldsymbol{x}, \boldsymbol{u}) = (1 + \boldsymbol{x}'\boldsymbol{u})^2$. A more general form for the polynomial kernel is: 
+
+$$
+K(\boldsymbol{x}, \boldsymbol{u}) = \left(\theta_1 \boldsymbol{x}'\boldsymbol{u} + \theta_2\right)^{\theta_3}
+$$  {#eq-kernel-polynomial}
+
+$\theta_3$ is an integer for the polynomial degree, $\theta_2$ is an offset that can be used to trade off between high- and lower-order polynomial effects, and $\theta_1$  is a scale parameter. There are also spline-based kernels [Gunn, Yuan]. 
+
+The most popular kernel function for SVMs is the radial basis function (RBF) kernel: 
+
+$$
+K(\boldsymbol{x}, \boldsymbol{u}) = \exp\left(-\sigma\; ||\boldsymbol{x} - \boldsymbol{u}||^2\right)
+$$  {#eq-kernel-rbf}
+
+See REFERENCES. There are several variants of the kernel such as the Laplacian kernel, that us an L<sub>1</sub> norm in the exponent, as well as radial basis kernel create using an ANOVA decomposition [stinson]. 
+
+There are also sigmoidal kernels [lin] that use the tanh activation function that will be seen in @sec-nnet-activation: 
+
+$$
+K(\boldsymbol{x}, \boldsymbol{u}) = tanh\left(\theta_1 \boldsymbol{x}' \boldsymbol{u} + \theta_2\right)
+$$ 
+
+Different kernel functions result in different patterns of nonlinear class boundaries. @fig-kernels shows an interactive visualization to demonstrate how the polynomial and RBF kernel functions produce class boundaries. In this example, there are eight support vectors for two classes. The figure shows the values of $\eta$ across a grid where all $\alpha_i = 1$. The default view shows the full summation of eight terms, but choosing one class or the other shows the accumulation of the four class-specific values on $abs(\eta)$. For the RBF kernel, $\eta$ shows peaks near the individual data points. Decreasing $\sigma$ expands the influence of each support vector, leading to fewer peaks and a more diffuse Gaussian-like pattern. Increasing $\sigma$ concentrates the influence until the individual effect of each support vector is limited to the space immediately surrounding it. The trend for the polynomial kernel are more predictable. The first-degree polynomial produces linear class boundaries, the second-degree polynomial produces a parabolic pattern, and the cubic polynomials generate boundaries that can have an "S" shape.  There is also a distinct difference in the shape of the class boundaries between the two kernel functions. 
+
+
+::: {#fig-kernels}
+
+::::: {.figure-content}
+
+```{shinylive-r}
+#| label: fig-kernels
+#| out-width: "70%"
+#| viewerHeight: 600
+#| standalone: true
+library(shiny)
+library(ggplot2)
+library(bslib)
+library(viridis)
+library(dplyr)
+library(kernlab)
+
+source("https://raw.githubusercontent.com/aml4td/website/main/R/shiny-setup.R")
+ui <- fluidPage(
+  theme = grid_theme,
+  fluidRow(
+    column(
+      width = 4,
+      radioButtons(
+        inputId = "kernel",
+        label = "Kernel",
+        choices = list("Radial Basis Function", "Polynomial")
+      )
+    ), # min distance
+    column(
+      width = 4,
+      sliderInput(
+        inputId = "log_sigma",
+        label = "Log10(Sigma)",
+        min = -4,
+        max = 4,
+        value = 0,
+        width = "100%",
+        step = 1
+      )
+    ), # nearest neighbors
+    
+    column(
+      width = 4,
+      sliderInput(
+        inputId = "degree",
+        label = "Polynomial Degree",
+        min = 1L,
+        max = 3L,
+        value = 2L,
+        width = "100%",
+        step = 1L
+      )
+    ),
+    fluidRow(
+      column(
+        width = 4,
+        radioButtons(
+          inputId = "data",
+          label = "Show Data",
+          choices = list("Both", "Class 1", "Class 2")
+        )
+      ),
+      column(
+        width = 6,
+        align = "center",
+        plotOutput('plot')
+      )
+    )
+  ) # top fluid row
+)
+
+server <- function(input, output) {
+  
+  x_seq <- seq(-2, 2, length.out = 100)
+  x_grid <- expand.grid(A = x_seq, B = x_seq)
+  x_mat <- as.matrix(x_grid)
+  
+  # fmt: skip
+  new_vec <- c(-1.00,  1.00,
+                0.00,  0.00,
+               -1.25, -0.75, 
+                1.25,  2.00,
+               # Now second class
+                0.50, -0.50,
+               -0.50,  0.00, 
+                1.50,  0.20,
+                0.00, -1.25
+  )
+  new_mat <- matrix(new_vec, ncol = 2, byrow = TRUE)
+  new_df <- tibble(
+    A = new_mat[, 1],
+    B = new_mat[, 2],
+    A_start = 0,
+    B_start = 0,
+    class = rep(1:2, each = 4)
+  )
+  
+  y_coefs <- rep(c(1, -1), each = 4)
+  y_cls <- rep(1:2, each = 4)
+  
+  y_mat <- cbind(
+    matrix(1, ncol = 4, nrow = nrow(x_mat)), 
+    matrix(-1, ncol = 4, nrow = nrow(x_mat))
+  )
+  
+  output$plot <-
+    renderPlot({
+      if (input$data == "Class 1") {
+        show_cls <- 1
+      } else if (input$data == "Class 2") {
+        show_cls <- 2
+      } else {
+        show_cls <- 1:2
+      }
+      inc_col <- y_cls %in% show_cls
+
+      if (input$kernel == "Radial Basis Function") {
+        kern <- kernlab::rbfdot(sigma = 2^input$log_sigma)
+      } else {
+        kern <- kernlab::polydot(degree = input$degree)
+      }
+      k_grid <-  kernlab::kernelMatrix(kern, x_mat, new_mat)
+      mat_prod <- k_grid * y_mat
+      k_sum <- apply(mat_prod[, inc_col, drop = FALSE], 1, sum)
+      if(length(show_cls) == 1) {
+        k_sum <- abs(k_sum)
+      }
+      x_grid$dot_prod <- k_sum
+      
+      p <- x_grid |>
+        ggplot(aes(A, B)) +
+        geom_tile(aes(fill = dot_prod), alpha = 3 / 4) +
+        geom_contour(aes(z = dot_prod), col = "black", linewidth = 1 / 10) +
+        coord_fixed(ratio = 1) +
+        theme(legend.position = "top") +
+        labs(fill = expression(eta)) +
+        scale_x_continuous(
+          limits = c(-2, 2),
+          expand = expansion(add = c(0.025, 0.025))
+        ) +
+        scale_y_continuous(
+          limits = c(-2, 2),
+          expand = expansion(add = c(0.025, 0.025))
+        ) 
+      
+      if (identical(show_cls, 1:2)) {
+        p <- p +
+          geom_point(data = new_df |> filter(class %in% 1), col = "black", cex = 2) +
+          geom_point(data = new_df |> filter(class %in% 2), col = "black", cex = 2, pch = 17) +
+          scale_fill_gradient2(low = "red", mid = "white", high = "blue") 
+      } else if (identical(show_cls, 1)) {
+        p <- p +
+          geom_point(data = new_df |> filter(class %in% 1), col = "black", cex = 2) +
+          scale_fill_gradient(low = "white", high = "blue") 
+      } else {
+        p <- p +
+          geom_point(data = new_df |> filter(class %in% 2), col = "black", cex = 2, pch = 17) +
+          scale_fill_gradient(low = "white", high = "red") 
+      }
+      
+      p
+    },
+    res = 100, width = 700)
+}
+
+app <- shinyApp(ui = ui, server = server)
+app
+```
+
+:::::
+
+A small SVM example with two classes (circles and squares) and eight support vectors. We can see how two different kernels and their parameters can effect the shape and complexity of the class boundary. The polynomial kernel set $\theta_1 = \theta_2 = 1$. 
+
+:::
+
+Recall that the SVM optimization problem uses an extra _cost_ parameter ($\mathcal{C}$) that requires specification before training. We usually tune this parameter in log<sub>2</sub> units. Unlike linear kernels, the cost parameter strongly affects how well the model performs. With small cost values, we tell the optimizer that prediction errors are acceptable. With a large cost value, the optimizer is told not to tolerate errors and to contort in every possible way to accurately predict all training-set samples. Increasing costs increases model complexity in support vector machines. The problem is that we want the fit to be flexible enough to effectively model the data but avoid overfitting. A visual example of this trade-off appears in @fig-two-class-overfit. We constructed these panels with an SVM using an RBF kernel. The low-complexity fit used $\mathcal{C} = 2^{-6.6}$ and the high-complexity model used $\mathcal{C} = 2^{20}$. The medium-complexity fit used a value of 1.0, which was close to the value estimated using grid search. 
+
+We'll need to tune the model over cost as well as any kernel parameters. It is difficult to know _a priori_ ranges for many of the kernel parameters; they are very dataset-specific. Additionally, there is often an interaction effect between the tuning parameters. For example, @fig-svm-grid shows this. The polynomial kernel was fixed with $\theta_3 = 2$ (i.e., quadratic), and the optimization was over $\mathcal{C}$ and $\theta_2$. The figure shows the optimal parameter region, with a line representing a ridge of optimal parameters. The key takeaway is that, for a fixed cost parameter, the optimal scaling parameter changes (and vice versa). 
+
+When tuning an SVM model, it can be effective to create a fairly large grid and use racing methods to evaluate candidates efficiently. As we saw in @fig-svm-grid, large regions of the parameter space perform poorly. Racing can quickly cull these regions. Alternatively, iterative search can also quickly learn the performance profile and adaptively find quality candidates. We'll take that approach for this section. 
+
+```{r}
+#| label: svm-comps
+#| include: false
+#| cache: true
+
+extract_num_sv <- function(x) {
+  require(tidymodels)
+  require(kernlab)
+  fit <- extract_fit_engine(x)
+  tibble::tibble(num_sv = length(fit@SVindex))
+}
+
+ctrl_grid <-
+  control_grid(
+    save_pred = TRUE,
+    save_workflow = TRUE,
+    extract = extract_num_sv,
+    parallel_over = "everything"
+  )
+
+ctrl_bo <-
+  control_bayes(
+    save_pred = TRUE,
+    save_workflow = TRUE,
+    extract = extract_num_sv,
+    no_improve = 15,
+    parallel_over = "everything"
+  )
+
+encode_rec <-
+  recipe(class ~ ., data = forested_train) |>
+  step_lencode_mixed(county, outcome = "class") |>
+  step_zv(all_predictors()) |>
+  step_orderNorm(all_numeric_predictors())
+
+svm_rbf_spec <-
+  svm_rbf(cost = tune(), rbf_sigma = tune(), mode = "classification")
+
+svm_poly_spec <-
+  svm_poly(
+    cost = tune(),
+    degree = tune(),
+    scale_factor = tune(),
+    mode = "classification"
+  )
+
+set.seed(872)
+forest_svm_rbf_res <-
+  svm_rbf_spec |>
+  tune_grid(
+    encode_rec,
+    resamples = forested_rs,
+    grid = 10,
+    metrics = cls_mtr,
+    control = ctrl_grid
+  )
+
+set.seed(872)
+forest_svm_rbf_bo_res <-
+  svm_rbf_spec |>
+  tune_bayes(
+    encode_rec,
+    resamples = forested_rs,
+    iter = 25,
+    initial = forest_svm_rbf_res,
+    metrics = cls_mtr,
+    control = ctrl_bo
+  )
+
+set.seed(872)
+forest_svm_poly_res <-
+  svm_poly_spec |>
+  tune_grid(
+    encode_rec,
+    resamples = forested_rs,
+    grid = 10,
+    metrics = cls_mtr,
+    control = ctrl_grid
+  )
+
+set.seed(872)
+forest_svm_poly_bo_res <-
+  svm_poly_spec |>
+  tune_bayes(
+    encode_rec,
+    resamples = forested_rs,
+    iter = 25,
+    initial = forest_svm_poly_res,
+    metrics = cls_mtr,
+    control = ctrl_bo
+  )
+
+svm_path <- 
+  bind_rows(
+    forest_svm_poly_bo_res |> 
+      collect_metrics() |> 
+      filter(.metric == "brier_class") |> 
+      mutate(Kernel = "Polynomial"),
+    forest_svm_rbf_bo_res |> 
+      collect_metrics() |> 
+      filter(.metric == "brier_class") |> 
+      mutate(Kernel = "RBF")
+  ) |> 
+  mutate(
+    lower = mean - qnorm(0.95) * std_err,
+    upper = mean + qnorm(0.95) * std_err
+  )
+
+forest_svm_rbf_bo_res <- butcher::butcher(forest_svm_rbf_bo_res)
+forest_svm_poly_bo_res <- butcher::butcher(forest_svm_poly_bo_res)
+```
+
+For preprocessing, the main operations are converting categorical predictors to a numeric format (e.g., dummy indicators, effect encoding, etc.) and normalizing predictors. For the forestation data, I used effect encoding for the location's county and ORD normalization to place the predictors on identical scales. I used an initial space-filling grid of 10 candidates, followed by 10 to 25 iterations of Bayesian optimization. The process stopped early if the Brier score did not improve for 10 consecutive iterations. 
+
+The polynomial kernel was tuned over $\theta_2$ and $\theta_3$ (fixing $\theta_1 = 1$). We tuned the RBF kernel over $\sigma$.  Cost values from XX and XX were possible. 
+
+```{r}
+#| label: fig-forest-svm-kernels
+#| echo: false
+#| out-width: 70%
+#| fig-width: 6
+#| fig-height: 4.25
+#| fig-cap: Bayesian optimization tuning results for SVM models with two different kernel functions. 
+svm_path |> 
+  ggplot(aes(.iter, mean, col = Kernel)) + 
+  geom_point(position = position_dodge(width = 0.6), cex = 1 / 2) +
+  geom_errorbar(
+    data = svm_path |> filter(.iter > 0), 
+    aes(ymin = lower, ymax = upper),
+    position = position_dodge(width = 0.6),
+    width = 1 / 3
+  ) +
+  scale_color_manual(values = c("#2CB11BFF", "#0076C0FF")) + 
+  theme(legend.position = "top") +
+  labs(x = "Iteration", y = "Brier Score")
+```
+
 
 `r r_comp("cls-nonlinear.html#sec-cls-svm")`
 
