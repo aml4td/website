@@ -151,7 +151,8 @@ save_if_missing <- function(x) {
   file_nm <- glue::glue("../RData/{nm}.RData")
   nm_exists <- file.exists(file_nm)
   if (!nm_exists) {
-    save(x, file = file_nm)
+    cl <- rlang::call2("save", !!!nm, file = file_nm)
+    rlang::eval_tidy(cl)
   }
   invisible(x)
 }
