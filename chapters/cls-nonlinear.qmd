@@ -1199,7 +1199,6 @@ We'll see the dot product again in @sec-cls-attention where it is intended to me
 
 ## Nonlinear Support Vector Machines {#sec-cls-svm-nonlin}
 
-
 In @sec-cls-svm-lin, we described the loss function for support vector machines and, in @eqn-svm-pred, we showed the prediction function: 
 
 $$
@@ -1234,7 +1233,7 @@ $$
 K(\boldsymbol{x}, \boldsymbol{u}) = \left(\theta_1 \boldsymbol{x}'\boldsymbol{u} + \theta_2\right)^{\theta_3}
 $$  {#eq-kernel-polynomial}
 
-$\theta_3$ is an integer for the polynomial degree, $\theta_2$ is an offset that can be used to trade off between high- and lower-order polynomial effects, and $\theta_1$  is a scale parameter. There are also spline-based kernels [Gunn, Yuan]. 
+$\theta_3$ is an integer for the polynomial degree, $\theta_2$ is an offset that can be used to trade off between high- and lower-order polynomial effects, and $\theta_1$  is a scale parameter. There are also spline-based kernels [@gunn1997support;@YuanYubo2007Sfss]. 
 
 The most popular kernel function for SVMs is the radial basis function (RBF) kernel: 
 
@@ -1242,9 +1241,9 @@ $$
 K(\boldsymbol{x}, \boldsymbol{u}) = \exp\left(-\sigma\; ||\boldsymbol{x} - \boldsymbol{u}||^2\right)
 $$  {#eq-kernel-rbf}
 
-See REFERENCES. There are several variants of the kernel such as the Laplacian kernel, that us an L<sub>1</sub> norm in the exponent, as well as radial basis kernel create using an ANOVA decomposition [stinson]. 
+See @scholkopf1997comparing. There are several variants of the kernel such as the Laplacian kernel, that us an L<sub>1</sub> norm in the exponent, as well as radial basis kernel create using an ANOVA decomposition [@RBFANOVA]. 
 
-There are also sigmoidal kernels [lin] that use the tanh activation function that will be seen in @sec-nnet-activation: 
+There are also sigmoidal kernels [@sellathurai1999separability;@LinLin2003Sigmoid] that use the tanh activation function that will be seen in @sec-nnet-activation: 
 
 $$
 K(\boldsymbol{x}, \boldsymbol{u}) = tanh\left(\theta_1 \boldsymbol{x}' \boldsymbol{u} + \theta_2\right)
@@ -1542,13 +1541,37 @@ svm_path <-
     upper = mean + qnorm(0.95) * std_err
   )
 
+best_svm <- 
+  svm_path |> 
+  slice_min(mean, n = 1, by = Kernel) |> 
+  mutate(
+    mean = round(mean, 3),
+    cost = signif(log2(cost), 3),
+    scale_factor = signif(log10(scale_factor), 3),
+    rbf_sigma = signif(log10(rbf_sigma), 3)
+  )
+
+opt_deg <- 
+  case_when(
+    best_svm$degree[best_svm$Kernel == "Polynomial"] == 3 ~ "cubic",
+    best_svm$degree[best_svm$Kernel == "Polynomial"] == 2 ~ "quadractic",
+    TRUE ~ "linear"
+  )
+
 forest_svm_rbf_bo_res <- butcher::butcher(forest_svm_rbf_bo_res)
 forest_svm_poly_bo_res <- butcher::butcher(forest_svm_poly_bo_res)
 ```
 
 For preprocessing, the main operations are converting categorical predictors to a numeric format (e.g., dummy indicators, effect encoding, etc.) and normalizing predictors. For the forestation data, I used effect encoding for the location's county and ORD normalization to place the predictors on identical scales. I used an initial space-filling grid of 10 candidates, followed by 10 to 25 iterations of Bayesian optimization. The process stopped early if the Brier score did not improve for 10 consecutive iterations. 
 
-The polynomial kernel was tuned over $\theta_2$ and $\theta_3$ (fixing $\theta_1 = 1$). We tuned the RBF kernel over $\sigma$.  Cost values from XX and XX were possible. 
+The polynomial kernel was tuned over $\theta_2$ and $\theta_3$ (fixing $\theta_1 = 1$). We tuned the RBF kernel over $\sigma$.  The search spaces were:
+
+- Cost: 2<sup>-10</sup> to 2<sup>5</sup>.
+- Polynomial degree ($\theta_3$): 1, 2, or 3.
+- Scale factor ($\theta_2$): 10<sup>-10</sup> to 10<sup>-1</sup>.
+- RBF scale ($\sigma$): 10<sup>-10</sup> to 10<sup>0</sup>.
+
+@fig-forest-svm-kernels shows the search results over time. The initial grid points had varying results, with some candidates achieving competitive performance while others had the worst possible Brier scores. The optimizer was able to find candidates that were slightly better than the initial set with the best result occurring at iteration `r best_svm$.iter[best_svm$Kernel == "Polynomial"]` for the polynomial kernel and `r best_svm$.iter[best_svm$Kernel == "RBF"]` for the radial basis function. 
 
 ```{r}
 #| label: fig-forest-svm-kernels
@@ -1571,6 +1594,7 @@ svm_path |>
   labs(x = "Iteration", y = "Brier Score")
 ```
 
+The polynomial kernel's best candidate used a `r opt_deg` polynomial, a scale value of 10<sup>`r best_svm$scale_factor[best_svm$Kernel == "Polynomial"]`</sup>, and a cost value of 2<sup>`r best_svm$cost[best_svm$Kernel == "Polynomial"]`</sup>. The resulting Brier score estimate was `r best_svm$mean[best_svm$Kernel == "Polynomial"]`. The RBF kernel has similar performance, with a Brier score of `r best_svm$mean[best_svm$Kernel == "RBF"]`. The corresponding tuning values were a $\sigma$ value of of 10<sup>`r best_svm$rbf_sigma[best_svm$Kernel == "RBF"]`</sup>, and a cost value of 2<sup>`r best_svm$cost[best_svm$Kernel == "RBF"]`</sup>. These results are not too far off from the linear SVM that used feature engineering. The main difference between the two approaches is that the nonlinear kernels affect _all_ predictors, including the effect-encoded county variable. 
 
 `r r_comp("cls-nonlinear.html#sec-cls-svm")`
 
