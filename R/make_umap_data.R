@@ -1,7 +1,7 @@
 library(tidymodels)
 library(bestNormalize)
 library(modeldatatoo)
-library(embed) 
+library(embed)
 
 # ------------------------------------------------------------------------------
 
@@ -73,7 +73,7 @@ umap_grid <-
   mutate(.config = row_number())
 
 set.seed(101)
-umap_grid <- umap_grid[sample(umap_grid$.config),]
+umap_grid <- umap_grid[sample(umap_grid$.config), ]
 nrow(umap_grid)
 
 # ------------------------------------------------------------------------------
@@ -131,7 +131,7 @@ for (j in 1:nrow(umap_grid)) {
       neighbors = umap_grid$neighbors[j],
       min_dist = umap_grid$min_dist[j],
       learn_rate = umap_grid$learn_rate[j],
-      initial  = umap_grid$initial_state[j],
+      initial = umap_grid$initial_state[j],
       supervised = umap_grid$supervised[j],
       .config = umap_grid$.config[j]
     )
@@ -145,7 +145,6 @@ for (j in 1:nrow(umap_grid)) {
     cat(sprintf("%2.0f", j), " (", sprintf("%5.1f", tmp_dur), "m)\n", sep = "")
     cat("\n\n")
   }
-
 }
 
 time_end <- proc.time()[3]
@@ -155,5 +154,5 @@ time_end <- proc.time()[3]
 save(
   umap_results,
   file = "RData/umap_weight_results.RData",
-  compress = TRUE)
-
+  compress = TRUE
+)

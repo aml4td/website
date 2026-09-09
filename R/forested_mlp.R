@@ -16,6 +16,10 @@ daemons(parallel::detectCores())
 
 # ------------------------------------------------------------------------------
 
+cls_mtr <- metric_set(brier_class, roc_auc, pr_auc, mn_log_loss)
+
+# ------------------------------------------------------------------------------
+
 encode_rec <-
   recipe(class ~ ., data = forested_train) |>
   step_lencode_mixed(county, outcome = "class") |>
@@ -60,8 +64,8 @@ mlp_adam_spec <-
   ) |>
   set_engine(
     "brulee",
-    stop_iter = 5,
-    optimizer = "ADAMw",
+    stop_iter = 10,
+    optimizer = "SGD",
     verbose = FALSE,
     rate_schedule = tune(),
     batch_size = tune(),
@@ -81,8 +85,8 @@ mlp_adam_2layer_spec <-
     "brulee_two_layer",
     hidden_units_2 = tune(),
     activation_2 = tune(),
-    stop_iter = 5,
-    optimizer = "ADAMw",
+    stop_iter = 10,
+    optimizer = "SGD",
     verbose = FALSE,
     rate_schedule = tune(),
     batch_size = tune(),
@@ -100,10 +104,7 @@ mlp_wflow_set <-
       orderNorm_pca = dummy_on_pca_rec,
       plain_pca = dummy_cs_pca_rec
     ),
-    models = list(
-      `1L_AdamW` = mlp_adam_spec,
-      `2L_AdamW` = mlp_adam_2layer_spec
-    )
+    models = list(`1L_AdamW` = mlp_adam_spec, `2L_AdamW` = mlp_adam_2layer_spec)
   ) |>
   option_add_parameters()
 
@@ -111,12 +112,14 @@ mlp_wflow_set <-
 
 pull_iter <- function(x) {
   require(tidymodels)
+  require(brulee)
   fit <- extract_fit_engine(x)
   tibble(epoch_actual = fit$best_epoch, num_param = length(unlist(coef(fit))))
 }
 
-ctrl <- control_race(
+ctrl <- control_grid(
   save_pred = TRUE,
+  save_workflow = TRUE,
   parallel_over = "everything",
   extract = pull_iter
 )
@@ -148,8 +151,11 @@ mlp_grid_res <-
   workflow_map(
     resamples = forested_rs,
     grid = 25,
-    verbose = TRUE
+    verbose = TRUE,
+    metrics = cls_mtr
   )
+
+# save.image(file = "~/tmp/checkpoint.RData")
 
 # ------------------------------------------------------------------------------
 
@@ -167,12 +173,7 @@ mlp_best_mtr <-
 
 mlp_collect <-
   mlp_grid_res |>
-  mutate(
-    epochs = map(
-      result,
-      ~ collect_extracts(.x)
-    )
-  ) |>
+  mutate(epochs = map(result, ~ collect_extracts(.x))) |>
   select(wflow_id, epochs) |>
   unnest(epochs) |>
   filter(map_lgl(.extracts, ~ inherits(.x, "data.frame"))) |>
@@ -232,6 +233,12 @@ save(
   epoch_actual,
   file = "RData/forested_mlp.Rdata"
 )
+
+forest_mlp_set_res <-
+  mlp_grid_res |>
+  butcher::butcher()
+
+save(forest_mlp_set_res, file = "RData/forest_mlp_set_res.Rdata")
 
 # ------------------------------------------------------------------------------
 

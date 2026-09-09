@@ -8,7 +8,7 @@ conflicted::conflicts_prefer(recipes::update)
 # ------------------------------------------------------------------------------
 
 chimiometrie_2019 <-
-  data_chimiometrie_2019()  %>%
+  data_chimiometrie_2019() %>%
   add_rowindex() %>%
   select(-soy_oil, -lucerne) %>%
   rename(.sample = .row)
@@ -16,8 +16,11 @@ chimiometrie_2019 <-
 barley_breaks <- (0:27) * 2
 
 set.seed(101)
-barley_split <- initial_validation_split(chimiometrie_2019, prop = c(0.7, 0.15),
-                                         strata = barley)
+barley_split <- initial_validation_split(
+  chimiometrie_2019,
+  prop = c(0.7, 0.15),
+  strata = barley
+)
 barley_train <- training(barley_split)
 barley_val <- validation(barley_split)
 barley_test <- testing(barley_split)
@@ -41,19 +44,22 @@ smoothing_only <- crossing(
 
 raw_plot_data <- smoothed_plot_data <- NULL
 for (i in 1:nrow(smoothing_only)) {
-
   raw_data <-
     barley_train %>%
     filter(.sample == 2) %>%
-    pivot_longer(cols = starts_with("wvlgth"),
-                 names_to = "name",
-                 values_to = ".measure") %>%
+    pivot_longer(
+      cols = starts_with("wvlgth"),
+      names_to = "name",
+      values_to = ".measure"
+    ) %>%
     mutate(
       .location = gsub("wvlgth_", "", name),
       .location = as.integer(.location)
     ) %>%
-    filter(.location >= 500 + smoothing_only$window_side[i] &
-            .location <= 550 - smoothing_only$window_side[i]) %>%
+    filter(
+      .location >= 500 + smoothing_only$window_side[i] &
+        .location <= 550 - smoothing_only$window_side[i]
+    ) %>%
     mutate(
       `differentiation order` = smoothing_only$differentiation_order[i],
       `polynomial degree` = smoothing_only$degree[i],
@@ -83,7 +89,6 @@ for (i in 1:nrow(smoothing_only)) {
     filter(.sample == 2 & .location >= 490)
 
   smoothed_plot_data <- bind_rows(smoothed_plot_data, smoothed_data)
-
 }
 
 # ------------------------------------------------------------------------------
@@ -100,19 +105,22 @@ first_diff <- crossing(
 
 raw_diff_plot_data <- diff_plot_data <- NULL
 for (i in 1:nrow(first_diff)) {
-
   raw_data <-
     barley_train %>%
     filter(.sample == 2) %>%
-    pivot_longer(cols = starts_with("wvlgth"),
-                 names_to = "name",
-                 values_to = ".measure") %>%
+    pivot_longer(
+      cols = starts_with("wvlgth"),
+      names_to = "name",
+      values_to = ".measure"
+    ) %>%
     mutate(
       .location = gsub("wvlgth_", "", name),
       .location = as.integer(.location)
     ) %>%
-    filter(.location >= 500 + smoothing_only$window_side[i] &
-             .location <= 550 - smoothing_only$window_side[i]) %>%
+    filter(
+      .location >= 500 + smoothing_only$window_side[i] &
+        .location <= 550 - smoothing_only$window_side[i]
+    ) %>%
     mutate(
       `differentiation order` = first_diff$differentiation_order[i],
       `polynomial degree` = first_diff$degree[i],
@@ -144,11 +152,15 @@ for (i in 1:nrow(first_diff)) {
     filter(.sample == 2 & .location >= 490)
 
   diff_plot_data <- bind_rows(diff_plot_data, smoothed_data)
-
 }
 
-save(smoothed_plot_data, raw_plot_data, diff_plot_data, raw_diff_plot_data,
-     file = "RData/savitzky_golay_demo.RData")
+save(
+  smoothed_plot_data,
+  raw_plot_data,
+  diff_plot_data,
+  raw_diff_plot_data,
+  file = "RData/savitzky_golay_demo.RData"
+)
 
 # ------------------------------------------------------------------------------
 cli::cli_rule("Reproducability")
@@ -158,4 +170,3 @@ sessioninfo::session_info()
 if (!interactive()) {
   q("no")
 }
-

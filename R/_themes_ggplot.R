@@ -1,5 +1,23 @@
 require(ggplot2)
-source("https://raw.githubusercontent.com/aml4td/website/main/R/_themes.R")
+# source("https://raw.githubusercontent.com/aml4td/website/main/R/_themes.R")
+# ------------------------------------------------------------------------------
+# Commonly used colors
+
+light_bg <- "#fcfefe"
+dark_bg <- "#222222"
+dark_line <- "#adb5bd"
+dark_data <- "#CCDEEC"
+dark_gold <- "#E7D283"
+dark_tan <- "#F2EFE5"
+
+# ------------------------------------------------------------------------------
+# A helper for postprocessing svg files
+
+h2rgb <- function(x) {
+  pct <- paste0(round(col2rgb(x)[, 1] / 255 * 100, 1), "%")
+  pct <- paste0(pct, collapse = ", ")
+  paste0("rgb(", pct, ")")
+}
 
 # ------------------------------------------------------------------------------
 
@@ -8,35 +26,40 @@ dk_text <- ggplot2::element_text(color = dark_line)
 dk_rect <- ggplot2::element_rect(fill = "transparent", color = dark_line)
 
 thm_transparent <- function(...) {
-  
   ret <- ggplot2::theme_bw(...)
-  
+
   transparent_rect <- ggplot2::element_rect(fill = "transparent", colour = NA)
-  ret$panel.background  <- transparent_rect
-  ret$plot.background   <- transparent_rect
+  ret$panel.background <- transparent_rect
+  ret$plot.background <- transparent_rect
   ret$legend.background <- transparent_rect
-  ret$legend.key        <- transparent_rect
-  
+  ret$legend.key <- transparent_rect
+
   ret$legend.position <- "top"
-  
+
   ret
 }
 
-thm_lt <- 
+thm_lt <-
   ggplot2::theme(
-    panel.border = ggplot2::element_rect(colour = "grey20", fill = "transparent"),
-    strip.background = ggplot2::element_rect(fill = "grey85", colour = "grey20"),
+    panel.border = ggplot2::element_rect(
+      colour = "grey20",
+      fill = "transparent"
+    ),
+    strip.background = ggplot2::element_rect(
+      fill = "grey85",
+      colour = "grey20"
+    ),
     panel.grid = ggplot2::element_line(colour = "grey92"),
     panel.grid.minor = ggplot2::element_line(linewidth = ggplot2::rel(0.5)),
     panel.background = transparent_rect,
     plot.background = transparent_rect,
     legend.background = transparent_rect,
-    legend.key  = transparent_rect,
-    legend.position = "top", 
+    legend.key = transparent_rect,
+    legend.position = "top",
     legend.direction = "horizontal"
   )
 
-thm_dk <- 
+thm_dk <-
   ggplot2::theme_dark() +
   ggplot2::theme(
     text = dk_text,
@@ -45,14 +68,17 @@ thm_dk <-
     strip.background = dk_rect,
     axis.text.x = ggplot2::element_text(colour = dark_data),
     axis.text.y = ggplot2::element_text(colour = dark_data),
-    legend.position = "top", 
+    legend.position = "top",
     legend.direction = "horizontal",
     legend.background = ggplot2::element_rect(fill = "transparent", color = NA),
-    legend.box.background = ggplot2::element_rect(fill = "transparent", color = NA),
+    legend.box.background = ggplot2::element_rect(
+      fill = "transparent",
+      color = NA
+    ),
     legend.key = ggplot2::element_rect(fill = "transparent", colour = NA)
   )
 
-dk_gif_thm <- 
+dk_gif_thm <-
   ggplot2::theme_dark() +
   ggplot2::theme(
     text = dk_text,
@@ -61,9 +87,15 @@ dk_gif_thm <-
     strip.background = dk_rect,
     axis.text.x = ggplot2::element_text(colour = dark_data),
     axis.text.y = ggplot2::element_text(colour = dark_data),
-    legend.position = "top", 
+    legend.position = "top",
     legend.direction = "horizontal",
-    legend.background = ggplot2::element_rect(fill = "transparent", color = dark_bg),
-    legend.box.background = ggplot2::element_rect(fill = "transparent", color = dark_bg),
+    legend.background = ggplot2::element_rect(
+      fill = "transparent",
+      color = dark_bg
+    ),
+    legend.box.background = ggplot2::element_rect(
+      fill = "transparent",
+      color = dark_bg
+    ),
     legend.key = ggplot2::element_rect(fill = "transparent", colour = dark_bg)
   )

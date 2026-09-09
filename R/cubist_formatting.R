@@ -1,9 +1,9 @@
 reformat_delivery_rules <- function(x) {
   x <- gsub("order_time", "time of order", x)
   x <- gsub("order_day", "day", x)
-  x <- gsub(" %in%", "in", x)  
+  x <- gsub(" %in%", "in", x)
   x <- gsub("%in%", "in", x)
-  x <- gsub("==", "is", x)  
+  x <- gsub("==", "is", x)
   x <- gsub("c(", "(", x, fixed = TRUE)
   x <- strsplit(x, "&")
   x <- map(x, trimws)
@@ -19,7 +19,7 @@ reformat_delivery_eqn <- function(x) {
   x$term <- gsub("(Intercept)", "", x$term, fixed = TRUE)
   x$term <- gsub("order_time", "(time of order)", x$term)
   x$term <- gsub("order_day", "day", x$term)
-  
+
   any_prod <- grepl("^product", x$term)
   if (any(any_prod)) {
     prod_nums <- gsub("product_(.*?)", "\\1", x$term)
@@ -31,7 +31,11 @@ reformat_delivery_eqn <- function(x) {
 
   x$coef <- format(x$estimate, signif = 2)
   trm_len <- nchar(x$term)
-  x$eq <- ifelse(trm_len > 0, paste(x$coef, x$term, x$sign), paste0(x$coef, " "))
-  
+  x$eq <- ifelse(
+    trm_len > 0,
+    paste(x$coef, x$term, x$sign),
+    paste0(x$coef, " ")
+  )
+
   paste(x$eq, collapse = "")
 }

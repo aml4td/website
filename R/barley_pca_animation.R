@@ -11,23 +11,25 @@ source("R/_common.R")
 # ------------------------------------------------------------------------------
 
 barley_pre_pca_rec <-
-  recipe(barley ~ ., 
-         data = barley_train %>% select(wvlgth_001, wvlgth_050, barley)) %>%
+  recipe(
+    barley ~ .,
+    data = barley_train %>% select(wvlgth_001, wvlgth_050, barley)
+  ) %>%
   step_zv(all_predictors()) %>%
-  step_orderNorm(all_numeric_predictors()) %>% 
+  step_orderNorm(all_numeric_predictors()) %>%
   prep()
 
-barley_val_normed <- 
-  barley_pre_pca_rec %>% 
+barley_val_normed <-
+  barley_pre_pca_rec %>%
   bake(barley_val)
 
-barley_val_cor <- round(cor(barley_val_normed)[1,2], 2)
+barley_val_cor <- round(cor(barley_val_normed)[1, 2], 2)
 
 
-barley_pca_coefs <- 
-  barley_pre_pca_rec %>% 
-  step_pca(all_predictors(), num_comp = 2, id = "pca") %>% 
-  prep() %>% 
+barley_pca_coefs <-
+  barley_pre_pca_rec %>%
+  step_pca(all_predictors(), num_comp = 2, id = "pca") %>%
+  prep() %>%
   tidy(id = "pca")
 
 # ------------------------------------------------------------------------------
@@ -46,10 +48,10 @@ rotate <- function(df, angle) {
   result <- as_tibble(result)
   result$angle <- angle
   # Angle is going clockwise
-  result$angle2 <- 360 - angle  
+  result$angle2 <- 360 - angle
   # Add other columns
   p <- ncol(df)
-  if ( p > 2 ) {
+  if (p > 2) {
     result <- dplyr::bind_cols(result, df[, 3:p])
   }
   result
@@ -69,46 +71,51 @@ rotations <-
 
 
 # Find the state/angles with maximal variance on the x-axis; these are the PCs
-variances <- 
-  rotations %>% 
+variances <-
+  rotations %>%
   summarize(
-    x_var = var(wvlgth_001), 
+    x_var = var(wvlgth_001),
     .by = c(angle, angle2, state2)
   )
-opt_variances <- 
-  variances %>% 
-  slice_max(x_var, n = 2) %>% 
+opt_variances <-
+  variances %>%
+  slice_max(x_var, n = 2) %>%
   mutate()
 
-opt_angles <- 
-  opt_variances %>% 
-  pluck("angle") %>% 
+opt_angles <-
+  opt_variances %>%
+  pluck("angle") %>%
   sort()
 
 # ------------------------------------------------------------------------------
 
-barley_val_normed %>% 
-  ggplot(aes(wvlgth_001, wvlgth_050, col = barley)) + 
+barley_val_normed %>%
+  ggplot(aes(wvlgth_001, wvlgth_050, col = barley)) +
   geom_point() +
   coord_obs_pred()
 
-rotations %>% 
-  filter(state2 == opt_variances$state2[1]) %>% 
-  ggplot(aes(wvlgth_001, wvlgth_050, col = barley)) + 
+rotations %>%
+  filter(state2 == opt_variances$state2[1]) %>%
+  ggplot(aes(wvlgth_001, wvlgth_050, col = barley)) +
   geom_point() +
   coord_obs_pred()
 
-rotations %>% 
-  filter(state2 == opt_variances$state2[2]) %>% 
-  ggplot(aes(wvlgth_001, wvlgth_050, col = barley)) + 
+rotations %>%
+  filter(state2 == opt_variances$state2[2]) %>%
+  ggplot(aes(wvlgth_001, wvlgth_050, col = barley)) +
   geom_point() +
   coord_obs_pred()
 
 # ------------------------------------------------------------------------------
 
 # Redo angles with replicates that indicate pauses in the animation
-angles <- c(rep(0, 10), rep(opt_angles[1], 9), rep(opt_angles[2], 9), orig_angles, 
-            rep(360, 10))
+angles <- c(
+  rep(0, 10),
+  rep(opt_angles[1], 9),
+  rep(opt_angles[2], 9),
+  orig_angles,
+  rep(360, 10)
+)
 angles <- sort(angles)
 
 angles_lab <- round(min(opt_variances$angle2), 0)
@@ -121,16 +128,21 @@ rotations <-
   mutate(
     state = as.numeric(state),
     state2 = max(state) - state
-    )
+  )
 
 ranges <-
   rotations %>%
-  distinct(angle, state2) %>%  
+  distinct(angle, state2) %>%
   mutate(
-    note = ifelse(angle == 0 | angle == 360, "original data (zero degree rotation) ", ""),
+    note = ifelse(
+      angle == 0 | angle == 360,
+      "original data (zero degree rotation) ",
+      ""
+    ),
     note = ifelse(angle == opt_angles[1], angles_txt[2], note),
     note = ifelse(angle == opt_angles[2], angles_txt[1], note),
-    note_x = -.5, note_y = 4
+    note_x = -.5,
+    note_y = 4
   )
 
 # ------------------------------------------------------------------------------
@@ -163,5 +175,9 @@ anim_save("premade/anime_barley_pca.gif")
 
 # ------------------------------------------------------------------------------
 
-save(barley_val_cor, barley_pca_coefs, opt_variances, file = "RData/barley_2d_pca_.RData")
-
+save(
+  barley_val_cor,
+  barley_pca_coefs,
+  opt_variances,
+  file = "RData/barley_2d_pca_.RData"
+)

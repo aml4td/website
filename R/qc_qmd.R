@@ -95,7 +95,11 @@ qc_qmd <- function(path) {
   invisible(TRUE)
 }
 
-qmd_files <- list.files(path = "chapters", pattern = "\\.qmd$", full.names = TRUE)
+qmd_files <- list.files(
+  path = "chapters",
+  pattern = "\\.qmd$",
+  full.names = TRUE
+)
 qmd_files <- qmd_files[!grepl("(news)|(contri)", qmd_files)]
 linted <- purrr::map_lgl(qmd_files, qc_qmd)
 

@@ -119,8 +119,10 @@ forested_test <- re_geocode(forested_sf_test)
 forested_both <- bind_rows(forested_train, forested_test)
 
 forested_split <- make_splits(
-  x = list(analysis = 1:nrow(forested_train),
-           assessment = (nrow(forested_train) + 1):nrow(forested_both)),
+  x = list(
+    analysis = 1:nrow(forested_train),
+    assessment = (nrow(forested_train) + 1):nrow(forested_both)
+  ),
   data = forested_both
 )
 
@@ -134,8 +136,9 @@ all.equal(forested_test, testing(forested_split))
 # ------------------------------------------------------------------------------
 # Make a data frame to use for plotting
 
-plot_initial_split <- 
-  forested_sf_split$data |> re_geocode() |> 
+plot_initial_split <-
+  forested_sf_split$data |>
+  re_geocode() |>
   mutate(group = "buffer", group_col = "#000000")
 
 plot_initial_split$group[forested_sf_split$in_id] <- "training"
@@ -159,7 +162,7 @@ if (rlang::is_installed("leaflet") & interactive()) {
       fillOpacity = 1 / 2,
       radius = 1500,
       popup = htmltools::htmlEscape(plot_initial_split$group)
-    ) |> 
+    ) |>
     addScaleBar()
 }
 
@@ -190,8 +193,8 @@ map_int(forested_rs$splits, ~ nrow(assessment(.x)))
 
 split_1 <- forested_rs$splits[[1]]
 
-plot_first_fold <- 
-  split_1$data |> 
+plot_first_fold <-
+  split_1$data |>
   mutate(group = "buffer", group_col = "#000000")
 
 plot_first_fold$group[split_1$in_id] <- "analysis"
@@ -214,27 +217,27 @@ if (rlang::is_installed("leaflet") & interactive()) {
       fillOpacity = 3 / 4,
       radius = 1500,
       popup = htmltools::htmlEscape(plot_first_fold$group)
-    ) |> 
+    ) |>
     addScaleBar()
 }
 
 # ------------------------------------------------------------------------------
 # translations
 
-name_key <- 
+name_key <-
   tribble(
-    ~text, ~variable,
-    "dew temperature", "dew_temp",
-    "annual precipitation", "precip_annual",
-    "annual minimum temperature", "temp_annual_min",
-    "annual maximum temperature", "temp_annual_max",
-    "january minimum temperature", "temp_january_min",
-    "annual mean temperature", "temp_annual_mean",
-    "minimum vapor", "vapor_min",
-    "maximum vapor", "vapor_max"
+    ~text                         , ~variable          ,
+    "dew temperature"             , "dew_temp"         ,
+    "annual precipitation"        , "precip_annual"    ,
+    "annual minimum temperature"  , "temp_annual_min"  ,
+    "annual maximum temperature"  , "temp_annual_max"  ,
+    "january minimum temperature" , "temp_january_min" ,
+    "annual mean temperature"     , "temp_annual_mean" ,
+    "minimum vapor"               , "vapor_min"        ,
+    "maximum vapor"               , "vapor_max"
   )
 
-name_list <- 
+name_list <-
   list(
     `dew temperature` = "dew_temp",
     `annual precipitation` = "precip_annual",
@@ -254,7 +257,7 @@ save(
   forested_train,
   forested_test,
   forested_rs,
-  name_key, 
+  name_key,
   name_list,
   file = "forested_data.RData"
 )
@@ -263,8 +266,12 @@ save(
   plot_first_fold,
   file = "forested_split_info.RData"
 )
-save(forested_sf, forested_sf_split, forested_sf_rs, 
-     file = "forested_sf_all.RData")
+save(
+  forested_sf,
+  forested_sf_split,
+  forested_sf_rs,
+  file = "forested_sf_all.RData"
+)
 
 # ------------------------------------------------------------------------------
 # Session versions

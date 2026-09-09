@@ -1,0 +1,194 @@
+# Write Chart Alt Text
+
+Generate accessible alt text for data visualizations in this project.
+
+ARGUMENTS
+- label: (optional) specific fig- label to generate alt text for
+- file: (optional) specific .qmd file to process
+
+## Instructions
+
+When invoked, analyze the figure(s) and generate alt text following these guidelines:
+
+### Key Advantage: Source Code Access
+
+Unlike typical alt text scenarios where you only see an image, **we have access to the R code that generates each chart**. Use this to extract precise details:
+
+**From `ggplot2` code:**
+- `aes(x, y)` → exact variable names for axes
+- `aes(color = ...)` / `aes(fill = ...)` → what color encodes
+- `geom_point()` → scatter, `geom_histogram()` → histogram, `geom_line()` → line chart
+- `geom_smooth()` / `geom_abline()` → overlaid fitted lines
+- `facet_wrap(~var)` → number of panels and what varies
+- `scale_color_gradient()` → color encoding scheme
+- `labs(x = ..., y = ...)` → axis labels if customized
+
+**From data generation code:**
+- `rbeta()`, `rnorm()`, `runif()` → expected distribution shape
+- `mutate()` transformations → what was done to data
+- Recipe steps → feature engineering applied
+- Filtering/subsetting → what subset is shown
+
+**From surrounding prose:**
+- Text before/after the chunk explains the **purpose** and **key insight**
+- Chapter context tells you what the figure is meant to teach
+- This is often the best source for the "key insight" part of alt text
+
+### Three-Part Structure (Amy Cesal's Formula)
+
+1. **Chart type** - First words identify the format
+2. **Data description** - Axes, variables, what's shown
+3. **Key insight** - The pattern or takeaway (often found in surrounding text)
+
+### Relationship to fig-cap
+
+Read the `fig-cap` first. The alt text should **complement, not duplicate** it:
+- If caption states the insight, alt text can focus on describing the visual structure
+- If caption is generic, alt text should include the key insight
+- Together they should give a complete understanding
+
+### Content Rules
+
+**Include:**
+- Chart type as first words
+- Axis labels and what they represent
+- Specific values/ranges when code reveals them (e.g., "peaks between 25-50")
+- Number of panels/facets
+- What color/size encodes if used
+- The key pattern that supports the chapter's point
+
+**Exclude:**
+- "Image of..." or "Chart showing..." (screen readers announce this)
+- Specific color names (e.g., "blue", "red", "magenta") — colors may change across dark/light themes. Instead, describe elements by relative brightness ("brighter", "dimmer"), position ("outer", "inner"), or pattern ("dashed", "solid"). Only name colors when they encode data and are stable across themes.
+- Information already in fig-cap
+- Implementation details (package names, function internals)
+
+### Length Guidelines
+
+| Complexity | Sentences | When to use                                 |
+|------------|-----------|---------------------------------------------|
+| Simple     | 2-3       | Single geom, no facets, obvious pattern     |
+| Standard   | 3-4       | Multiple geoms or color encoding            |
+| Complex    | 4-5       | Faceted, multiple overlays, nuanced insight |
+
+### Quality Checklist
+
+- [ ] Starts with chart type (Scatter chart, Histogram, Faceted bar chart, etc.)
+- [ ] Names the axis variables
+- [ ] Includes specific values/ranges from code when informative
+- [ ] States the key insight from surrounding prose
+- [ ] Complements (not duplicates) the fig-cap
+- [ ] Would make sense to someone who cannot see the image
+- [ ] Uses plain language (avoid jargon like "geom" or "aesthetic")
+
+## Template Patterns
+
+**Scatter chart:**
+```
+Scatter chart. [X var] along the x-axis, [Y var] along the y-axis.
+[Shape: linear/curved/clustered]. [Specific pattern, e.g., "peaks when X is 25-50"].
+[Any overlaid fits or annotations].
+```
+
+**Histogram:**
+```
+Histogram of [variable]. [Shape: right-skewed/bimodal/normal/uniform].
+[If transformed: "after [transformation], the distribution [result]"].
+[Notable features: outliers, gaps, multiple modes].
+```
+
+**Bar chart:**
+```
+Bar chart. [Categories] along the x-axis, [measure] along the y-axis.
+[Key comparison: which is highest/lowest, relative differences].
+[Pattern: increasing/decreasing/grouped].
+```
+
+**Tile/raster chart:**
+```
+Tile chart [or heatmap]. [Row variable] along the y-axis, [column variable] along the x-axis.
+Color encodes [what value]. [Pattern: where values are high/low].
+[If faceted: "N panels showing [what varies]"].
+```
+
+**Faceted chart:**
+```
+Faceted [chart type] with [N] panels, one per [faceting variable].
+[What's constant across panels]. [What changes/varies].
+[Key comparison or insight across panels].
+```
+
+**Correlation heatmap:**
+```
+Correlation [matrix/heatmap] of [what variables]. [Arrangement].
+[Overall pattern: mostly positive/negative/mixed].
+[Notable clusters or strong/weak pairs].
+[If relevant: contrast with expected behavior, e.g., "unlike PCA, these are not orthogonal"].
+```
+
+**Before/after comparison:**
+```
+[N] [chart type]s arranged [vertically/in grid]. [Top/Left] shows [original].
+[Bottom/Right] shows [transformed]. [Key difference/similarity].
+[If overlay: "an overlaid curve shows [reference]"].
+```
+
+**Line chart with overlays:**
+```
+[Line/Scatter] chart with overlaid [fits/curves]. [Axes].
+[Number] of [lines/fits] shown: [list what each represents].
+[Which fits well vs. poorly and why].
+```
+
+## Workflow
+
+### Finding Figures
+
+Figures come in two forms — search for both:
+
+**1. Code chunk figures** (most common):
+```bash
+grep -n "#| label: fig-" chapters/*.qmd
+```
+
+**2. Fenced div figures** (composite or interactive figures):
+```bash
+grep -n '{#fig-' chapters/*.qmd
+```
+These use Quarto's `:::: {#fig-label}` syntax and may contain multiple sub-chunks, static images mixed with animations, or Shinylive apps. Add `fig-alt` to each sub-chunk inside the div, not to the div itself.
+
+**Skip interactive (Shinylive) figures** — they render as iframes where `fig-alt` has no effect. Look for `shinylive-r` chunks to identify these.
+
+**Check for placeholder alt text** — some figures may already have `fig-alt` but with stub text (e.g., "Nearest centroids"). Search for existing `fig-alt` entries and verify they are complete descriptions.
+
+### For Each Figure
+
+1. **Locate** - Use grep to find file and line number
+2. **Read context** - Read ~50 lines around the chunk (prose before + code + prose after)
+3. **Extract details** - Note fig-cap, ggplot code, data generation, surrounding explanation
+4. **Draft alt text** - Apply three-part structure (type → data → insight)
+5. **Verify** - Check against quality checklist
+
+## Example
+
+**Code context:**
+```r
+plotting_data |>
+  ggplot(aes(value)) +
+  geom_histogram(binwidth = 0.2) +
+  facet_grid(name~., scales = "free_y") +
+  geom_line(aes(x, y), data = norm_curve, color = "green4")
+```
+
+**Surrounding prose says:** "Normalization doesn't make data more normal"
+
+**fig-cap:** "Normalization doesn't make data more normal. The green curve indicates the density of the unit normal distribution."
+
+**Good alt text:**
+```
+#| fig-alt: "Faceted histogram with two panels stacked vertically. Top panel shows original data with a bimodal distribution. Bottom panel shows the same data after z-score normalization, retaining the bimodal shape. An overlaid normal distribution curve on the bottom panel clearly does not match the data, demonstrating that normalization preserves distribution shape rather than creating normality."
+```
+
+### Formatting Rule
+
+Always write `fig-alt` as a **single-line quoted string** — do not word-wrap across multiple lines. This keeps diffs clean when alt text is edited.

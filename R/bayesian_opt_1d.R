@@ -17,7 +17,7 @@ true_curve <- dplyr::tibble(x = x_seq, y = y_seq)
 iter <- 15
 
 set.seed(1)
-x_vals <- c(-8,  3)
+x_vals <- c(-8, 3)
 n_0 <- length(x_vals)
 y_vals <- fn(x_vals) + rnorm(1, sd = 1 / 4)
 obs_dat <- dplyr::tibble(x = rep(NA, iter + n_0), y = rep(NA, iter + n_0))
@@ -32,21 +32,30 @@ rng <- function(x) (x - (-10)) / 20
 rng_obs <- function(x) (x - min(x)) / (max(x) - min(x))
 
 
-
 for (i in 1:iter) {
   y_best <- min(obs_dat$y, na.rm = TRUE)
   x_scaled <- rng(x_vals)
   x_mat <- matrix(x_scaled, ncol = 1)
   mod_fit <- GP_fit(x_mat, y_vals)
   pred_lst <- predict(mod_fit, rng(x_seq_mat))
-  pred_df <- dplyr::tibble(x = x_seq_mat[,1], .mean = pred_lst$Y_hat,
-                           .sd = sqrt(pred_lst$MSE))
-  exp_imp <- predict(exp_improve(eps = 0.1), pred_df, maximize = FALSE, iter = 1, best = y_best)
+  pred_df <- dplyr::tibble(
+    x = x_seq_mat[, 1],
+    .mean = pred_lst$Y_hat,
+    .sd = sqrt(pred_lst$MSE)
+  )
+  exp_imp <- predict(
+    exp_improve(eps = 0.1),
+    pred_df,
+    maximize = FALSE,
+    iter = 1,
+    best = y_best
+  )
   gp_pred[[i]] <-
     bind_cols(pred_df, exp_imp) %>%
     mutate(
       objective = if_else(objective < 0, 0, objective),
-      objective = rng_obs(objective))
+      objective = rng_obs(objective)
+    )
 
   new_best <- x_seq_mat[which.max(exp_imp$objective)]
   cli::cli_inform("new best at {new_best}")
@@ -56,7 +65,6 @@ for (i in 1:iter) {
 
   obs_dat$x[seq_along(x_vals)] <- x_vals
   obs_dat$y[seq_along(x_vals)] <- y_vals
-
 }
 
 ggplot(pred_df, aes(x)) +

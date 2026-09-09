@@ -28,7 +28,10 @@ bart_interactions <- function(x, y, ...) {
   sd_int <- res$interaction_counts_sd[keep_ind]
 
   bart_int_res <-
-    tidyr::crossing(ind_1 = seq_along(dim_names), ind_2 = seq_along(dim_names)) %>%
+    tidyr::crossing(
+      ind_1 = seq_along(dim_names),
+      ind_2 = seq_along(dim_names)
+    ) %>%
     dplyr::mutate(
       var_1 = dim_names[ind_1],
       var_2 = dim_names[ind_2]
@@ -62,7 +65,7 @@ bart_interaction_res <-
     interaction = map_chr(interaction, ~ gsub("_", " ", .x)),
     interaction = reorder(interaction, mean)
   ) %>%
-  select(interaction, mean) %>% 
+  select(interaction, mean) %>%
   arrange(desc(mean))
 
 save(bart_interaction_res, file = "RData/bart_interaction_res.RData")
