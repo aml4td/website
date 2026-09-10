@@ -271,3 +271,14 @@ names_zero_padded <- function(num, prefix = "x", call = rlang::caller_env()) {
 
 log_2_breaks <- scales::trans_breaks("log2", function(x) 2^x)
 log_2_labs <- scales::trans_format("log2", scales::math_format(2^.x))
+
+# ------------------------------------------------------------------------------
+
+fmt_sched <- function(x) {
+  x[x == "none"] <- "constant learning rate"
+  x[x == "decay_time"] <- "time-decayed learning rate"
+  x[x == "decay_expo"] <- "exponential-decayed learning rate"
+  x[x == "cyclic"] <- "cyclic learning rate"
+  x[x == "step"] <- "step function learning rate"
+  x
+}

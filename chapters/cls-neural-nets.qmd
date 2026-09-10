@@ -1678,6 +1678,204 @@ Attention can be incredibly powerful. For column attention, we can estimate rela
 
 `r r_comp("cls-neural-nets.html#sec-cls-attention")`
 
+
+### Multi-Head Attention {#sec-cls-multi-attention}
+
+To improve attention, we can expand in two different directions. _Multi-head attention_ (MHA) is when there are multiple attention mechanisms that run in parallel to one another. The idea is to estimate mulitple higher-order representations by having parallel estimates. Let's say that, in a data set, there were five underlying latent relationships that could be captured by attention. A single attention head would not be expressive enough to capture the patterns of multiple independent relationships. To increase the model's capacity, we can increase the dimensionality of attention. At the end of MHA, we concatenate the $\boldsymbol{Z}$ values produced by each attention head (per sample). 
+
+We can also increase capacity by using several multi-head attention components arranged in sequence. We could consider an _attention block_ to be a set of operations that centers on attention (multi-head or not). This term is often used to include other operations such as batch normalization, linear operations to create an embedding dimension, and so on. As we'll see with the SAINT model in the next section, it uses attention blocks with batch normalization, nonlinear activations, residual components, and _both_ row and column attention.  
+
+Returning to column attention, AutoInt [@song2019autoint] is a model that uses multi-head column attention. The model natively incorporates qualitative predictors (if any), so there is no need to preprocess them into binary indicators or perform other external encoding operations. AutoInt begins with an initial layer that projects _each predictor_ into $p_{emb}$ dimensions via a learned linear operation. For example, in the forestation data, there are 16 predictors, and one (`county`) is qualitative with 39 categories in the training set. If $p_{emb} = 7$, the embedding layer has 7(39 + 15) = 378 parameters.
+
+These features are passed to a multi-head column attention process. It begins with another linear operation so that attention can have its own embedding dimension (per head). The outputs of the column-attention processes are concatenated together to produce a broader set of attended embeddings. After this, a residual skip layer is added to the embeddings, and nonlinear activation is applied.
+
+Suppose that, for the forestation data, we specified 7 initial embedding dimensions per predictor and used three attention blocks, each with two attention heads, each with an embedding size of 13. A summary of the AutoInt model, tracking the output feature dimensions and the number of learned parameters at each stage, would be:
+
+1. **Embedding layer** that outputs 16 sets of 7-dimensional embeddings:
+   - Categorical predictor: (39 × 7) embedding vectors using 273 parameters
+   - Numeric predictors: (15 × 7) embedding vectors using 105 parameters
+   - Embedding parameters: 378
+
+2. **Column self-attention**: 3 blocks, 2 heads of dimension 13, block output dimension (2 heads × 13 dimensions = 26)
+   - Block 1: input dimension 7 to output dimension 26, yielding output shape (16 × 26)
+     - QKV projections: (3 × (2 × 7 × 13)) = 546 parameters
+     - Residual projection: 7 to 26 with (7 × 26 = 182) parameters
+     - Add residual
+     - ReLU activation
+     - Block parameters: 728
+   - Block 2: input dimension 26 to output dimension 26 with output shape (16 × 26)
+     - QKV projections: (3 × (2 × 26 × 13)) = 2,028 parameters
+     - Residual projection 26 to 26: (26 × 26) = 676 parameters
+     - Add residual
+     - ReLU activation
+     - Block parameters: 2,704
+   - Block 3: input dimension 26 to 26 with output shape (16 × 26)
+     - Same as Block 2
+     - Block parameters: 2,704
+   - Flatten: (16 × 26) = 416 values
+
+3. **Output head** output shape is $C = 2$
+   - Linear operation projecting the 416 dimensions of the required $C = 2$. This uses (416 × 2) + 2 = 834 parameters (including 2 bias terms)
+   - Softmax
+
+In total, there are 7,348 learned parameters.
+
+```{r}
+#| label: auto-int-load
+
+load("../RData/forested_autoint.RData")
+
+autoint_grid <-
+  autoint_res |>
+  collect_metrics() |>
+  select(all_of(.get_tune_parameter_names(autoint_res))) |>
+  distinct()
+
+autoint_rngs <-
+  autoint_res |>
+  .get_tune_parameters() |>
+  filter(id != "rate_schedule")
+
+autoint_nms <- autoint_rngs$id
+autoint_rngs <-
+  autoint_rngs |>
+  pluck("object") |>
+  map(~ .x$range)
+
+names(autoint_rngs) <- autoint_nms
+
+scheds <- sort(unique(autoint_grid$rate_schedule))
+scheds[scheds == "decay_expo"] <- "Decay (expo)"
+scheds[scheds == "decay_time"] <- "Decay (expo)"
+scheds <- tools::toTitleCase(scheds)
+
+autoint_best <- show_best(autoint_res, metric = "brier_class", n = 1)
+```
+
+There are numerous tuning parameters related to the architecture, primarily the embedding sizes and the number of attention iterations. An AutoInt model was tuned over `r nrow(autoint_grid)` unique candidate values for the following tuning parameters: 
+
+- Initial embedding dimension from `r autoint_rngs$num_embedding$lower` to  `r autoint_rngs$num_embedding$upper`.
+- Dropout rate for initial embedding from `r autoint_rngs$dropout_embedding$lower` to  `r autoint_rngs$dropout_embedding$upper`.
+- Attention embedding size from `r autoint_rngs$num_attn_feat$lower` to  `r autoint_rngs$num_attn_feat$upper`.
+- Number of attention heads from `r autoint_rngs$num_attn_heads$lower` to  `r autoint_rngs$num_attn_heads$upper`.
+- Number of attention blocks from `r autoint_rngs$num_attn_blocks$lower` to  `r autoint_rngs$num_attn_blocks$upper`.
+- Dropout rate for attention parameters from `r autoint_rngs$dropout_attn$lower` to  `r autoint_rngs$dropout_attn$upper`.
+- Learning rate from 10<sup>`r autoint_rngs$learn_rate$lower`</sup> to 10<sup>`r autoint_rngs$learn_rate$upper`</sup>.
+- Rate schedules of `r cli::format_inline("{scheds}")`.
+- Momentum from `r autoint_rngs$momentum$lower` to  `r autoint_rngs$momentum$upper`.
+- Batch size from `r 2^autoint_rngs$batch_size$lower` to  `r 2^autoint_rngs$batch_size$upper`.
+
+The models were trained for up to 50 epochs of stochastic gradient descent, with early stopping after 10 consecutive poor results. 
+
+The results are shown in @fig-auto-int-cls-tune where two other statistics, the average number of training epochs and the number of model parameters, are also included.  There is a significant amount of noise in these results, yielding few definitive trends. This is probably due to optimization issues. We can see from the mean number of epochs that models that stopped SGD earlier did worse than others. This suggests that the training process did not go well, perhaps due to poor initialization or a combination of suboptimal tuning parameters (such as a high learning rate combined with high momentum). We don't see a trend between performance and the number of model parameters in these results. 
+
+There is some indication that six or more attention heads are useful, but the data appear to favor fewer attention blocks. There is a noisy trend in the learning rate that, somewhat surprisingly, performs better at lower rates. Also, smaller batch sizes do better than larger ones (on average). 
+
+```{r}
+#| label: fig-auto-int-cls-tune
+#| echo: false
+#| warning: false
+#| message: false
+#| out-width: 90%
+#| fig-width: 8
+#| fig-height: 7
+#| fig-cap: AutoInt tuning results for the forestation data.
+
+autoint_info <-
+  autoint_res |>
+  collect_extracts() |>
+  mutate(
+    epochs = map_int(.extracts, ~ .x$epoch_actual),
+    num_param = map_int(.extracts, ~ .x$num_param)
+  ) |>
+  summarize(
+    `Mean Actual Epochs` = median(epochs),
+    `# Parameters (log-10)` = log10(mean(num_param)),
+    .by = c(.config)
+  )
+
+autoint_prm_nms <- .get_tune_parameter_names(autoint_res)
+
+autoint_brier <-
+  collect_metrics(autoint_res) |>
+  filter(.metric == "brier_class") |>
+  full_join(autoint_info, by = ".config") |>
+  select(
+    all_of(autoint_prm_nms),
+    mean,
+    `Mean Actual Epochs`,
+    `# Parameters (log-10)`
+  ) |>
+  mutate(
+    `Learning Rate (log-10)` = log10(learn_rate),
+    `Batch Size (log-2)` = log2(batch_size)
+  ) |>
+  rename(
+    `# Embedding Dimensions` = num_embedding,
+    `# Embedding Dropout` = dropout_embedding,
+    `Gradient Descent Momentum` = momentum,
+    `Learning Rate Scheduler` = rate_schedule,
+    `Attention Dropout Rate` = dropout_attn,
+    `# Attention Blocks` = num_attn_blocks,
+    `# Attention Heads` = num_attn_heads,
+    `# Attention Features` = num_attn_feat
+  ) |>
+  select(
+    -learn_rate,
+    -batch_size
+  ) |>
+  pivot_longer(
+    cols = c(
+      -mean,
+      -`Learning Rate Scheduler`
+    ),
+    names_to = "parameter"
+  )
+
+autoint_nms_order <-
+  c(
+    "# Embedding Dimensions",
+    "# Embedding Dropout",
+    "# Attention Features",
+    "# Attention Heads",
+    "# Attention Blocks",
+    "Attention Dropout Rate",
+    "Gradient Descent Momentum",
+    "Learning Rate (log-10)",
+    "Batch Size (log-2)",
+    "Mean Actual Epochs",
+    "# Parameters (log-10)"
+  )
+
+autoint_brier <-
+  autoint_brier |>
+  mutate(parameter = factor(parameter, levels = autoint_nms_order))
+
+autoint_brier |>
+  filter(mean < 0.15) |>
+  ggplot(
+    aes(
+      value,
+      mean,
+      col = `Learning Rate Scheduler`
+    )
+  ) +
+  geom_point(alpha = 3 / 4) +
+  facet_wrap(~parameter, scales = "free_x") +
+  theme(
+    legend.position = "top",
+    legend.box = "vertical"
+    # legend.direction = "vertical"
+  ) +
+  labs(x = NULL, y = "Brier Score")
+```
+
+The best results corresponded to a model using `r autoint_best$num_embedding` dimensions for its initial embedding with a dropout rate of `r round(autoint_best$dropout_embedding, 2)`. For attention, `r autoint_best$num_attn_blocks` blocks, each with `r autoint_best$num_attn_heads` and a dimension of `r autoint_best$num_attn_heads`, were best and had an associated dropout rate of `r round(autoint_best$dropout_attn, 2)`. The best learning rate was 10<sup>`r round(log10(autoint_best$learn_rate), 2)`</sup> with a `r fmt_sched(autoint_best$rate_schedule)`. The batch size was `r autoint_best$batch_size` samples and the best momentum value was  `r round(autoint_best$momentum, 2)`. The estimated Brier score for this configuration was `r signif(autoint_best$mean[1], 3)`, which is competitive but does not beat the current best model.
+
+Now we'll consider how attention operates on our other data dimension. 
+
+`r r_comp("cls-neural-nets.html#sec-cls-multi-attention")`
+
 ## Chapter References {.unnumbered}
 
 
