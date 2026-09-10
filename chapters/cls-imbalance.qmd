@@ -27,6 +27,7 @@ library(themis)
 library(ggforce)
 library(discrim)
 library(RANN)
+library(tabby)
 
 # ------------------------------------------------------------------------------
 # set options
@@ -546,13 +547,13 @@ mlp_spec <-
     hidden_units = tune(),
     penalty = tune(),
     learn_rate = tune(),
-    epochs = 100,
+    epochs = 20,
     activation = "relu"
   ) |>
   set_engine(
     "brulee",
     stop_iter = 5,
-    optimizer = "ADAMw",
+    optimizer = "SGD",
     verbose = FALSE,
     batch_size = tune(),
     momentum = tune()
@@ -616,15 +617,12 @@ mlp_plain_ranges <-
 
 lgb_plain_spec <-
   boost_tree(
-    trees = 1000,
     tree_depth = tune(),
-    min_n = tune(),
-    mtry = tune(),
+    trees = tune(),
     learn_rate = tune(),
-    stop_iter = 5
   ) |>
-  set_mode("classification") |>
-  set_engine("lightgbm")
+  set_engine('catboost') |>
+  set_mode('classification')
 
 lgb_plain_wflow <- workflow(class ~ ., lgb_plain_spec)
 
@@ -791,6 +789,27 @@ xrf_plain_best_pred_ind <- collect_predictions(
 )
 xrf_max_prob <- xrf_plain_best_pred_ind |> pluck(".pred_yes") |> max()
 ```
+
+
+
+```{r}
+#| label: myopia-icl
+#| include: false
+
+mirai::daemons(3)
+tab_icl_spec <- tabular_icl(mode = "classification")
+set.seed(820)
+tab_icl_res <-
+  tab_icl_spec |>
+  fit_resamples(
+    class ~ ., 
+    myopia_rs,
+    metrics = cls_mtr,
+    control = ctrl_rs
+  )
+
+```
+
 
 A set of five models was tested. First, a regularized logistic regression was used with glmnet penalties. The predictors included main effects and all two-factor interactions. Penalty values ranging from 10<sup>`r min(log10(glmn_plain_ranges$penalty))`</sup> to 10<sup>`r max(log10(glmn_plain_ranges$penalty))`</sup> were evaluated with four mixtures that ranged from `r min(glmn_plain_ranges$mixture* 100)`% to `r max(glmn_plain_ranges$mixture* 100)`% Lasso. A regular grid of `r nrow(glmn_plain_grid)` candidates was used to optimize these parameters^[We use the original implementation of the glmnet model, which features a capability where, for a specific mixture value, a single model fit contains results for multiple penalty values. For this reason, we can evaluate a regular grid with  `r nrow(glmn_plain_grid)` candidates with only `r vctrs::vec_unique_count(glmn_plain_grid$mixture)` model fits, one for each mixture value. A regular grid exploits this feature, but a space-filling design would nullify this advantage.].
 
