@@ -1,0 +1,157 @@
+
+R version 4.6.0 (2026-04-24) -- "Because it was There"
+Copyright (C) 2026 The R Foundation for Statistical Computing
+Platform: aarch64-apple-darwin23
+
+R is free software and comes with ABSOLUTELY NO WARRANTY.
+You are welcome to redistribute it under certain conditions.
+Type 'license()' or 'licence()' for distribution details.
+
+  Natural language support but running in an English locale
+
+R is a collaborative project with many contributors.
+Type 'contributors()' for more information and
+'citation()' on how to cite R or R packages in publications.
+
+Type 'demo()' for some demos, 'help()' for on-line help, or
+'help.start()' for an HTML browser interface to help.
+Type 'q()' to quit R.
+
+> # pak::pak(c("tidymodels/tabular@saint"), ask = FALSE)
+> library(tidymodels)
+── Attaching packages ────────────────────────────────────── tidymodels 1.5.0 ──
+✔ broom        1.0.13         ✔ recipes      1.3.2     
+✔ dials        1.4.3.9000     ✔ rsample      1.3.2     
+✔ dplyr        1.2.1          ✔ tailor       0.1.0     
+✔ ggplot2      4.0.3          ✔ tidyr        1.3.2     
+✔ infer        1.1.0          ✔ tune         2.1.0.9000
+✔ modeldata    1.5.1          ✔ workflows    1.3.0     
+✔ parsnip      1.6.0          ✔ workflowsets 1.1.1     
+✔ purrr        1.2.2          ✔ yardstick    1.4.0     
+── Conflicts ───────────────────────────────────────── tidymodels_conflicts() ──
+✖ purrr::discard() masks scales::discard()
+✖ dplyr::filter()  masks stats::filter()
+✖ dplyr::lag()     masks stats::lag()
+✖ recipes::step()  masks stats::step()
+> library(tabular)
+> library(bestNormalize)
+Registered S3 method overwritten by 'butcher':
+  method                 from    
+  as.character.dev_topic generics
+> library(spatialsample)
+> library(finetune)
+> 
+> load("~/content/website/RData/forested_data.RData")
+> 
+> # ------------------------------------------------------------------------------
+> 
+> tidymodels_prefer()
+> theme_set(theme_bw())
+> options(pillar.advice = FALSE, pillar.min_title_chars = Inf)
+> mirai::daemons(2)
+> 
+> # ------------------------------------------------------------------------------
+> 
+> cls_mtr <- metric_set(brier_class, roc_auc, pr_auc, mn_log_loss)
+> 
+> # ------------------------------------------------------------------------------
+> 
+> norm_rec <-
++   recipe(class ~ ., data = forested_train) |>
++   step_orderNorm(all_numeric_predictors())
+> 
+> saint_spec <-
++   tabular_saint(
++     num_embedding = tune(),
++ 
++     num_attn_heads = tune(),
++     num_attn_blocks = tune(),
++     dropout_attn = tune(),
++     attention_type = tune(),
++ 
++     hidden_units = tune(),
++     dropout_hidden = tune(),
++     target_token = tune(),
++ 
++     penalty = 0,
++     learn_rate = tune(),
++     rate_schedule = tune(),
++     momentum = tune(),
++     batch_size = tune(),
++     epochs = 50L,
++     stop_iter = 10L
++   ) |>
++   set_engine(
++     "brulee",
++     optimizer = "SGD",
++     device = "mps",
++     row_attention_on_predict = TRUE,
++   ) |>
++   set_mode("classification")
+> 
+> saint_wflow <- workflow(norm_rec, saint_spec)
+> 
+> # ------------------------------------------------------------------------------
+> 
+> pull_iter <- function(x) {
++   require(tidymodels)
++   require(brulee)
++   fit <- extract_fit_engine(x)
++   revived <- brulee:::revive_model(fit$model)
++   num_param <- 
++     lapply(revived$parameters, function(x) prod(dim(x))) |> 
++     as.integer() |> 
++     sum()
++ 
++   tibble(
++     epoch_best = length(fit$loss),
++     epoch_actual = fit$best_epoch,
++     num_param = num_param
++   )
++ }
+> 
+> ctrl <- control_grid(
++   save_pred = TRUE,
++   save_workflow = TRUE,
++   parallel_over = "everything",
++   extract = pull_iter
++ )
+> 
+> # ------------------------------------------------------------------------------
+> 
+> saint_param <-
++   saint_wflow |>
++   extract_parameter_set_dials() |>
++   update(
++     num_embedding = num_embedding(c(2, 50)),
++     hidden_units = hidden_units(c(2, 50)),
++     batch_size = batch_size(c(4, 9))
++   )
+> 
+> set.seed(12)
+> torch::torch_manual_seed(12)
+> saint_res <-
++   saint_wflow |>
++   tune_grid(
++     resamples = forested_rs,
++     grid = 25,
++     param_info = saint_param,
++     metrics = cls_mtr,
++     control = ctrl
++   )
+> 
+> # ------------------------------------------------------------------------------
+> 
+> save(
++   saint_res,
++   file = "~/content/website/RData/forested_saint.RData"
++ )
+> 
+> # ------------------------------------------------------------------------------
+> 
+> if (!interactive()) {
++   q("no")
++ }
+> proc.time()
+     user    system   elapsed 
+    5.718     4.386 16108.753 

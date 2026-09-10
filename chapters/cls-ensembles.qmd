@@ -6,16 +6,32 @@ knitr:
 
 # Classification Ensembles {#sec-cls-ensembles}
 
+
 ```{r}
 #| label: cls-ensembles-setup
 #| include: false
 source("../R/_common.R")
+source("../R/_themes.R")
+source("../R/_themes_ggplot.R")
+source("../R/_themes_gt.R")
 
 # ------------------------------------------------------------------------------
+# Required packages
 
 library(tidymodels)
 library(mirai)
 library(spatialsample)
+library(future)
+library(patchwork)
+library(gt)
+library(gtExtras)
+library(lorax)
+library(bonsai)
+library(probably)
+library(tidyposterior)
+library(rules)
+library(paletteer)
+library(baguette)
 
 # ------------------------------------------------------------------------------
 # set options
@@ -23,18 +39,281 @@ library(spatialsample)
 tidymodels_prefer()
 set_options()
 daemons(parallel::detectCores())
+theme_set(thm_lt)
+
+source("../R/compare_models.R")
 
 # ------------------------------------------------------------------------------
 # load data
 
 load("../RData/forested_data.RData")
+
+# ------------------------------------------------------------------------------
+
+cls_mtr <- metric_set(brier_class, roc_auc, pr_auc, mn_log_loss)
 ```
 
 ## Bagging {#sec-cls-bag}
 
+
+```{r}
+#| label: forest-bag-cart
+#| include: false
+#| cache: true
+
+cart_bag_spec <-
+  bag_tree(mode = "classification") |>
+  set_engine("rpart", times = 50)
+
+set.seed(285)
+forest_cart_bag_res <-
+  cart_bag_spec |>
+  fit_resamples(
+    class ~ .,
+    resamples = forested_rs,
+    control = control_resamples(
+      save_pred = TRUE,
+      save_workflow = TRUE
+    ),
+    metrics = cls_mtr
+  )
+
+forest_cart_bag_best <- select_best(forest_cart_bag_res, metric = "brier_class")
+
+forest_cart_bag_pred <-
+  forest_cart_bag_res |>
+  collect_predictions(parameters = forest_cart_bag_best) |>
+  mutate(wflow_id = "Bagged CART") |>
+  relocate(wflow_id)
+
+forest_cart_bag_mtr_ex <-
+  forest_cart_bag_pred |>
+  cls_mtr(class, estimate = .pred_class, .pred_Yes)
+```
+
+
 ## Random Forest {#sec-cls-rand-forest}
 
+```{r}
+#| label: forest-rf-ranger
+#| include: false
+#| cache: true
+
+rngr_spec <-
+  rand_forest(
+    mode = "classification",
+    mtry = tune(),
+    trees = 500,
+    min_n = tune()
+  )
+
+set.seed(526)
+forest_rngr_res <-
+  rngr_spec |>
+  tune_grid(
+    class ~ .,
+    resamples = forested_rs,
+    grid = 25,
+    control = control_grid(
+      save_pred = TRUE,
+      save_workflow = TRUE
+    ),
+    metrics = cls_mtr
+  )
+
+forest_rngr_best <- select_best(forest_rngr_res, metric = "brier_class")
+
+forest_rngr_pred <-
+  forest_rngr_res |>
+  collect_predictions(parameters = forest_rngr_best) |>
+  mutate(wflow_id = "Random Forest") |>
+  relocate(wflow_id)
+
+forest_rngr_mtr_ex <-
+  forest_rngr_pred |>
+  cls_mtr(class, estimate = .pred_class, .pred_Yes)
+```
+
+
+```{r}
+#| label: forest-rf-obl
+#| include: false
+#| cache: true
+
+rf_obl_spec <-
+  rand_forest(
+    mode = "classification",
+    mtry = tune(),
+    trees = 500,
+    min_n = tune()
+  ) |>
+  set_engine("aorsf")
+
+set.seed(545)
+forest_rf_obl_res <-
+  rf_obl_spec |>
+  tune_grid(
+    class ~ .,
+    resamples = forested_rs,
+    grid = 25,
+    control = control_grid(
+      save_pred = TRUE,
+      save_workflow = TRUE
+    ),
+    metrics = cls_mtr
+  )
+
+forest_rf_obl_best <- select_best(forest_rf_obl_res, metric = "brier_class")
+
+forest_rf_obl_pred <-
+  forest_rf_obl_res |>
+  collect_predictions(parameters = forest_rf_obl_best) |>
+  mutate(wflow_id = "Oblique Random Forest") |>
+  relocate(wflow_id)
+
+forest_rf_obl_mtr_ex <-
+  forest_rf_obl_pred |>
+  cls_mtr(class, estimate = .pred_class, .pred_Yes)
+```
+
 ## Boosting {#sec-cls-boosting}
+
+
+```{r}
+#| label: forest-boost-c5
+#| include: false
+#| cache: true
+
+c5_spec <-
+  boost_tree(
+    mode = "classification",
+    trees = tune(),
+    min_n = tune()
+  ) |>
+  set_engine("C5.0")
+
+set.seed(498)
+forest_c5_res <-
+  c5_spec |>
+  tune_grid(
+    class ~ .,
+    resamples = forested_rs,
+    grid = 25,
+    control = control_grid(
+      save_pred = TRUE,
+      save_workflow = TRUE
+    ),
+    metrics = cls_mtr
+  )
+
+forest_c5_best <- select_best(forest_c5_res, metric = "brier_class")
+
+forest_c5_pred <-
+  forest_c5_res |>
+  collect_predictions(parameters = forest_c5_best) |>
+  mutate(wflow_id = "Boosted C5.0") |>
+  relocate(wflow_id)
+
+forest_c5_mtr_ex <-
+  forest_c5_pred |>
+  cls_mtr(class, estimate = .pred_class, .pred_Yes)
+```
+
+```{r}
+#| label: forest-boost-xgb
+#| include: false
+#| cache: true
+
+xgb_spec <-
+  boost_tree(
+    mode = "classification",
+    trees = 1000,
+    mtry = tune(),
+    min_n = tune(),
+    tree_depth = tune(),
+    loss_reduction = tune(),
+    learn_rate = tune(),
+    stop_iter = 5
+  )
+
+set.seed(754)
+forest_xgb_res <-
+  xgb_spec |>
+  tune_grid(
+    class ~ .,
+    resamples = forested_rs,
+    grid = 25,
+    control = control_grid(
+      save_pred = TRUE,
+      save_workflow = TRUE
+    ),
+    metrics = cls_mtr
+  )
+
+forest_xgb_best <- select_best(forest_xgb_res, metric = "brier_class")
+
+forest_xgb_pred <-
+  forest_xgb_res |>
+  collect_predictions(parameters = forest_xgb_best) |>
+  mutate(wflow_id = "XGBoost") |>
+  relocate(wflow_id)
+
+forest_xgb_mtr_ex <-
+  forest_xgb_pred |>
+  cls_mtr(class, estimate = .pred_class, .pred_Yes)
+```
+
+```{r}
+#| label: forest-boost-lgb
+#| include: false
+#| cache: true
+
+lgb_spec <-
+  boost_tree(
+    mode = "classification",
+    trees = 1000,
+    mtry = tune(),
+    min_n = tune(),
+    tree_depth = tune(),
+    loss_reduction = tune(),
+    learn_rate = tune(),
+    stop_iter = 5
+  ) |>
+  set_engine("lightgbm")
+
+set.seed(931)
+forest_lgb_res <-
+  lgb_spec |>
+  tune_grid(
+    class ~ .,
+    resamples = forested_rs,
+    grid = 25,
+    control = control_grid(
+      save_pred = TRUE,
+      save_workflow = TRUE
+    ),
+    metrics = cls_mtr
+  )
+
+forest_lgb_best <- select_best(forest_lgb_res, metric = "brier_class")
+
+forest_lgb_pred <-
+  forest_lgb_res |>
+  collect_predictions(parameters = forest_lgb_best) |>
+  mutate(wflow_id = "LightGBM") |>
+  relocate(wflow_id)
+
+forest_lgb_mtr_ex <-
+  forest_lgb_pred |>
+  cls_mtr(class, estimate = .pred_class, .pred_Yes)
+```
+
+```{r}
+#| label: forest-boost-ctb
+#| include: false
+
+load("../RData/forest_catboost.RData")
+```
 
 ### Classical Boosting {#sec-cls-classic-boosting}
 
@@ -42,10 +321,198 @@ load("../RData/forested_data.RData")
 
 ## Bayesian Additive Regression Trees {#sec-cls-bart}
 
+```{r}
+#| label: forest-bart
+#| include: false
+#| cache: true
+
+bart_spec <-
+  parsnip::bart(
+    mode = "classification",
+    trees = 500,
+    prior_terminal_node_coef = tune(),
+    prior_terminal_node_expo = tune()
+  ) |>
+  set_engine("dbarts", keepevery = 10)
+
+set.seed(637)
+forest_bart_res <-
+  bart_spec |>
+  tune_grid(
+    class ~ .,
+    resamples = forested_rs,
+    grid = 25,
+    control = control_grid(
+      save_pred = TRUE,
+      save_workflow = TRUE
+    ),
+    metrics = cls_mtr
+  )
+
+forest_bart_best <- select_best(forest_bart_res, metric = "brier_class")
+
+forest_bart_pred <-
+  forest_bart_res |>
+  collect_predictions(parameters = forest_bart_best) |>
+  mutate(wflow_id = "BART") |>
+  relocate(wflow_id)
+
+forest_bart_mtr_ex <-
+  forest_bart_pred |>
+  cls_mtr(class, estimate = .pred_class, .pred_Yes)
+```
+
+
 ## Rule-Based Ensembles {#sec-cls-rule-ensembles}
 
 ### C5.0 Rules {#sec-cls-c50-rules}
 
 ### RuleFit {#sec-cls-rule-fit}
 
+## Comparisons to Previous Models {#sec-cls-ensemble-compare}
+
+```{r}
+#| label: cls-ensemble-compare
+#| include: false
+load("../RData/forest_logistic_set_res.Rdata")
+load("../RData/forest_glmnet_set_res.Rdata")
+load("../RData/forest_linear_res.Rdata")
+
+load("../RData/forest_fda_set_res.Rdata")
+load("../RData/forest_knn_set_res.Rdata")
+
+load("../RData/forest_mlp_set_res.Rdata")
+load("../RData/forest_autoint_set_res.Rdata")
+load("../RData/forest_saint_set_res.Rdata")
+load("../RData/forest_tabpfn_set_res.Rdata")
+load("../RData/forest_tabicl_set_res.Rdata")
+
+load("../RData/forest_cart_set_res.RData")
+load("../RData/forest_c5_set_res.RData")
+load("../RData/forest_cit_set_res.RData")
+load("../RData/forested_obl_set_res.RData")
+load("../RData/forest_c5rules_set_res.RData")
+
+
+forest_ensemble_set_res <-
+  as_workflow_set(
+    Bagged_CART = forest_cart_bag_res |> butcher::butcher(),
+    RF = forest_rngr_res |> butcher::butcher(),
+    Oblique_RF = forest_rf_obl_res |> butcher::butcher(),
+    Boost_C5.0 = forest_c5_res |> butcher::butcher(),
+    XGBoost = forest_xgb_res |> butcher::butcher(),
+    LightGBM = forest_lgb_res |> butcher::butcher(),
+    BART = forest_bart_res |> butcher::butcher()
+  )
+
+all_sets <-
+  dplyr::bind_rows(
+    forest_fda_set_res,
+    forest_knn_set_res,
+    forest_glmnet_set_res,
+    forest_logistic_set_res,
+    forest_mlp_set_res,
+    forest_tabpfn_set_res,
+    forest_tabicl_set_res,
+    forest_autoint_set_res,
+    forest_saint_set_res,
+    forested_obl_set_res,
+    forest_cart_set_res,
+    forest_c5_set_res,
+    forest_c5rules_set_res,
+    forest_cit_set_res,
+    forest_ensemble_set_res,
+    forest_ctb_set_res
+  )
+```
+
+```{r}
+#| label: cls-ensemble-compare-bayes
+#| include: false
+#| cache: false
+set.seed(905)
+ensemble_compare <- compare_models(
+  all_sets,
+  chains = 10,
+  cores = 10,
+  iter = 5000
+)
+ensemble_compare
+
+ensemble_best <- ensemble_compare$model[is.na(ensemble_compare$probability)]
+
+ensemble_subset <-
+  ensemble_compare |>
+  slice_min(median, by = c(class, engine)) |>
+  mutate(
+    model = as.character(model),
+    model = ifelse(grepl("basic_", model), "Oblique Tree", model),
+    model = ifelse(
+      grepl("logistic_mle", model),
+      "Logistic (unpenalized)",
+      model
+    ),
+    model = ifelse(grepl("1L", model), "MLP (1 Layer)", model),
+    model = ifelse(grepl("2L", model), "MLP (2 Layers)", model),
+    model = gsub("glmnet", "Logistic (penalized)", model),
+    model = ifelse(grepl("basic_", model), "Oblique Tree", model),
+    model = ifelse(grepl("tab_pfn", model), "TabPFN", model),
+    model = ifelse(grepl("autoint", model), "AutoInt", model),
+    model = gsub("_", " ", model),
+    model = factor(model),
+    model = reorder(model, median)
+  )
+
+ensemble_best_brier <- round(
+  ensemble_subset$median[ensemble_subset$model == ensemble_best],
+  3
+)
+```
+
+How well do these models perform relative to previously discussed techniques?  @fig-cls-ensemble-compare visualizes the Brier score results across models. The Bayesian methods in @sec-compare-resample-bayes were used to estimate the probability distributions for each of the best candidates for each model. The intervals show the 0.05, 0.50, and 0.95 quantiles. Currently, the `r ensemble_best` model has the smallest Brier score with a Bayesian point estimate of `r ensemble_best_brier`.
+
+```{r}
+#| label: fig-cls-ensemble-compare
+#| echo: false
+#| warning: false
+#| out-width: 70%
+#| fig-width: 6
+#| fig-height: 4
+#| fig-cap: "Comparisons of current forestation models. The intervals are 90% credible intervals. The bars on the right show the probability of practical equivalence to the current best model, assuming that a difference in Brier scores of +/- 0.01 is practical."
+#| fig-alt: "Two-panel figure comparing all forestation models discussed so far. The left panel is a dot-and-whisker plot of Brier scores with 90% credible intervals, ordered from best to worst. Tree-based models cluster at higher Brier scores than the leading models. The right panel shows horizontal bars for the probability of practical equivalence, indicating that single tree models have virtually no chance of matching the currently best-performing models."
+p_brier <-
+  ensemble_subset |>
+  ggplot(aes(median, model)) +
+  geom_point() +
+  geom_errorbar(aes(xmin = lower, xmax = upper), width = 1 / 2) +
+  labs(y = NULL, x = "Brier Score") +
+  theme(
+    plot.margin = margin(t = 10, r = 2, b = 10, l = 10, unit = "pt")
+  )
+
+p_brier_diff <-
+  ensemble_subset |>
+  ggplot(aes(pract_equiv, model)) +
+  geom_bar(stat = "identity", aes(fill = pract_equiv), show.legend = FALSE) +
+  labs(y = NULL, x = "Pr[Equiv]") +
+  scale_x_continuous(breaks = round((0:2) / 2, 2), limits = 0:1) +
+  scale_fill_viridis_c(direction = -1) +
+  theme(
+    axis.text.y = element_blank(),
+    axis.ticks.y = element_blank(),
+    plot.margin = margin(t = 10, r = 10, b = 10, l = 2, unit = "pt")
+  )
+
+p_brier + p_brier_diff + plot_layout(widths = c(4, 1))
+```
+
+
 ## Chapter References {.unnumbered}
+
+
+```{r}
+#| label: cls-ensemble-results
+#| include: false
+
+save_if_missing(forest_ensemble_set_res)
+```

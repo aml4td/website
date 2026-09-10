@@ -445,7 +445,7 @@ $$ {#eq-chi2}
 
 Since this statistic measures the difference between our model and an uninformative state, we want to maximize its value. This $\chi^2$ statistic is often used in _conditional inference trees_ [@hothorn2006unbiased]. In @sec-cls-cit, we'll describe the strategic advantages of minimizing the associated p-value of this value rather than maximizing the statistic itself. 
 
-As we'll see in the next chapter, modern boosting models often use splitting criteria based on the log-likelihood. The rationales for the methods discussed in this chapter are described in @sec-cls-modern-boost. Also, for simplicity, we'll assume that the outcome has $C = 2$ classes. We'll focus on the three most popular models: XGBoost [@xgb16], LightGBM [@lgb17], and CatBoost [@cat18].
+As we'll see in the next chapter, modern boosting models often use splitting criteria based on the log-likelihood. The rationales for the methods discussed in this chapter are described @sec-cls-modern-boosting. Also, for simplicity, we'll assume that the outcome has $C = 2$ classes. We'll focus on the three most popular models: XGBoost [@xgb16], LightGBM [@lgb17], and CatBoost [@cat18].
 
 These tools often minimize the sum of the Pearson residuals (previously seen in @sec-logistic-diagnostic):
 
@@ -953,7 +953,7 @@ $$
 \widehat{p}_j = \frac{n_{+j} + \alpha}{n + \alpha + \beta}
 $$
 
-$n_{+j}$ is the number of events in category $j$ within all of the $n$ rows under consideration. CatBoost uses $\beta = 1$ and calls $\alpha$ the "prior" parameter, which can be used for tuning. Once all of the $j$ values of $\widehat{p}_j$ are computed, the split determination treats the predictor as if it were quantitative from the start. CatBoost's algorithm, which uses the CTR values to determine the best predictor (and value) to split on, is fairly complex and is detailed in @sec-cls-modern-boost. 
+$n_{+j}$ is the number of events in in category $j$ within all of the $n$ rows under consideration. CatBoost uses $\beta = 1$ and calls $\alpha$ the "prior" parameter, which can be used for tuning. Once all of the $j$ values of $\widehat{p}_j$ are computed, the split determination treats the predictor as if it were quantitative from the start. CatBoost's algorithm, which uses the CTR values to determine the best predictor (and value) to split on, is fairly complex and is detailed in @sec-cls-modern-boosting. 
 
 So far, we've constrained our splits to be binary. C4.5 can create multiway splits for categorical predictors. For example, with categories `A`-`F`, a split might contain three groups such as `{A, B, C}`, `{D}`, and `{E, F}`. To do this, C4.5 uses a greedy, hill-climbing algorithm. When a specific split candidate is evaluated, it is rated using a penalized gain ratio. The gain is the improvement of the information statistic before and after combining categories. The penalty is based on the Minimum Description Length (MDL) principle [@quinlan1987inferring] and uses the logarithm of the number of ways to partition $C$ categories into $k$ groups (a.k.a. a Bell number) divided by the number of data points. 
 
@@ -2142,7 +2142,7 @@ C4.5 is a popular tree-based machine learning model, described in detail by @qui
 - multiway splits for qualitative predictors
 - small adjustments to the terminal node estimates
 
-Differences between the two are largely due to the addition of a boosting algorithm, which will be described in @sec-cls-modern-boost. One difference between the two versions is that C5.0 includes an option to perform a *global* pruning phase at the end of tree construction. This uses a form of the one-standard-error rule from CART. Pessimistic pruning occurs locally, trimming the tree at a specific node. The global process considers the entire tree at once.
+Differences between the two are largely due to the addition of a boosting algorithm, which will be described in @sec-cls-modern-boosting. One difference between the two versions is that C5.0 includes an option to perform a *global* pruning phase at the end of tree construction. This uses a form of the one-standard-error rule from CART. Pessimistic pruning occurs locally, trimming the tree at a specific node. The global process considers the entire tree at once.
 
 To start, we must compute our "error budget." This is the number of errors in the tree that is allowable under the one-standard-error rule. To compute this, C5.0 determines the number of errors ($\mathcal{E}$) out of $n$ training set samples. Based on the equation for the Binomial variance, the equation for the standard error of the number of errors is:
 
@@ -2811,13 +2811,18 @@ This is a significant disadvantage for trees, but, as we'll see in the next chap
 ```{r}
 #| label: cls-tree-compare
 #| include: false
-load("../RData/forest_fda_set_res.Rdata")
-load("../RData/forest_nb_set_res.Rdata")
-load("../RData/forest_knn_set_res.Rdata")
-load("../RData/forest_linear_res.Rdata")
-load("../RData/forest_glmnet_set_res.Rdata")
 load("../RData/forest_logistic_set_res.Rdata")
+load("../RData/forest_glmnet_set_res.Rdata")
+load("../RData/forest_linear_res.Rdata")
+
+load("../RData/forest_fda_set_res.Rdata")
+load("../RData/forest_knn_set_res.Rdata")
+
 load("../RData/forest_mlp_set_res.Rdata")
+load("../RData/forest_autoint_set_res.Rdata")
+load("../RData/forest_saint_set_res.Rdata")
+load("../RData/forest_tabpfn_set_res.Rdata")
+load("../RData/forest_tabicl_set_res.Rdata")
 
 forest_cart_set_res <-
   as_workflow_set(
@@ -2842,16 +2847,19 @@ forest_c5rules_set_res <-
 all_sets <-
   dplyr::bind_rows(
     forest_fda_set_res,
-    forest_nb_set_res,
     forest_knn_set_res,
+    forest_glmnet_set_res,
+    forest_logistic_set_res,
+    forest_mlp_set_res,
+    forest_tabpfn_set_res,
+    forest_tabicl_set_res,
+    forest_autoint_set_res,
+    forest_saint_set_res,
     forested_obl_set_res,
     forest_cart_set_res,
     forest_c5_set_res,
     forest_c5rules_set_res,
-    forest_cit_set_res,
-    forest_glmnet_set_res,
-    forest_mlp_set_res,
-    forest_logistic_set_res
+    forest_cit_set_res
   )
 ```
 
@@ -2879,12 +2887,17 @@ tree_subset <-
     model = ifelse(grepl("1L", model), "MLP (1 Layer)", model),
     model = ifelse(grepl("2L", model), "MLP (2 Layers)", model),
     model = gsub("glmnet", "Logistic (penalized)", model),
+    model = ifelse(grepl("basic_", model), "Oblique Tree", model),
+    model = ifelse(grepl("tab_pfn", model), "TabPFN", model),
+    model = ifelse(grepl("autoint", model), "AutoInt", model),
     model = factor(model),
     model = reorder(model, median)
   )
+
+tree_best_brier <- round(tree_subset$median[tree_subset$model == tree_best], 3)
 ```
 
-How well do these models perform relative to previously discussed techniques? Currently, the `r tree_best` model has the smallest Brier score. @fig-cls-tree-compare visualizes the Brier score results across models. The Bayesian methods in @sec-compare-resample-bayes were used to estimate the probability distributions for each of the best candidates for each model. The intervals show the 0.05, 0.50, and 0.95 quantiles. 
+How well do these models perform relative to previously discussed techniques?  @fig-cls-tree-compare visualizes the Brier score results across models. The Bayesian methods in @sec-compare-resample-bayes were used to estimate the probability distributions for each of the best candidates for each model. The intervals show the 0.05, 0.50, and 0.95 quantiles. Currently, the `r tree_best` model has the smallest Brier score with a Bayesian point estimate of `r `tree_best_brier`.
 
 ```{r}
 #| label: fig-cls-tree-compare
@@ -2907,7 +2920,6 @@ p_brier <-
 
 p_brier_diff <-
   tree_subset |>
-  filter(model != tree_best) |>
   ggplot(aes(pract_equiv, model)) +
   geom_bar(stat = "identity", aes(fill = pract_equiv), show.legend = FALSE) +
   labs(y = NULL, x = "Pr[Equiv]") +
@@ -2933,9 +2945,10 @@ While the results for these models might be disappointing, their value lies in t
 ```{r}
 #| label: cls-trees-results
 #| include: false
-save(forest_cart_set_res, file = "../RData/forest_cart_set_res.RData")
-save(forest_c5_set_res, file = "../RData/forest_c5_set_res.RData")
-save(forest_cit_set_res, file = "../RData/forest_cit_set_res.RData")
-save(forested_obl_set_res, file = "../RData/forested_obl_set_res.RData")
-save(forest_c5rules_set_res, file = "../RData/forest_c5rules_set_res.RData")
+
+save_if_missing(forest_cart_set_res)
+save_if_missing(forest_c5_set_res)
+save_if_missing(forest_cit_set_res)
+save_if_missing(forested_obl_set_res)
+save_if_missing(forest_c5rules_set_res)
 ```
