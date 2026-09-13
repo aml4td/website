@@ -584,7 +584,7 @@ mlp_plain_res <-
     metrics = cls_mtr,
     control = ctrl_grid,
     param_info = mlp_plain_param,
-    grid = 25
+    grid = 5
   )
 
 mlp_plain_best <- select_best(mlp_plain_res, metric = "brier_class")
@@ -711,6 +711,7 @@ rf_plain_ranges <-
 #| label: myopia-xrf-plain
 #| include: false
 #| cache: true
+#| eval: false
 
 xrf_plain_spec <-
   rule_fit(
@@ -775,6 +776,7 @@ xrf_plain_ranges <-
 
 ```{r}
 #| label: myopia-xrf-plain-best
+#| eval: false
 set.seed(926)
 xrf_plain_fit <-
   xrf_plain_wflow |>
@@ -789,8 +791,6 @@ xrf_plain_best_pred_ind <- collect_predictions(
 )
 xrf_max_prob <- xrf_plain_best_pred_ind |> pluck(".pred_yes") |> max()
 ```
-
-
 
 ```{r}
 #| label: myopia-icl
@@ -809,7 +809,6 @@ tab_icl_res <-
   )
 
 ```
-
 
 A set of five models was tested. First, a regularized logistic regression was used with glmnet penalties. The predictors included main effects and all two-factor interactions. Penalty values ranging from 10<sup>`r min(log10(glmn_plain_ranges$penalty))`</sup> to 10<sup>`r max(log10(glmn_plain_ranges$penalty))`</sup> were evaluated with four mixtures that ranged from `r min(glmn_plain_ranges$mixture* 100)`% to `r max(glmn_plain_ranges$mixture* 100)`% Lasso. A regular grid of `r nrow(glmn_plain_grid)` candidates was used to optimize these parameters^[We use the original implementation of the glmnet model, which features a capability where, for a specific mixture value, a single model fit contains results for multiple penalty values. For this reason, we can evaluate a regular grid with  `r nrow(glmn_plain_grid)` candidates with only `r vctrs::vec_unique_count(glmn_plain_grid$mixture)` model fits, one for each mixture value. A regular grid exploits this feature, but a space-filling design would nullify this advantage.].
 
@@ -830,7 +829,7 @@ Single-layer neural networks were evaluated and were tuned over:
 
 ::::
 
-SGD via AdamW was used to optimize the model for up to 100 epochs, with early stopping after 5 consecutive poor results. ReLU activation was used. 
+SGD was used to optimize the model for up to 100 epochs, with early stopping after 5 consecutive poor results. ReLU activation was used. 
 
 Boosted trees (via light GBM) were also trained for up to 1,000 iterations with early stopping after 5 bad iterations. The model was tuned over: 
 
@@ -858,16 +857,16 @@ Finally, a RuleFit model was optimized over:
 :::: {.columns}
 
 ::: {.column width="50%"}
-- The number of boosting iterations (`r min(xrf_plain_ranges$trees)` to `r max(xrf_plain_ranges$trees)`)
-- Tree depth (`r min(xrf_plain_ranges$tree_depth)` to `r max(xrf_plain_ranges$tree_depth)` splits). 
-- Amount of data needed for further splitting (`r min(xrf_plain_ranges$min_n)` to `r max(xrf_plain_ranges$min_n)` samples).
+- The number of boosting iterations (` min(xrf_plain_ranges$trees)` to `r max(xrf_plain_ranges$trees)`)
+- Tree depth (` min(xrf_plain_ranges$tree_depth)` to `r max(xrf_plain_ranges$tree_depth)` splits). 
+- Amount of data needed for further splitting (` min(xrf_plain_ranges$min_n)` to ` max(xrf_plain_ranges$min_n)` samples).
 
 :::
 
 ::: {.column width="50%"}
-- The learning rate (10<sup>`r min(log10(xrf_plain_ranges$learn_rate))`</sup> to 10<sup>`r max(log10(xrf_plain_ranges$learn_rate))`</sup>).
--  Proportional $m_{try}$ (`r min(round(xrf_plain_ranges$mtry * 100, 1))`% to `r max(round(xrf_plain_ranges$mtry * 100, 1))`%).
-- The L<sub>1</sub> penalty (10<sup>`r min(log10(xrf_plain_ranges$penalty))`</sup> to 10<sup>`r max(log10(xrf_plain_ranges$penalty))`</sup>).
+- The learning rate (10<sup>` min(log10(xrf_plain_ranges$learn_rate))`</sup> to 10<sup>` max(log10(xrf_plain_ranges$learn_rate))`</sup>).
+-  Proportional $m_{try}$ (` min(round(xrf_plain_ranges$mtry * 100, 1))`% to ` max(round(xrf_plain_ranges$mtry * 100, 1))`%).
+- The L<sub>1</sub> penalty (10<sup>` min(log10(xrf_plain_ranges$penalty))`</sup> to 10<sup>` max(log10(xrf_plain_ranges$penalty))`</sup>).
 :::
 
 ::::
@@ -888,8 +887,8 @@ plain_res <- as_workflow_set(
   glmnet = glmn_plain_res,
   nnet = mlp_plain_res,
   boosting = lgb_plain_res,
-  rand_forest = rf_plain_res,
-  rule_fit = xrf_plain_res
+  # rule_fit = xrf_plain_res,
+  rand_forest = rf_plain_res
 )
 
 rank_plain <-
@@ -913,7 +912,7 @@ rank_plain |>
   theme(legend.position = "top")
 ```
 
-While the Rulefit and logistic regressions had the smallest Brier scores, their respective best candidates have issues. For the RuleFit model, the maximum estimated probability of a patient being myopic is `r round(xrf_max_prob * 100, 1)`% across all of the assessment sets. While the values are well-calibrated within the observed data range, this upper limit of probability is probably too small to be the final model. We would expect at least one of the held-out predictions to be closer to one when the patient is truly myopic. We also do not have a clear sense of how well-calibrated the predictions are when values are closer to one. 
+While the Rulefit and logistic regressions had the smallest Brier scores, their respective best candidates have issues. For the RuleFit model, the maximum estimated probability of a patient being myopic is ` round(xrf_max_prob * 100, 1)`% across all of the assessment sets. While the values are well-calibrated within the observed data range, this upper limit of probability is probably too small to be the final model. We would expect at least one of the held-out predictions to be closer to one when the patient is truly myopic. We also do not have a clear sense of how well-calibrated the predictions are when values are closer to one. 
 
 For the regularized logistic model, @fig-myopia-logistic illustrates the relationship between the tuning parameters and the Brier score. We can see that while the numerically best results are to use `r round(glmn_plain_best$mixture * 100, 0)`% Lasso regularization with a penalty of 10<sup>`r min(log10(glmn_plain_best$penalty))`</sup>, there are several other combinations with nearly equivalent metrics. The model fitted on the entire training set could have a maximum of `r max_num_terms` model coefficients (apart from the intercept) since there are `r num_pred` main effects and `r choose(num_pred, 2)` possible two-way interactions. However, the Lasso model can remove predictors, and the fitted model contains only `r nrow(glmn_plain_main)` main effect and `r nrow(glmn_plain_int)` interactions. For a model used purely for prediction, this is not a terrible situation. However, the lack of main effects is troubling since there are interaction terms in the model with no corresponding main effects. This is inconsistent with the heredity principle discussed in @sec-interactions-principles and suggests that these interactions are unlikely to be real. 
 
@@ -954,7 +953,7 @@ p / (glmn_plain_cal + glmn_plain_roc)
 
 The calibration curve is not terrible; the lower range of the class probabilities is well-calibrated. The curve does deviate from the diagonal line when the probability midpoint on the x-axis is greater than about 30%. However, note from the shaded 90% confidence intervals that the variation around the curve is very large, largely due to the few samples with high probabilities of myopia. 
 
-The ROC curve is symmetric and fairly unremarkable. The visualization shows that the default 50% threshold for converting the probabilities to hard "yes/no" predictions is somewhat problematic. The sensitivity for this cutpoint is very poor (`r round(glmn_plain_best_mtr$mean[xrf_plain_best_mtr$.metric == "sensitivity"] * 100, 1)`%) while the specificity is exquisite (`r round(glmn_plain_best_mtr$mean[xrf_plain_best_mtr$.metric == "specificity"] * 100, 1)`%). This is fairly common for class imbalances. The model performs significantly better where the data are more abundant, and since most participants in the study are not myopic, high specificity is more easily achieved. 
+The ROC curve is symmetric and fairly unremarkable. The visualization shows that the default 50% threshold for converting the probabilities to hard "yes/no" predictions is somewhat problematic. The sensitivity for this cutpoint is very poor (` round(glmn_plain_best_mtr$mean[xrf_plain_best_mtr$.metric == "sensitivity"] * 100, 1)`%) while the specificity is exquisite (` round(glmn_plain_best_mtr$mean[xrf_plain_best_mtr$.metric == "specificity"] * 100, 1)`%). This is fairly common for class imbalances. The model performs significantly better where the data are more abundant, and since most participants in the study are not myopic, high specificity is more easily achieved. 
 
 We quantified performance for these models using a variety of methods. @tbl-plain-metrics shows several statistics for both hard and soft prediction types. When assessing class probability estimates, the Brier scores for each model are all acceptably low, and most areas under the ROC curves have objectively large values. The areas under the precision-recall curves are mediocre, with the largest possible value being 1.0 and the worst value is `r signif(mean(myopia_train$class == "yes"), digits = 3)`. 
 
@@ -984,12 +983,12 @@ plain_metric_table <-
     rf_plain_best_mtr |> 
       select(Metric = .metric, Estimate = mean) |> 
       mutate(Model = "Random Forest"),
+    # xrf_plain_best_mtr |> 
+    #   select(Metric = .metric, Estimate = mean) |> 
+    #   mutate(Model = "RuleFit"),
     lgb_plain_best_mtr |> 
       select(Metric = .metric, Estimate = mean) |> 
-      mutate(Model = "Boosted Tree"),
-    xrf_plain_best_mtr |> 
-      select(Metric = .metric, Estimate = mean) |> 
-      mutate(Model = "RuleFit")
+      mutate(Model = "Boosted Tree")
   ) |> 
   filter(Metric != "mn_log_loss") |> 
   mutate(
