@@ -9,6 +9,7 @@ knitr:
 ```{r}
 #| label: cls-imbalance-setup
 #| include: false
+
 source("../R/_common.R")
 # source("../R/_themes_ggplot.R")
 
@@ -93,20 +94,20 @@ myopia_rs <- vfold_cv(myopia_train, repeats = 5)
 
 # ------------------------------------------------------------------------------
 
-myopia_formatted <- 
-  myopia_train |> 
+myopia_formatted <-
+  myopia_train |>
   mutate(
     father_myopic = factor(ifelse(father_myopic == 1, "myopic", "normal")),
     mother_myopic = factor(ifelse(mother_myopic == 1, "myopic", "normal")),
     sex = factor(ifelse(female == 1, "Female", "Male"))
-    ) |> 
+  ) |>
   rename(
     `paternal genetics` = father_myopic,
     `maternal genetics` = mother_myopic
-  ) |> 
-  rename_with(~ paste0(.x, ")"), contains("hours")) |> 
-  rename_with(~ gsub("hours_", "hours (", .x), contains("hours"))|> 
-  rename_with(~ gsub("_", " ", .x), everything()) |> 
+  ) |>
+  rename_with(~ paste0(.x, ")"), contains("hours")) |>
+  rename_with(~ gsub("hours_", "hours (", .x), contains("hours")) |>
+  rename_with(~ gsub("_", " ", .x), everything()) |>
   select(-female)
 
 # ------------------------------------------------------------------------------
@@ -148,7 +149,8 @@ We'll conduct some quick exploratory data analysis, then proceed to creating mod
 ```{r}
 #| label: myopia-age-sex
 #| include: false
-rates_by_age_sex <- 
+
+rates_by_age_sex <-
   myopia_train |>
   count(class, age, female) |>
   pivot_wider(id_cols = c(female, age), names_from = class, values_from = n) |>
@@ -164,7 +166,7 @@ rates_by_age_sex <-
     lower = map_dbl(stats, ~ .x$conf.low),
     upper = map_dbl(stats, ~ .x$conf.high),
     Sex = if_else(female == 1, "Female", "Male")
-  ) 
+  )
 
 rates_by_parent <-
   myopia_train |>
@@ -185,7 +187,7 @@ rates_by_parent <-
     rate = round(map_dbl(stats, ~ .x$estimate) * 100, 1),
     lower = round(map_dbl(stats, ~ .x$conf.low) * 100, 1),
     upper = round(map_dbl(stats, ~ .x$conf.high) * 100, 1)
-  ) |> 
+  ) |>
   arrange(mother_myopic, father_myopic)
 ```
 
@@ -206,11 +208,11 @@ rates_by_age_sex |>
     aes(ymin = lower, ymax = upper),
     position = position_dodge(width = 0.25),
     width = 0.2
-  )+
+  ) +
   scale_color_manual(values = c("#417839FF", "#E18727FF")) +
   scale_y_continuous(labels = label_percent(), limits = c(0, 1)) +
   labs(x = "Age", y = "Rate of Myopia") +
-  theme(legend.position = "top") 
+  theme(legend.position = "top")
 ```
 
 The points suggest a slight increase in myopia rates among girls, but this is well within the error bars defined by the 90% confidence intervals. Due to the concentration of points in a single age group, it is difficult to determine whether there is an age trend. However, since the slight rate increase for girls is constant from ages six to eight, there is little indication of an interaction between these factors. 
@@ -247,18 +249,19 @@ There are several aspects of class imbalance that make it one of the most challe
 First, most performance metrics are not robust to imbalances. Recall that in @sec-cls-metrics, accuracy was used as a prime example. For a two-class outcome with an event rate of $\pi$, a model can automatically achieve an accuracy of $1 - \pi$ _without any predictors_, simply by predicting the majority class. This is the case for most metrics. The areas under the ROC and PR curves are notably effective in the presence of an imbalance [@sec-compare-roc-pr], as is the Kappa statistic. In other words, while still being accurate, it will not treat the minority class data with the importance that it has to the modeling project. 
 
 Second, as one would expect, classes with the most data are most likely to be predicted well. For example, if the minority class is associated with the event of interest, the confidence intervals for specificity will reflect greater certainty (i.e., narrower intervals) than those for sensitivity. Another consequence of one class having most of the training data is that the model may be drawn to patterns in the majority class. This is especially true for models that have high complexity (e.g., low bias). To demonstrate, @fig-myopia-cart shows a simple CART model fit to the myopia training data (using automated cost-complexity pruning). The first split captures a large majority of the training set since these are easily predicted to be non-myopic children. The remainder of the tree is splitting small amounts of non-myopic data to create pure terminal nodes. 
+
 ```{r}
 #| label: fig-myopia-cart
 #| echo: false
 #| fig-width: 10
 #| fig-height: 5
-#| fig-cap: A CART fit to the myopia training set. Most of the training set data are covered by the initial split, which focuses on the majority class. 
+#| fig-cap: A CART fit to the myopia training set. Most of the training set data are covered by the initial split, which focuses on the majority class.
 #| out-width: 90%
-rpart(class ~ ., data = myopia_formatted) |> 
-  as.party() |> 
+
+rpart(class ~ ., data = myopia_formatted) |>
+  as.party() |>
   plot()
 ```
-
 
 The model is doing what it is intended to do; it does not know that we might be most interested in our minority class samples. The default objective function doesn't account for class frequencies, so it optimizes over the entire training set, giving the majority class the most leverage. 
 
@@ -266,39 +269,38 @@ This also brings up a pattern that can occur when dealing with class imbalances 
 
 Third, the event rate significantly affects our class probability estimates, even in non-Bayesian models. Recall from @sec-nonlinear-da that one of the prior distributions corresponds to the probability distribution of our outcome ($Pr[Y = k]$ in @eq-discrim). If our supervised model is represented by $Pr[\boldsymbol{x}|Y = k]$, its predicted probabilities are shown by the event rate to produce the posterior probability. In other words, if the minority class event rate is 5% and our model predicts that a sample estimates the probability of being an event as 80%, the overall (posterior) probability of being an event is about `r round(post_prob(0.05, 0.8) * 100, 0)`%. This raises the bar for the supervised model, requiring exquisite performance to overcome the prevalence. With this event rate, the model would have to produce a class probability estimate of `r round(optimize(best_prob, c(0.8, 1), prior = 0.05)$minimum * 100, 0)`% or more to produce a posterior probability of at least 50%. We'll discuss this idea in the next section as well as in @sec-prevalence-again.
 
-In future sections, we’ll use two predictors in the myopia data to visualize the effects of different techniques. In the upper-left panel of the lower diagonal of @fig-myopia-splom we see the spherical equivalent refraction and vitreous chamber depth predictor data from the training set, colored by the outcome class. A flexible discriminant analysis model using MARS basis functions was used to model these data. Interactions between hinge functions were allowed, and generalized cross-validation was used to automatically determine the optimal level of model complexity. The model was fit to the training set, and @fig-myopia-fda shows the class boundary, defined using the 50% probability cutoff. The events (in red) occupy the space to the left of the main data stream. The class boundary does its best to find the optimal partition of the data, but we can see that less than half of the training set events are not to the left of the boundary. 
+In future sections, we'll use two predictors in the myopia data to visualize the effects of different techniques. In the upper-left panel of the lower diagonal of @fig-myopia-splom we see the spherical equivalent refraction and vitreous chamber depth predictor data from the training set, colored by the outcome class. A flexible discriminant analysis model using MARS basis functions was used to model these data. Interactions between hinge functions were allowed, and generalized cross-validation was used to automatically determine the optimal level of model complexity. The model was fit to the training set, and @fig-myopia-fda shows the class boundary, defined using the 50% probability cutoff. The events (in red) occupy the space to the left of the main data stream. The class boundary does its best to find the optimal partition of the data, but we can see that less than half of the training set events are not to the left of the boundary. 
 
 ```{r}
 #| label: myopia-plain-fda
 #| include: false
 
-smol_grid <- 
+smol_grid <-
   crossing(
     `spherical equivalent refraction` = seq(-1, 5, length.out = 100),
     `axial length` = seq(20, 25, length.out = 100)
   )
 
 ends <- tribble(
-  ~`spherical equivalent refraction`, ~`axial length`, ~yes, ~no,
-  NA_real_, NA_real_, 0.0, 1.0,
-  NA_real_, NA_real_, 1.0, 0.0
+  ~`spherical equivalent refraction` , ~`axial length` , ~yes , ~no ,
+  NA_real_                           , NA_real_        , 0.0  , 1.0 ,
+  NA_real_                           , NA_real_        , 1.0  , 0.0
 )
 
-myopia_smol_formatted <- 
-  myopia_formatted |> 
+myopia_smol_formatted <-
+  myopia_formatted |>
   select(`spherical equivalent refraction`, `axial length`, class)
 
-fda_plain_fit <- discrim_flexible(prod_degree = 2) |> 
+fda_plain_fit <- discrim_flexible(prod_degree = 2) |>
   fit(class ~ ., data = myopia_smol_formatted)
 fda_plain_pred <- augment(fda_plain_fit, new_data = smol_grid)
-fda_plain_capture <- 
-  augment(fda_plain_fit, new_data = myopia_smol_formatted) |> 
-  filter(.pred_yes >= 0.5 & class == "yes") |> 
+fda_plain_capture <-
+  augment(fda_plain_fit, new_data = myopia_smol_formatted) |>
+  filter(.pred_yes >= 0.5 & class == "yes") |>
   nrow()
 ```
 
-:::: {#fig-myopia-fda}
-
+::: {#fig-myopia-fda}
 ```{r}
 #| label: myopia-fda
 #| echo: false
@@ -306,19 +308,36 @@ fda_plain_capture <-
 #| fig-height: 5.2
 #| warning: false
 #| out-width: 50%
-myopia_smol_formatted |> 
+
+myopia_smol_formatted |>
   ggplot(aes(`spherical equivalent refraction`, `axial length`)) +
-  geom_point(aes(color = class), alpha = 0.5, shape = 16, size = 2, show.legend = FALSE) + 
+  geom_point(
+    aes(color = class),
+    alpha = 0.5,
+    shape = 16,
+    size = 2,
+    show.legend = FALSE
+  ) +
   geom_tile(data = fda_plain_pred, aes(fill = .pred_yes), alpha = .1) +
-  geom_contour(data = fda_plain_pred, aes(z = .pred_yes), breaks = 1/2, col = "black") +
-  scale_fill_gradient2(low = "#377EB8", mid = "white", high = "#E41A1C", midpoint = 0.5) +
-  scale_color_brewer(palette = "Set1") + 
+  geom_contour(
+    data = fda_plain_pred,
+    aes(z = .pred_yes),
+    breaks = 1 / 2,
+    col = "black"
+  ) +
+  scale_fill_gradient2(
+    low = "#377EB8",
+    mid = "white",
+    high = "#E41A1C",
+    midpoint = 0.5
+  ) +
+  scale_color_brewer(palette = "Set1") +
   labs(fill = "Probability") +
   theme(legend.position = "top")
 ```
 
 A flexible discriminant fit to the myopia training set. Using the default probability cutoff of 50%, shown as the black contour, `r fda_plain_capture` of the `r sum(myopia_smol_formatted$class == "yes")` events are correctly predicted as events. 
-::::
+:::
 
 Before moving on to specific techniques, let's discuss a potential fallacy encountered when there are rare events: correctly predicting the events to the detriment of the overall model goals is often inappropriate. 
 
@@ -334,7 +353,7 @@ For this reason, a project was started to determine whether an ML model could be
 
 Based on this, we would pursue an objective function that focused on finding events and did not require reporting well-calibrated probabilities^[The author's manager, a dogmatic Bayesian, strongly discouraged spending time on the project since there was no way to overcome the low event rate. In the end, it was immaterial; the initial clinical data showed that the drug was ineffective, and the whole project was cancelled.]. The model would require significant clinical validation to demonstrate that our probability threshold for calling a patient "truly PD" meets its stated performance characteristics. Here, PR-curves and Gain Charts would be of paramount importance. 
 
-However, it can also be the case that we need to understand why the model works or why a data point was predicted to belong to a specific class. In @sec-drug-interactions, we’ll discuss a project from drug development where a model is used to estimate the risk of a potential drug causing patient harm. We definitely want to find the events (e.g., problematic drugs), but we also need a good understanding of how certain we are that there is an issue. 
+However, it can also be the case that we need to understand why the model works or why a data point was predicted to belong to a specific class. In @sec-drug-interactions, we'll discuss a project from drug development where a model is used to estimate the risk of a potential drug causing patient harm. We definitely want to find the events (e.g., problematic drugs), but we also need a good understanding of how certain we are that there is an issue. 
 
 ::: {.important-box}
 In other words, we should not confuse what we will do to deal with extreme frequencies with the idea that we should just care about finding important events. 
@@ -384,6 +403,7 @@ ctrl_rs <- control_resamples(save_pred = TRUE, save_workflow = TRUE)
 ```{r}
 #| label: recipes
 #| include: false
+
 bare_rec <-
   recipe(class ~ ., data = myopia_train)
 
@@ -393,7 +413,7 @@ norm_rec <-
 
 glmn_rec <-
   bare_rec |>
-  step_interact(~ all_predictors():all_predictors()) |> 
+  step_interact(~ all_predictors():all_predictors()) |>
   step_normalize(all_numeric_predictors())
 
 down_rec <-
@@ -403,7 +423,7 @@ down_rec <-
 down_glmn_rec <-
   bare_rec |>
   step_downsample(class) |>
-  step_interact(~ all_predictors():all_predictors()) |> 
+  step_interact(~ all_predictors():all_predictors()) |>
   step_normalize(all_numeric_predictors())
 
 smote_rec <-
@@ -413,7 +433,7 @@ smote_rec <-
 smote_glmn_rec <-
   bare_rec |>
   step_smote(class) |>
-  step_zv(all_predictors()) |> 
+  step_zv(all_predictors()) |>
   step_interact(~ all_predictors():all_predictors())
 
 rose_rec <-
@@ -424,7 +444,7 @@ rose_glmn_rec <-
   bare_rec |>
   step_rose(class) |>
   step_zv(all_predictors()) |>
-  step_interact(~ all_predictors():all_predictors()) 
+  step_interact(~ all_predictors():all_predictors())
 
 nm_rec <-
   bare_rec |>
@@ -434,7 +454,7 @@ nm_glmn_rec <-
   bare_rec |>
   step_nearmiss(class) |>
   step_zv(all_predictors()) |>
-  step_interact(~ all_predictors():all_predictors()) 
+  step_interact(~ all_predictors():all_predictors())
 ```
 
 ```{r}
@@ -461,45 +481,45 @@ glmn_plain_res <-
     grid = glmn_plain_grid
   )
 
-### 
+###
 
 glmn_plain_best <- select_best(glmn_plain_res, metric = "brier_class")
 glmn_plain_fit <- fit_best(glmn_plain_res)
-glmn_plain_main <- 
-  glmn_plain_fit |> 
-  tidy() |> 
+glmn_plain_main <-
+  glmn_plain_fit |>
+  tidy() |>
   filter(estimate != 0 & !grepl("(_x_)|(Intercept)", term))
-glmn_plain_int<- 
-  glmn_plain_fit |> 
-  tidy() |> 
+glmn_plain_int <-
+  glmn_plain_fit |>
+  tidy() |>
   filter(estimate != 0 & grepl("_x_", term))
 
 ###
 
-glmn_plain_alt_brier <- 
-  show_best(glmn_plain_res, metric = "brier_class", n = 50) |> 
-  filter(mixture < 0.1) |> 
+glmn_plain_alt_brier <-
+  show_best(glmn_plain_res, metric = "brier_class", n = 50) |>
+  filter(mixture < 0.1) |>
   slice_min(mean)
 
-glmn_plain_alt_best <- 
-  glmn_plain_alt_brier |> 
+glmn_plain_alt_best <-
+  glmn_plain_alt_brier |>
   select(mixture, penalty, .config)
 
-glmn_plain_alt_fit <- 
-  glmn_plain_wflow |> 
-  finalize_workflow(glmn_plain_alt_best) |> 
+glmn_plain_alt_fit <-
+  glmn_plain_wflow |>
+  finalize_workflow(glmn_plain_alt_best) |>
   fit(myopia_train)
 
-glmn_plain_alt_main <- 
-  glmn_plain_alt_fit |> 
-  tidy() |> 
+glmn_plain_alt_main <-
+  glmn_plain_alt_fit |>
+  tidy() |>
   filter(estimate != 0 & !grepl("(_x_)|(Intercept)", term))
-glmn_plain_alt_int<- 
-  glmn_plain_alt_fit |> 
-  tidy() |> 
+glmn_plain_alt_int <-
+  glmn_plain_alt_fit |>
+  tidy() |>
   filter(estimate != 0 & grepl("_x_", term))
 
-### 
+###
 
 glmn_plain_best_mtr <- collect_metrics(glmn_plain_res) |>
   inner_join(glmn_plain_alt_best |> select(.config), by = ".config")
@@ -509,39 +529,47 @@ glmn_plain_best_pred <- collect_predictions(
   summarize = TRUE
 )
 
-glmn_plain_roc_curve <- 
+glmn_plain_roc_curve <-
   glmn_plain_best_pred |>
   roc_curve(class, .pred_yes)
 
-glmn_pr_roc_curve <- 
+glmn_pr_roc_curve <-
   glmn_plain_best_pred |>
   pr_curve(class, .pred_yes)
 
 glmn_plain_roc_default <- closest_point(glmn_plain_roc_curve)
 glmn_plain_pr_default <- closest_point(glmn_pr_roc_curve)
-glmn_plain_roc_sensitive <- closest_point(glmn_plain_roc_curve, "sensitivity", 0.80)
+glmn_plain_roc_sensitive <- closest_point(
+  glmn_plain_roc_curve,
+  "sensitivity",
+  0.80
+)
 
-glmn_plain_ranges <- 
-  glmn_plain_res |> 
-  collect_metrics() |> 
+glmn_plain_ranges <-
+  glmn_plain_res |>
+  collect_metrics() |>
   select(all_of(.get_tune_parameter_names(glmn_plain_res))) |>
   map(range)
 
-glmn_brier_init <- 
-  show_best(glmn_plain_res, metric = "brier_class") |> 
-  slice(1) |> 
+glmn_brier_init <-
+  show_best(glmn_plain_res, metric = "brier_class") |>
+  slice(1) |>
   pluck("mean")
 
-glmn_brier_final <- 
+glmn_brier_final <-
   glmn_plain_best_mtr$mean[glmn_plain_best_mtr$.metric == "brier_class"]
 
-glmn_brier_drop <- round((glmn_brier_final - glmn_brier_init) / glmn_brier_init * 100, 1)
+glmn_brier_drop <- round(
+  (glmn_brier_final - glmn_brier_init) / glmn_brier_init * 100,
+  1
+)
 ```
 
 ```{r}
 #| label: myopia-mlp-plain
 #| include: false
 #| cache: true
+
 mlp_spec <-
   mlp(
     hidden_units = tune(),
@@ -560,16 +588,16 @@ mlp_spec <-
   ) |>
   set_mode("classification")
 
-mlp_rec <- 
-  bare_rec |> 
-  step_dummy(all_factor_predictors(), one_hot = TRUE) |> 
-  step_zv(all_predictors()) |> 
+mlp_rec <-
+  bare_rec |>
+  step_dummy(all_factor_predictors(), one_hot = TRUE) |>
+  step_zv(all_predictors()) |>
   step_normalize(all_predictors())
 
 mlp_plain_wflow <- workflow(mlp_rec, mlp_spec)
-mlp_plain_param <- 
+mlp_plain_param <-
   mlp_plain_wflow |>
-  extract_parameter_set_dials() |> 
+  extract_parameter_set_dials() |>
   update(
     momentum = momentum(c(0.8, 0.99)),
     hidden_units = hidden_units(c(2, 50)),
@@ -596,16 +624,16 @@ mlp_plain_best_pred <- collect_predictions(
   summarize = TRUE
 )
 
-mlp_roc_curve <- 
+mlp_roc_curve <-
   mlp_plain_best_pred |>
   roc_curve(class, .pred_yes)
 
 mlp_plain_default <- closest_point(mlp_roc_curve)
 mlp_plain_sensitive <- closest_point(mlp_roc_curve, "sensitivity", 0.95)
 
-mlp_plain_ranges <- 
-  mlp_plain_res |> 
-  collect_metrics() |> 
+mlp_plain_ranges <-
+  mlp_plain_res |>
+  collect_metrics() |>
   select(all_of(.get_tune_parameter_names(mlp_plain_res))) |>
   map(range)
 ```
@@ -645,16 +673,16 @@ lgb_plain_best_pred <- collect_predictions(
   summarize = TRUE
 )
 
-lgb_roc_curve <- 
+lgb_roc_curve <-
   lgb_plain_best_pred |>
   roc_curve(class, .pred_yes)
 
 lgb_plain_default <- closest_point(lgb_roc_curve)
 lgb_plain_sensitive <- closest_point(lgb_roc_curve, "sensitivity", 0.95)
 
-lgb_plain_ranges <- 
-  lgb_plain_res |> 
-  collect_metrics() |> 
+lgb_plain_ranges <-
+  lgb_plain_res |>
+  collect_metrics() |>
   select(all_of(.get_tune_parameter_names(lgb_plain_res))) |>
   map(range)
 ```
@@ -693,16 +721,16 @@ rf_plain_best_pred <- collect_predictions(
   summarize = TRUE
 )
 
-rf_plain_roc_curve <- 
+rf_plain_roc_curve <-
   rf_plain_best_pred |>
   roc_curve(class, .pred_yes)
 
 rf_plain_default <- closest_point(rf_plain_roc_curve)
 rf_plain_sensitive <- closest_point(rf_plain_roc_curve, "sensitivity", 0.95)
 
-rf_plain_ranges <- 
-  rf_plain_res |> 
-  collect_metrics() |> 
+rf_plain_ranges <-
+  rf_plain_res |>
+  collect_metrics() |>
   select(all_of(.get_tune_parameter_names(rf_plain_res))) |>
   map(range)
 ```
@@ -725,20 +753,20 @@ xrf_plain_spec <-
   set_engine('xrf', counts = FALSE) |>
   set_mode('classification')
 
-xrf_rec <- 
-  bare_rec |> 
-  step_dummy(all_factor_predictors(), one_hot = TRUE) |> 
-  step_zv(all_predictors()) |> 
+xrf_rec <-
+  bare_rec |>
+  step_dummy(all_factor_predictors(), one_hot = TRUE) |>
+  step_zv(all_predictors()) |>
   step_normalize(all_predictors())
 
 xrf_plain_wflow <- workflow(xrf_rec, xrf_plain_spec)
-xrf_plain_param <- 
-  xrf_plain_wflow |> 
-  extract_parameter_set_dials() |> 
+xrf_plain_param <-
+  xrf_plain_wflow |>
+  extract_parameter_set_dials() |>
   update(
-    tree_depth = tree_depth(c(2,4)),
+    tree_depth = tree_depth(c(2, 4)),
     min_n = min_n(c(2, 10))
-    )
+  )
 
 set.seed(820)
 xrf_plain_res <-
@@ -760,16 +788,20 @@ xrf_plain_best_pred <- collect_predictions(
   summarize = TRUE
 )
 
-xrf_plain_roc_curve <- 
+xrf_plain_roc_curve <-
   xrf_plain_best_pred |>
   roc_curve(class, .pred_yes)
 
 xrf_plain_roc_default <- closest_point(xrf_plain_roc_curve)
-xrf_plain_roc_sensitive <- closest_point(xrf_plain_roc_curve, "sensitivity", 0.95)
+xrf_plain_roc_sensitive <- closest_point(
+  xrf_plain_roc_curve,
+  "sensitivity",
+  0.95
+)
 
-xrf_plain_ranges <- 
-  xrf_plain_res |> 
-  collect_metrics() |> 
+xrf_plain_ranges <-
+  xrf_plain_res |>
+  collect_metrics() |>
   select(all_of(.get_tune_parameter_names(xrf_plain_res))) |>
   map(range)
 ```
@@ -777,6 +809,7 @@ xrf_plain_ranges <-
 ```{r}
 #| label: myopia-xrf-plain-best
 #| eval: false
+
 set.seed(926)
 xrf_plain_fit <-
   xrf_plain_wflow |>
@@ -785,9 +818,9 @@ xrf_plain_fit <-
 xrf_plain_rules <- xrf_plain_fit |> tidy(penalty = xrf_plain_best$penalty)
 
 xrf_plain_best_pred_ind <- collect_predictions(
-    xrf_plain_res,
-    parameters = xrf_plain_best,
-    summarize = FALSE
+  xrf_plain_res,
+  parameters = xrf_plain_best,
+  summarize = FALSE
 )
 xrf_max_prob <- xrf_plain_best_pred_ind |> pluck(".pred_yes") |> max()
 ```
@@ -802,50 +835,45 @@ set.seed(820)
 tab_icl_res <-
   tab_icl_spec |>
   fit_resamples(
-    class ~ ., 
+    class ~ .,
     myopia_rs,
     metrics = cls_mtr,
     control = ctrl_rs
   )
-
 ```
 
 A set of five models was tested. First, a regularized logistic regression was used with glmnet penalties. The predictors included main effects and all two-factor interactions. Penalty values ranging from 10<sup>`r min(log10(glmn_plain_ranges$penalty))`</sup> to 10<sup>`r max(log10(glmn_plain_ranges$penalty))`</sup> were evaluated with four mixtures that ranged from `r min(glmn_plain_ranges$mixture* 100)`% to `r max(glmn_plain_ranges$mixture* 100)`% Lasso. A regular grid of `r nrow(glmn_plain_grid)` candidates was used to optimize these parameters^[We use the original implementation of the glmnet model, which features a capability where, for a specific mixture value, a single model fit contains results for multiple penalty values. For this reason, we can evaluate a regular grid with  `r nrow(glmn_plain_grid)` candidates with only `r vctrs::vec_unique_count(glmn_plain_grid$mixture)` model fits, one for each mixture value. A regular grid exploits this feature, but a space-filling design would nullify this advantage.].
 
 Single-layer neural networks were evaluated and were tuned over: 
 
-:::: {.columns}
-
-::: {.column width="50%"}
+::: {.columns}
+::::: {.column width="50%"}
 - The number of hidden units (`r min(mlp_plain_ranges$hidden_units)` to `r max(mlp_plain_ranges$hidden_units)`). 
 - The L<sub>2</sub> penalty (10<sup>`r min(log10(mlp_plain_ranges$penalty))`</sup> to 10<sup>`r max(log10(mlp_plain_ranges$penalty))`</sup>).
 - The learning rate (10<sup>`r min(log10(mlp_plain_ranges$learn_rate))`</sup> to 10<sup>`r max(log10(mlp_plain_ranges$learn_rate))`</sup>).
-:::
+:::::
 
-::: {.column width="50%"}
+::::: {.column width="50%"}
 - The batch size (`r min(mlp_plain_ranges$batch_size)` to `r max(mlp_plain_ranges$batch_size)` samples).
 - AdamW momentum (`r min(mlp_plain_ranges$momentum)` to `r max(mlp_plain_ranges$momentum)`).
+:::::
 :::
-
-::::
 
 SGD was used to optimize the model for up to 100 epochs, with early stopping after 5 consecutive poor results. ReLU activation was used. 
 
 Boosted trees (via light GBM) were also trained for up to 1,000 iterations with early stopping after 5 bad iterations. The model was tuned over: 
 
-:::: {.columns}
-
-::: {.column width="50%"}
+::: {.columns}
+::::: {.column width="50%"}
 - Tree depth (`r min(lgb_plain_ranges$tree_depth)` to `r max(lgb_plain_ranges$tree_depth)` splits). 
 - Amount of data needed for further splitting (`r min(lgb_plain_ranges$min_n)` to `r max(lgb_plain_ranges$min_n)` samples).
-:::
+:::::
 
-::: {.column width="50%"}
+::::: {.column width="50%"}
 - The learning rate (10<sup>`r min(log10(lgb_plain_ranges$learn_rate))`</sup> to 10<sup>`r max(log10(lgb_plain_ranges$learn_rate))`</sup>).
 - $m_{try}$ (`r min(lgb_plain_ranges$mtry)` to `r max(lgb_plain_ranges$mtry)` predictors).
+:::::
 :::
-
-::::
 
 Additionally, random forests with 2,000 classification trees were tuned over: 
 
@@ -854,22 +882,19 @@ Additionally, random forests with 2,000 classification trees were tuned over:
 
 Finally, a RuleFit model was optimized over: 
 
-:::: {.columns}
-
-::: {.column width="50%"}
+::: {.columns}
+::::: {.column width="50%"}
 - The number of boosting iterations (` min(xrf_plain_ranges$trees)` to `r max(xrf_plain_ranges$trees)`)
 - Tree depth (` min(xrf_plain_ranges$tree_depth)` to `r max(xrf_plain_ranges$tree_depth)` splits). 
 - Amount of data needed for further splitting (` min(xrf_plain_ranges$min_n)` to ` max(xrf_plain_ranges$min_n)` samples).
+:::::
 
-:::
-
-::: {.column width="50%"}
+::::: {.column width="50%"}
 - The learning rate (10<sup>` min(log10(xrf_plain_ranges$learn_rate))`</sup> to 10<sup>` max(log10(xrf_plain_ranges$learn_rate))`</sup>).
--  Proportional $m_{try}$ (` min(round(xrf_plain_ranges$mtry * 100, 1))`% to ` max(round(xrf_plain_ranges$mtry * 100, 1))`%).
+- Proportional $m_{try}$ (` min(round(xrf_plain_ranges$mtry * 100, 1))`% to ` max(round(xrf_plain_ranges$mtry * 100, 1))`%).
 - The L<sub>1</sub> penalty (10<sup>` min(log10(xrf_plain_ranges$penalty))`</sup> to 10<sup>` max(log10(xrf_plain_ranges$penalty))`</sup>).
+:::::
 :::
-
-::::
 
 Apart from the logistic regression, a space-filling design of 25 candidates was used for optimization. 
 
@@ -902,7 +927,7 @@ rank_plain_best <-
 
 rank_plain |>
   ggplot(aes(rank, mean, col = wflow_id)) +
-  geom_point(cex = 1/2) +
+  geom_point(cex = 1 / 2) +
   geom_vline(
     data = rank_plain_best,
     aes(col = wflow_id, xintercept = rank),
@@ -928,24 +953,24 @@ Additionally, @fig-myopia-logistic shows some diagnostics for the logistic regre
 #| fig-height: 7
 #| fig-cap: "Results of the logistic regression model optimization (without adjustments for the class imbalance). The top plot shows the performance profile for the two tuning parameters. Underneath are the calibration and ROC curves. The solid blue point on the ROC curve corresponds to the default cutoff. The pooled averaged holdout predictions were used to compute these visualizations."
 
-p <- 
-  autoplot(glmn_plain_res, metric = "brier_class") + 
-  theme(legend.position = "top") + 
+p <-
+  autoplot(glmn_plain_res, metric = "brier_class") +
+  theme(legend.position = "top") +
   labs(y = "Resampled Brier Score")
 
-glmn_plain_cal <- 
- glmn_plain_best_pred |>
+glmn_plain_cal <-
+  glmn_plain_best_pred |>
   cal_plot_windowed(class, .pred_yes, step_size = 0.05, window_size = 0.2) +
   labs(title = "Calibration Curve")
 
-glmn_plain_roc <- 
-  autoplot(glmn_plain_roc_curve) + 
+glmn_plain_roc <-
+  autoplot(glmn_plain_roc_curve) +
   geom_point(
-    data = glmn_plain_roc_default, 
+    data = glmn_plain_roc_default,
     aes(x = 1 - specificity, y = sensitivity),
-    cex = 4, 
+    cex = 4,
     col = "blue"
-  ) + 
+  ) +
   labs(title = "ROC Curve", y = "Sensitivity", x = "1 - Specificity")
 
 p / (glmn_plain_cal + glmn_plain_roc)
@@ -957,55 +982,60 @@ The ROC curve is symmetric and fairly unremarkable. The visualization shows that
 
 We quantified performance for these models using a variety of methods. @tbl-plain-metrics shows several statistics for both hard and soft prediction types. When assessing class probability estimates, the Brier scores for each model are all acceptably low, and most areas under the ROC curves have objectively large values. The areas under the precision-recall curves are mediocre, with the largest possible value being 1.0 and the worst value is `r signif(mean(myopia_train$class == "yes"), digits = 3)`. 
 
-:::: {.columns}
+::: {.columns}
+::::: {.column width="5%"}
+:::::
 
-::: {.column width="5%"}
-:::
-
-::: {.column width="90%"}
-
-::: {#tbl-plain-metrics}
-
+::::: {.column width="90%"}
+::::::: {#tbl-plain-metrics}
 ```{r}
 #| label: plain-metrics
 #| echo: false
-mtr_labs <- c("Brier Score",  "ROC AUC", "PR AUC", "Binomial Log Loss",
-              "Accuracy", "Kappa", "Sensitivity", "Specificity")
 
-plain_metric_table <- 
+mtr_labs <- c(
+  "Brier Score",
+  "ROC AUC",
+  "PR AUC",
+  "Binomial Log Loss",
+  "Accuracy",
+  "Kappa",
+  "Sensitivity",
+  "Specificity"
+)
+
+plain_metric_table <-
   bind_rows(
-    glmn_plain_best_mtr |> 
-      select(Metric = .metric, Estimate = mean) |> 
-      mutate(Model = "Logistic (glmnet)"), 
-    mlp_plain_best_mtr |> 
-      select(Metric = .metric, Estimate = mean) |> 
+    glmn_plain_best_mtr |>
+      select(Metric = .metric, Estimate = mean) |>
+      mutate(Model = "Logistic (glmnet)"),
+    mlp_plain_best_mtr |>
+      select(Metric = .metric, Estimate = mean) |>
       mutate(Model = "Neural Network"),
-    rf_plain_best_mtr |> 
-      select(Metric = .metric, Estimate = mean) |> 
+    rf_plain_best_mtr |>
+      select(Metric = .metric, Estimate = mean) |>
       mutate(Model = "Random Forest"),
-    # xrf_plain_best_mtr |> 
-    #   select(Metric = .metric, Estimate = mean) |> 
+    # xrf_plain_best_mtr |>
+    #   select(Metric = .metric, Estimate = mean) |>
     #   mutate(Model = "RuleFit"),
-    lgb_plain_best_mtr |> 
-      select(Metric = .metric, Estimate = mean) |> 
+    lgb_plain_best_mtr |>
+      select(Metric = .metric, Estimate = mean) |>
       mutate(Model = "Boosted Tree")
-  ) |> 
-  filter(Metric != "mn_log_loss") |> 
+  ) |>
+  filter(Metric != "mn_log_loss") |>
   mutate(
-    Metric = 
-      case_when(
-        Metric == "accuracy" ~ "Accuracy",
-        Metric == "kap" ~ "Kappa",
-        Metric == "roc_auc" ~ "ROC AUC",
-        Metric == "brier_class" ~ "Brier Score",
-        Metric == "mn_log_loss" ~ "Binomial Log Loss",
-        Metric == "pr_auc" ~ "PR AUC",
-        Metric == "sensitivity" ~ "Sensitivity",
-        Metric == "specificity" ~ "Specificity",
-        TRUE ~ Metric
-      ),
+    Metric = case_when(
+      Metric == "accuracy" ~ "Accuracy",
+      Metric == "kap" ~ "Kappa",
+      Metric == "roc_auc" ~ "ROC AUC",
+      Metric == "brier_class" ~ "Brier Score",
+      Metric == "mn_log_loss" ~ "Binomial Log Loss",
+      Metric == "pr_auc" ~ "PR AUC",
+      Metric == "sensitivity" ~ "Sensitivity",
+      Metric == "specificity" ~ "Specificity",
+      TRUE ~ Metric
+    ),
     Metric = factor(Metric, levels = mtr_labs)
-  ) |> 
+  ) |>
   pivot_wider(id_cols = Model, names_from = Metric, values_from = Estimate)
 
 gt(plain_metric_table) |>
@@ -1014,45 +1044,43 @@ gt(plain_metric_table) |>
     n_sigfig = 3
   ) |>
   fmt_percent(columns = c(Accuracy, Sensitivity, Specificity), decimals = 1) |>
-  cols_move_to_start(`Brier Score`) |> 
+  cols_move_to_start(`Brier Score`) |>
   tab_spanner(
     "Hard Class Prediction Metrics",
     columns = c(Accuracy, Sensitivity, Specificity, Kappa)
-  ) |> 
-    tab_spanner(
+  ) |>
+  tab_spanner(
     "Probability Prediction Metrics",
     columns = c(`ROC AUC`, `PR AUC`, `Brier Score`)
   )
 ```
 
 Resampled performance metrics for the best candidates across different models. The models were optimized based on the Brier score. 
- 
-:::
+:::::::
+:::::
 
+::::: {.column width="5%"}
+:::::
 :::
-
-::: {.column width="5%"}
-:::
-
-:::: 
 
 The hard class predictions in @tbl-plain-metrics use the default 50% probability cutoff. A few of the models have accuracies that are larger than the rate that the majority class occurs in the training set (`r round(mean(myopia_train$class == "no") * 100, 1)`%). The Kappa statistics indicate a significant signal in the models for predicting qualitative class membership. However, with this cutoff, the model is effectively useless at predicting which people are myopic, as the best possible sensitivity is `r round(max(plain_metric_table$Sensitivity) * 100, 1)`%. 
 
 If we are satisfied with the model's ability to discriminate between classes (as evidenced by the ROC curve) and that the probabilities are sufficiently calibrated, we can address the sensitivity problem by selecting an appropriate probability threshold. As with most optimization problems, we require an objective function to make the best decision regarding this tuning parameter. There are a few ways we can approach the problem: 
 
- 1. Given what we know about how the model will be used, we could define specific costs for false negatives and false positives (with correctly predicted classes having zero cost). Using these values, we can choose a threshold that minimizes the cost of the decision. This is similar to a weighted Kappa approach, except the weights would not be symmetric. 
- 2. Seek a constrained optimization. For example, we can try to maximize the sensitivity under the constraint that the specificity is at an acceptable value. The ROC curve provides the substrate for these calculations, as it includes sensitivity and specificity for various thresholds in the data. 
- 3. Optimize an existing composite score that captures the right balance of sensitivity and specificity. The Matthews correlation coefficient and F-statistics are examples of such metrics. 
- 4. Use a multiparameter optimization method, such as desirability functions from @sec-cls-multi-objectives, to define a jointly acceptable result (i.e., overall desirability). This would enable us to consider multiple performance metrics, as well as other variables, in the decision-making process. 
- 
+1. Given what we know about how the model will be used, we could define specific costs for false negatives and false positives (with correctly predicted classes having zero cost). Using these values, we can choose a threshold that minimizes the cost of the decision. This is similar to a weighted Kappa approach, except the weights would not be symmetric. 
+2. Seek a constrained optimization. For example, we can try to maximize the sensitivity under the constraint that the specificity is at an acceptable value. The ROC curve provides the substrate for these calculations, as it includes sensitivity and specificity for various thresholds in the data. 
+3. Optimize an existing composite score that captures the right balance of sensitivity and specificity. The Matthews correlation coefficient and F-statistics are examples of such metrics. 
+4. Use a multiparameter optimization method, such as desirability functions from @sec-cls-multi-objectives, to define a jointly acceptable result (i.e., overall desirability). This would enable us to consider multiple performance metrics, as well as other variables, in the decision-making process. 
+
 We'll focus on the first two options. 
 
 To choose the threshold using a custom cost metric (the first option in the list above), we would have to determine an appropriate cost structure for false positives and false negatives, usually based on the consequences of either error. For our myopia example, this is a somewhat subjective choice that depends on some context-specific rationale. In other cases, the costs might be analytically calculated as a function of monetary costs [@zadrozny2001learning]. @fig-class-cost shows examples of cost curves if the false positive cost is fixed at 1.0 and the cost of a false negative varies in severity. The y-axis is the mean of the cost values averaged across the `r nrow(myopia_rs)` assessment sets. 
- 
+
 ```{r}
 #| label: myopia-glmnet-threshold
 #| include: false
 #| cache: true
+
 thresholds <- seq(0.0, 0.40, by = 0.02)[-1]
 
 glmn_tlr <-
@@ -1066,7 +1094,7 @@ glmn_plain_mod_spec <-
   logistic_reg(penalty = tune(), mixture = !!glmn_plain_alt_best$mixture) |>
   set_engine("glmnet", path_values = !!path)
 
-glmn_thr_wflow <- workflow(glmn_rec, glmn_plain_mod_spec, glmn_tlr) 
+glmn_thr_wflow <- workflow(glmn_rec, glmn_plain_mod_spec, glmn_tlr)
 
 glmn_thr_res <-
   glmn_thr_wflow |>
@@ -1075,13 +1103,14 @@ glmn_thr_res <-
     metrics = cls_mtr,
     control = ctrl_grid,
     grid = crossing(
-      penalty = c(0.001, glmn_plain_alt_best$penalty), 
-      threshold = thresholds)
+      penalty = c(0.001, glmn_plain_alt_best$penalty),
+      threshold = thresholds
+    )
   )
 
-glmn_thr_pred <- 
-  glmn_thr_res |> 
-  collect_predictions(summarize = FALSE) |> 
+glmn_thr_pred <-
+  glmn_thr_res |>
+  collect_predictions(summarize = FALSE) |>
   filter(penalty == glmn_plain_alt_best$penalty)
 ```
 
@@ -1092,26 +1121,27 @@ glmn_thr_pred <-
 #| fig-width: 6
 #| fig-height: 4
 #| fig-cap: "Cost curves when the cost of a correct prediction is zero, the cost of a false positive is 1.0, and the cost of a false negative varies."
+
 costs <- c(2, 5, 10, 15)
 
 for (i in seq_along(costs)) {
-  tmp <- 
-    glmn_thr_pred |> 
+  tmp <-
+    glmn_thr_pred |>
     mutate(
       cost_val = costs[i],
       .pred_class = if_else(.pred_yes >= threshold, "yes", "no"),
       .pred_class = factor(.pred_class, levels = c("yes", "no")),
-      cost = 
-        case_when(
-          class == "yes" & .pred_class == "no"  ~ cost_val,
-          class == "no"  & .pred_class == "yes" ~ 1.0,
-          TRUE ~ 0.0)
-    ) |> 
+      cost = case_when(
+        class == "yes" & .pred_class == "no" ~ cost_val,
+        class == "no" & .pred_class == "yes" ~ 1.0,
+        TRUE ~ 0.0
+      )
+    ) |>
     summarize(
-      cost = mean(cost), 
+      cost = mean(cost),
       .by = c(id, id2, threshold, cost_val)
     )
-  
+
   if (i == 1) {
     cost_mtr <- tmp
   } else {
@@ -1119,8 +1149,8 @@ for (i in seq_along(costs)) {
   }
 }
 
-cost_mean_mtr <- 
-  cost_mtr |> 
+cost_mean_mtr <-
+  cost_mtr |>
   summarize(
     num = sum(!is.na(cost)),
     cls_cost = mean(cost),
@@ -1128,7 +1158,7 @@ cost_mean_mtr <-
     .by = c(threshold, cost_val)
   )
 
-cost_best_mtr <- 
+cost_best_mtr <-
   cost_mean_mtr |> slice_min(cls_cost, by = c(cost_val))
 
 cost_mean_mtr |>
@@ -1152,7 +1182,7 @@ It is important to realize that this strategy only optimizes the probability thr
 
 Moving on to constrained optimization, when choosing a threshold using an ROC curve, an immediate question arises: "Which data should be used to compute the ROC curve?" _Preferably_, the cutoff selection should use different data than the data used to fit the model. For example, diagnostic tests that require approval from a government agency (e.g., the Food and Drug Administration in the US) require a different data set to set the threshold. However, this may not be feasible if there is not an abundance of data or the resources to acquire such data. If we can't hold out another data set, we can use the assessment sets generated during resampling^[Or a validation set if multiple resamples are not used.]. There are at least two different approaches. 
 
- - **Option 2A - _post hoc_ pooling**: After we have resampled our model configurations, we can pool the assessment set predictions for the best candidate. This ROC curve is computed based on the overall existing class probability estimate values. This approach generated the visualizations in @fig-myopia-logistic. 
+- **Option 2A - _post hoc_ pooling**: After we have resampled our model configurations, we can pool the assessment set predictions for the best candidate. This ROC curve is computed based on the overall existing class probability estimate values. This approach generated the visualizations in @fig-myopia-logistic. 
 
 - **Option 2B - threshold tuning**: During model tuning, we treat the probability threshold as a tuning parameter and include it in the grid search. For each threshold in the grid, conditional on any other tuning parameters, we have resampling estimates for sensitivity and specificity. These points are then used to create an ROC curve. 
 
@@ -1168,48 +1198,50 @@ Note that there are a few options when we treat the threshold as a tuning parame
 #| fig-height: 4.7
 #| fig-cap: "Two approaches for optimizing the probability threshold via the ROC curve. Both curves use the regularized logistic regression's resampling results."
 
-glmn_thr_roc <- 
-  glmn_thr_res |> 
-  collect_metrics(type = "wide") |> 
-  filter(penalty == glmn_plain_alt_best$penalty) |> 
-  select(threshold, sensitivity, specificity) |> 
+glmn_thr_roc <-
+  glmn_thr_res |>
+  collect_metrics(type = "wide") |>
+  filter(penalty == glmn_plain_alt_best$penalty) |>
+  select(threshold, sensitivity, specificity) |>
   bind_rows(
     tribble(
       ~threshold , ~sensitivity , ~specificity ,
-      0 ,            1 ,            0 ,
-      1 ,            0 ,            1
+               0 ,            1 ,            0 ,
+               1 ,            0 ,            1
     )
   )
 
-roc_tradeoff <- 
+roc_tradeoff <-
   glmn_thr_roc |>
   filter(specificity >= 0.8) |>
   slice_max(sensitivity) |>
   mutate(
     prevalence = mean(myopia_df$class == "yes"),
-    ppv = (sensitivity * prevalence) / ((sensitivity * prevalence) +
+    ppv = (sensitivity * prevalence) /
+      ((sensitivity * prevalence) +
         ((1 - specificity) * (1 - prevalence))),
-    npv = (specificity * (1 - prevalence)) / (((1 - sensitivity) * prevalence) +
+    npv = (specificity * (1 - prevalence)) /
+      (((1 - sensitivity) * prevalence) +
         ((specificity) * (1 - prevalence)))
   )
 
 glmn_thr_roc |>
-  mutate(Method = "Threshold Tuning") |> 
+  mutate(Method = "Threshold Tuning") |>
   bind_rows(
-    glmn_plain_roc_curve |> 
-      select(.threshold, sensitivity, specificity) |> 
+    glmn_plain_roc_curve |>
+      select(.threshold, sensitivity, specificity) |>
       mutate(Method = "post hoc Pooling")
-  ) |> 
+  ) |>
   ggplot(aes(1 - specificity, sensitivity, col = Method)) +
   geom_step(direction = "vh", linewidth = 0.8) +
   coord_obs_pred() +
-  theme(legend.position = "top") + 
+  theme(legend.position = "top") +
   labs(color = NULL) +
   scale_color_manual(values = c("#8785B2FF", "#DABD61FF"))
 ```
- 
+
 For the logistic regression model, @fig-myopia-two-roc shows the ROC curves for both schemes. The curves significantly overlap for these data. Note that the curve associated with a second-stage grid contains `r nrow(glmn_thr_roc) - 2` unique points since it is based on the values used in our second-stage grid. The curve for the _post hoc_ pooling method has `r nrow(glmn_plain_roc_curve) - 2` points, which represents how many unique predicted probabilities are contained in the _post hoc_ data pool. 
- 
+
 Using either method for composing the ROC tool provides us with a tool to make trade-offs between sensitivity and specificity. For example, if we want to maximize sensitivity on the condition that specificity is at least 80%, the curve produced by threshold tuning indicates that the cutoff should be `r round(roc_tradeoff$threshold * 100, 1)`%. The estimated statistics associated with this value are a sensitivity of `r round(roc_tradeoff$sensitivity * 100, 1)`% and a specificity of `r round(roc_tradeoff$specificity * 100, 1)`%. 
 
 This overall approach involves finding a suitable ML model that does not allow class imbalance to alter our methodology, while deferring cutoff selection until the end of the process. This approach can lead to a well-calibrated model that appropriately classifies new samples. The downside becomes apparent when trying to explain individual results to the model's consumers. 
@@ -1229,7 +1261,7 @@ The non-technical response could be:
 Of course, this is paraphrasing, but the hypothetical conversation does illustrate the potential confusion. 
 
 This seeming disconnect can become worse as the prevalence becomes smaller. For very rare events (i.e., < 5%), the cutoff associated with the sensitivity-specificity trade-off can be very small, perhaps less than 1%. This is the price paid for having probability estimates that are consistent with the rate at which the event occurs in the wild. 
- 
+
 ## Strategy 2: Correcting the Imbalance {#sec-imblance-correction}
 
 In the previous section, the only operation used to account for the small minority class was to optimize the probability threshold _after_ the model had been chosen. In this section, we'll consider several methods for actively addressing the imbalance during model optimization. The two primary classes of techniques are: 
@@ -1256,25 +1288,26 @@ We'll describe each technique in the context of its use to modify the training s
 ```{r}
 #| label: myopia-down-fda
 #| include: false
-myopia_down_formatted <- 
-  recipe(class ~ ., data = myopia_train) |> 
+
+myopia_down_formatted <-
+  recipe(class ~ ., data = myopia_train) |>
   step_downsample(class) |>
-  prep() |> 
+  prep() |>
   bake(new_data = NULL)
 
 set.seed(616)
-myopia_down_smol_formatted <- 
-  recipe(class ~ ., data = myopia_smol_formatted) |> 
+myopia_down_smol_formatted <-
+  recipe(class ~ ., data = myopia_smol_formatted) |>
   step_downsample(class) |>
-  prep() |> 
+  prep() |>
   bake(new_data = NULL)
 
-fda_down_fit <- discrim_flexible(prod_degree = 2) |> 
+fda_down_fit <- discrim_flexible(prod_degree = 2) |>
   fit(class ~ ., data = myopia_down_smol_formatted)
 fda_down_pred <- augment(fda_down_fit, new_data = smol_grid)
-fda_down_capture <- 
-  augment(fda_down_fit, new_data = myopia_smol_formatted) |> 
-  filter(.pred_yes >= 0.5 & class == "yes") |> 
+fda_down_capture <-
+  augment(fda_down_fit, new_data = myopia_smol_formatted) |>
+  filter(.pred_yes >= 0.5 & class == "yes") |>
   nrow()
 
 load(url(
@@ -1282,15 +1315,10 @@ load(url(
 ))
 ```
 
-
 This approach is straightforward: every class with more data than the minority class is randomly sampled, ensuring that all classes have the same number of training set points. The minority class stays the same. For our myopia data, the majority class is randomly reduced from `r sum(myopia_train$class == "no")` to `r sum(myopia_down_formatted$class == "no")` patients. @fig-myopia-subsampling show examples for the two predictor subset including how the FDA fit changes with the reduced data set. The same class boundary is shown within each of the facets. We can see that the boundary is slightly more simplistic than @fig-myopia-fda but has shifted to the right, capturing more events with the default 50% cutoff (at the expense of increased false positives). 
 
-
-
 ::: {#fig-myopia-subsampling}
-
-::: {.figure-content}
-
+::::: {.figure-content}
 ```{shinylive-r}
 #| label: fig-subsampling
 #| out-width: "80%"
@@ -1420,11 +1448,9 @@ server <- function(input, output) {
 app <- shinyApp(ui = ui, server = server)
 app
 ```
-
-:::
+:::::
 
 The effect of a few sampling and synthesis techniques on two of the predictors in the myopia training set. The class boundary is based on a 50% probability cutoff.
-
 :::
 
 Besides rebalancing, the advantage of downsampling is that models can be trained faster. The downside is that important information might be lost in the majority class(es) due to random sampling. We are diminishing the influence of the majority class and creating a smaller training set. Another effect of this is that our models will tend to be more simplistic, as the reduced data cannot support excessive complexity. 
@@ -1591,9 +1617,13 @@ rose_grid <- crossing(
 )
 
 # Assumed independent in H so we can use the product of two univariates
-rose_grid$probability <- 
-  dnorm(rose_grid$`spherical equivalent refraction`, mean = point_center[1], sd = sqrt(H[1,1])) *
-  dnorm(rose_grid$`axial length`, mean = point_center[2], sd = sqrt(H[2,2]))
+rose_grid$probability <-
+  dnorm(
+    rose_grid$`spherical equivalent refraction`,
+    mean = point_center[1],
+    sd = sqrt(H[1, 1])
+  ) *
+  dnorm(rose_grid$`axial length`, mean = point_center[2], sd = sqrt(H[2, 2]))
 
 p_rose <-
   myopia_smol_formatted |>
@@ -1709,7 +1739,7 @@ p_smote <-
   ) +
   labs(title = "(a) SMOTE")
 
-p_smote + p_rose 
+p_smote + p_rose
 ```
 
 Note that SMOTE does not center the new samples around the original point; they can only be adjacent to it, since newly created data points must lie between it and the neighbor. This has the effect of clumping or clustering points to some degree. This can be seen in @fig-myopia-sampling where there are gaps in the minority class distribution where no minority class data reside.  This can be resolved by increasing the number of neighbors, but adding too many would lead to overlap in predictor distributions for each class. One could tune the number of neighbors, but it may not produce a clear winner for this parameter.  
@@ -1790,7 +1820,7 @@ min_maj |>
   lims(
     x = extendrange(min_maj$V1),
     y = extendrange(min_maj$V2)
-  ) + 
+  ) +
   labs(x = "Predictor A", y = "Predictor B") +
   coord_fixed()
 ```
@@ -1825,7 +1855,6 @@ dist_and_ind <- function(x, k = 5, ...) {
 }
 
 # ------------------------------------------------------------------------------
-
 
 nm1_info <- apply(distances, 2, dist_and_ind, k = 2)
 nm1_dists <- map_dbl(nm1_info, ~ .x$mean)
@@ -1949,22 +1978,21 @@ for (i in seq_along(nm3_info)) {
 
 The technique called "NearMiss-1" retains the majority-class samples with the smallest average distances to their _K_ nearest neighbors. For example, using _K_ = 2, this table shows the distances between the minority and majority class samples:
 
-:::: {.columns}
+::: {.columns}
+::::: {.column width="8%"}
+:::::
 
-::: {.column width="8%"}
-:::
-
-::: {.column width="84%"}
-
+::::: {.column width="84%"}
 ```{r}
 #| label: near-miss-1
 #| echo: false
-nm1_gt |> 
+
+nm1_gt |>
   cols_width(
     Minority ~ px(90),
     everything() ~ px(80)
-  ) |> 
-  tab_spanner(label = "Majority Point Labels", columns = c(-Minority)) |> 
+  ) |>
+  tab_spanner(label = "Majority Point Labels", columns = c(-Minority)) |>
   tab_style(
     style = cell_borders(
       sides = "bottom",
@@ -1972,16 +2000,14 @@ nm1_gt |>
       weight = px(2)
     ),
     locations = cells_body(rows = nrow(nm1_df) - 1)
-  ) |> 
+  ) |>
   tab_options(table.width = pct(80))
 ```
+:::::
 
+::::: {.column width="8%"}
+:::::
 :::
-
-::: {.column width="8%"}
-:::
-
-:::: 
 
 For the first majority-class observation, its closest minority-class samples are #7 and #8 (each column's two nearest neighbors are highlighted with a background accent color). The average distance between its two neighbors, shown in the bottom row of the table, is `r round(nm1_dists[1], 2)`. To balance the data, NearMiss-1 would retain four samples: `r nm1_sel`.
 
@@ -1993,22 +2019,21 @@ It is unclear whether the largest or the smallest average distance is used to de
 
 This table highlights the two furthest neighbors (i.e., "2FN") and their average distances: 
 
-:::: {.columns}
+::: {.columns}
+::::: {.column width="8%"}
+:::::
 
-::: {.column width="8%"}
-:::
-
-::: {.column width="84%"}
-
+::::: {.column width="84%"}
 ```{r}
 #| label: near-miss-2
 #| echo: false
-nm2_gt |> 
+
+nm2_gt |>
   cols_width(
     Minority ~ px(90),
     everything() ~ px(80)
-  ) |> 
-  tab_spanner(label = "Majority Point Labels", columns = c(-Minority)) |> 
+  ) |>
+  tab_spanner(label = "Majority Point Labels", columns = c(-Minority)) |>
   tab_style(
     style = cell_borders(
       sides = "bottom",
@@ -2016,16 +2041,14 @@ nm2_gt |>
       weight = px(2)
     ),
     locations = cells_body(rows = nrow(nm1_df) - 1)
-  ) |> 
+  ) |>
   tab_options(table.width = pct(80))
 ```
+:::::
 
+::::: {.column width="8%"}
+:::::
 :::
-
-::: {.column width="8%"}
-:::
-
-:::: 
 
 Note that the neighbors are the opposite of those in the previous table. In this instance, we would retain samples `r nm2_sel`. 
 
@@ -2035,22 +2058,21 @@ In our example, we'll use two neighbors for both calculations. In the first stag
 
 This table shows the reduced distance matrix and the average distances: 
 
-:::: {.columns}
+::: {.columns}
+::::: {.column width="8%"}
+:::::
 
-::: {.column width="8%"}
-:::
-
-::: {.column width="84%"}
-
+::::: {.column width="84%"}
 ```{r}
 #| label: near-miss-3
 #| echo: false
-nm3_gt |> 
+
+nm3_gt |>
   cols_width(
     Minority ~ px(90),
     everything() ~ px(80)
-  ) |> 
-  tab_spanner(label = "Majority Point Labels", columns = c(-Minority)) |> 
+  ) |>
+  tab_spanner(label = "Majority Point Labels", columns = c(-Minority)) |>
   tab_style(
     style = cell_borders(
       sides = "bottom",
@@ -2058,22 +2080,21 @@ nm3_gt |>
       weight = px(2)
     ),
     locations = cells_body(rows = nrow(nm1_df) - 1)
-  ) |> 
+  ) |>
   tab_options(table.width = pct(80))
 ```
+:::::
 
+::::: {.column width="8%"}
+:::::
 :::
-
-::: {.column width="8%"}
-:::
-
-:::: 
 
 Based on these distances, NearMiss-3 selects `r nm3_sel` to include in the majority class. 
 
 ```{r}
 #| label: tomek-calcs
 #| include: false
+
 nn_mat_min <- nn_mat_maj <- dist_mat * 0
 tom_col_info <- apply(distances, 2, dist_and_ind, k = 1)
 tom_col_nn <- map_int(tom_col_info, ~ .x$ind)
@@ -2128,10 +2149,14 @@ sampling_mtr <-
   collect_metrics() |>
   select(-.estimator, -n, -std_err, -preproc) |>
   mutate(
-    model = if_else(model == "boost_tree", "Boosted Tree", "Logistic Regression"),
+    model = if_else(
+      model == "boost_tree",
+      "Boosted Tree",
+      "Logistic Regression"
+    ),
     model = factor(model, levels = c("Logistic Regression", "Boosted Tree")),
     sampling = map_chr(wflow_id, ~ strsplit(.x, "_")[[1]][1])
-    ) |>
+  ) |>
   pivot_wider(
     id_cols = c(wflow_id, .config, model, sampling),
     names_from = .metric,
@@ -2147,25 +2172,25 @@ sampling_mtr <-
 #| out-width: 80%
 #| fig-cap: "Cross-validated statistics for the subsampling and synthesis methods. The top panel shows an ROC-like visualization with sensitivity and 1 - specificity. The bottom panel relates sensitivity ot the Brier Score."
 
-sampling_sens_spec <- 
+sampling_sens_spec <-
   sampling_mtr |>
   ggplot(aes(1 - specificity, sensitivity, col = model, pch = model)) +
-  geom_abline(lty = 3) + 
+  geom_abline(lty = 3) +
   geom_point(cex = 2, alpha = 2 / 3) +
   facet_wrap(~sampling, ncol = 4) +
-  coord_fixed(xlim = 0:1, ylim = 0:1) + 
+  coord_fixed(xlim = 0:1, ylim = 0:1) +
   theme(legend.position = "bottom") +
   labs(color = "Model", pch = "Model") +
   scale_shape_manual(values = c(1:0)) +
   scale_color_manual(values = c("#EF7C12FF", "#172869FF"))
 
-sampling_sens_brier <- 
+sampling_sens_brier <-
   sampling_mtr |>
   ggplot(aes(sensitivity, brier_class, col = model, pch = model)) +
   geom_point(cex = 2, alpha = 2 / 3, show.legend = FALSE) +
   facet_wrap(~model) +
   coord_fixed(ratio = 4) +
-  labs(y = "Brier score")+
+  labs(y = "Brier score") +
   scale_shape_manual(values = c(1:0)) +
   scale_color_manual(values = c("#EF7C12FF", "#172869FF"))
 
@@ -2187,7 +2212,7 @@ glmn_plain_pred <-
   glmn_thr_res |>
   collect_predictions(summarize = TRUE) |>
   filter(
-    penalty == glmn_plain_alt_best$penalty & 
+    penalty == glmn_plain_alt_best$penalty &
       threshold == roc_tradeoff$threshold
   ) |>
   select(.row, plain = .pred_yes) |>
@@ -2250,35 +2275,39 @@ sampling_roc_auc <- function(split) {
 set.seed(518)
 sampling_glmn_roc_reps <-
   plain_sampling_pred |>
-  filter(model == "Logistic Regression") |> 
+  filter(model == "Logistic Regression") |>
   bootstraps(times = 2000) |>
-  mutate(stats = map(splits, sampling_roc_auc)) |> 
-  int_pctl(stats, alpha = 0.1) |> 
+  mutate(stats = map(splits, sampling_roc_auc)) |>
+  int_pctl(stats, alpha = 0.1) |>
   mutate(model = "Logistic Regression")
 
 set.seed(518)
 sampling_lgb_roc_reps <-
   plain_sampling_pred |>
-  filter(model == "Boosted Tree") |> 
+  filter(model == "Boosted Tree") |>
   bootstraps(times = 2000) |>
-  mutate(stats = map(splits, sampling_roc_auc)) |> 
-  int_pctl(stats, alpha = 0.1) |> 
+  mutate(stats = map(splits, sampling_roc_auc)) |>
+  int_pctl(stats, alpha = 0.1) |>
   mutate(model = "Boosted Tree")
 
-sampling_roc_reps <- 
+sampling_roc_reps <-
   bind_rows(
     sampling_glmn_roc_reps,
     sampling_lgb_roc_reps
-  ) |> 
+  ) |>
   mutate(
     model = factor(model, levels = c("Logistic Regression", "Boosted Tree"))
   )
 
-glmn_samp_roc_rng <- range(best_sampling$roc_auc[best_sampling$model == "Logistic Regression"])
-lgb_samp_roc_rng <- range(best_sampling$roc_auc[best_sampling$model == "Boosted Tree"])
+glmn_samp_roc_rng <- range(best_sampling$roc_auc[
+  best_sampling$model == "Logistic Regression"
+])
+lgb_samp_roc_rng <- range(best_sampling$roc_auc[
+  best_sampling$model == "Boosted Tree"
+])
 ```
 
-We can see that these tools have an effect on the hard class prediction metrics, such as sensitivity and specificity. Although @fig-myopia-sampling indicates that the calibration properties are not good, meaning that probability estimates do not reflect the rate at which events occur. However, it is possible that the probabilities can help discriminate between the classes for some threshold. For the four sampling methods used on these data, their ROC AUC values for the best logistic regression models ranged from `r round(glmn_samp_roc_rng[1], 3)` to `r round(glmn_samp_roc_rng[2], 3)` The range for the boosted tree models was `r round(lgb_samp_roc_rng[1], 3)` to `r round(lgb_samp_roc_rng[2], 3)`. Are these any better or worse than the models that were developed in @sec-imbalance-acceptance? Using the bootstrap techniques in @sec-compare-holdout, we linked the predictions by row for all of these models, created 2,000 bootstrap samples, and then computed the difference in the area under the ROC curves. @fig-myopia-sampling-comparison shows the results. For these data, there doesn’t appear to be any improvement in the ROC AUCs when subsampling and synthesis tools are used. Note that the x-axis scale is fairly small; these AUC values are very similar to one another. One comparison did not cover zero, indicating that using logistic regression with SMOTE had a slightly worse AUC than simply using the training set as is. 
+We can see that these tools have an effect on the hard class prediction metrics, such as sensitivity and specificity. Although @fig-myopia-sampling indicates that the calibration properties are not good, meaning that probability estimates do not reflect the rate at which events occur. However, it is possible that the probabilities can help discriminate between the classes for some threshold. For the four sampling methods used on these data, their ROC AUC values for the best logistic regression models ranged from `r round(glmn_samp_roc_rng[1], 3)` to `r round(glmn_samp_roc_rng[2], 3)` The range for the boosted tree models was `r round(lgb_samp_roc_rng[1], 3)` to `r round(lgb_samp_roc_rng[2], 3)`. Are these any better or worse than the models that were developed in @sec-imbalance-acceptance? Using the bootstrap techniques in @sec-compare-holdout, we linked the predictions by row for all of these models, created 2,000 bootstrap samples, and then computed the difference in the area under the ROC curves. @fig-myopia-sampling-comparison shows the results. For these data, there doesn't appear to be any improvement in the ROC AUCs when subsampling and synthesis tools are used. Note that the x-axis scale is fairly small; these AUC values are very similar to one another. One comparison did not cover zero, indicating that using logistic regression with SMOTE had a slightly worse AUC than simply using the training set as is. 
 
 ```{r}
 #| label: fig-myopia-sampling-comparison
@@ -2311,11 +2340,11 @@ These results highlights the idea that rebalancing tools can help a model do bet
 
 ### Cost-Sensitive Learning {#sec-cost-sensitive-learning}
 
-Cost-sensitive learning is a technique that ensures the model places greater emphasis on certain classes or imposes a higher penalty for specific types of misclassification errors. @breiman1984classification (Section 4.4) is one of the earliest references to consider this point of view. We’ve previously talked about the differing consequences of making an incorrect prediction. For example, @sec-mushrooms showed a model that predicts whether mushrooms are poisonous or not. We could think about this in terms of the general cost of a prediction (not too dissimilar to the discussion related to SVM models). 
+Cost-sensitive learning is a technique that ensures the model places greater emphasis on certain classes or imposes a higher penalty for specific types of misclassification errors. @breiman1984classification (Section 4.4) is one of the earliest references to consider this point of view. We've previously talked about the differing consequences of making an incorrect prediction. For example, @sec-mushrooms showed a model that predicts whether mushrooms are poisonous or not. We could think about this in terms of the general cost of a prediction (not too dissimilar to the discussion related to SVM models). 
 
 If we have $C$ classes, we could create a cost matrix that defines the specific costs $\mathbb{c}_{j|k}$ of incorrectly predicting a data point to be class $j$ when it is truly class $k$. In many instances, the diagonal terms of this matrix are zero since there is no real "cost" to making the correct prediction. There are cases where different types of benefits are associated with different types of correct predictions. See @elkan2001foundations for an example. However, for the purposes of our discussion here, we will assume that the diagonal is zero. 
 
-If we have this cost structure, we can use the predicted class probabilities to estimate the expected costs for a collection of data by averaging a set of individual costs. Let’s say that $C=3$ and the cost matrix is 
+If we have this cost structure, we can use the predicted class probabilities to estimate the expected costs for a collection of data by averaging a set of individual costs. Let's say that $C=3$ and the cost matrix is 
 
 $$
 \mathbb{C} = 
@@ -2331,45 +2360,46 @@ where the true values are in columns, and the predicted class levels are rows. F
 ```{r}
 #| label: cost-examples
 #| echo: false
-ex_costs <- 
+
+ex_costs <-
   tribble(
-    ~truth, ~estimate, ~cost,
-    "A", "B", 0.50,
-    "A", "C", 0.25,
-    "B", "A", 1.00,
-    "B", "C", 0.75,
-    "C", "A", 3.00,
-    "C", "B", 2.00
+    ~truth , ~estimate , ~cost ,
+    "A"    , "B"       , 0.50  ,
+    "A"    , "C"       , 0.25  ,
+    "B"    , "A"       , 1.00  ,
+    "B"    , "C"       , 0.75  ,
+    "C"    , "A"       , 3.00  ,
+    "C"    , "B"       , 2.00
   )
 
-ex_cost_dat <- 
+ex_cost_dat <-
   tribble(
-    ~.prob_A, ~.prob_B, ~.prob_C, ~truth,
-    1 / 3, 1 / 3, 1 / 3,  1L,
-    1 / 3, 1 / 3, 1 / 3,  2L,
-    1 / 3, 1 / 3, 1 / 3,  3L,
-    0.1, 0.5, 0.4,  1L,
-    0.4, 0.5, 0.1,  3L,
-  ) |> 
+    ~.prob_A , ~.prob_B , ~.prob_C , ~truth ,
+    1 / 3    , 1 / 3    , 1 / 3    , 1L     ,
+    1 / 3    , 1 / 3    , 1 / 3    , 2L     ,
+    1 / 3    , 1 / 3    , 1 / 3    , 3L     ,
+    0.1      , 0.5      , 0.4      , 1L     ,
+    0.4      , 0.5      , 0.1      , 3L     ,
+  ) |>
   mutate(truth = factor(LETTERS[truth]))
 
 cost_res <- NULL
 for (i in 1:nrow(ex_cost_dat)) {
-  tmp <- 
-    ex_cost_dat |> 
-    slice(i) |> 
-    classification_cost(truth, .prob_A:.prob_C, costs = ex_costs) 
+  tmp <-
+    ex_cost_dat |>
+    slice(i) |>
+    classification_cost(truth, .prob_A:.prob_C, costs = ex_costs)
   cost_res <- bind_rows(cost_res, tmp)
 }
 
-cost_tbl <- 
-  bind_cols(ex_cost_dat, cost_res) |> 
+cost_tbl <-
+  bind_cols(ex_cost_dat, cost_res) |>
   select(Truth = truth, A = .prob_A, B = .prob_B, C = .prob_C, Cost = .estimate)
 
-cost_tbl |> 
-  gt() |> 
-  fmt_number(c(-Truth)) |> 
-  tab_spanner(columns= A:C, label = "Probability Estimates")
+cost_tbl |>
+  gt() |>
+  fmt_number(c(-Truth)) |>
+  tab_spanner(columns = A:C, label = "Probability Estimates")
 ```
 
 First, consider the top three rows, which contain equivocal class probability estimates for each class. The result classification costs vary considerably due to the asymmetric nature of the different class costs. The Third row has the worst results because the cost-structure specifies that the third class is the most important to classify correctly (in elements $\mathbb{C}_{13}$ and $\mathbb{C}_{23}$). The fourth row contains an example that is mispredicted as class B when it is actually class A. The cost is not high since the elements in the first column of $\mathbb{C}$ are not large relative to the others. The worst cost corresponds to the bottom row, where mispredicting class C as either class A or class B incurs the highest costs. This is compounded by the probability for class C being especially small which downweights the effect of $\mathbb{C}_{13}$. 
@@ -2398,7 +2428,7 @@ If the model implementation allows for case weights, we can use importance weigh
 While not related to class imbalances, importance weights are also useful for time-series data, where we would like more recent data to have a higher priority in the model fit. It can also be useful for dealing with problematic/anomalous data in a model. For example, data collected during the global COVID-19 pandemic can have a negative impact on fits, but it may still need to be included. Assigning these row small case weights may solve those issues. 
 :::
 
-Note that the scale of class weights may differ across metrics and/or models (as we’ll see below). For one type of model, minority class weights ranging from 1 to 50 might have the same performance as another model/metric that ranges from 1 to 5. There is some trial and error associated with tuning the weights. 
+Note that the scale of class weights may differ across metrics and/or models (as we'll see below). For one type of model, minority class weights ranging from 1 to 50 might have the same performance as another model/metric that ranges from 1 to 5. There is some trial and error associated with tuning the weights. 
 
 If your problem has a well-known cost structure, likely expressed in units of currency, there is probably little ambiguity about it. Otherwise, we might use class weights to either decrease the likelihood of tragic errors from occurring in the model or to help the model overcome a severe class imbalance. In other words, the "importance" in importance weights could mean many different things. 
 
@@ -2407,27 +2437,27 @@ To visualize an example, @fig-myopia-cost-fda shows the same data as @fig-myopia
 ```{r}
 #| label: myopia-cost-fda
 #| include: false
-myopia_smol_wts_formatted <- 
-  myopia_smol_formatted |> 
+
+myopia_smol_wts_formatted <-
+  myopia_smol_formatted |>
   mutate(
     cls_wts = if_else(class == "yes", 15.0, 1.0),
     cls_wts = importance_weights(cls_wts)
   )
 
-fda_wts_wflow <- 
-  workflow(class ~ ., discrim_flexible(prod_degree = 2)) |> 
+fda_wts_wflow <-
+  workflow(class ~ ., discrim_flexible(prod_degree = 2)) |>
   add_case_weights(cls_wts)
 
 fda_cost_fit <- fit(fda_wts_wflow, data = myopia_smol_wts_formatted)
 fda_cost_pred <- augment(fda_cost_fit, new_data = smol_grid)
-fda_cost_capture <- 
-  augment(fda_cost_fit, new_data = myopia_smol_formatted) |> 
-  filter(.pred_yes >= 0.5 & class == "yes") |> 
+fda_cost_capture <-
+  augment(fda_cost_fit, new_data = myopia_smol_formatted) |>
+  filter(.pred_yes >= 0.5 & class == "yes") |>
   nrow()
 ```
 
-:::: {#fig-myopia-cost-fda}
-
+::: {#fig-myopia-cost-fda}
 ```{r}
 #| label: myopia-cost-grid
 #| echo: false
@@ -2435,20 +2465,36 @@ fda_cost_capture <-
 #| fig-height: 5.2
 #| warning: false
 #| out-width: 50%
-myopia_smol_formatted |> 
+
+myopia_smol_formatted |>
   ggplot(aes(`spherical equivalent refraction`, `axial length`)) +
-  geom_point(aes(color = class), alpha = 0.5, shape = 16, size = 2, show.legend = FALSE) + 
+  geom_point(
+    aes(color = class),
+    alpha = 0.5,
+    shape = 16,
+    size = 2,
+    show.legend = FALSE
+  ) +
   geom_tile(data = fda_cost_pred, aes(fill = .pred_yes), alpha = .1) +
-  geom_contour(data = fda_cost_pred, aes(z = .pred_yes), breaks = 1/2, col = "black") +
-  scale_fill_gradient2(low = "#377EB8", mid = "white", high = "#E41A1C", midpoint = 0.5) +
-  scale_color_brewer(palette = "Set1") + 
+  geom_contour(
+    data = fda_cost_pred,
+    aes(z = .pred_yes),
+    breaks = 1 / 2,
+    col = "black"
+  ) +
+  scale_fill_gradient2(
+    low = "#377EB8",
+    mid = "white",
+    high = "#E41A1C",
+    midpoint = 0.5
+  ) +
+  scale_color_brewer(palette = "Set1") +
   labs(fill = "Probability") +
   theme(legend.position = "top")
 ```
 
 A flexible discriminant fit to the myopia training set using cost-sensitive learning. The myopic subjects had a 15-fold higher cost in the objective function and `r fda_cost_capture` of the `r sum(myopia_smol_formatted$class == "yes")` events (in red) are identified using the default 50% threshold. This figure is comparable with @fig-myopia-fda and @fig-myopia-subsampling.
-
-::::
+:::
 
 Case weights based on the class can also approximate some of the subsampling methods shown in the previous section. For example, instead of dropping training set rows from the data, we can adjust the importance weights so that the sum of the weights in the majority class equals the sum of the weights in the minority class. By doing this, we may be able to obtain a better model since the majority of the majority class is not lost.  Similarly, an approximation to upsampling would only increase the minority class weights so that the class weight totals are in equilibrium. This would also result in faster training times than basic oversampling.
 
@@ -2533,23 +2579,24 @@ lgb_cost_mtr <-
   collect_metrics(type = "wide") |>
   mutate(class_weight = 1 / scale_pos_weight)
 
-glmn_wts_mtr <- 
-  all_glmn_wts |> 
+glmn_wts_mtr <-
+  all_glmn_wts |>
   map2_dfr(
-    all_wts, 
-    ~ collect_metrics(.x, type = "wide") |> 
+    all_wts,
+    ~ collect_metrics(.x, type = "wide") |>
       mutate(class_weight = .y)
   )
 
-cost_mtr <- 
+cost_mtr <-
   bind_rows(
-  lgb_cost_mtr |> 
-  select(.config, sensitivity, specificity, brier_class, class_weight) |> 
-  mutate(
-    Model = "Boosted Tree"),
-  glmn_wts_mtr |> 
-    select(.config, sensitivity, specificity, brier_class, class_weight) |> 
-    mutate(Model = "Logistic Regression")
+    lgb_cost_mtr |>
+      select(.config, sensitivity, specificity, brier_class, class_weight) |>
+      mutate(
+        Model = "Boosted Tree"
+      ),
+    glmn_wts_mtr |>
+      select(.config, sensitivity, specificity, brier_class, class_weight) |>
+      mutate(Model = "Logistic Regression")
   )
 
 cost_rng <-
@@ -2560,9 +2607,9 @@ cost_rng <-
     .by = c(Model)
   )
 
-cost_mtr <- 
-  cost_mtr |> 
-  full_join(cost_rng, by = "Model") |> 
+cost_mtr <-
+  cost_mtr |>
+  full_join(cost_rng, by = "Model") |>
   mutate(
     Model = factor(Model, levels = c("Logistic Regression", "Boosted Tree")),
     class_weight = log2(class_weight),
@@ -2586,23 +2633,23 @@ As with subsampling and synthesis methods, the class probabilities generated by 
 #| out-width: 80%
 #| fig-cap: "Cross-validated statistics for the cost-sensitive models. The top panel shows an ROC-like visualization with sensitivity and 1 - specificity. The bottom panel relates sensitivity ot the Brier Score."
 
-cost_roc <- 
+cost_roc <-
   cost_mtr |>
   ggplot(aes(1 - specificity, sensitivity, col = scaled_weight)) +
   geom_point(cex = 2, alpha = 1 / 3) +
   coord_fixed(xlim = 0:1, ylim = 0:1) +
-  facet_wrap(~ Model) + 
+  facet_wrap(~Model) +
   labs(color = "Class Weight (scaled)") +
   theme(legend.position = "bottom") +
   scale_color_viridis_c(option = "A", direction = -1)
 
-cost_sens_brier <- 
+cost_sens_brier <-
   cost_mtr |>
   ggplot(aes(sensitivity, brier_class, col = scaled_weight)) +
   geom_point(cex = 2, alpha = 1 / 3, show.legend = FALSE) +
   lims(x = 0:1) +
   labs(y = "Brier score") +
-  facet_wrap(~ Model) +
+  facet_wrap(~Model) +
   coord_fixed(ratio = 4.5, xlim = 0:1, ylim = c(0.08, 0.30)) +
   scale_color_viridis_c(option = "A", direction = -1)
 
@@ -2621,7 +2668,7 @@ If we assume that the rate of myopia in the population of interest is consistent
 - negative predictive value (NPV): `r round(roc_tradeoff$npv * 100, 1)`%
 
 Even though our sensitivity and specificity ended up being fairly balanced, the statistics that convey to true ability to predict are not.  
- 
+
 This could exacerbate the potential confusion that can occur when explaining the results of a prediction. Continuing the hypothetical conversation from @sec-imbalance-acceptance, the explanation of the PPV might be: 
 
 > "We understand that this rule of thumb might seem overly stringent. 
@@ -2642,4 +2689,3 @@ For example, @covidcdc calculated COVID-19 cases and deaths, and estimated cumul
 This illustrates that computations that depend on the event rate can be challenging, as the values can systematically change under different conditions and over time. 
 
 ## Chapter References {.unnumbered}
- 
