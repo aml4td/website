@@ -29,6 +29,7 @@ library(ggforce)
 library(discrim)
 library(RANN)
 library(tabby)
+library(tidyposterior)
 
 # ------------------------------------------------------------------------------
 # set options
@@ -649,7 +650,7 @@ lgb_plain_spec <-
     trees = tune(),
     learn_rate = tune(),
   ) |>
-  set_engine('catboost') |>
+  set_engine('lightgbm') |>
   set_mode('classification')
 
 lgb_plain_wflow <- workflow(class ~ ., lgb_plain_spec)
@@ -826,13 +827,19 @@ xrf_max_prob <- xrf_plain_best_pred_ind |> pluck(".pred_yes") |> max()
 ```
 
 ```{r}
+#| label: reset-parallel
+#| include: false
+mirai::daemons(3)
+```
+
+```{r}
 #| label: myopia-icl
 #| include: false
+#| cache: true
 
-mirai::daemons(3)
 tab_icl_spec <- tabular_icl(mode = "classification")
 set.seed(820)
-tab_icl_res <-
+tab_icl_plain_res <-
   tab_icl_spec |>
   fit_resamples(
     class ~ .,
@@ -840,6 +847,19 @@ tab_icl_res <-
     metrics = cls_mtr,
     control = ctrl_rs
   )
+
+tab_icl_plain_best_mtr <- collect_metrics(tab_icl_plain_res)
+tab_icl_plain_best_pred <- collect_predictions(
+  tab_icl_plain_res,
+  summarize = TRUE
+)
+
+tab_icl_roc_curve <-
+  tab_icl_plain_best_pred |>
+  roc_curve(class, .pred_yes)
+
+tab_icl_plain_default <- closest_point(tab_icl_roc_curve)
+tab_icl_plain_sensitive <- closest_point(tab_icl_roc_curve, "sensitivity", 0.95)
 ```
 
 A set of five models was tested. First, a regularized logistic regression was used with glmnet penalties. The predictors included main effects and all two-factor interactions. Penalty values ranging from 10<sup>`r min(log10(glmn_plain_ranges$penalty))`</sup> to 10<sup>`r max(log10(glmn_plain_ranges$penalty))`</sup> were evaluated with four mixtures that ranged from `r min(glmn_plain_ranges$mixture* 100)`% to `r max(glmn_plain_ranges$mixture* 100)`% Lasso. A regular grid of `r nrow(glmn_plain_grid)` candidates was used to optimize these parameters^[We use the original implementation of the glmnet model, which features a capability where, for a specific mixture value, a single model fit contains results for multiple penalty values. For this reason, we can evaluate a regular grid with  `r nrow(glmn_plain_grid)` candidates with only `r vctrs::vec_unique_count(glmn_plain_grid$mixture)` model fits, one for each mixture value. A regular grid exploits this feature, but a space-filling design would nullify this advantage.].
@@ -884,8 +904,8 @@ Finally, a RuleFit model was optimized over:
 
 ::: {.columns}
 ::::: {.column width="50%"}
-- The number of boosting iterations (` min(xrf_plain_ranges$trees)` to `r max(xrf_plain_ranges$trees)`)
-- Tree depth (` min(xrf_plain_ranges$tree_depth)` to `r max(xrf_plain_ranges$tree_depth)` splits). 
+- The number of boosting iterations (` min(xrf_plain_ranges$trees)` to ` max(xrf_plain_ranges$trees)`)
+- Tree depth (` min(xrf_plain_ranges$tree_depth)` to ` max(xrf_plain_ranges$tree_depth)` splits). 
 - Amount of data needed for further splitting (` min(xrf_plain_ranges$min_n)` to ` max(xrf_plain_ranges$min_n)` samples).
 :::::
 
@@ -909,12 +929,15 @@ Apart from the logistic regression, a space-filling design of 25 candidates was 
 #| fig-cap: "Cross-validated Brier scores for different modeling approaches without adjustments for class imbalance. The dashed vertical lines indicate the highest-ranked candidate for each model."
 
 plain_res <- as_workflow_set(
-  glmnet = glmn_plain_res,
-  nnet = mlp_plain_res,
-  boosting = lgb_plain_res,
+  Glmnet = glmn_plain_res,
+  MLP = mlp_plain_res,
+  Boosting = lgb_plain_res,
   # rule_fit = xrf_plain_res,
-  rand_forest = rf_plain_res
+  TabICL = tab_icl_plain_res, 
+  `Random Forest` = rf_plain_res
 )
+
+save(plain_res, file = "~/tmp/plain_res.RData")
 
 rank_plain <-
   rank_results(plain_res, rank_metric = "brier_class") |>
@@ -925,16 +948,26 @@ rank_plain_best <-
   slice_min(mean, by = c(wflow_id)) |>
   mutate(percent_worse = (rank - 1) / nrow(rank_plain) * 100)
 
-rank_plain |>
-  ggplot(aes(rank, mean, col = wflow_id)) +
-  geom_point(cex = 1 / 2) +
-  geom_vline(
-    data = rank_plain_best,
-    aes(col = wflow_id, xintercept = rank),
-    lty = 2
-  ) +
-  labs(x = "Rank", y = "Brier Score", col = "Model") +
-  theme(legend.position = "top")
+# rank_plain |>
+#   ggplot(aes(rank, mean, col = wflow_id)) +
+#   geom_point(cex = 1 / 2) +
+#   geom_vline(
+#     data = rank_plain_best,
+#     aes(col = wflow_id, xintercept = rank),
+#     lty = 2
+#   ) +
+#   labs(x = "Rank", y = "Brier Score", col = "Model") +
+#   theme(legend.position = "top")
+
+brier_mod <- perf_mod(
+  plain_res,
+  metric = "brier_class",
+  refresh = 0,
+  iter = 2000,
+  cores = 5,
+  chains = 5
+)
+compare_to_leader(brier_mod) |> autoplot() 
 ```
 
 While the Rulefit and logistic regressions had the smallest Brier scores, their respective best candidates have issues. For the RuleFit model, the maximum estimated probability of a patient being myopic is ` round(xrf_max_prob * 100, 1)`% across all of the assessment sets. While the values are well-calibrated within the observed data range, this upper limit of probability is probably too small to be the final model. We would expect at least one of the held-out predictions to be closer to one when the patient is truly myopic. We also do not have a clear sense of how well-calibrated the predictions are when values are closer to one. 
@@ -1017,6 +1050,9 @@ plain_metric_table <-
     # xrf_plain_best_mtr |>
     #   select(Metric = .metric, Estimate = mean) |>
     #   mutate(Model = "RuleFit"),
+    tab_icl_plain_best_mtr |>
+      select(Metric = .metric, Estimate = mean) |>
+      mutate(Model = "TabICL"),
     lgb_plain_best_mtr |>
       select(Metric = .metric, Estimate = mean) |>
       mutate(Model = "Boosted Tree")
@@ -1036,7 +1072,8 @@ plain_metric_table <-
     ),
     Metric = factor(Metric, levels = mtr_labs)
   ) |>
-  pivot_wider(id_cols = Model, names_from = Metric, values_from = Estimate)
+  pivot_wider(id_cols = Model, names_from = Metric, values_from = Estimate) |> 
+  arrange(`Brier Score`)
 
 gt(plain_metric_table) |>
   fmt_number(
