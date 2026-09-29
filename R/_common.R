@@ -100,25 +100,27 @@ is_m1_mac <- Sys.info()["machine"] == "arm64"
 # Try to avoid repetition when saving
 
 save_new_version <- function(x, pth, verbose) {
-  if (!file.exists(pth)) {
+  it_exists <- file.exists(pth)
+  if (!it_exists) {
     return(TRUE)
   }
-  load(pth)
-  obj_name <- basename(pth)
-  obj_name <- gsub(".RData", "", obj_name, fixed = TRUE)
-  diffs <-
-    waldo::compare(
-      get(obj_name),
-      x,
-      ignore_srcref = TRUE,
-      ignore_function_env = TRUE,
-      ignore_formula_env = TRUE
-    )
-  if (verbose) {
-    cat(cli::rule(obj_name), "\n")
-    print(diffs)
-  }
-  length(diffs) > 0
+  #load(pth)
+  #obj_name <- basename(pth)
+  #obj_name <- gsub(".RData", "", obj_name, fixed = TRUE)
+  #diffs <-
+  #  waldo::compare(
+  #    get(obj_name),
+  #    x,
+  #    ignore_srcref = TRUE,
+  #    ignore_function_env = TRUE,
+  #    ignore_formula_env = TRUE
+  #  )
+  #if (verbose) {
+  #  cat(cli::rule(obj_name), "\n")
+  #  print(diffs)
+  #}
+  #length(diffs) > 0
+  it_exists
 }
 
 save_obj <- function(x, verbose = FALSE) {
