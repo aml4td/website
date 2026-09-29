@@ -64,8 +64,8 @@ mlp_adam_spec <-
   ) |>
   set_engine(
     "brulee",
-    stop_iter = 5,
-    optimizer = "ADAMw",
+    stop_iter = 10,
+    optimizer = "SGD",
     verbose = FALSE,
     rate_schedule = tune(),
     batch_size = tune(),
@@ -85,8 +85,8 @@ mlp_adam_2layer_spec <-
     "brulee_two_layer",
     hidden_units_2 = tune(),
     activation_2 = tune(),
-    stop_iter = 5,
-    optimizer = "ADAMw",
+    stop_iter = 10,
+    optimizer = "SGD",
     verbose = FALSE,
     rate_schedule = tune(),
     batch_size = tune(),
@@ -114,14 +114,15 @@ pull_iter <- function(x) {
   require(tidymodels)
   require(brulee)
   fit <- extract_fit_engine(x)
-  tibble(epoch_actual = fit$best_epoch,
-         num_param = length(unlist(coef(fit))))
+  tibble(epoch_actual = fit$best_epoch, num_param = length(unlist(coef(fit))))
 }
 
-ctrl <- control_grid(save_pred = TRUE,
-                     save_workflow = TRUE,
-                     parallel_over = "everything",
-                     extract = pull_iter)
+ctrl <- control_grid(
+  save_pred = TRUE,
+  save_workflow = TRUE,
+  parallel_over = "everything",
+  extract = pull_iter
+)
 
 mlp_wflow_set <-
   mlp_wflow_set |>
@@ -129,7 +130,7 @@ mlp_wflow_set <-
 
 for (i in 1:nrow(mlp_wflow_set)) {
   wflow_id <- mlp_wflow_set$wflow_id[[i]]
-  
+
   prm <- mlp_wflow_set$option[[i]]$param_info
   prm <- prm |>
     update(
@@ -146,7 +147,7 @@ for (i in 1:nrow(mlp_wflow_set)) {
 
 set.seed(12)
 mlp_grid_res <-
-  mlp_wflow_set |> 
+  mlp_wflow_set |>
   workflow_map(
     resamples = forested_rs,
     grid = 25,
@@ -203,8 +204,10 @@ best_id <-
   mlp_ranks |>
   filter(.metric == "brier_class") |>
   slice_min(mean, n = 5) |>
-  inner_join(brier_and_params |> select(wflow_id, .config, num_param),
-             by = join_by(wflow_id, .config)) |>
+  inner_join(
+    brier_and_params |> select(wflow_id, .config, num_param),
+    by = join_by(wflow_id, .config)
+  ) |>
   slice_min(num_param, n = 1) |>
   pluck("wflow_id")
 
