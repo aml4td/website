@@ -32,6 +32,7 @@ library(tidyposterior)
 library(rules)
 library(paletteer)
 library(baguette)
+library(grid)
 
 # ------------------------------------------------------------------------------
 # set options
@@ -52,6 +53,15 @@ load("../RData/forested_data.RData")
 
 cls_mtr <- metric_set(brier_class, roc_auc, pr_auc, mn_log_loss)
 ```
+
+While classification trees are interesting and flexible models, as we saw in the previous chapter, they often rank poorly in prediction. Two of the reasons are: 
+
+- The granularity of predictions from rectangular trees is often low since the number of unique predicted values is the same as the number of terminal nodes. 
+- Their high model variance contributes to an overall high model mean squared error (recalling @sec-variance-bias).  Breiman [1994] labeled tree-based models as being an _unstable procedure_. 
+
+In this chapter, we discuss methods for bundling many classification trees into an overall ensemble model. As we'll see, tree ensembles have a well-earned reputation for exceptionally high accuracy. 
+
+We'll start with ensembles of independently generated trees (bagging and random forests), then move to Bayesian ensembles, and finish with ensembles assembled sequentially (boosting). We'll also discuss two rule-based ensembles.
 
 ## Bagging {#sec-cls-bag}
 
@@ -92,6 +102,99 @@ forest_cart_bag_mtr_ex <-
 ```
 
 
+Bagging, short for bootstrap aggregation, was first popularized by BREIMAN 1996. The most commonly used definition of a bagged tree is a collection of decision trees grown to maximum size (i.e., unpruned with a small $n_{min}$) and trained on a bootstrap sample of the training set. If we create an ensemble of $B$ trees, we obtain a collection of $B$ predictions for each data point. The final prediction summarizes the collection. Most often the proportion of hard-class "votes" from each tree is used for probability estimates, although other estimators, such as the mean of the class probabilities, can also be used. 
+
+Using many trees solves the two issues mentioned above. The ensemble's overall model variance is much smaller than a single tree's. STANDARD ERROR OF BETA MEAN?. Since trees are very flexible, they have low model bias. Combined with lower ensemble variance, this makes the overall model error very low and therefore more predictive. 
+
+Practically, combining $B$ predictions means the predicted values are more granular. To achieve stable performance, $25 \le B \le 50$ is often a good range. However, this is not a tuning parameter; we just need enough ensemble members to obtain a good mean estimate. 
+
+The key thing to realize about bagging is that it only improves high-variance models. Consider logistic regression, where the model estimates parameters using all training data points. Adding or removing rows from the training set, or jittering their values, has a relatively limited effect on predictions. This model has low variance, so averaging its predictions has little impact; we are averaging very similar values. Trees, by contrast, can produce very different splits and/or predictions when the training data are perturbed. 
+
+Why use very deep trees? The mechanics of bagging are designed to increase the diversity of the predicted values produced by each tree. Using a bootstrap sample, some training set samples are removed entirely, while others are replicated multiple times. This data perturbation encourages different trees. Using _unpruned_ and maximally grown trees is another technique to diversify predictions. We know very large trees are more likely to overfit by overreacting to specific training set points. This is generally bad. However, in ensembles, we _want_ higher variance from diverse predictions. 
+
+```{r}
+#| label: cls-bagging-demo
+#| include: false
+#| cache: true
+
+extr_term_nodes <- function(x) {
+  require(tidymodels)
+  require(lorax)
+  bag_obj <- 
+    x |> 
+    extract_fit_engine() 
+  
+  num_nodes <- 
+    bag_obj$model_df$model |> 
+    purrr::map_int(
+      ~ .x |> extract_fit_engine() |> lorax::extract_rules() |> nrow()) |> 
+    sum()
+  
+  tibble::tibble(num_terminal_nodes = num_nodes)
+}
+
+bag_wflow <-
+  workflow(
+    class ~ .,
+    bag_tree(
+      min_n = tune(),
+      cost_complexity = tune(),
+      mode = "classification"
+    ) |>
+      set_engine("rpart", time = 50)
+  )
+
+bag_param <- 
+  bag_wflow |> 
+  extract_parameter_set_dials() |> 
+  update(min_n = min_n(c(1, 100)))
+
+
+set.seed(8262)
+bag_res <-
+  bag_wflow |>
+  tune_grid(
+    resamples = forested_rs,
+    grid = 25,
+    param_info = bag_param,
+    control = control_grid(extract = extr_term_nodes)
+  )
+```
+
+To demonstrate, we used the forestation data and created bagged CART ensembles with a range of tuning parameter values to see how tree complexity affects performance. A variety of bagged trees with 50 members, $c_p \in [10^{-10}, 10^{-1}]$ and $min_n \in [1, 100]$ were resampled. The figure shows the results where complexity was measured using the average number of terminal nodes within the ensemble. Clearly, simple (i.e., shallow) trees make poor ensembles. As we increase model complexity, performance improves rapidly before plateauing at low Brier scores. This was not a tuning exercise; we generally don't tune these models. This analysis shows that, in ensembles, maximum complexity equates to prediction diversity, which drives predictive performance. CITE PERFORMANCE for main model versus individual trees
+
+```{r}
+#| label: fig-cls-bagging-complexity
+#| echo: false
+#| fig-width: 6
+#| fig-height: 3.5
+#| fig-align: "center"
+#| out-width: "70%"
+#| fig-cap: The relationship between tree complexity and performance for a bagged ensemble of 50 CART trees.
+
+bag_res |> 
+  collect_extracts() |> 
+  select(.config, .extracts) |> 
+  unnest(.extracts) |> 
+  summarize(
+    num_terminal_nodes = mean(num_terminal_nodes),
+    .by = c(.config)
+  ) |> 
+  full_join(
+    collect_metrics(bag_res, type = "wide"), 
+    by = join_by(.config)
+  ) |> 
+  ggplot(aes(num_terminal_nodes / 50, brier_class)) +
+  geom_point() +
+  geom_smooth(se = FALSE, span = 0.5) +
+  scale_x_log10() +
+  labs(y = "Brier Class", x = "Mean # Terminal Nodes per Tree") 
+```
+
+Do other models benefit from being combined in a bagged ensemble? Neural networks for small to medium training sets are fairly unstable. Perturbing the data _and the random seed_ can generate different models and predictions. $K$-nearest neighbors are also very unstable. However, training them with a bagged tree may not be a good idea since a bootstrapped training set contains 2 or more replicated training samples. For $K < 10$, it may not be difficult to produce neighbors that are themselves (resulting in zero error). MARS/FDA models are slightly unstable. In our experience, adaptive regression splines produce diversity in split points when the underlying trend is not linear. For example, if a predictor and the outcome have a quadratic relationship, bagging produces similar models with split points that cluster where the derivative is near zero (e.g., the inflection point). Bagging these models can slightly improve performance. 
+
+Next we'll talk about a generalization of bagged trees: random forests. 
+
 ## Random Forest {#sec-cls-rand-forest}
 
 ```{r}
@@ -103,8 +206,7 @@ rngr_spec <-
   rand_forest(
     mode = "classification",
     mtry = tune(),
-    trees = 500,
-    min_n = tune()
+    trees = 1000
   )
 
 set.seed(526)
@@ -113,7 +215,7 @@ forest_rngr_res <-
   tune_grid(
     class ~ .,
     resamples = forested_rs,
-    grid = 25,
+    grid = tibble(mtry = 1:16),
     control = control_grid(
       save_pred = TRUE,
       save_workflow = TRUE
@@ -125,15 +227,12 @@ forest_rngr_best <- select_best(forest_rngr_res, metric = "brier_class")
 
 forest_rngr_pred <-
   forest_rngr_res |>
-  collect_predictions(parameters = forest_rngr_best) |>
-  mutate(wflow_id = "Random Forest") |>
-  relocate(wflow_id)
+  collect_predictions(parameters = forest_rngr_best) 
 
 forest_rngr_mtr_ex <-
   forest_rngr_pred |>
   cls_mtr(class, estimate = .pred_class, .pred_Yes)
 ```
-
 
 ```{r}
 #| label: forest-rf-obl
@@ -175,6 +274,134 @@ forest_rf_obl_mtr_ex <-
   forest_rf_obl_pred |>
   cls_mtr(class, estimate = .pred_class, .pred_Yes)
 ```
+
+
+Canonically, this model is the same as a bagging ensemble, with one additional feature designed to make its constituent trees more diverse. Recall that most decision trees are _greedy_ since they choose the best predictor and split point that has the best result at the current location in the tree. They focus on the choice that matters most at that specific point. 
+
+Random forests include an integer tuning parameter commonly called $m_{try}$: at each split point in each tree, the model considers only a random subset of $m_{try}$  predictors as the split variable. This significantly influences the makeup of the trees since the best possible decision may not be possible. It is likely suboptimal and might very well be detrimental to the tree _at that stage_. However, from the ensemble's perspective, the trees are good enough to use and become less correlated with one another, promoting additional tree diversity. In the end, using $m_{try}$ usually improves the model's efficacy. 
+
+```{r}
+#| label: fig-forest-splits
+#| echo: false
+#| fig-width: 12
+#| fig-height: 12
+#| fig-align: "center"
+#| out-width: "100%"
+#| fig-cap: Four examples of splits in a random forest ensemble. 
+
+set.seed(147)
+mtry_fit <- ranger::ranger(
+  class ~ .,
+  data = forested_train,
+  num.trees = 2,
+  mtry = 3,
+  max.depth = 3,
+  min.node.size = 2000,
+  min.bucket = 400,
+  seed = 147
+)
+
+set.seed(147)
+full_fit <- ranger::ranger(
+  class ~ .,
+  data = forested_train,
+  num.trees = 2,
+  mtry = 16,
+  max.depth = 3,
+  min.node.size = 2000,
+  min.bucket = 400,
+  seed = 147
+)
+set.seed(147)
+extra_fit <- ranger::ranger(
+  class ~ .,
+  data = forested_train,
+  num.trees = 2,
+  mtry = 16,
+  splitrule = "extratrees",
+  max.depth = 3,
+  min.node.size = 2000,
+  min.bucket = 400,
+  seed = 147
+)
+
+full_p   <- full_fit   |> as.party(data = forested_train)
+full_2_p <- full_2_fit |> as.party(data = forested_train, trees = 2)
+mtry_p   <- mtry_fit   |> as.party(data = forested_train)
+extra_p  <- extra_fit  |> as.party(data = forested_train)
+
+# ------------------------------------------------------------------------------
+
+plot_in_cell <- function(x, row, col, title) {
+  grid::pushViewport(grid::viewport(layout.pos.row = row, layout.pos.col = col))
+  plot(x, main = title, newpage = FALSE)
+  grid::popViewport()
+}
+
+
+grid::grid.newpage()
+grid::pushViewport(grid::viewport(layout = grid::grid.layout(2, 2)))
+plot_in_cell(full_p, 1, 1, "(a) mtry = 16, tree 1")
+plot_in_cell(full_2_p, 1, 2, "(b) mtry = 16, tree 2")
+plot_in_cell(mtry_p, 2, 1, "(c) mtry =  3")
+plot_in_cell(extra_p, 2, 2, "(d) extremely randomized")
+grid::popViewport()
+
+```
+
+
+However, using $m_{try}$ has a few downsides. First, to ensure informative predictors have enough opportunities to be considered in the split, we have to drastically increase the number of trees in the ensemble. At a minimum, 500 trees are needed, but 1,000 to 2,000 trees are recommended to have a reliable model. The second downside is that it somewhat compromises random forests' ability to perform automatic feature selection. Many uninformative predictors will be selected for a split. Fortunately, random forests pioneered permutation importance, which we discuss in @sec-importance. 
+
+We'll describe a few variations of random forest models. 
+
+### Extremely Randomized Trees
+
+First, extremely randomized trees (a.k.a. "extratrees") make splits completely at random and with the original training set. Essentially, these are unsupervised split candidates: a randomly chosen predictor and a randomly chosen split point. It considers  $m_{try}$ random candidate splits and chooses the best among them. It also uses $n_{min}$ as a tuning parameter for tree complexity.
+
+
+```{r}
+#| label: forest-rf-extra
+#| include: false
+#| cache: true
+
+ert_spec <-
+  rand_forest(
+    mode = "classification",
+    mtry = tune(),
+    trees = 1000
+  ) |> 
+  set_engine("ranger", splitrule = "extratrees")
+
+set.seed(526)
+forest_ert_res <-
+  ert_spec |>
+  tune_grid(
+    class ~ .,
+    resamples = forested_rs,
+    grid = tibble(mtry = 1:16),
+    control = control_grid(
+      save_pred = TRUE,
+      save_workflow = TRUE
+    ),
+    metrics = cls_mtr
+  )
+
+forest_ert_best <- select_best(forest_ert_res, metric = "brier_class")
+
+forest_ert_pred <-
+  forest_ert_res |>
+  collect_predictions(parameters = forest_ert_best)
+
+forest_ert_mtr_ex <-
+  forest_ert_pred |>
+  cls_mtr(class, estimate = .pred_class, .pred_Yes)
+```
+
+### Conditional Inference Forests
+
+
+### Forests using Regularized Trees
+
 
 ## Boosting {#sec-cls-boosting}
 
@@ -398,6 +625,7 @@ forest_ensemble_set_res <-
   as_workflow_set(
     Bagged_CART = forest_cart_bag_res |> butcher::butcher(),
     RF = forest_rngr_res |> butcher::butcher(),
+    `RF (ERT)` = forest_ert_res |> butcher::butcher(),
     Oblique_RF = forest_rf_obl_res |> butcher::butcher(),
     Boost_C5.0 = forest_c5_res |> butcher::butcher(),
     XGBoost = forest_xgb_res |> butcher::butcher(),
