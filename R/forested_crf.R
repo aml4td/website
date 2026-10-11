@@ -1,4 +1,5 @@
 library(tidymodels)
+library(bonsai)
 library(embed)
 library(mirai)
 library(spatialsample)
@@ -31,7 +32,7 @@ crf_spec <-
     mode = "classification",
     mtry = tune(),
     trees = 1000
-  ) |> 
+  ) |>
   set_engine("partykit")
 
 set.seed(526)
@@ -54,7 +55,7 @@ forest_crf_set_res <- as_workflow_set("Cond. Inf. Forests" = forest_crf_res)
 
 # ------------------------------------------------------------------------------
 
-save(forest_crf_set_res,  file = "RData/forest_crf.RData")
+save(forest_crf_set_res, file = "RData/forest_crf.RData")
 
 # ------------------------------------------------------------------------------
 
