@@ -629,6 +629,58 @@ forest_bart_mtr_ex <-
   cls_mtr(class, estimate = .pred_class, .pred_Yes)
 ```
 
+Bayesian additive regression trees (BART) model the outcome with a sum of many small trees. We place prior distributions on each tree's structure, on its leaf parameters, and on the amount of shrinkage. While the model is more complex, the general process mirrors the one described in @sec-logistic-bayes. 
+
+To estimate the model, we use MCMC to sample from the model's posterior distribution. Each MCMC iteration updates every tree in turn and yields one complete ensemble. After the chains converge to the posterior, we can sample from it to create a set of trees that define the ensemble. 
+
+To start, let's denote a specific tree as $\mathcal{T}$ (as in the previous chapter) and parameters associated with its terminal nodes as $\Theta$. These parameters are not the probability estimates; they are on the real line and are similar to linear predictor values. 
+
+For a specific predictor vector $\boldsymbol{x}$, the function $g(\boldsymbol{x}, \mathcal{T}, \Theta)$ returns the element in $\Theta$ corresponding to the terminal node where $\boldsymbol{x}$ lands. 
+
+The overall BART model averages these estimates across $T$ trees to produce 
+
+$$
+\mathcal{F}(\boldsymbol{x}) = \sum_{j=1}^{T} g(\boldsymbol{x};\, \mathcal{T}_j, \Theta_j)
+$$
+
+which is also on the real line. As we'll see below, this value is converted to a probability scale for the final prediction. 
+
+Since BART is a Bayesian method, it relies heavily on probability and likelihood functions for computations. We typically assume that a binary outcome follows a Bernoulli distribution. To make the computations more tractable, BART takes a different approach that focuses on Gaussian quantities. It defines a latent Gaussian random variable
+
+$$
+Z_i = \mathcal{F}(\boldsymbol{x}_i) + \gamma + \varepsilon_i
+$$
+
+where $\gamma$ is a user-defined offset, and $\varepsilon_i$ is an error term assumed to follow a standard normal distribution. The offset defaults to $\gamma = 0$ but can be used to address class imbalance. For example, if the event rate were 10% in the data, we might set $\gamma = \Phi^{-1}(0.1) \approx -1.28$ to help the model perform effectively, where $\Phi^{-1}$ is the inverse of the cumulative normal distribution function $\Phi$. After the model is finalized, our probability estimates are then
+
+$$
+Pr\big[Y_i|\boldsymbol{x}_i\big] = \Phi\Big(\widehat{\mathcal{F}}(x_i) + \gamma\Big)
+$$
+There are two main sets of priors. The first is the tree-structure prior, which describes the probability that a specific node $\mathcal{N}$ in the tree should be split. This prior is parameterized as:
+
+$$
+Pr[{\text{split}}\;\mathcal{N}] = \alpha\,(1 + d_{\mathcal{N}})^{-\beta}
+$$
+
+where $d_{\mathcal{N}}$ is the current depth of the prior and $\alpha$ and $\beta$ default to 0.95 and 2.0, respectively. 
+
+We can tune these parameters to see if larger or smaller trees are more appropriate for our data. This parameterization helps us define what is plausible before seeing the data. 
+
+There are also uniform priors to select the predictor and the split point (based on a quantile or percent of the predictor's range). 
+
+What about the terminal node parameters? The individual values are assumed to be Gaussian $\theta_i \sim N\big(0, \sigma_\theta^2\big)$. The corresponding variance is $\sigma_\theta = \frac{\kappa}{\lambda\sqrt{T}}$ where $\lambda$ is a regularization parameter and $\kappa$ is a scaling parameter that defaults to 3.0. The parameter $\lambda$ can shrink or expand the prior variance in the denominator, allowing more (or fewer) extreme probabilities to be plausible. 
+
+We'll skip the specifics of how the likelihood is computed, but note that our Gaussian assumptions make the likelihood and posterior analytically tractable and efficient to compute. These models employ an impressive number of computational tricks. For example, we never evaluate the likelihood over the full data. Instead, we retain various sufficient statistics at the leaf level, which makes the Metropolis-Hastings computations very efficient. See REFERENCES for more details. 
+
+During the Metropolis-Hastings process, proposals for new trees use the operations described in @sec-cls-tree-global to grow, prune, and mutate trees (specifically @fig-tree-mutation). One implementation (`dbarts`) uses: 
+
+- Pr[split a leaf into two children] = 0.25
+- Pr[collapse two sibling leaves into their parent] = 0.25
+- Pr[redraw the cutpoint of an internal node's rule] = 0.40
+- Pr[exchange the rules of a parent and child internal node] = 0.10
+
+At each iteration of the search, the entire ensemble of $T$ trees is created based on the previously accepted configuration.  We sample the priors for hundreds (or thousands) of iterations. If we believe that the process has converged, we generate our final set of $T$ trees for the ensemble. 
+
 
 ## Boosting {#sec-cls-boosting}
 
