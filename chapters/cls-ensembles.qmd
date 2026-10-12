@@ -18,6 +18,7 @@ source("../R/_themes_gt.R")
 # ------------------------------------------------------------------------------
 # Required packages
 
+library(partykit)
 library(tidymodels)
 library(mirai)
 library(spatialsample)
@@ -48,6 +49,9 @@ source("../R/compare_models.R")
 # load data
 
 load("../RData/forested_data.RData")
+load("../RData/forest_crf.RData")
+load("../RData/forest_catboost.RData")
+load("../RData/forest_cart_set_res.RData")
 
 # ------------------------------------------------------------------------------
 
@@ -161,7 +165,7 @@ bag_res <-
   )
 ```
 
-To demonstrate, we used the forestation data and created bagged CART ensembles with a range of tuning parameter values to see how tree complexity affects performance. A variety of bagged trees with 50 members, $c_p \in [10^{-10}, 10^{-1}]$ and $min_n \in [1, 100]$ were resampled. The figure shows the results where complexity was measured using the average number of terminal nodes within the ensemble. Clearly, simple (i.e., shallow) trees make poor ensembles. As we increase model complexity, performance improves rapidly before plateauing at low Brier scores. This was not a tuning exercise; we generally don't tune these models. This analysis shows that, in ensembles, maximum complexity equates to prediction diversity, which drives predictive performance. CITE PERFORMANCE for main model versus individual trees
+To demonstrate, we used the forestation data and created bagged CART ensembles with a range of tuning parameter values to see how tree complexity affects performance. A variety of bagged trees with 50 members, $\alpha \in [10^{-10}, 10^{-1}]$ and $n_{min} \in [1, 100]$ were resampled^[Where $\alpha$ is the costcomplexity parameters from @eq-cost-complexity.]. The figure shows the results where complexity was measured using the average number of terminal nodes within the ensemble. Clearly, simple (i.e., shallow) trees make poor ensembles. As we increase model complexity, performance improves rapidly before plateauing at low Brier scores. This was not a tuning exercise; we generally don't tune these models. This analysis shows that, in ensembles, maximum complexity equates to prediction diversity, which drives predictive performance. CITE PERFORMANCE for main model versus individual trees
 
 ```{r}
 #| label: fig-cls-bagging-complexity
@@ -171,6 +175,8 @@ To demonstrate, we used the forestation data and created bagged CART ensembles w
 #| fig-align: "center"
 #| out-width: "70%"
 #| fig-cap: The relationship between tree complexity and performance for a bagged ensemble of 50 CART trees.
+#| warning: false
+#| message: false
 
 bag_res |> 
   collect_extracts() |> 
@@ -243,8 +249,7 @@ rf_obl_spec <-
   rand_forest(
     mode = "classification",
     mtry = tune(),
-    trees = 500,
-    min_n = tune()
+    trees = 1000
   ) |>
   set_engine("aorsf")
 
@@ -274,89 +279,6 @@ forest_rf_obl_mtr_ex <-
   forest_rf_obl_pred |>
   cls_mtr(class, estimate = .pred_class, .pred_Yes)
 ```
-
-
-Canonically, this model is the same as a bagging ensemble, with one additional feature designed to make its constituent trees more diverse. Recall that most decision trees are _greedy_ since they choose the best predictor and split point that has the best result at the current location in the tree. They focus on the choice that matters most at that specific point. 
-
-Random forests include an integer tuning parameter commonly called $m_{try}$: at each split point in each tree, the model considers only a random subset of $m_{try}$  predictors as the split variable. This significantly influences the makeup of the trees since the best possible decision may not be possible. It is likely suboptimal and might very well be detrimental to the tree _at that stage_. However, from the ensemble's perspective, the trees are good enough to use and become less correlated with one another, promoting additional tree diversity. In the end, using $m_{try}$ usually improves the model's efficacy. 
-
-```{r}
-#| label: fig-forest-splits
-#| echo: false
-#| fig-width: 12
-#| fig-height: 12
-#| fig-align: "center"
-#| out-width: "100%"
-#| fig-cap: Four examples of splits in a random forest ensemble. 
-
-set.seed(147)
-mtry_fit <- ranger::ranger(
-  class ~ .,
-  data = forested_train,
-  num.trees = 2,
-  mtry = 3,
-  max.depth = 3,
-  min.node.size = 2000,
-  min.bucket = 400,
-  seed = 147
-)
-
-set.seed(147)
-full_fit <- ranger::ranger(
-  class ~ .,
-  data = forested_train,
-  num.trees = 2,
-  mtry = 16,
-  max.depth = 3,
-  min.node.size = 2000,
-  min.bucket = 400,
-  seed = 147
-)
-set.seed(147)
-extra_fit <- ranger::ranger(
-  class ~ .,
-  data = forested_train,
-  num.trees = 2,
-  mtry = 16,
-  splitrule = "extratrees",
-  max.depth = 3,
-  min.node.size = 2000,
-  min.bucket = 400,
-  seed = 147
-)
-
-full_p   <- full_fit   |> as.party(data = forested_train)
-full_2_p <- full_2_fit |> as.party(data = forested_train, trees = 2)
-mtry_p   <- mtry_fit   |> as.party(data = forested_train)
-extra_p  <- extra_fit  |> as.party(data = forested_train)
-
-# ------------------------------------------------------------------------------
-
-plot_in_cell <- function(x, row, col, title) {
-  grid::pushViewport(grid::viewport(layout.pos.row = row, layout.pos.col = col))
-  plot(x, main = title, newpage = FALSE)
-  grid::popViewport()
-}
-
-
-grid::grid.newpage()
-grid::pushViewport(grid::viewport(layout = grid::grid.layout(2, 2)))
-plot_in_cell(full_p, 1, 1, "(a) mtry = 16, tree 1")
-plot_in_cell(full_2_p, 1, 2, "(b) mtry = 16, tree 2")
-plot_in_cell(mtry_p, 2, 1, "(c) mtry =  3")
-plot_in_cell(extra_p, 2, 2, "(d) extremely randomized")
-grid::popViewport()
-
-```
-
-
-However, using $m_{try}$ has a few downsides. First, to ensure informative predictors have enough opportunities to be considered in the split, we have to drastically increase the number of trees in the ensemble. At a minimum, 500 trees are needed, but 1,000 to 2,000 trees are recommended to have a reliable model. The second downside is that it somewhat compromises random forests' ability to perform automatic feature selection. Many uninformative predictors will be selected for a split. Fortunately, random forests pioneered permutation importance, which we discuss in @sec-importance. 
-
-We'll describe a few variations of random forest models. 
-
-### Extremely Randomized Trees
-
-First, extremely randomized trees (a.k.a. "extratrees") make splits completely at random and with the original training set. Essentially, these are unsupervised split candidates: a randomly chosen predictor and a randomly chosen split point. It considers  $m_{try}$ random candidate splits and chooses the best among them. It also uses $n_{min}$ as a tuning parameter for tree complexity.
 
 
 ```{r}
@@ -397,10 +319,315 @@ forest_ert_mtr_ex <-
   cls_mtr(class, estimate = .pred_class, .pred_Yes)
 ```
 
-### Conditional Inference Forests
+Canonically, this model is the same as a bagging ensemble, with one additional feature designed to make its constituent trees more diverse. Recall that most decision trees are _greedy_ since they choose the best predictor and split point that has the best result at the current location in the tree. They focus on the choice that matters most at that specific point. 
+
+Random forests include an integer tuning parameter commonly called $m_{try}$: at each split point in each tree, the model considers only a random subset of $m_{try}$  predictors as the split variable. This significantly influences the makeup of the trees since the best possible decision may not be possible. It is likely suboptimal and might very well be detrimental to the tree _at that stage_. However, from the ensemble's perspective, the trees are good enough to use and become less correlated with one another, promoting additional tree diversity. In the end, using $m_{try}$ usually improves the model's efficacy. 
+
+@fig-forest-splits shows several individual trees for the forestation data. Each panel fits an artificially small tree on these data and controls the random seed between plots. The blocks in the terminal nodes visualize the relative proportions of the classes from the training set for each rule. Trees (a) and (b) are standard CART fits that are trained on two different bootstrap samples. We can see that the structure is the same, but the split _values_ are slightly different. Tree (c) uses the same bootstrap samples as (a) but uses $m_{try} = 3$ instead of all predictors. We can see a completely different tree structure, with mostly different variables from the previous two trees. 
+
+```{r}
+#| label: fig-forest-splits
+#| echo: false
+#| warning: false
+#| fig-width: 17
+#| fig-height: 12
+#| fig-align: "center"
+#| out-width: "100%"
+#| fig-cap: Four examples of splits in a random forest ensemble. Trees (a) and (b) demonstrate the differences in trees due to different bootstrap samples. Tree (c) is the same as (a) but uses a smaller value for the tuning parameter. Tree (d) is also the same as (a) but uses randomized splits.
+
+set.seed(147)
+mtry_fit <- ranger::ranger(
+  class ~ .,
+  data = forested_train,
+  num.trees = 200,
+  mtry = 3,
+  max.depth = 3,
+  min.node.size = 2000,
+  min.bucket = 400,
+  seed = 147
+)
+
+set.seed(147)
+full_fit <- ranger::ranger(
+  class ~ .,
+  data = forested_train,
+  num.trees = 200,
+  mtry = 16,
+  max.depth = 3,
+  min.node.size = 2000,
+  min.bucket = 400,
+  seed = 147
+)
+
+set.seed(147)
+extra_fit <- ranger::ranger(
+  class ~ .,
+  data = forested_train,
+  num.trees = 200,
+  mtry = 16,
+  splitrule = "extratrees",
+  max.depth = 3,
+  min.node.size = 2000,
+  min.bucket = 400,
+  seed = 147
+)
+
+set.seed(1247)
+samp_tree <- sample.int(199, 1) + 1
+full_p   <- full_fit  |> as.party(data = forested_train)
+full_2_p <- full_fit  |> as.party(data = forested_train, tree = samp_tree)
+mtry_p   <- mtry_fit  |> as.party(data = forested_train)
+extra_p  <- extra_fit |> as.party(data = forested_train)
+
+# ------------------------------------------------------------------------------
+
+#plot_in_cell <- function(x, row, col, title) {
+#  grid::pushViewport(grid::viewport(layout.pos.row = row, layout.pos.col = col))
+#  plot(x, main = title, newpage = FALSE)
+#  grid::popViewport()
+#}
 
 
-### Forests using Regularized Trees
+#grid::grid.newpage()
+#grid::pushViewport(grid::viewport(layout = grid::grid.layout(2, 2)))
+#plot_in_cell(full_p, 1, 1, "(a) mtry = 16, tree 1")
+#plot_in_cell(full_2_p, 1, 2, "(b) mtry = 16, tree 2")
+#plot_in_cell(mtry_p, 2, 1, "(c) mtry =  3")
+#plot_in_cell(extra_p, 2, 2, "(d) extremely randomized")
+# grid::popViewport()
+
+library(ggparty)
+p_full <- 
+  ggparty(full_p) +
+  geom_edge() +
+  geom_edge_label(
+    aes(label = breaks_label), 
+    fill = "white", 
+    nudge_y = 0, 
+    linewidth = 0,
+    parse = TRUE,
+    size = 5
+  ) +
+  geom_node_splitvar(fill = "white", size = 7, label.padding = unit(0.15, "lines")) +
+  geom_node_plot(
+    gglist = list(
+      geom_bar(
+        aes(x = "", fill = class), 
+        position = position_fill(),
+        alpha = 0.7,
+    ), 
+      xlab("class"),
+      theme_void(),
+      scale_fill_manual(values = c("#218239", "#d4ad42"))
+    )
+  ) + 
+  labs(title = "(a) mtry = 16, tree 1") + 
+  theme(plot.title = element_text(size = 25)) 
+
+p_full_2 <- 
+  ggparty(full_2_p) +
+  geom_edge() +
+    geom_edge_label(
+    aes(label = breaks_label), 
+    fill = "white", 
+    nudge_y = 0, 
+    linewidth = 0,
+    parse = TRUE,
+    size = 5
+  ) +
+  geom_node_splitvar(fill = "white", size = 7, label.padding = unit(0.15, "lines")) +
+  geom_node_plot(
+    gglist = list(
+      geom_bar(
+        aes(x = "", fill = class), 
+        position = position_fill(),
+        alpha = 0.7,
+    ), 
+      xlab("class"),
+      theme_void(),
+      scale_fill_manual(values = c("#218239", "#d4ad42"))
+    )
+  ) + 
+  labs(title = paste("(a) mtry = 16, tree", samp_tree)) + 
+  theme(plot.title = element_text(size = 25)) 
+
+p_mtry <- 
+  ggparty(mtry_p) +
+  geom_edge() +
+  geom_edge_label(
+    aes(label = breaks_label), 
+    fill = "white", 
+    nudge_y = 0, 
+    linewidth = 0,
+    parse = TRUE,
+    size = 5
+  ) +
+  geom_node_splitvar(fill = "white", size = 7, label.padding = unit(0.15, "lines")) +
+  geom_node_plot(
+    gglist = list(
+      geom_bar(
+        aes(x = "", fill = class), 
+        position = position_fill(),
+        alpha = 0.7,
+    ), 
+      xlab("class"),
+      theme_void(),
+      scale_fill_manual(values = c("#218239", "#d4ad42"))
+    )
+  ) + 
+  labs(title = "(c) mtry =  3, tree 1") + 
+  theme(plot.title = element_text(size = 25)) 
+
+p_extra <- 
+  ggparty(extra_p) +
+  geom_edge() +
+ geom_edge_label(
+    aes(label = breaks_label), 
+    fill = "white", 
+    nudge_y = 0, 
+    linewidth = 0,
+    parse = TRUE,
+    size = 5
+  ) +
+  geom_node_splitvar(fill = "white", size = 7, label.padding = unit(0.15, "lines")) +
+  geom_node_plot(
+    gglist = list(
+      geom_bar(
+        aes(x = "", fill = class), 
+        position = position_fill(),
+        alpha = 0.7,
+    ), 
+      xlab("class"),
+      theme_void(),
+      scale_fill_manual(values = c("#218239", "#d4ad42"))
+    )
+  ) + 
+  labs(title = "(d) extremely randomized, tree 1") + 
+  theme(plot.title = element_text(size = 25)) 
+
+(p_full + p_full_2)/(p_mtry + p_extra)
+```
+
+
+However, using $m_{try}$ has a few downsides. First, to ensure informative predictors have enough opportunities to be considered in the split, we have to drastically increase the number of trees in the ensemble. At a minimum, 500 trees are needed, but 1,000 to 2,000 trees are recommended to have a reliable model. The second downside is that it somewhat compromises random forests' ability to perform automatic feature selection. Many uninformative predictors will be selected for a split. Fortunately, random forests pioneered permutation importance, which we discuss in @sec-importance. The original reference for the model suggests using a default value of $m_{try} = \sqrt{p}$ for classification models, where $p$ is the number of predictors. 
+
+For the forestation data, a random forest model was optimized over $m_{try}$ for all 16 possible values. Each ensemble consisted of 1,000 trees. The results are shown in @fig-forest-splits along with some variants of the model that will be discussed below. We can see that there is a noticeable trend in the data for this model that results in an optimal value of $m_{try} = `r forest_rngr_best$mtry[1]`$, the y-axis shows that the range of possible results is extremely narrow. Almost any of these values would be suitable. This is quite often the pattern that we see for this model. 
+
+```{r}
+#| label: forest-rf-mtry
+#| include: false
+rngr_mtr <- 
+  forest_rngr_res |> 
+  collect_metrics() |> 
+  filter(.metric == "brier_class") |> 
+  select(mtry, mean) |> 
+  mutate(Model = "Traditional")
+
+cfr_mtr <- 
+  forest_crf_set_res |> 
+  pluck("result") |> 
+  pluck(1) |> 
+  collect_metrics() |> 
+  filter(.metric == "brier_class") |> 
+  select(mtry, mean) |> 
+  mutate(Model = "Conditional Inference")
+
+rf_obl_mtr <- 
+  forest_rf_obl_res |> 
+  collect_metrics() |> 
+  filter(.metric == "brier_class") |> 
+  select(mtry, mean) |> 
+  mutate(Model = "Oblique")
+
+rf_ert_mtr <- 
+  forest_ert_res |> 
+  collect_metrics() |> 
+  filter(.metric == "brier_class") |> 
+  select(mtry, mean) |> 
+  mutate(Model = "Randomized")
+
+rfs <- c("Traditional", "Conditional Inference", "Randomized", "Oblique")
+rf_all_mtr <- 
+  bind_rows(rngr_mtr, cfr_mtr, rf_obl_mtr, rf_ert_mtr) |> 
+  mutate(Model = factor(Model, levels = rfs))
+rf_mtr_rng <- round(range(rf_all_mtr$mean), 3)
+forest_crf_best <- 
+  forest_crf_set_res |> 
+  pluck("result") |> 
+  pluck(1) |> 
+  select_best(metric = "brier_class")
+```
+
+```{r}
+#| label: fig-forest-rf
+#| echo: false
+#| fig-width: 6
+#| fig-height: 4
+#| fig-align: "center"
+#| out-width: "70%"
+#| fig-cap: Tuning results for several variations of random forests. 
+
+rf_all_mtr |> 
+  ggplot(aes(mtry, mean, col = Model)) + 
+  geom_point() + 
+  geom_line() +
+  labs(x = expression(m[try]), y = "Brier Score", color = NULL)
+```
+
+This robustness to tuning parameters reflects how low-maintenance random forest models are overall. They require very little tuning, need no variable transformations, can leave categorical predictors as-is, and, depending on the implementation, can naturally handle missing data. On average, they rank in the top 10% of models (in terms of performance) and, although they probably aren't uniformly optimal, they can produce a high-quality model with little effort.  
+
+As one would expect with such a popular model, there have been a multitude of other extensions and enhancements to the standard model. There are direct analogs to different single-tree methods described in the previous chapter. For example, instead of CART models, conditional inference trees can be used as the ensemble's constituents. This offers some improvements, especially if you want to reduce bias in split selection. As will be described in a later chapter, random forests are a primary tool for measuring how important predictors are to the outcome. Random forest variable importance methods are not perfect, but using conditional inference trees makes them more accurate because the model is not predisposed to select predictors based on how many unique values they contain. For comparison, we also tuned this approach over $m_{try}$. The available implementation is limited to categorical predictors with less than 24 splits, so an effect encoding preprocesspor was used on the county predictor. 
+
+@fig-forest-rf shows that, for these data, the conditional inference forest results are slightly worse than the CART ensemble but are most likely practically equivalenet. In this case, $m_{try} = `r forest_crf_best$mtry[1]`$ was found to be optimal. 
+
+Additionally, you can use oblique trees. In this case, $ $m_{try}$ controls how many randomly selected predictors should make up the linear projection used for each split. This functional form likely has much lower variance than rectangular splits, so using it in a random forest model may not be as much of an upgrade as it is for traditional splits. Again, @fig-forest-rf shows these results.  While slightly better than conditional inference trees in this analysis, they are minutely worse than traditional forests.  
+
+Latly, we should mention extremely randomized trees (a.k.a. "extratrees"). These make splits completely at random and with the original training set. Essentially, these are unsupervised split candidates: a randomly chosen predictor and a randomly chosen split point. It considers  $m_{try}$ random candidate splits and chooses the best among them. This approach is much faster because it avoids an exhaustive search across predictors. @fig-forest-splits demonstrates the effect of this method in panel (d) where randomized splits were used in conjunction with $m_{try} = 16$ so that 16 candidate splits were evaluated for each node. The structure, predictors, and split values differ significantly from the previous trees.  
+
+@fig-forest-rf also shows the results of this model, which slightly edges out the traditional model but found $m_{try} = p$ to be optimal (and is, in essence, bagging). 
+
+## Bayesian Additive Regression Trees {#sec-cls-bart}
+
+```{r}
+#| label: forest-bart
+#| include: false
+#| cache: true
+
+bart_spec <-
+  parsnip::bart(
+    mode = "classification",
+    trees = 500,
+    prior_terminal_node_coef = tune(),
+    prior_terminal_node_expo = tune()
+  ) |>
+  set_engine("dbarts", keepevery = 10)
+
+set.seed(637)
+forest_bart_res <-
+  bart_spec |>
+  tune_grid(
+    class ~ .,
+    resamples = forested_rs,
+    grid = 25,
+    control = control_grid(
+      save_pred = TRUE,
+      save_workflow = TRUE
+    ),
+    metrics = cls_mtr
+  )
+
+forest_bart_best <- select_best(forest_bart_res, metric = "brier_class")
+
+forest_bart_pred <-
+  forest_bart_res |>
+  collect_predictions(parameters = forest_bart_best) |>
+  mutate(wflow_id = "BART") |>
+  relocate(wflow_id)
+
+forest_bart_mtr_ex <-
+  forest_bart_pred |>
+  cls_mtr(class, estimate = .pred_class, .pred_Yes)
+```
 
 
 ## Boosting {#sec-cls-boosting}
@@ -535,59 +762,9 @@ forest_lgb_mtr_ex <-
   cls_mtr(class, estimate = .pred_class, .pred_Yes)
 ```
 
-```{r}
-#| label: forest-boost-ctb
-#| include: false
-
-load("../RData/forest_catboost.RData")
-```
-
 ### Classical Boosting {#sec-cls-classic-boosting}
 
 ### Modern Boosting {#sec-cls-modern-boosting}
-
-## Bayesian Additive Regression Trees {#sec-cls-bart}
-
-```{r}
-#| label: forest-bart
-#| include: false
-#| cache: true
-
-bart_spec <-
-  parsnip::bart(
-    mode = "classification",
-    trees = 500,
-    prior_terminal_node_coef = tune(),
-    prior_terminal_node_expo = tune()
-  ) |>
-  set_engine("dbarts", keepevery = 10)
-
-set.seed(637)
-forest_bart_res <-
-  bart_spec |>
-  tune_grid(
-    class ~ .,
-    resamples = forested_rs,
-    grid = 25,
-    control = control_grid(
-      save_pred = TRUE,
-      save_workflow = TRUE
-    ),
-    metrics = cls_mtr
-  )
-
-forest_bart_best <- select_best(forest_bart_res, metric = "brier_class")
-
-forest_bart_pred <-
-  forest_bart_res |>
-  collect_predictions(parameters = forest_bart_best) |>
-  mutate(wflow_id = "BART") |>
-  relocate(wflow_id)
-
-forest_bart_mtr_ex <-
-  forest_bart_pred |>
-  cls_mtr(class, estimate = .pred_class, .pred_Yes)
-```
 
 
 ## Rule-Based Ensembles {#sec-cls-rule-ensembles}
@@ -626,7 +803,7 @@ forest_ensemble_set_res <-
     Bagged_CART = forest_cart_bag_res |> butcher::butcher(),
     RF = forest_rngr_res |> butcher::butcher(),
     `RF (ERT)` = forest_ert_res |> butcher::butcher(),
-    Oblique_RF = forest_rf_obl_res |> butcher::butcher(),
+    `Oblique RF` = forest_rf_obl_res |> butcher::butcher(),
     Boost_C5.0 = forest_c5_res |> butcher::butcher(),
     XGBoost = forest_xgb_res |> butcher::butcher(),
     LightGBM = forest_lgb_res |> butcher::butcher(),
@@ -649,6 +826,7 @@ all_sets <-
     forest_c5_set_res,
     forest_c5rules_set_res,
     forest_cit_set_res,
+    forest_crf_set_res, 
     forest_ensemble_set_res,
     forest_ctb_set_res
   )
@@ -665,12 +843,15 @@ ensemble_compare <- compare_models(
   cores = 10,
   iter = 5000
 )
-ensemble_compare
 
 ensemble_best <- ensemble_compare$model[is.na(ensemble_compare$probability)]
 
 ensemble_subset <-
   ensemble_compare |>
+  mutate(
+    # To get results for traditional and randomized RF 
+    engine = if_else(grepl("ERT", model), "extratrees", engine)
+  ) |> 
   slice_min(median, by = c(class, engine)) |>
   mutate(
     model = as.character(model),
@@ -705,7 +886,7 @@ How well do these models perform relative to previously discussed techniques?  @
 #| warning: false
 #| out-width: 70%
 #| fig-width: 6
-#| fig-height: 4
+#| fig-height: 5
 #| fig-cap: "Comparisons of current forestation models. The intervals are 90% credible intervals. The bars on the right show the probability of practical equivalence to the current best model, assuming that a difference in Brier scores of +/- 0.01 is practical."
 #| fig-alt: "Two-panel figure comparing all forestation models discussed so far. The left panel is a dot-and-whisker plot of Brier scores with 90% credible intervals, ordered from best to worst. Tree-based models cluster at higher Brier scores than the leading models. The right panel shows horizontal bars for the probability of practical equivalence, indicating that single tree models have virtually no chance of matching the currently best-performing models."
 p_brier <-
