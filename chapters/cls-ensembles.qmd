@@ -106,11 +106,11 @@ forest_cart_bag_mtr_ex <-
 ```
 
 
-Bagging, short for bootstrap aggregation, was first popularized by BREIMAN 1996. The most commonly used definition of a bagged tree is a collection of decision trees grown to maximum size (i.e., unpruned with a small $n_{min}$) and trained on a bootstrap sample of the training set. If we create an ensemble of $B$ trees, we obtain a collection of $B$ predictions for each data point. The final prediction summarizes the collection. Most often the proportion of hard-class "votes" from each tree is used for probability estimates, although other estimators, such as the mean of the class probabilities, can also be used. 
+Bagging, short for bootstrap aggregation, was first popularized by BREIMAN 1996. The most commonly used definition of a bagged tree is a collection of decision trees grown to maximum size (i.e., unpruned with a small $n_{min}$) and trained on a bootstrap sample of the training set. If we create an ensemble of $T$ trees, we obtain a collection of $T$ predictions for each data point. The final prediction summarizes the collection. Most often the proportion of hard-class "votes" from each tree is used for probability estimates, although other estimators, such as the mean of the class probabilities, can also be used. 
 
 Using many trees solves the two issues mentioned above. The ensemble's overall model variance is much smaller than a single tree's. STANDARD ERROR OF BETA MEAN?. Since trees are very flexible, they have low model bias. Combined with lower ensemble variance, this makes the overall model error very low and therefore more predictive. 
 
-Practically, combining $B$ predictions means the predicted values are more granular. To achieve stable performance, $25 \le B \le 50$ is often a good range. However, this is not a tuning parameter; we just need enough ensemble members to obtain a good mean estimate. 
+Practically, combining $T$ predictions means the predicted values are more granular. To achieve stable performance, $25 \le T \le 50$ is often a good range. However, this is not a tuning parameter; we just need enough ensemble members to obtain a good mean estimate. 
 
 The key thing to realize about bagging is that it only improves high-variance models. Consider logistic regression, where the model estimates parameters using all training data points. Adding or removing rows from the training set, or jittering their values, has a relatively limited effect on predictions. This model has low variance, so averaging its predictions has little impact; we are averaging very similar values. Trees, by contrast, can produce very different splits and/or predictions when the training data are perturbed. 
 
@@ -593,14 +593,43 @@ Latly, we should mention extremely randomized trees (a.k.a. "extratrees"). These
 #| include: false
 #| cache: true
 
+extract_bart <- function(x) {
+  require(tidymodels)
+  x <- extract_fit_engine(x)
+  trees <- dbarts::extract(x, "trees")
+  num_term_nodes <- 
+    trees |> 
+    dplyr::filter(var == -1) |> 
+    dplyr::count(tree, sample) |> 
+    dplyr::summarize(mean_num_term_node = mean(n)) |> 
+    purrr::pluck(1)
+  nms <- colnames(x$varcount)
+  is_county <- grepl("county", nms)
+  num_used <- apply(x$varcount[, !is_county], 2, function(x) any(x > 0))
+  cat_used <- any(apply(x$varcount[, is_county], 2, function(x) any(x > 0)))
+  vars_used <- sum(c(num_used, cat_used))
+  tibble(num_term_nodes = num_term_nodes, num_vars_used = vars_used)
+}
+
 bart_spec <-
   parsnip::bart(
     mode = "classification",
-    trees = 500,
+    trees = 100,
     prior_terminal_node_coef = tune(),
-    prior_terminal_node_expo = tune()
+    prior_terminal_node_expo = tune(),
+    prior_outcome_range = tune()
   ) |>
-  set_engine("dbarts", keepevery = 10)
+  set_engine("dbarts", keepevery = 10, nskip = 5000L, keeptrees = TRUE)
+
+bart_wflow <- workflow(class ~ ., bart_spec)
+
+bart_param <- 
+  bart_wflow |> 
+  extract_parameter_set_dials() |> 
+  update(
+    prior_outcome_range = prior_outcome_range(c(0.5, 5)),
+    prior_terminal_node_coef = prior_terminal_node_coef(c(0.1, 1))
+  )
 
 set.seed(637)
 forest_bart_res <-
@@ -609,9 +638,11 @@ forest_bart_res <-
     class ~ .,
     resamples = forested_rs,
     grid = 25,
+    param_info = bart_param, 
     control = control_grid(
       save_pred = TRUE,
-      save_workflow = TRUE
+      save_workflow = TRUE,
+      extract = extract_bart
     ),
     metrics = cls_mtr
   )
@@ -629,7 +660,7 @@ forest_bart_mtr_ex <-
   cls_mtr(class, estimate = .pred_class, .pred_Yes)
 ```
 
-Bayesian additive regression trees (BART) model the outcome with a sum of many small trees. We place prior distributions on each tree's structure, on its leaf parameters, and on the amount of shrinkage. While the model is more complex, the general process mirrors the one described in @sec-logistic-bayes. 
+Bayesian additive regression trees (BART) model the outcome with a sum of many small trees [@bart2010;@chipman2006bayesian]. We place prior distributions on each tree's structure, on its leaf parameters, and on the amount of shrinkage. While the model is more complex, the general process mirrors the one described in @sec-logistic-bayes. 
 
 To estimate the model, we use MCMC to sample from the model's posterior distribution. Each MCMC iteration updates every tree in turn and yields one complete ensemble. After the chains converge to the posterior, we can sample from it to create a set of trees that define the ensemble. 
 
@@ -637,7 +668,7 @@ To start, let's denote a specific tree as $\mathcal{T}$ (as in the previous chap
 
 For a specific predictor vector $\boldsymbol{x}$, the function $g(\boldsymbol{x}, \mathcal{T}, \Theta)$ returns the element in $\Theta$ corresponding to the terminal node where $\boldsymbol{x}$ lands. 
 
-The overall BART model averages these estimates across $T$ trees to produce 
+The overall BART model averages these estimates across $T$ trees to produce:
 
 $$
 \mathcal{F}(\boldsymbol{x}) = \sum_{j=1}^{T} g(\boldsymbol{x};\, \mathcal{T}_j, \Theta_j)
@@ -645,22 +676,25 @@ $$
 
 which is also on the real line. As we'll see below, this value is converted to a probability scale for the final prediction. 
 
-Since BART is a Bayesian method, it relies heavily on probability and likelihood functions for computations. We typically assume that a binary outcome follows a Bernoulli distribution. To make the computations more tractable, BART takes a different approach that focuses on Gaussian quantities. It defines a latent Gaussian random variable
+Since BART is a Bayesian method, it relies heavily on probability and likelihood functions for computations. We typically assume that a binary outcome follows a Bernoulli distribution. To make the computations more tractable, BART takes a different approach that focuses on Gaussian quantities [@albert1993bayesian]. It defines a latent Gaussian random variable
 
 $$
 Z_i = \mathcal{F}(\boldsymbol{x}_i) + \gamma + \varepsilon_i
 $$
 
-where $\gamma$ is a user-defined offset, and $\varepsilon_i$ is an error term assumed to follow a standard normal distribution. The offset defaults to $\gamma = 0$ but can be used to address class imbalance. For example, if the event rate were 10% in the data, we might set $\gamma = \Phi^{-1}(0.1) \approx -1.28$ to help the model perform effectively, where $\Phi^{-1}$ is the inverse of the cumulative normal distribution function $\Phi$. After the model is finalized, our probability estimates are then
+where $\gamma$ is a user-defined offset, and $\varepsilon_i$ is an error term assumed to follow a standard normal distribution. The offset defaults to $\gamma = 0$ but can be used to address class imbalance. For example, if the event rate were 10% in the data, we might set $\gamma = \Phi^{-1}(0.1) \approx -1.28$ to help the model perform effectively, where $\Phi^{-1}$ is the inverse of the cumulative normal distribution function $\Phi$. The ensemble starts with $T$ trees with no splits, so $\hat{\mathcal{F}} = 0$. 
+
+After the model is finalized, our probability estimates are then
 
 $$
 Pr\big[Y_i|\boldsymbol{x}_i\big] = \Phi\Big(\widehat{\mathcal{F}}(x_i) + \gamma\Big)
-$$
+$$ {#eq-bart-prob}
+
 There are two main sets of priors. The first is the tree-structure prior, which describes the probability that a specific node $\mathcal{N}$ in the tree should be split. This prior is parameterized as:
 
 $$
 Pr[{\text{split}}\;\mathcal{N}] = \alpha\,(1 + d_{\mathcal{N}})^{-\beta}
-$$
+$$ {#eq-bart-depth-prior}
 
 where $d_{\mathcal{N}}$ is the current depth of the prior and $\alpha$ and $\beta$ default to 0.95 and 2.0, respectively. 
 
@@ -668,18 +702,85 @@ We can tune these parameters to see if larger or smaller trees are more appropri
 
 There are also uniform priors to select the predictor and the split point (based on a quantile or percent of the predictor's range). 
 
-What about the terminal node parameters? The individual values are assumed to be Gaussian $\theta_i \sim N\big(0, \sigma_\theta^2\big)$. The corresponding variance is $\sigma_\theta = \frac{\kappa}{\lambda\sqrt{T}}$ where $\lambda$ is a regularization parameter and $\kappa$ is a scaling parameter that defaults to 3.0. The parameter $\lambda$ can shrink or expand the prior variance in the denominator, allowing more (or fewer) extreme probabilities to be plausible. 
+What about the terminal node parameters? The individual values are assumed to be Gaussian $\theta_i \sim N\big(0, \sigma_\theta^2\big)$. The corresponding variance is $\sigma_\theta = \frac{\kappa}{k\sqrt{T}}$. $\kappa$ is a scaling factor that specifies the usable probit range to effectively be $\pm \kappa$. Its default is 3.0. The parameter $k$ helps modulate how many prior standard deviations $\mathcal{F}$ stays inside that range define by $\kappa$. $k$ can shrink or expand the prior variance in the denominator, allowing more (or fewer) extreme probabilities to be plausible. 
 
-We'll skip the specifics of how the likelihood is computed, but note that our Gaussian assumptions make the likelihood and posterior analytically tractable and efficient to compute. These models employ an impressive number of computational tricks. For example, we never evaluate the likelihood over the full data. Instead, we retain various sufficient statistics at the leaf level, which makes the Metropolis-Hastings computations very efficient. See REFERENCES for more details. 
+The MCMC process for BART is somewhat more complex than the algorithm previously demonstrated for logistic regression. If we run the MCMC chain for $B$ iterations, we will actually make $B\times T$ accept/reject decisions. Each tree in the ensemble goes through the process, rather than one proposal for the whole ensemble. For each tree, these steps are executed: 
 
-During the Metropolis-Hastings process, proposals for new trees use the operations described in @sec-cls-tree-global to grow, prune, and mutate trees (specifically @fig-tree-mutation). One implementation (`dbarts`) uses: 
+1. Remove tree $j$ from the ensemble and calculate its partial residual. These are the current estimate of the latent variable $Z$.
+2. Propose a new tree structure
+3. Sample from the leaf prior. 
+4. Compute the likelihood with the new values. 
+5. Accept/reject this tree
+
+For the first step, we can rewrite the latent model as
+
+$$
+Z_i - \gamma = \sum_{j=1}^{T} g(\boldsymbol{x}_i; \mathcal{T}_j, \Theta_j) + \varepsilon_i
+$$
+
+The partial residual fixes the predictions for the other trees and subtracts them from the current estimate of the latent variable and its offset: 
+
+$$
+R_{ij} = (Z_i - \gamma) - \sum_{l \neq j} g(\boldsymbol{x}_i; \mathcal{T}_l, \Theta_l)
+$$
+
+Since we treat the other trees' predictions as constants, we can assume the partial residuals are also Gaussian. The partial residuals are now the response variable in a one-tree Gaussian regression^[We'll see that the sequential use of partial residuals is the backbone of the boosting methods described in the next section. BART's use of them _is not_ the same; it is not boosting. The residuals are used in a cyclic, round-robin way. Boosting uses them differently.]. These values are used to compute the current likelihood. 
+
+For the second step, proposals for new trees use the operations described in @sec-cls-tree-global to grow, prune, and mutate trees (specifically @fig-tree-mutation). See @chipman1998bayesian. One implementation [@dbarts] uses: 
 
 - Pr[split a leaf into two children] = 0.25
 - Pr[collapse two sibling leaves into their parent] = 0.25
 - Pr[redraw the cutpoint of an internal node's rule] = 0.40
 - Pr[exchange the rules of a parent and child internal node] = 0.10
 
-At each iteration of the search, the entire ensemble of $T$ trees is created based on the previously accepted configuration.  We sample the priors for hundreds (or thousands) of iterations. If we believe that the process has converged, we generate our final set of $T$ trees for the ensemble. 
+The steps 3 and 5 in the MCMC process for individual trees are more conventional. However, the likelihood is complex, so we'll skip the mechanics of how it is computed, but note that our Gaussian assumptions make the likelihood and posterior analytically tractable and efficient to compute. These models employ an impressive number of computational tricks. For example, we never evaluate the likelihood over the full data. Instead, we retain various sufficient statistics at the leaf level, which makes the Metropolis-Hastings computations very efficient. See @kapelner2013bartmachine, @pratola2014parallel, @emh, and @he2019xbart for more details. 
+
+We sample the priors for hundreds (or thousands) of iterations. If we believe that the process has converged, we generate our final set of $T$ trees for the ensemble. 
+
+
+```{r}
+#| label: fig-forest-bart
+#| echo: false
+#| out-width: 80%
+#| fig-width: 7
+#| fig-height: 2.5
+#| fig-cap: "Tuning results for BART. "
+
+bart_ord <- 
+  c("Depth Prior Coefficient", "Depth Prior Exponent", 
+    "Range Multiplier", "# Terminal Nodes")
+
+forest_bart_res |>
+  collect_extracts() |>
+  unnest(.extracts) |>
+  summarize(
+    num_term_nodes = mean(num_term_nodes),
+    .by = c(.config)
+  ) |>
+  full_join(
+    forest_bart_res |>
+      collect_metrics(type = "wide"),
+    by = ".config"
+  ) |>
+  rename(
+    `# Terminal Nodes` = num_term_nodes,
+    `Depth Prior Coefficient` = prior_terminal_node_coef,
+    `Depth Prior Exponent` = prior_terminal_node_expo,
+    `Range Multiplier` = prior_outcome_range
+  ) |> 
+  select(-mn_log_loss, -roc_auc, -pr_auc) |> 
+  pivot_longer(
+    -c(.config, brier_class),
+    names_to = "parameter",
+    values_to = "value"
+  ) |>
+  mutate(parameter = factor(parameter, levels = bart_ord)) |>
+  ggplot(aes(value, brier_class)) +
+  geom_point(alpha = 2 / 4, cex = 2) +
+  facet_wrap(~parameter, scales = "free_x", nrow = 1) +
+  labs(y = "Brier Score", x = NULL)
+```
+
 
 
 ## Boosting {#sec-cls-boosting}
