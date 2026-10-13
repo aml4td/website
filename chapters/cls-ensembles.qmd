@@ -696,9 +696,59 @@ $$
 Pr[{\text{split}}\;\mathcal{N}] = \alpha\,(1 + d_{\mathcal{N}})^{-\beta}
 $$ {#eq-bart-depth-prior}
 
-where $d_{\mathcal{N}}$ is the current depth of the prior and $\alpha$ and $\beta$ default to 0.95 and 2.0, respectively. 
+where $d_{\mathcal{N}}$ is the current depth of the prior and $\alpha$ and $\beta$ default to 0.95 and 2.0, respectively. @fig-tree-prior shows how the two parameters relate to the probability. @fig-tree-prior demonstrates how this equation captures our belief about the model. If we think we will need a set of deeper trees to predict the outcome accurately, smaller exponents with a larger coefficient are a good option. Exponents greater than 2.0 are the right choice if we believe a collection of small trees (perhaps even a single split) is best. If we have no _a priori_ thoughts on the matter, we can tune these parameters to see whether larger or smaller trees fit our data better. This parameterization helps us define what is plausible before seeing the data.
 
-We can tune these parameters to see if larger or smaller trees are more appropriate for our data. This parameterization helps us define what is plausible before seeing the data. 
+
+::: {#fig-tree-prior}
+
+::::: {.figure-content}
+
+```{r}
+#| label: tree-prior
+#| echo: false
+#| out-width: 100%
+#| fig-width: 10
+#| fig-height: 3
+
+depth_prior <- function(depth, alpha = 0.95, beta = 2.0) {
+  dplyr::tibble(depth = depth, alpha = alpha, beta = beta) |> 
+    dplyr::mutate(
+      probability = alpha * (1 + depth)^(-beta)
+    )
+}
+
+combos <- crossing(alpha = c(0.5, 0.7, 0.9), beta = c(0.5, 1.5, 2.0, 2.5))
+
+dpth <- 1:10
+
+
+prior_probs <- NULL
+for (i in 1:nrow(combos)) {
+  prior_probs <- 
+    bind_rows(prior_probs,
+              depth_prior(dpth, alpha = combos$alpha[i], beta = combos$beta[i]))
+}
+
+prior_probs |>
+  mutate(alpha = format(alpha), Exponenet = beta) |>
+  ggplot(aes(depth, probability, col = alpha, pch = alpha)) +
+  geom_point(cex = 2) +
+  geom_line(alpha = 1 / 2) +
+  facet_wrap( ~ Exponenet, labeller = label_both, nrow = 1) +
+  scale_x_continuous(breaks = 1:10) +
+  labs(
+    x = "Tree Depth",
+    y = "Probability",
+    col = "Coefficient",
+    pch = "Coefficient"
+  )
+```
+
+:::::
+
+The effect of the $\alpha$ and $\beta$ parameters for the prior associated with tree depth. 
+
+:::
 
 There are also uniform priors to select the predictor and the split point (based on a quantile or percent of the predictor's range). 
 
@@ -750,7 +800,7 @@ To demonstrate, a BART model was tuned over $\alpha$ and $\beta$ from @eq-bart-p
 #| out-width: 80%
 #| fig-width: 7
 #| fig-height: 2.5
-#| fig-cap: "Tuning results for BART. "
+#| fig-cap: "Tuning results for BART. The panel on the right reflects the average number of terminal nodes in the ensemble for different tuning parameter candidates."
 
 bart_ord <- 
   c("Depth Prior Coefficient", "Depth Prior Exponent", 
