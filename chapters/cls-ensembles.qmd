@@ -1055,7 +1055,75 @@ $$
 
 The binary class votes provides more weight to trees that have the largest confidence values. 
 
+
+
 ### Modern Boosting {#sec-cls-modern-boosting}
+
+As with the BART discussion, we'll denote a linear predictor type quantity as $\mathcal{F}(\boldsymbol{x}_i)$, which is on the real line. For trees, this is not a linear combination of parameters, but a set of conditional logic statements that yield a single numeric score. This score can be converted to a probability-like format via the logistic function
+
+$$
+p(\boldsymbol{x}_i)_i = \frac{1}{1 + e^{-\mathcal{F}(\boldsymbol{x}_i)}}
+$$
+
+A boosted tree ensemble is a sum of $T$ trees:
+
+$$
+\mathcal{F}_T = \mathcal{F}_0 + \alpha \sum_{j=1}^{T} \mathcal{T}_j
+$$
+
+where $\alpha$ is the learning rate and $\mathcal{F}_0$ is an initial score value. 
+
+As we mentioned earlier, most commonly used gradient boosting models use the log-likelihood [@sec-cross-entropy] as the objective function (previously denoted as $\psi()$ in @sec-gradient-opt). For simplicity, we'll focus on $C=2$ classes. As a reminder, for the Bernoulli distribution, that function is
+
+$$
+\ell(y_i, \mathcal{F}_i) = -\left[ y_i \log p_i + (1 - y_i) \log(1 - p_i) \right]
+$$
+
+using $\mathcal{F}_i$ as shorthand for $\mathcal{F}(\boldsymbol{x}_i)$. Written in terms of the score, this simplifies to:
+
+$$
+\ell(y_i, \mathcal{F}_i) = \log\left(1 + e^{\mathcal{F}_i}\right) - y_i \mathcal{F}_i
+$$
+
+It is common to add a penalty to this loss function: 
+
+The full objective adds a penalty $\mathcal{P}$ on the complexity of each tree:
+
+$$
+\psi() = \sum_{i=1}^{n} \ell(y_i, \mathcal{F}_i) + \sum_{j=1}^{T} \mathcal{P}(\mathcal{T}_j)
+$$
+
+for some penalty function $\mathcal{P}$. Now that we have the objective function, what are the gradient and Hessian?
+
+First, the deverivatives are with respect to the $\mathcal{F}_i$ so there are $n_{tr}$ elements. We'll eventually want to parameterize the gradient as a function of $p_i$ instead of $\mathcal{F}_i$. For that, we need:
+
+$$
+\frac{\partial p_i}{\partial \mathcal{F}_i} = \frac{e^{-\mathcal{F}_i}}{\left(1 + e^{-\mathcal{F}_i}\right)^2} = \underbrace{\frac{1}{1 + e^{-\mathcal{F}_i}}}_{p_i} \cdot \underbrace{\frac{e^{-\mathcal{F}_i}}{1 + e^{-\mathcal{F}_i}}}_{1 - p_i} = p_i (1 - p_i)
+$$
+
+We'll also need
+
+$$
+\frac{\partial \ell}{\partial p_i} = -\frac{y_i}{p_i} + \frac{1 - y_i}{1 - p_i} = \frac{-y_i (1 - p_i) + (1 - y_i) p_i}{p_i (1 - p_i)} = \frac{p_i - y_i}{p_i (1 - p_i)}
+$$
+
+Using the chain rule, we have
+
+$$
+g_i = \frac{\partial \ell}{\partial \mathcal{F}_i} = \frac{\partial \ell}{\partial p_i} \cdot \frac{\partial p_i}{\partial \mathcal{F}_i} = \frac{p_i - y_i}{p_i (1 - p_i)} \cdot p_i (1 - p_i) = p_i - y_i
+$$
+ 
+This is the raw residual $e_{ik}$ from @sec-tree-splitting which ranges from $[-1, 1]$. 
+
+The Hessian is much more straightforward: 
+
+$$
+h_i = \frac{\partial^2 \ell}{\partial \mathcal{F}_i^2} = p_i (1 - p_i)
+$$
+
+This matches the variance of the Bernoulli distribution, is non-negative, and is maximized at $1/C = 0.5$. Recall that the Hessian is a _matrix_ with partial derivatives on the off-diagonals. Gradient boosting uses the approximation all $h_{ii'} = 0$ for all $i \ne i'$. 
+
+
 
 
 ## Rule-Based Ensembles {#sec-cls-rule-ensembles}
