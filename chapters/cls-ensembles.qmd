@@ -991,7 +991,69 @@ forest_lgb_mtr_ex <-
   cls_mtr(class, estimate = .pred_class, .pred_Yes)
 ```
 
+
+Modern boosting methods do not use sample reweighting to create ensemble members. Although AdaBoost has not persisted as a commonly used method, one sample-weighting method has. C5.0 is a modern successor to Quinlan's C4.5 model. Let's discuss this method for diving into other techniques. 
+
 ### Classical Boosting {#sec-cls-classic-boosting}
+
+C5.0 has several minor differences from its predecessor and also enables boosting via reweighting. Like modern methods, this boosting tool includes a significant amount of engineering embedded within. For example, C5.0 conducts a kind of futility analysis to determine whether training-set points it will _never_ be able to predict correctly and drops them. This discussion provides a general overview of what the methodology does and how well it works. 
+
+So far, we have not discussed **case weights**. These values, associated with each training set sample, often measure how much influence a specific data point should have on computations such as the model's objective function. A wide variety of case weights can be used in different phases (e.g., training, model assessment, etc.). For example, frequency weights are integer values that indicate how often a specific data vector occurs. For example, if the forestation included only the county predictor, we could reduce the training set to `r length(levels(forested_train$county))` rows (one per county) and assign a corresponding frequency weight based on how often each county occurs.  
+
+Our focus here is on importance weights, which are general non-negative values used during model training. Most of our models can already accommodate case weights during computations. We define the training set case weights as $w_i$ ($i=1\ldots n_{tr}$), initialized to 1.0 (unless the user overrides this default), and fit the first tree in the ensemble with each training set sample having the same influence on the model.  After this fit, the number of leaves in this tree is used to limit the dpeth of future trees to make all trees about the same size. 
+ 
+After training tree $\mathcal{T}_j$ of $T$ in the ensemble, the current tree classifies the entire training set. This is also when C5.0 conducts its futility analysis to determine which (if any) points to exclude. We'll denote the available training set points at iteration $j$ as $n_{(j)}$. 
+
+The probability estimate for class $k$ for tree $j$ is the class-specific count in the node divided by the total count. With missing data, the estimate is a weighted average of the terminal nodes into which its fractional weight was distributed. This is the estimate used (internally) during training and, when predicting new samples, the corrected values described in @sec-tree-estimates are the estimates. 
+
+The case-weight update algorithm depends on whether the model predicted samples correctly or incorrectly. When the model predicts the correct class, the weights are scaled _multiplicatively_, while the poorly predicted ones have an _additive_ increase.  For tree $j$, we denote the total weights for correctly and incorrectly predicted samples as $W_{+}^{(j)}$ and $W_{-}^{(j)}$, respectively. Also, $\mathcal{E}^{(j)}$ is the unweighted number of misclassified active samples. From these, we compute:
+
+$$
+\begin{align}
+\delta^{(j)} &= \frac{W_{+}^{(j)} - W_{-}^{(j)}}{4} \notag \\
+a^{(j)} &= \frac{W_{+}^{(j)} - \delta^{(j)}}{W_{+}^{(j)}} \notag \\
+b^{(j)} &= \frac{\delta^{(j)}}{\mathcal{E}^{(j)}} \notag \\
+\nu^{(j)} &= \frac{n_{(j)}}{W_{+}^{(j)} + W_{-}^{(j)}} \notag 
+\end{align}
+$$
+
+$\delta^{(j)}$ is _how much_ weight moves. This is the total weight taken from the correctly classified group and given to the misclassified group. It is set so that the misclassified group's total ends up halfway between its current total, $W_{-}^{(j)}$, and half of all the weight.  
+
+The case-weight update is then: 
+
+$$
+w_i^{(j+1)} =
+\begin{cases}
+\max\left(\nu^{(j)}\, a^{(j)}\, w_i^{(j)},\ 0.001\right) & \text{if correctly predicted}  \\
+\nu^{(j)}\left(w_i^{(j)} + b^{(j)}\right) & \text{if incorrectly predicted} \\
+0 & \text{if dropped}
+\end{cases}
+$$
+
+$a^{(j)}$ represents how much each correctly classified sample shrinks and $b^{(j)}$ is the additional weight that incorrect samples recieve. The factor $\nu^{(j)}$ makes the active weights sum to $n_{(j)}$.
+
+
+To make the final ensemble prediction, C5.0 uses the sum of the weights for class $k$ in terminal node $\ell$ for tree $j$ ($n_{\ell k}^{(j)}$) as well as the total weights over classes ($n_{\ell}^{(j)}$). They also use the observer class prevalences from the training set ($p_k$). The hard class prediction is determined by finding the largest value for the node that the new sample lands in (denoted as $\ell$ here): 
+
+$$
+\widehat{y}^{(j)} = \arg\max_k n_{\ell k}^{(j)}
+$$
+
+The shrunken terminal node proportion is computed (as mentioned in the previous chapter)
+
+$$
+\widetilde{p}_k^{(j)} = \frac{n_{\ell k}^{(j)} + p_k^{(j)}}{n_{\ell}^{(j)} + 1}
+$$
+
+where $p_k^{(j)}$ is the proportion determined from the data currently in each tree^[Since some training set samples may have been abandoned.]. For the tree, the _confidence value_ is the shrunken proportion corresponding to the predicted class $\widehat{y}^{(j)}$. We'll call that $\widetilde{p}^{(j)}$. 
+
+Now that we have estimated confidence values for each tree, the final estimate for an unknown sample is a weighted average of the votes: 
+
+$$
+\widehat{p}_{k} = \frac{\sum\limits_{j=1}^{T} \widetilde{p}^{(j)}\, I\big[\widehat{y}^{(j)} = k\big]}{\sum \limits_{j=1}^{T^{}} \widetilde{p}^{(j)}}
+$$
+
+The binary class votes provides more weight to trees that have the largest confidence values. 
 
 ### Modern Boosting {#sec-cls-modern-boosting}
 
