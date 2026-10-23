@@ -6,7 +6,7 @@ library(mirai)
 if (!rlang::is_installed("catboost")) {
   # See https://catboost.ai/docs/en/installation/r-installation-binary-installation
   
-  version <- "1.2.7"
+  version <- "1.2.10"
   template <- "https://github.com/catboost/catboost/releases/download/v{version}/catboost-R-darwin-universal2-{version}.tgz"
   
   target_url <- glue::glue(template)
@@ -35,7 +35,7 @@ ctb_spec <-
     tree_depth = tune(),
     learn_rate = tune()
   ) |> 
-  set_engine("lightgbm")
+  set_engine("catboost")
 
 ctb_param <- 
   ctb_spec |> 
@@ -64,7 +64,7 @@ forest_ctb_best <- select_best(forest_ctb_res, metric = "brier_class")
 forest_ctb_pred <-
   forest_ctb_res |>
   collect_predictions(parameters = forest_ctb_best) |>
-  mutate(wflow_id = "LightGBM") |>
+  mutate(wflow_id = "CatBoost") |>
   relocate(wflow_id)
 
 forest_ctb_mtr_ex <-
