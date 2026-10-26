@@ -49,11 +49,21 @@ source("../R/compare_models.R")
 # load data
 
 load("../RData/forested_data.RData")
-load("../RData/forest_crf.RData")
-load("../RData/forest_catboost.RData")
-load("../RData/forest_cart_set_res.RData")
 
 # ------------------------------------------------------------------------------
+# We do some extra work to determine things like the number of terminal nodes etc
+# an these can take terrible amounts of time to compute. For this reason, we
+# do the computations separately
+
+load("../RData/forest_cart_set_res.RData")
+load("../RData/forest_crf.RData")
+load("../RData/forest_c5.RData")
+load("../RData/forest_xgboost.RData")
+load("../RData/forest_lightgbm.RData")
+load("../RData/forest_catboost.RData")
+
+# ------------------------------------------------------------------------------
+
 
 cls_mtr <- metric_set(brier_class, roc_auc, pr_auc, mn_log_loss)
 ```
@@ -61,7 +71,7 @@ cls_mtr <- metric_set(brier_class, roc_auc, pr_auc, mn_log_loss)
 While classification trees are interesting and flexible models, as we saw in the previous chapter, they often rank poorly in prediction. Two of the reasons are: 
 
 - The granularity of predictions from rectangular trees is often low since the number of unique predicted values is the same as the number of terminal nodes. 
-- Their high model variance contributes to an overall high model mean squared error (recalling @sec-variance-bias).  Breiman [1994] labeled tree-based models as being an _unstable procedure_. 
+- Their high model variance contributes to an overall high model mean squared error (recalling @sec-variance-bias). @breiman1996heuristics labeled tree-based models as being an _unstable procedure_. 
 
 In this chapter, we discuss methods for bundling many classification trees into an overall ensemble model. As we'll see, tree ensembles have a well-earned reputation for exceptionally high accuracy. 
 
@@ -861,137 +871,6 @@ The next leap forward was @friedman2002. Perhaps influenced by SGD, Friedman def
 
 While some small improvements have been made, fundamentally, most modern boosting models are implementations of stochastic gradient boosting. The current slate of top-performing models (XGBoost, LightGBM, and CatBoost) are based on this model and are mostly focused on the engineering aspects of the computations. 
 
-
-```{r}
-#| label: forest-boost-c5
-#| include: false
-#| cache: true
-
-c5_spec <-
-  boost_tree(
-    mode = "classification",
-    trees = tune(),
-    min_n = tune()
-  ) |>
-  set_engine("C5.0")
-
-set.seed(498)
-forest_c5_res <-
-  c5_spec |>
-  tune_grid(
-    class ~ .,
-    resamples = forested_rs,
-    grid = 25,
-    control = control_grid(
-      save_pred = TRUE,
-      save_workflow = TRUE
-    ),
-    metrics = cls_mtr
-  )
-
-forest_c5_best <- select_best(forest_c5_res, metric = "brier_class")
-
-forest_c5_pred <-
-  forest_c5_res |>
-  collect_predictions(parameters = forest_c5_best) |>
-  mutate(wflow_id = "Boosted C5.0") |>
-  relocate(wflow_id)
-
-forest_c5_mtr_ex <-
-  forest_c5_pred |>
-  cls_mtr(class, estimate = .pred_class, .pred_Yes)
-```
-
-```{r}
-#| label: forest-boost-xgb
-#| include: false
-#| cache: true
-
-xgb_spec <-
-  boost_tree(
-    mode = "classification",
-    trees = 1000,
-    mtry = tune(),
-    min_n = tune(),
-    tree_depth = tune(),
-    loss_reduction = tune(),
-    learn_rate = tune(),
-    stop_iter = 5
-  )
-
-set.seed(754)
-forest_xgb_res <-
-  xgb_spec |>
-  tune_grid(
-    class ~ .,
-    resamples = forested_rs,
-    grid = 25,
-    control = control_grid(
-      save_pred = TRUE,
-      save_workflow = TRUE
-    ),
-    metrics = cls_mtr
-  )
-
-forest_xgb_best <- select_best(forest_xgb_res, metric = "brier_class")
-
-forest_xgb_pred <-
-  forest_xgb_res |>
-  collect_predictions(parameters = forest_xgb_best) |>
-  mutate(wflow_id = "XGBoost") |>
-  relocate(wflow_id)
-
-forest_xgb_mtr_ex <-
-  forest_xgb_pred |>
-  cls_mtr(class, estimate = .pred_class, .pred_Yes)
-```
-
-```{r}
-#| label: forest-boost-lgb
-#| include: false
-#| cache: true
-
-lgb_spec <-
-  boost_tree(
-    mode = "classification",
-    trees = 1000,
-    mtry = tune(),
-    min_n = tune(),
-    tree_depth = tune(),
-    loss_reduction = tune(),
-    learn_rate = tune(),
-    stop_iter = 5
-  ) |>
-  set_engine("lightgbm")
-
-set.seed(931)
-forest_lgb_res <-
-  lgb_spec |>
-  tune_grid(
-    class ~ .,
-    resamples = forested_rs,
-    grid = 25,
-    control = control_grid(
-      save_pred = TRUE,
-      save_workflow = TRUE
-    ),
-    metrics = cls_mtr
-  )
-
-forest_lgb_best <- select_best(forest_lgb_res, metric = "brier_class")
-
-forest_lgb_pred <-
-  forest_lgb_res |>
-  collect_predictions(parameters = forest_lgb_best) |>
-  mutate(wflow_id = "LightGBM") |>
-  relocate(wflow_id)
-
-forest_lgb_mtr_ex <-
-  forest_lgb_pred |>
-  cls_mtr(class, estimate = .pred_class, .pred_Yes)
-```
-
-
 Modern boosting methods do not use sample reweighting to create ensemble members. Although AdaBoost has not persisted as a commonly used method, one sample-weighting method has. C5.0 is a modern successor to Quinlan's C4.5 model. Let's discuss this method for diving into other techniques. 
 
 ### Classical Boosting {#sec-cls-classic-boosting}
@@ -1059,74 +938,162 @@ The binary class votes provides more weight to trees that have the largest confi
 
 ### Modern Boosting {#sec-cls-modern-boosting}
 
-As with the BART discussion, we'll denote a linear predictor type quantity as $\mathcal{F}(\boldsymbol{x}_i)$, which is on the real line. For trees, this is not a linear combination of parameters, but a set of conditional logic statements that yield a single numeric score. This score can be converted to a probability-like format via the logistic function
+Before getting into the specifics of different gradient boosting species, let's get an idea of the problem we are trying to solve and the high-level mechanics of how it solves it. 
+
+As with the BART discussion, we'll denote the model's score for a sample as $\mathcal{F}(\boldsymbol{x}_i)$, a quantity on the real line that plays the same role as the linear predictor in logistic regression. A single tree produces its score by sending $\boldsymbol{x}_i$ through a set of conditional logic statements to a terminal node and returning that node's value. Given the tree's structure, the score is linear in the terminal node values. The structure itself (the splits) is not a smooth function of any parameters. The score is converted to a probability estimate via the logistic function:
+
 
 $$
-p(\boldsymbol{x}_i)= \frac{1}{1 + e^{-\mathcal{F}(\boldsymbol{x}_i)}}
+p(\boldsymbol{x}_i) = \frac{1}{1 + e^{-\mathcal{F}(\boldsymbol{x}_i)}}
 $$
 
 A boosted tree ensemble is a sum of $T$ trees:
 
 $$
-\mathcal{F}_T = \mathcal{F}_0 + \alpha \sum_{j=1}^{T} \mathcal{T}_j
+\mathcal{F}_T(\boldsymbol{x}) = \mathcal{F}_0 + \alpha \sum_{j=1}^{T} f_j(\boldsymbol{x})
 $$
 
-where $\alpha$ is the learning rate and $\mathcal{F}_0$ is an initial score value. 
+where $\alpha$ is the learning rate and $\mathcal{F}_0$ is an initial score. $\mathcal{F}_0$ is usually the log-odds of the event rate in the training set. $f_j(\boldsymbol{x})$ is the numeric score prediction from the tree created at iteration $j$. If the tree structure $\mathcal{T}_j$ partitions the predictor space into terminal node regions $R_{j1}, \ldots, R_{jK_j}$, then:
 
-As we mentioned earlier, most commonly used gradient boosting models use the log-likelihood [@sec-cross-entropy] as the objective function (previously denoted as $\psi()$ in @sec-gradient-opt). For simplicity, we'll focus on $C=2$ classes. As a reminder, for the Bernoulli distribution, that function is
+$$
+f_j(\boldsymbol{x}) = \sum_{k=1}^{K_j} w_{jk} \, I(\boldsymbol{x} \in R_{jk})
+$$
+
+The structure $\mathcal{T}_j$ determines which terminal node $\boldsymbol{x}$ lands in, and $w_{jk}$ is the value returned by that node. The ensemble is built one tree at a time:
+
+$$
+\mathcal{F}_j(\boldsymbol{x}) = \mathcal{F}_{j-1}(\boldsymbol{x}) + \alpha \, f_j(\boldsymbol{x})
+$$
+
+As we'll see, this is analogous to the typical gradient step shown in  @eq-gd-step: 
+
+$$
+\boldsymbol{\theta}_{i} = \boldsymbol{\theta}_{i-1} - \alpha\:g(\boldsymbol{\theta}_{i-1})
+$$
+
+As we mentioned earlier, most commonly used gradient boosting models use the negative log-likelihood [@sec-cross-entropy] as the objective function (previously denoted as $\psi$ in @sec-gradient-opt). For simplicity, we'll focus on $C = 2$ classes. For the Bernoulli distribution, the contribution of a single training set point is:
 
 $$
 \ell(y_i, \mathcal{F}_i) = -\Big[ y_i \log p_i + (1 - y_i) \log(1 - p_i) \Big]
 $$
 
-using $\mathcal{F}_i$ as shorthand for $\mathcal{F}(\boldsymbol{x}_i)$. Written in terms of the score, this simplifies to:
+using $\mathcal{F}_i$ and $p_i$ as shorthand for $\mathcal{F}(\boldsymbol{x}_i)$ and $p(\boldsymbol{x}_i)$. Written in terms of the score, this simplifies to:
 
 $$
 \ell(y_i, \mathcal{F}_i) = \log\left(1 + e^{\mathcal{F}_i}\right) - y_i \mathcal{F}_i
 $$
 
-It is common to add a penalty to this loss function: 
-
-The full objective adds a penalty $\mathcal{P}$ on the complexity of each tree:
+The full objective function adds a penalty $\mathcal{P}$ on the complexity of each tree:
 
 $$
-\psi() = \sum_{i=1}^{n_{tr}} \ell(y_i, \mathcal{F}_i) + \sum_{j=1}^{T} \mathcal{P}(\mathcal{T}_j)
+\psi = \sum_{i=1}^{n_{tr}} \ell(y_i, \mathcal{F}_i) + \sum_{j=1}^{T} \mathcal{P}(\mathcal{T}_j)
 $$
 
-for some penalty function $\mathcal{P}$. Now that we have the objective function, what are the gradient and Hessian?
+The penalty can depend on both the tree structure (e.g., the number of terminal nodes) and the terminal node values $w_{jk}$. We've already seen examples of penalties in @sec-tree-splitting. The trees are added one at a time, and earlier trees are not changed. So at iteration $j$, the only part of the penalty that matters is $\mathcal{P}(\mathcal{T}_j)$. The three libraries discussed below use different forms of $\mathcal{P}$.
 
-First, the deverivatives are with respect to the $\mathcal{F}_i$ so there are $n_{tr}$ elements. We'll eventually want to parameterize the gradient as a function of $p_i$ instead of $\mathcal{F}_i$. For that, we need:
+Now that we have the objective function, what are the gradient and Hessian?
+
+A tree is a step function, so we cannot differentiate the objective with respect to its split points. Instead, gradient boosting treats each sample's current score $\mathcal{F}_i$ as a free value that could be moved up or down, and differentiates with respect to that. There are $n_{tr}$ such values, so the gradient has $n_{tr}$ elements.
+
+Since $\ell$ is written in terms of $p_i$, and $p_i$ is a function of $\mathcal{F}_i$, we'll use the chain rule. The first piece is the derivative of the logistic function:
 
 $$
 \frac{\partial p_i}{\partial \mathcal{F}_i} = \frac{e^{-\mathcal{F}_i}}{\left(1 + e^{-\mathcal{F}_i}\right)^2} = \underbrace{\frac{1}{1 + e^{-\mathcal{F}_i}}}_{p_i} \cdot \underbrace{\frac{e^{-\mathcal{F}_i}}{1 + e^{-\mathcal{F}_i}}}_{1 - p_i} = p_i (1 - p_i)
 $$
 
-We'll also need
+The second is the derivative of the loss with respect to the probability:
 
 $$
 \frac{\partial \ell}{\partial p_i} = -\frac{y_i}{p_i} + \frac{1 - y_i}{1 - p_i} = \frac{-y_i (1 - p_i) + (1 - y_i) p_i}{p_i (1 - p_i)} = \frac{p_i - y_i}{p_i (1 - p_i)}
 $$
 
-Using the chain rule, we have
+Multiplying these, the $p_i(1 - p_i)$ terms cancel:
 
 $$
 g_i = \frac{\partial \ell}{\partial \mathcal{F}_i} = \frac{\partial \ell}{\partial p_i} \cdot \frac{\partial p_i}{\partial \mathcal{F}_i} = \frac{p_i - y_i}{p_i (1 - p_i)} \cdot p_i (1 - p_i) = p_i - y_i
 $$
- 
-This is the raw residual $e_{ik}$ from @sec-tree-splitting which ranges from $[-1, 1]$. 
 
-The Hessian is much more straightforward: 
+As a check, differentiating the simplified form of $\ell$ directly gives the same result:
 
 $$
-h_i = \frac{\partial^2 \ell}{\partial \mathcal{F}_i^2} = p_i (1 - p_i)
+g_i = \frac{e^{\mathcal{F}_i}}{1 + e^{\mathcal{F}_i}} - y_i = p_i - y_i
 $$
 
-This matches the variance of the Bernoulli distribution, is non-negative, and is maximized at $1/C = 0.5$. Recall that the Hessian is a _matrix_ with partial derivatives on the off-diagonals. Gradient boosting uses the approximation all $h_{ii'} = 0$ for all $i \ne i'$. 
+The negative gradient, $-g_i = y_i - p_i$, is the raw residual $e_{ik}$ from @sec-tree-splitting. It falls in $(-1, 1)$, and in the boosting literature it is called the pseudo-residual. Note the sign: the residual points in the direction that *decreases* the loss.
 
-We'll denote $G$ and $H$ as the sum of the $g_i$ and $h_i$ over the training set. 
+How, then, does gradient boosting work? It mirrors gradient descent. The initial score $\mathcal{F}_0$ plays the role of the starting parameter values ($\boldsymbol{\theta}_0$). A gradient descent step would move each score against its gradient:
 
+$$
+\mathcal{F}_i \leftarrow \mathcal{F}_{j-1} - \alpha \, g_{j-1}
+$$
 
+That step is only defined for the training set points and says nothing about a new $\boldsymbol{x}$. Instead, we build a tree $f_j$ that approximates the negative gradients $y_i - p_i$ as a function of the predictors. These are the residuals of the *current ensemble* ($\mathcal{F}_0$ plus all previous trees). The tree turns the gradient step into a function that can be applied to any sample. Its predictions are on the log-odds scale, not the probability scale, and they are shrunk by $\alpha$ before being added to $\mathcal{F}$.
 
+The modern libraries also use the Hessian, which makes each update a Newton step rather than a plain gradient step. The general form of Newton's Method is: 
+
+$$
+\boldsymbol{\theta}_{i+1} = \boldsymbol{\theta}_i - \alpha\:H(\boldsymbol{\theta}_i)^{-1}g(\boldsymbol{\theta}_i)
+$$ {#eq-newton-step}
+
+The Hessian follows from differentiating $g_i$ once more. Since $y_i$ is a constant:
+
+$$
+h_{ii} = \frac{\partial^2 \ell}{\partial \mathcal{F}_i^2} = \frac{\partial}{\partial \mathcal{F}_i} \left( p_i - y_i \right) = \frac{\partial p_i}{\partial \mathcal{F}_i} = p_i (1 - p_i)
+$$
+
+This is the variance of the Bernoulli distribution. It is always positive and has a maximum value of 0.25 at $p_i = 0.5$. It is near zero when the model is confident ($p_i$ close to 0 or 1).
+
+Recall that the Hessian is a _matrix_, with the mixed second partial derivatives $\partial^2 \psi / \partial \mathcal{F}_i \, \partial \mathcal{F}_{i'}$ on the off-diagonals. Here, each sample's loss depends only on its own score, so $h_{ii'} = 0$ when $i \ne i'$. The $n_{tr} \times n_{tr}$ Hessian is diagonal, and the vector of $h_i$ values contains all the information^[Since it is digonal, we index it by $i$ and not $ii$ for convenience.]. This is not true for $C > 2$ classes (see below).
+
+For the samples in terminal node $k$ of tree $j$, define $G_k = \sum_{i \in k} g_i$ and $H_k = \sum_{i \in k} h_i$. Without a penalty, the Newton step for that node is:
+
+$$
+w_{jk} = -\frac{G_k}{H_k}
+$$
+
+The numerator is the sum of the residuals in the node. The denominator rescales it from the probability scale to the real line. The penalty $\mathcal{P}$ changes this formula, and the same sums $G$ and $H$ are used to score candidate splits while the tree is grown. After the tree is added, the probabilities and residuals are recomputed, the next tree is fit to the new residuals, and the process repeats.
+
+::: {.important-box}
+A high-level summary of gradient boosting machines: after an initial model, a new tree is created to minimize the errors in the current ensemble at that point. This process continues for a set number of iterations or until early stopping halts it.
+:::
+
+For multiclass outcomes, there are, of course, some differences.  First, the multinomial log-likelihood is used and is still equivalent to using cross-entropy (@eq-cross-entropy) regardless of the value of $C$. The probabilities $p_{ik}$ are computed using a standard softmax function on the set of $C$ score values $\mathcal{F}_{i1}, \ldots, \mathcal{F}_{iC}$.
+
+The form of the gradient doesn't change, although it does now have $C$ elements ($g_{ik} = p_{ick} - y_{ik}$) per sample. The Hessian is more complex since the off-diagonals are theoretically non-zero: 
+
+$$
+\frac{\partial^2 \ell_i}{\partial \mathcal{F}_{ik} \, \partial \mathcal{F}_{ik'}} =
+\begin{cases}
+p_{ik} (1 - p_{ik}) & k = k' \\
+-p_{ik} \, p_{ik'} & k \neq k'
+\end{cases}
+$$
+
+The Hessian matrix has $C\times n_{tr}$ rows and columns and is block diagonal, with $C\times C$ blocks. Since we assume that the training set points are independent, the Hessian elements corresponding to the same point are zero. For a specific sample $i$, the block looks like: 
+
+$$
+\boldsymbol{H}_i =
+\begin{bmatrix}
+p_{i1}(1 - p_{i1}) & -p_{i1} p_{i2} & \cdots & -p_{i1} p_{iC} \\
+-p_{i2} p_{i1} & p_{i2}(1 - p_{i2}) & \cdots & -p_{i2} p_{iC} \\
+\vdots & \vdots & \ddots & \vdots \\
+-p_{iC} p_{i1} & -p_{iC} p_{i2} & \cdots & p_{iC}(1 - p_{iC})
+\end{bmatrix}
+$$
+
+Since the probabilities must sum to one, there is a built-in linear dependency, and we can't invert the block. Practically speaking, the approximation Hessian is used by once again setting the off-diagonals to zero as before [@friedman2000; @friedman2001]. The true Hessian is not possible here anyway, since the trees for different classes probably have different structures and do not share terminal nodes. Some implementations rescale the diagonal terms (e.g., by $C / (C - 1)$) to partially compensate.
+
+#### XGBoost
+
+@xgb16
+
+#### LightGBM
+
+@lgb17
+
+#### CatBoost
+
+@cat18
 
 ## Rule-Based Ensembles {#sec-cls-rule-ensembles}
 
@@ -1157,7 +1124,6 @@ load("../RData/forest_c5_set_res.RData")
 load("../RData/forest_cit_set_res.RData")
 load("../RData/forested_obl_set_res.RData")
 load("../RData/forest_c5rules_set_res.RData")
-
 
 forest_ensemble_set_res <-
   as_workflow_set(
