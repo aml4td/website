@@ -6,33 +6,36 @@ library(mirai)
 
 # ------------------------------------------------------------------------------
 
-daemons(parallel::detectCores())
+daemons(5)
 load("RData/forested_data.RData")
 cls_mtr <- metric_set(brier_class, roc_auc, pr_auc, mn_log_loss)
 
 # ------------------------------------------------------------------------------
 
-boost_stats <- function(x) {
+ensmbl_stats <- function(x) {
   require(tidymodels)
   require(lorax)
   if (inherits(x, c("model_fit", "workflow"))) {
     x <- extract_fit_engine(x)
+  } else {
+    dat <- NULL
   }
   num_members <- num_ensemble_members(x)
   mem_seq <- seq_len(num_members)
 
-  rule_df <-
-    purrr::map_dfr(
-      mem_seq, 
-      ~ extract_rules(x, trees = .x, add_statistics = TRUE)
-    )
-  
-  rule_df |> 
+  rule_df <- extract_rules(
+    x,
+    tree = mem_seq,
+    add_statistics = TRUE
+  )
+
+  rule_df |>
     summarize(
       num_rule_terms = mean(num_rule_terms),
       num_rule_predictors = mean(num_rule_predictors),
       num_terminal_nodes = length(tree)
-    )
+    ) |>
+    mutate(num_members = num_members)
 }
 
 # ------------------------------------------------------------------------------
@@ -40,21 +43,19 @@ boost_stats <- function(x) {
 xgb_spec <-
   boost_tree(
     mode = "classification",
-    trees = 1000,
+    trees = 5000,
     mtry = tune(),
     min_n = tune(),
     tree_depth = tune(),
     loss_reduction = tune(),
     learn_rate = tune(),
     stop_iter = 5
-  ) 
+  )
 
-xgb_param <- 
-  xgb_spec |> 
-  extract_parameter_set_dials() |> 
-  update(
-    tree_depth = tree_depth(c(2, 32))
-    )
+xgb_param <-
+  xgb_spec |>
+  extract_parameter_set_dials() |>
+  update(tree_depth = tree_depth(c(2, 32)))
 
 set.seed(458)
 forest_xgb_res <-
@@ -67,7 +68,7 @@ forest_xgb_res <-
     control = control_grid(
       save_pred = TRUE,
       save_workflow = TRUE,
-      extract = boost_stats
+      extract = ensmbl_stats
     ),
     metrics = cls_mtr
   )
@@ -91,8 +92,7 @@ forest_xgb_set_res <-
 
 # ------------------------------------------------------------------------------
 
-save(list = ls(pattern = "forest_xgb_"), 
-     file = "RData/forest_catboost.RData")
+save(list = ls(pattern = "forest_xgb_"), file = "RData/forest_xgboost.RData")
 
 if (!interactive()) {
   q("no")
