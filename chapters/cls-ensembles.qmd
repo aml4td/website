@@ -6,7 +6,6 @@ knitr:
 
 # Classification Ensembles {#sec-cls-ensembles}
 
-
 ```{r}
 #| label: cls-ensembles-setup
 #| include: false
@@ -79,12 +78,10 @@ We'll start with ensembles of independently generated trees (bagging and random 
 
 ## Bagging {#sec-cls-bag}
 
-
 ```{r}
 #| label: forest-bag-cart
 #| include: false
 #| cache: true
-
 cart_bag_spec <-
   bag_tree(mode = "classification") |>
   set_engine("rpart", times = 50)
@@ -115,7 +112,6 @@ forest_cart_bag_mtr_ex <-
   cls_mtr(class, estimate = .pred_class, .pred_Yes)
 ```
 
-
 Bagging, short for bootstrap aggregation, was first popularized by @breiman1996. The most commonly used definition of a bagged tree is a collection of decision trees grown to maximum size (i.e., unpruned with a small $n_{min}$) and trained on a bootstrap sample of the training set. If we create an ensemble of $T$ trees, we obtain a collection of $T$ predictions for each data point. The final prediction summarizes the collection. Most often the proportion of hard-class "votes" from each tree is used for probability estimates, although other estimators, such as the mean of the class probabilities, can also be used. 
 
 Using many trees solves the two issues mentioned above. The ensemble's overall model variance is much smaller than a single tree's. STANDARD ERROR OF BETA MEAN?. Since trees are very flexible, they have low model bias. Combined with lower ensemble variance, this makes the overall model error very low and therefore more predictive. 
@@ -130,20 +126,20 @@ Why use very deep trees? The mechanics of bagging are designed to increase the d
 #| label: cls-bagging-demo
 #| include: false
 #| cache: true
-
 extr_term_nodes <- function(x) {
   require(tidymodels)
   require(lorax)
-  bag_obj <- 
-    x |> 
-    extract_fit_engine() 
-  
-  num_nodes <- 
-    bag_obj$model_df$model |> 
+  bag_obj <-
+    x |>
+    extract_fit_engine()
+
+  num_nodes <-
+    bag_obj$model_df$model |>
     purrr::map_int(
-      ~ .x |> extract_fit_engine() |> lorax::extract_rules() |> nrow()) |> 
+      ~ .x |> extract_fit_engine() |> lorax::extract_rules() |> nrow()
+    ) |>
     sum()
-  
+
   tibble::tibble(num_terminal_nodes = num_nodes)
 }
 
@@ -158,9 +154,9 @@ bag_wflow <-
       set_engine("rpart", time = 50)
   )
 
-bag_param <- 
-  bag_wflow |> 
-  extract_parameter_set_dials() |> 
+bag_param <-
+  bag_wflow |>
+  extract_parameter_set_dials() |>
   update(min_n = min_n(c(1, 100)))
 
 
@@ -187,24 +183,23 @@ To demonstrate, we used the forestation data and created bagged CART ensembles w
 #| fig-cap: The relationship between tree complexity and performance for a bagged ensemble of 50 CART trees.
 #| warning: false
 #| message: false
-
-bag_res |> 
-  collect_extracts() |> 
-  select(.config, .extracts) |> 
-  unnest(.extracts) |> 
+bag_res |>
+  collect_extracts() |>
+  select(.config, .extracts) |>
+  unnest(.extracts) |>
   summarize(
     num_terminal_nodes = mean(num_terminal_nodes),
     .by = c(.config)
-  ) |> 
+  ) |>
   full_join(
-    collect_metrics(bag_res, type = "wide"), 
+    collect_metrics(bag_res, type = "wide"),
     by = join_by(.config)
-  ) |> 
+  ) |>
   ggplot(aes(num_terminal_nodes / 50, brier_class)) +
   geom_point() +
   geom_smooth(se = FALSE, span = 0.5) +
   scale_x_log10() +
-  labs(y = "Brier Class", x = "Mean # Terminal Nodes per Tree") 
+  labs(y = "Brier Class", x = "Mean # Terminal Nodes per Tree")
 ```
 
 Do other models benefit from being combined in a bagged ensemble? Neural networks for small to medium training sets are fairly unstable. Perturbing the data _and the random seed_ can generate different models and predictions. $K$-nearest neighbors are also very unstable. However, training them with a bagged tree may not be a good idea since a bootstrapped training set contains 2 or more replicated training samples. For $K < 10$, it may not be difficult to produce neighbors that are themselves (resulting in zero error). MARS/FDA models are slightly unstable. In our experience, adaptive regression splines produce diversity in split points when the underlying trend is not linear. For example, if a predictor and the outcome have a quadratic relationship, bagging produces similar models with split points that cluster where the derivative is near zero (e.g., the inflection point). Bagging these models can slightly improve performance. 
@@ -217,7 +212,6 @@ Next we'll talk about a generalization of bagged trees: random forests.
 #| label: forest-rf-ranger
 #| include: false
 #| cache: true
-
 rngr_spec <-
   rand_forest(
     mode = "classification",
@@ -243,7 +237,7 @@ forest_rngr_best <- select_best(forest_rngr_res, metric = "brier_class")
 
 forest_rngr_pred <-
   forest_rngr_res |>
-  collect_predictions(parameters = forest_rngr_best) 
+  collect_predictions(parameters = forest_rngr_best)
 
 forest_rngr_mtr_ex <-
   forest_rngr_pred |>
@@ -254,7 +248,6 @@ forest_rngr_mtr_ex <-
 #| label: forest-rf-obl
 #| include: false
 #| cache: true
-
 rf_obl_spec <-
   rand_forest(
     mode = "classification",
@@ -290,18 +283,16 @@ forest_rf_obl_mtr_ex <-
   cls_mtr(class, estimate = .pred_class, .pred_Yes)
 ```
 
-
 ```{r}
 #| label: forest-rf-extra
 #| include: false
 #| cache: true
-
 ert_spec <-
   rand_forest(
     mode = "classification",
     mtry = tune(),
     trees = 1000
-  ) |> 
+  ) |>
   set_engine("ranger", splitrule = "extratrees")
 
 set.seed(526)
@@ -344,7 +335,6 @@ Random forests include an integer tuning parameter commonly called $m_{try}$: at
 #| fig-align: "center"
 #| out-width: "100%"
 #| fig-cap: Four examples of splits in a random forest ensemble. Trees (a) and (b) demonstrate the differences in trees due to different bootstrap samples. Tree (c) is the same as (a) but uses a smaller value for the tuning parameter. Tree (d) is also the same as (a) but uses randomized splits.
-
 set.seed(147)
 mtry_fit <- ranger::ranger(
   class ~ .,
@@ -384,10 +374,10 @@ extra_fit <- ranger::ranger(
 
 set.seed(1247)
 samp_tree <- sample.int(199, 1) + 1
-full_p   <- full_fit  |> as.party(data = forested_train)
-full_2_p <- full_fit  |> as.party(data = forested_train, tree = samp_tree)
-mtry_p   <- mtry_fit  |> as.party(data = forested_train)
-extra_p  <- extra_fit |> as.party(data = forested_train)
+full_p <- full_fit |> as.party(data = forested_train)
+full_2_p <- full_fit |> as.party(data = forested_train, tree = samp_tree)
+mtry_p <- mtry_fit |> as.party(data = forested_train)
+extra_p <- extra_fit |> as.party(data = forested_train)
 
 # ------------------------------------------------------------------------------
 
@@ -396,7 +386,6 @@ extra_p  <- extra_fit |> as.party(data = forested_train)
 #  plot(x, main = title, newpage = FALSE)
 #  grid::popViewport()
 #}
-
 
 #grid::grid.newpage()
 #grid::pushViewport(grid::viewport(layout = grid::grid.layout(2, 2)))
@@ -407,117 +396,132 @@ extra_p  <- extra_fit |> as.party(data = forested_train)
 # grid::popViewport()
 
 library(ggparty)
-p_full <- 
+p_full <-
   ggparty(full_p) +
   geom_edge() +
   geom_edge_label(
-    aes(label = breaks_label), 
-    fill = "white", 
-    nudge_y = 0, 
+    aes(label = breaks_label),
+    fill = "white",
+    nudge_y = 0,
     linewidth = 0,
     parse = TRUE,
     size = 5
   ) +
-  geom_node_splitvar(fill = "white", size = 7, label.padding = unit(0.15, "lines")) +
+  geom_node_splitvar(
+    fill = "white",
+    size = 7,
+    label.padding = unit(0.15, "lines")
+  ) +
   geom_node_plot(
     gglist = list(
       geom_bar(
-        aes(x = "", fill = class), 
+        aes(x = "", fill = class),
         position = position_fill(),
         alpha = 0.7,
-    ), 
+      ),
       xlab("class"),
       theme_void(),
       scale_fill_manual(values = c("#218239", "#d4ad42"))
     )
-  ) + 
-  labs(title = "(a) mtry = 16, tree 1") + 
-  theme(plot.title = element_text(size = 25)) 
+  ) +
+  labs(title = "(a) mtry = 16, tree 1") +
+  theme(plot.title = element_text(size = 25))
 
-p_full_2 <- 
+p_full_2 <-
   ggparty(full_2_p) +
   geom_edge() +
-    geom_edge_label(
-    aes(label = breaks_label), 
-    fill = "white", 
-    nudge_y = 0, 
+  geom_edge_label(
+    aes(label = breaks_label),
+    fill = "white",
+    nudge_y = 0,
     linewidth = 0,
     parse = TRUE,
     size = 5
   ) +
-  geom_node_splitvar(fill = "white", size = 7, label.padding = unit(0.15, "lines")) +
+  geom_node_splitvar(
+    fill = "white",
+    size = 7,
+    label.padding = unit(0.15, "lines")
+  ) +
   geom_node_plot(
     gglist = list(
       geom_bar(
-        aes(x = "", fill = class), 
+        aes(x = "", fill = class),
         position = position_fill(),
         alpha = 0.7,
-    ), 
+      ),
       xlab("class"),
       theme_void(),
       scale_fill_manual(values = c("#218239", "#d4ad42"))
     )
-  ) + 
-  labs(title = paste("(a) mtry = 16, tree", samp_tree)) + 
-  theme(plot.title = element_text(size = 25)) 
+  ) +
+  labs(title = paste("(a) mtry = 16, tree", samp_tree)) +
+  theme(plot.title = element_text(size = 25))
 
-p_mtry <- 
+p_mtry <-
   ggparty(mtry_p) +
   geom_edge() +
   geom_edge_label(
-    aes(label = breaks_label), 
-    fill = "white", 
-    nudge_y = 0, 
+    aes(label = breaks_label),
+    fill = "white",
+    nudge_y = 0,
     linewidth = 0,
     parse = TRUE,
     size = 5
   ) +
-  geom_node_splitvar(fill = "white", size = 7, label.padding = unit(0.15, "lines")) +
+  geom_node_splitvar(
+    fill = "white",
+    size = 7,
+    label.padding = unit(0.15, "lines")
+  ) +
   geom_node_plot(
     gglist = list(
       geom_bar(
-        aes(x = "", fill = class), 
+        aes(x = "", fill = class),
         position = position_fill(),
         alpha = 0.7,
-    ), 
+      ),
       xlab("class"),
       theme_void(),
       scale_fill_manual(values = c("#218239", "#d4ad42"))
     )
-  ) + 
-  labs(title = "(c) mtry =  3, tree 1") + 
-  theme(plot.title = element_text(size = 25)) 
+  ) +
+  labs(title = "(c) mtry =  3, tree 1") +
+  theme(plot.title = element_text(size = 25))
 
-p_extra <- 
+p_extra <-
   ggparty(extra_p) +
   geom_edge() +
- geom_edge_label(
-    aes(label = breaks_label), 
-    fill = "white", 
-    nudge_y = 0, 
+  geom_edge_label(
+    aes(label = breaks_label),
+    fill = "white",
+    nudge_y = 0,
     linewidth = 0,
     parse = TRUE,
     size = 5
   ) +
-  geom_node_splitvar(fill = "white", size = 7, label.padding = unit(0.15, "lines")) +
+  geom_node_splitvar(
+    fill = "white",
+    size = 7,
+    label.padding = unit(0.15, "lines")
+  ) +
   geom_node_plot(
     gglist = list(
       geom_bar(
-        aes(x = "", fill = class), 
+        aes(x = "", fill = class),
         position = position_fill(),
         alpha = 0.7,
-    ), 
+      ),
       xlab("class"),
       theme_void(),
       scale_fill_manual(values = c("#218239", "#d4ad42"))
     )
-  ) + 
-  labs(title = "(d) extremely randomized, tree 1") + 
-  theme(plot.title = element_text(size = 25)) 
+  ) +
+  labs(title = "(d) extremely randomized, tree 1") +
+  theme(plot.title = element_text(size = 25))
 
-(p_full + p_full_2)/(p_mtry + p_extra)
+(p_full + p_full_2) / (p_mtry + p_extra)
 ```
-
 
 However, using $m_{try}$ has a few downsides. First, to ensure informative predictors have enough opportunities to be considered in the split, we have to drastically increase the number of trees in the ensemble. At a minimum, 500 trees are needed, but 1,000 to 2,000 trees are recommended to have a reliable model. The second downside is that it somewhat compromises random forests' ability to perform automatic feature selection. Many uninformative predictors will be selected for a split. Fortunately, random forests pioneered permutation importance, which we discuss in @sec-importance. The original reference for the model suggests using a default value of $m_{try} = \sqrt{p}$ for classification models, where $p$ is the number of predictors. 
 
@@ -526,45 +530,45 @@ For the forestation data, a random forest model was optimized over $m_{try}$ for
 ```{r}
 #| label: forest-rf-mtry
 #| include: false
-rngr_mtr <- 
-  forest_rngr_res |> 
-  collect_metrics() |> 
-  filter(.metric == "brier_class") |> 
-  select(mtry, mean) |> 
+rngr_mtr <-
+  forest_rngr_res |>
+  collect_metrics() |>
+  filter(.metric == "brier_class") |>
+  select(mtry, mean) |>
   mutate(Model = "Traditional")
 
-cfr_mtr <- 
-  forest_crf_set_res |> 
-  pluck("result") |> 
-  pluck(1) |> 
-  collect_metrics() |> 
-  filter(.metric == "brier_class") |> 
-  select(mtry, mean) |> 
+cfr_mtr <-
+  forest_crf_set_res |>
+  pluck("result") |>
+  pluck(1) |>
+  collect_metrics() |>
+  filter(.metric == "brier_class") |>
+  select(mtry, mean) |>
   mutate(Model = "Conditional Inference")
 
-rf_obl_mtr <- 
-  forest_rf_obl_res |> 
-  collect_metrics() |> 
-  filter(.metric == "brier_class") |> 
-  select(mtry, mean) |> 
+rf_obl_mtr <-
+  forest_rf_obl_res |>
+  collect_metrics() |>
+  filter(.metric == "brier_class") |>
+  select(mtry, mean) |>
   mutate(Model = "Oblique")
 
-rf_ert_mtr <- 
-  forest_ert_res |> 
-  collect_metrics() |> 
-  filter(.metric == "brier_class") |> 
-  select(mtry, mean) |> 
+rf_ert_mtr <-
+  forest_ert_res |>
+  collect_metrics() |>
+  filter(.metric == "brier_class") |>
+  select(mtry, mean) |>
   mutate(Model = "Randomized")
 
 rfs <- c("Traditional", "Conditional Inference", "Randomized", "Oblique")
-rf_all_mtr <- 
-  bind_rows(rngr_mtr, cfr_mtr, rf_obl_mtr, rf_ert_mtr) |> 
+rf_all_mtr <-
+  bind_rows(rngr_mtr, cfr_mtr, rf_obl_mtr, rf_ert_mtr) |>
   mutate(Model = factor(Model, levels = rfs))
 rf_mtr_rng <- round(range(rf_all_mtr$mean), 3)
-forest_crf_best <- 
-  forest_crf_set_res |> 
-  pluck("result") |> 
-  pluck(1) |> 
+forest_crf_best <-
+  forest_crf_set_res |>
+  pluck("result") |>
+  pluck(1) |>
   select_best(metric = "brier_class")
 ```
 
@@ -575,11 +579,10 @@ forest_crf_best <-
 #| fig-height: 4
 #| fig-align: "center"
 #| out-width: "70%"
-#| fig-cap: Tuning results for several variations of random forests. 
-
-rf_all_mtr |> 
-  ggplot(aes(mtry, mean, shape = Model, col = Model)) + 
-  geom_point() + 
+#| fig-cap: Tuning results for several variations of random forests.
+rf_all_mtr |>
+  ggplot(aes(mtry, mean, shape = Model, col = Model)) +
+  geom_point() +
   geom_line() +
   labs(x = expression(m[try]), y = "Brier Score", color = NULL)
 ```
@@ -602,16 +605,15 @@ Latly, we should mention extremely randomized trees (a.k.a. "extratrees"). These
 #| label: forest-bart
 #| include: false
 #| cache: true
-
 extract_bart <- function(x) {
   require(tidymodels)
   x <- extract_fit_engine(x)
   trees <- dbarts::extract(x, "trees")
-  num_term_nodes <- 
-    trees |> 
-    dplyr::filter(var == -1) |> 
-    dplyr::count(tree, sample) |> 
-    dplyr::summarize(mean_num_term_node = mean(n)) |> 
+  num_term_nodes <-
+    trees |>
+    dplyr::filter(var == -1) |>
+    dplyr::count(tree, sample) |>
+    dplyr::summarize(mean_num_term_node = mean(n)) |>
     purrr::pluck(1)
   nms <- colnames(x$varcount)
   is_county <- grepl("county", nms)
@@ -633,9 +635,9 @@ bart_spec <-
 
 bart_wflow <- workflow(class ~ ., bart_spec)
 
-bart_param <- 
-  bart_wflow |> 
-  extract_parameter_set_dials() |> 
+bart_param <-
+  bart_wflow |>
+  extract_parameter_set_dials() |>
   update(
     prior_outcome_range = prior_outcome_range(c(0.5, 5)),
     prior_terminal_node_coef = prior_terminal_node_coef(c(0.1, 1))
@@ -648,7 +650,7 @@ forest_bart_res <-
     class ~ .,
     resamples = forested_rs,
     grid = 25,
-    param_info = bart_param, 
+    param_info = bart_param,
     control = control_grid(
       save_pred = TRUE,
       save_workflow = TRUE,
@@ -708,7 +710,6 @@ $$ {#eq-bart-depth-prior}
 
 where $d_{\mathcal{N}}$ is the current depth of the prior and $\alpha$ and $\beta$ default to 0.95 and 2.0, respectively. @fig-tree-prior shows how the two parameters relate to the probability. @fig-tree-prior demonstrates how this equation captures our belief about the model. If we think we will need a set of deeper trees to predict the outcome accurately, smaller exponents with a larger coefficient are a good option. Exponents greater than 2.0 are the right choice if we believe a collection of small trees (perhaps even a single split) is best. If we have no _a priori_ thoughts on the matter, we can tune these parameters to see whether larger or smaller trees fit our data better. This parameterization helps us define what is plausible before seeing the data.
 
-
 ::: {#fig-tree-prior}
 
 ::::: {.figure-content}
@@ -719,9 +720,8 @@ where $d_{\mathcal{N}}$ is the current depth of the prior and $\alpha$ and $\bet
 #| out-width: 100%
 #| fig-width: 10
 #| fig-height: 3
-
 depth_prior <- function(depth, alpha = 0.95, beta = 2.0) {
-  dplyr::tibble(depth = depth, alpha = alpha, beta = beta) |> 
+  dplyr::tibble(depth = depth, alpha = alpha, beta = beta) |>
     dplyr::mutate(
       probability = alpha * (1 + depth)^(-beta)
     )
@@ -734,9 +734,11 @@ dpth <- 1:10
 
 prior_probs <- NULL
 for (i in 1:nrow(combos)) {
-  prior_probs <- 
-    bind_rows(prior_probs,
-              depth_prior(dpth, alpha = combos$alpha[i], beta = combos$beta[i]))
+  prior_probs <-
+    bind_rows(
+      prior_probs,
+      depth_prior(dpth, alpha = combos$alpha[i], beta = combos$beta[i])
+    )
 }
 
 prior_probs |>
@@ -744,7 +746,7 @@ prior_probs |>
   ggplot(aes(depth, probability, col = alpha, pch = alpha)) +
   geom_point(cex = 2) +
   geom_line(alpha = 1 / 2) +
-  facet_wrap( ~ Exponenet, labeller = label_both, nrow = 1) +
+  facet_wrap(~Exponenet, labeller = label_both, nrow = 1) +
   scale_x_continuous(breaks = 1:10) +
   labs(
     x = "Tree Depth",
@@ -811,10 +813,13 @@ To demonstrate, a BART model was tuned over $\alpha$ and $\beta$ from @eq-bart-p
 #| fig-width: 7
 #| fig-height: 2.5
 #| fig-cap: "Tuning results for BART. The panel on the right reflects the average number of terminal nodes in the ensemble for different tuning parameter candidates."
-
-bart_ord <- 
-  c("Depth Prior Coefficient", "Depth Prior Exponent", 
-    "Range Multiplier", "# Terminal Nodes")
+bart_ord <-
+  c(
+    "Depth Prior Coefficient",
+    "Depth Prior Exponent",
+    "Range Multiplier",
+    "# Terminal Nodes"
+  )
 
 forest_bart_res |>
   collect_extracts() |>
@@ -833,8 +838,8 @@ forest_bart_res |>
     `Depth Prior Coefficient` = prior_terminal_node_coef,
     `Depth Prior Exponent` = prior_terminal_node_expo,
     `Range Multiplier` = prior_outcome_range
-  ) |> 
-  select(-mn_log_loss, -roc_auc, -pr_auc) |> 
+  ) |>
+  select(-mn_log_loss, -roc_auc, -pr_auc) |>
   pivot_longer(
     -c(.config, brier_class),
     names_to = "parameter",
@@ -880,7 +885,7 @@ C5.0 has several minor differences from its predecessor and also enables boostin
 So far, we have not discussed **case weights**. These values, associated with each training set sample, often measure how much influence a specific data point should have on computations such as the model's objective function. A wide variety of case weights can be used in different phases (e.g., training, model assessment, etc.). For example, frequency weights are integer values that indicate how often a specific data vector occurs. For example, if the forestation included only the county predictor, we could reduce the training set to `r length(levels(forested_train$county))` rows (one per county) and assign a corresponding frequency weight based on how often each county occurs.  
 
 Our focus here is on importance weights, which are general non-negative values used during model training. Most of our models can already accommodate case weights during computations. We define the training set case weights as $w_i$ ($i=1\ldots n_{tr}$), initialized to 1.0 (unless the user overrides this default), and fit the first tree in the ensemble with each training set sample having the same influence on the model.  After this fit, the number of leaves in this tree is used to limit the dpeth of future trees to make all trees about the same size. 
- 
+
 After training tree $\mathcal{T}_t$ of $T$ in the ensemble, the current tree classifies the entire training set. This is also when C5.0 conducts its futility analysis to determine which (if any) points to exclude. We'll denote the available training set points at iteration $t$ as $n_{(t)}$. 
 
 The probability estimate for class $k$ for tree $t$ is the class-specific count in the node divided by the total count. With missing data, the estimate is a weighted average of the terminal nodes into which its fractional weight was distributed. This is the estimate used (internally) during training and, when predicting new samples, the corrected values described in @sec-tree-estimates are the estimates. 
@@ -911,7 +916,6 @@ $$
 
 $a^{(t)}$ represents how much each correctly classified sample shrinks and $b^{(t)}$ is the additional weight that incorrect samples recieve. The factor $\nu^{(t)}$ makes the active weights sum to $n_{(t)}$.
 
-
 To make the final ensemble prediction, C5.0 uses the sum of the weights for class $k$ in terminal node $\ell$ for tree $t$ ($n_{\ell k}^{(t)}$) as well as the total weights over classes ($n_{\ell}^{(t)}$). They also use the observer class prevalences from the training set ($p_k$). The hard class prediction is determined by finding the largest value for the node that the new sample lands in (denoted as $\ell$ here): 
 
 $$
@@ -934,7 +938,6 @@ $$
 
 The binary class votes provides more weight to trees that have the largest confidence values. 
 
-
 ```{r}
 #| label: fig-forest-c5-boost
 #| echo: false
@@ -942,7 +945,6 @@ The binary class votes provides more weight to trees that have the largest confi
 #| fig-width: 12
 #| fig-height: 2.5
 #| fig-cap: "Tuning results for boosted C5.0 trees. The panel on the right reflects the average number of terminal nodes in the ensemble for different tuning parameter candidates."
-
 # fmt: skip
 c5_ord <- 
   c("Trees", "Minimal Node Size", "# Terminal Nodes (log-10)", "# Rule Terms")
@@ -962,14 +964,14 @@ forest_c5_res |>
   ) |>
   mutate(
     num_terminal_nodes = log10(num_terminal_nodes)
-  ) |> 
+  ) |>
   rename(
     `# Terminal Nodes (log-10)` = num_terminal_nodes,
-    `# Rule Terms`= num_rule_terms,
+    `# Rule Terms` = num_rule_terms,
     `Minimal Node Size` = min_n,
     `Trees` = trees
   ) |>
-  select(-mn_log_loss, -roc_auc, -pr_auc) |> 
+  select(-mn_log_loss, -roc_auc, -pr_auc) |>
   pivot_longer(
     -c(.config, brier_class),
     names_to = "parameter",
@@ -979,12 +981,11 @@ forest_c5_res |>
   ggplot(aes(value, brier_class)) +
   geom_point(alpha = 2 / 4, cex = 2) +
   facet_wrap(~parameter, scales = "free_x", nrow = 1) +
-  labs(y = "Brier Score", x = NULL) + 
+  labs(y = "Brier Score", x = NULL) +
   theme(
     strip.text = element_text(size = 9),
     strip.text.x = element_text(margin = margin(t = 4, b = 4))
   )
-
 ```
 
 ### Modern Boosting {#sec-cls-modern-boosting}
@@ -992,7 +993,6 @@ forest_c5_res |>
 Before getting into the specifics of different gradient boosting species, let's get an idea of the problem we are trying to solve and the high-level mechanics of how it solves it. 
 
 As with the BART discussion, we'll denote the model's score for a sample as $\mathcal{F}(\boldsymbol{x}_i)$, a quantity on the real line that plays the same role as the linear predictor in logistic regression. A single tree produces its score by sending $\boldsymbol{x}_i$ through a set of conditional logic statements to a terminal node and returning that node's value. Given the tree's structure, the score is linear in the terminal node values. The structure itself (the splits) is not a smooth function of any parameters. The score is converted to a probability estimate via the logistic function:
-
 
 $$
 p(\boldsymbol{x}_i) = \frac{1}{1 + e^{-\mathcal{F}(\boldsymbol{x}_i)}}
@@ -1096,7 +1096,7 @@ This is the variance of the Bernoulli distribution. It is always positive and ha
 
 Recall that the Hessian is a _matrix_, with the mixed second partial derivatives $\partial^2 \psi / \partial \mathcal{F}_i \, \partial \mathcal{F}_{i'}$ on the off-diagonals. Here, each sample's loss depends only on its own score, so $h_{ii'} = 0$ when $i \ne i'$. The $n_{tr} \times n_{tr}$ Hessian is diagonal, and the vector of $h_i$ values contains all the information^[Since it is digonal, we index it by $i$ and not $ii$ for convenience.]. This is not true for $C > 2$ classes (see below).
 
-For the samples in terminal node $l$ of tree $t$, define $G_k = \sum_{i \in l} g_i$ and $H_l = \sum_{i \in l} h_i$. Without a penalty, the Newton step for that node is:
+For the samples in terminal node $l$ of tree $t$, define $G_l = \sum_{i \in l} g_i$ and $H_l = \sum_{i \in l} h_i$. Without a penalty, the Newton step for that node is:
 
 $$
 w_{tl} = -\frac{G_l}{H_l}
@@ -1134,6 +1134,95 @@ $$
 
 Since the probabilities must sum to one, there is a built-in linear dependency, and we can't invert the block. Practically speaking, the approximation Hessian is used by once again setting the off-diagonals to zero as before [@friedman2000; @friedman2001]. The true Hessian is not possible here anyway, since the trees for different classes probably have different structures and do not share terminal nodes. Some implementations rescale the diagonal terms (e.g., by $C / (C - 1)$) to partially compensate.
 
+```{r}
+#| label: boost-helpers
+#| include: false
+
+actual_trees <- function(x, digits = 3, ...) {
+  total_models <- 
+    x |> collect_metrics(summarize = FALSE) |> 
+    dplyr::filter(.metric == "brier_class") |> 
+    nrow()
+  max_trees <- 
+    x |> 
+    extract_spec_parsnip() |> 
+    pluck("args") |> 
+    pluck("trees") |> 
+    rlang::eval_tidy()
+  x |>
+    collect_extracts() |>
+    unnest(.extracts) |> 
+    mutate(early = num_members < max_trees) |> 
+    summarize(
+      early = mean(early) * 100,
+      num_members = mean(num_members)
+    ) |> 
+    mutate(max_trees = max_trees, num_models = total_models) |> 
+    mutate(across(c(everything()), ~ fmt(.x, digits = digits, ...))) |> 
+    as.list()
+}
+
+marginal_boost_plot <- function(x) {
+  bst_ord <- 
+    c("Mtry", "Minimal Node Size", "Tree Depth", "Learning Rate (log-10)", 
+      "Min. Loss\nReduction (log-10)", 
+      "# Terminal Nodes (log-10)", "# Rule Terms")
+  
+  x |>
+    collect_extracts() |>
+    unnest(.extracts) |>
+    summarize(
+      num_terminal_nodes = mean(num_terminal_nodes),
+      num_rule_terms = mean(num_rule_terms),
+      .by = c(.config)
+    ) |>
+    full_join(
+      x |>
+        collect_metrics(type = "wide"),
+      by = ".config"
+    ) |>
+    mutate(
+      learn_rate = log10(learn_rate),
+      loss_reduction = log10(loss_reduction),
+      num_terminal_nodes = log10(num_terminal_nodes)
+    ) |>
+    rename(
+      `# Terminal Nodes (log-10)` = num_terminal_nodes,
+      `Learning Rate (log-10)` = learn_rate,
+      `Min. Loss\nReduction (log-10)` = loss_reduction,
+      `# Rule Terms` = num_rule_terms,
+      `Minimal Node Size` = min_n,
+      Mtry = mtry,
+      `Tree Depth` = tree_depth
+    ) |>
+    select(-mn_log_loss, -roc_auc, -pr_auc) |>
+    pivot_longer(
+      -c(.config, brier_class),
+      names_to = "parameter",
+      values_to = "value"
+    ) |>
+    mutate(
+      is_param = parameter %in% bst_ord[1:5],
+      parameter = factor(parameter, levels = bst_ord)
+    ) |>
+    ggplot(aes(value, brier_class, pch = is_param)) +
+    geom_point(alpha = 2 / 4, cex = 2, show.legend = FALSE) +
+    facet_wrap(~parameter, scales = "free_x", nrow = 1) +
+    labs(y = "Brier Score", x = NULL) +
+    theme(
+      strip.text = element_text(size = 9),
+      strip.text.x = element_text(margin = margin(t = 4, b = 4))
+    ) + 
+    scale_shape_manual(values = c(1, 16))
+}
+
+trees_xgb <- actual_trees(forest_xgb_res)
+trees_lgb <- actual_trees(forest_lgb_res)
+trees_ctb <- actual_trees(forest_ctb_res)
+```
+
+Now, let's go into details for the three most popular boosting methods. 
+
 #### XGBoost
 
 @xgb16
@@ -1144,65 +1233,16 @@ Since the probabilities must sum to one, there is a built-in linear dependency, 
 #| out-width: 100%
 #| fig-width: 12
 #| fig-height: 2.5
-#| fig-cap: "Tuning results for XGBoost The panel on the right reflects the average number of terminal nodes in the ensemble for different tuning parameter candidates."
-
+#| fig-cap: "Tuning results for XGBoost. The two rightmost panels show the average number of terminal nodes in the ensemble as well as the number of terms in the rules leading to the terminal nodes."
 # fmt: skip
-bst_ord <- 
-  c("Mtry", "Minimal Node Size", "Tree Depth", "Learning Rate (log-10)", 
-    "Min. Loss\nReduction (log-10)", # "# Members (log-10)", 
-    "# Terminal Nodes (log-10)", "# Rule Terms")
-
-forest_xgb_res |>
-  collect_extracts() |>
-  unnest(.extracts) |>
-  summarize(
-    num_terminal_nodes = mean(num_terminal_nodes),
-    num_rule_terms = mean(num_rule_terms),
-    .by = c(.config)
-  ) |>
-  full_join(
-    forest_xgb_res |>
-      collect_metrics(type = "wide"),
-    by = ".config"
-  ) |>
-  mutate(
-    learn_rate = log10(learn_rate),
-    loss_reduction = log10(loss_reduction),
-    num_terminal_nodes = log10(num_terminal_nodes)
-  ) |> 
-  rename(
-    `# Terminal Nodes (log-10)` = num_terminal_nodes,
-    `Learning Rate (log-10)` = learn_rate,
-    `Min. Loss\nReduction (log-10)` = loss_reduction,
-    # `# Members (log-10)`= num_members,
-    `# Rule Terms`= num_rule_terms,
-    `Minimal Node Size` = min_n,
-    Mtry = mtry,
-    `Tree Depth` = tree_depth
-  ) |>
-  select(-mn_log_loss, -roc_auc, -pr_auc) |> 
-  pivot_longer(
-    -c(.config, brier_class),
-    names_to = "parameter",
-    values_to = "value"
-  ) |>
-  mutate(parameter = factor(parameter, levels = bst_ord)) |>
-  ggplot(aes(value, brier_class)) +
-  geom_point(alpha = 2 / 4, cex = 2) +
-  facet_wrap(~parameter, scales = "free_x", nrow = 1) +
-  labs(y = "Brier Score", x = NULL) + 
-  theme(
-    strip.text = element_text(size = 9),
-    strip.text.x = element_text(margin = margin(t = 4, b = 4))
-  )
-
+marginal_boost_plot(forest_xgb_res)
 ```
+
+Did models stop early after 5 iterations of poor validation set results? Of the `r trees_xgb$num_models` that were evaluated, the average number of trees in the ensemble was `r trees_xgb$num_members` (out of a maximum of `r trees_xgb$max_trees`), with `r trees_xgb$early`% of the models finish early. 
 
 #### LightGBM
 
 @lgb17
-
-
 
 ```{r}
 #| label: fig-forest-lgb
@@ -1211,57 +1251,12 @@ forest_xgb_res |>
 #| fig-width: 12
 #| fig-height: 2.5
 #| fig-cap: "Tuning results for LightGBM. The panel on the right reflects the average number of terminal nodes in the ensemble for different tuning parameter candidates."
-
-forest_lgb_res |>
-  collect_extracts() |>
-  unnest(.extracts) |>
-  summarize(
-    num_terminal_nodes = mean(num_terminal_nodes),
-    num_rule_terms = mean(num_rule_terms),
-    .by = c(.config)
-  ) |>
-  full_join(
-    forest_lgb_res |>
-      collect_metrics(type = "wide"),
-    by = ".config"
-  ) |>
-  mutate(
-    learn_rate = log10(learn_rate),
-    loss_reduction = log10(loss_reduction),
-    num_terminal_nodes = log10(num_terminal_nodes)
-  ) |> 
-  rename(
-    `# Terminal Nodes (log-10)` = num_terminal_nodes,
-    `Learning Rate (log-10)` = learn_rate,
-    `Min. Loss\nReduction (log-10)` = loss_reduction,
-    # `# Members (log-10)`= num_members,
-    `# Rule Terms`= num_rule_terms,
-    `Minimal Node Size` = min_n,
-    Mtry = mtry,
-    `Tree Depth` = tree_depth
-  ) |>
-  select(-mn_log_loss, -roc_auc, -pr_auc) |> 
-  pivot_longer(
-    -c(.config, brier_class),
-    names_to = "parameter",
-    values_to = "value"
-  ) |>
-  mutate(parameter = factor(parameter, levels = bst_ord)) |>
-  ggplot(aes(value, brier_class)) +
-  geom_point(alpha = 2 / 4, cex = 2) +
-  facet_wrap(~parameter, scales = "free_x", nrow = 1) +
-  labs(y = "Brier Score", x = NULL) + 
-  theme(
-    strip.text = element_text(size = 9),
-    strip.text.x = element_text(margin = margin(t = 4, b = 4))
-  )
+marginal_boost_plot(forest_lgb_res)
 ```
-
 
 #### CatBoost
 
 @cat18
-
 
 ```{r}
 #| label: fig-forest-ctg
@@ -1270,11 +1265,11 @@ forest_lgb_res |>
 #| fig-width: 12
 #| fig-height: 2.5
 #| fig-cap: "Tuning results for CatBoost The panel on the right reflects the average number of terminal nodes in the ensemble for different tuning parameter candidates."
-
 # fmt: skip
 ctb_ord <- 
   c("Mtry", "Minimal Node Size", "Tree Depth", "Learning Rate (log-10)", 
     "# Terminal Nodes (log-10)", "# Rule Terms")
+
 forest_ctb_res |>
   collect_extracts() |>
   unnest(.extracts) |>
@@ -1298,7 +1293,7 @@ forest_ctb_res |>
     `# Rule Terms` = num_rule_terms,
     `Minimal Node Size` = min_n,
     Mtry = mtry,
-     `Tree Depth` = tree_depth
+    `Tree Depth` = tree_depth
   ) |>
   select(-mn_log_loss, -roc_auc, -pr_auc) |>
   pivot_longer(
@@ -1317,11 +1312,9 @@ forest_ctb_res |>
   )
 ```
 
-
 ## Rule-Based Ensembles {#sec-cls-rule-ensembles}
 
 ### C5.0 Rules {#sec-cls-c50-rules}
-
 
 ```{r}
 #| label: fig-forest-c5-rule-boost
@@ -1330,8 +1323,6 @@ forest_ctb_res |>
 #| fig-width: 7
 #| fig-height: 2.5
 #| fig-cap: "Tuning results for boosted C5.0 rule sets. The panel on the right reflects the average number of terminal nodes in the ensemble for different tuning parameter candidates."
-
-
 forest_c5rules_res |>
   collect_extracts() |>
   unnest(.extracts) |>
@@ -1347,14 +1338,14 @@ forest_c5rules_res |>
   ) |>
   mutate(
     num_terminal_nodes = log10(num_terminal_nodes)
-  ) |> 
+  ) |>
   rename(
     `# Terminal Nodes (log-10)` = num_terminal_nodes,
-    `# Rule Terms`= num_rule_terms,
+    `# Rule Terms` = num_rule_terms,
     `Minimal Node Size` = min_n,
     `Trees` = trees
   ) |>
-  select(-mn_log_loss, -roc_auc, -pr_auc) |> 
+  select(-mn_log_loss, -roc_auc, -pr_auc) |>
   pivot_longer(
     -c(.config, brier_class),
     names_to = "parameter",
@@ -1364,17 +1355,14 @@ forest_c5rules_res |>
   ggplot(aes(value, brier_class)) +
   geom_point(alpha = 2 / 4, cex = 2) +
   facet_wrap(~parameter, scales = "free_x", nrow = 1) +
-  labs(y = "Brier Score", x = NULL) + 
+  labs(y = "Brier Score", x = NULL) +
   theme(
     strip.text = element_text(size = 9),
     strip.text.x = element_text(margin = margin(t = 4, b = 4))
   )
-
 ```
 
-
 ### RuleFit {#sec-cls-rule-fit}
-
 
 ```{r}
 #| label: fig-forest-rulefit
@@ -1384,6 +1372,7 @@ forest_c5rules_res |>
 #| fig-height: 2.5
 #| fig-cap: "Tuning results for RuleFit The panel on the right reflects the average number of terminal nodes in the ensemble for different tuning parameter candidates."
 
+# fmt: skip
 xrf_ord <- 
   c("Mtry", "Minimal Node Size", 
     "Tree Depth", "Learning Rate (log-10)", "Min. Loss\nReduction (log-10)", 
@@ -1391,7 +1380,7 @@ xrf_ord <-
 
 forest_xrf_res |>
   collect_extracts() |>
-  select(-penalty) |> 
+  select(-penalty) |>
   unnest(.extracts) |>
   summarize(
     num_coef = mean(num_coef),
@@ -1408,18 +1397,18 @@ forest_xrf_res |>
     loss_reduction = log10(loss_reduction),
     num_coef = log10(num_coef),
     penalty = log10(penalty)
-  ) |> 
+  ) |>
   rename(
     `# Coefficients\n (log-10)` = num_coef,
     `Learning Rate (log-10)` = learn_rate,
     `Min. Loss\nReduction (log-10)` = loss_reduction,
-    `# Rule Terms`= num_rule_terms,
+    `# Rule Terms` = num_rule_terms,
     `Minimal Node Size` = min_n,
     Mtry = mtry,
     `Tree Depth` = tree_depth,
     `Penalty (log-10)` = penalty
   ) |>
-  select(-mn_log_loss, -roc_auc, -pr_auc) |> 
+  select(-mn_log_loss, -roc_auc, -pr_auc) |>
   pivot_longer(
     -c(.config, brier_class),
     names_to = "parameter",
@@ -1429,7 +1418,7 @@ forest_xrf_res |>
   ggplot(aes(value, brier_class)) +
   geom_point(alpha = 2 / 4, cex = 1) +
   facet_wrap(~parameter, scales = "free_x", nrow = 1) +
-  labs(y = "Brier Score", x = NULL) + 
+  labs(y = "Brier Score", x = NULL) +
   theme(
     strip.text = element_text(size = 9),
     strip.text.x = element_text(margin = margin(t = 4, b = 4))
@@ -1490,12 +1479,11 @@ all_sets <-
     forest_c5_set_res,
     forest_c5rules_set_res,
     forest_cit_set_res,
-    forest_crf_set_res, 
+    forest_crf_set_res,
     forest_ensemble_set_res,
     forest_ctb_set_res
   )
 ```
-
 
 ```{r}
 #| label: cls-ensemble-compare-bayes
@@ -1514,9 +1502,9 @@ ensemble_best <- ensemble_compare$model[is.na(ensemble_compare$probability)]
 ensemble_subset <-
   ensemble_compare |>
   mutate(
-    # To get results for traditional and randomized RF 
+    # To get results for traditional and randomized RF
     engine = if_else(grepl("ERT", model), "extratrees", engine)
-  ) |> 
+  ) |>
   slice_min(median, by = c(class, engine)) |>
   mutate(
     model = as.character(model),
@@ -1580,13 +1568,10 @@ p_brier_diff <-
 p_brier + p_brier_diff + plot_layout(widths = c(4, 1))
 ```
 
-
 ## Chapter References {.unnumbered}
-
 
 ```{r}
 #| label: cls-ensemble-results
 #| include: false
-
 save_if_missing(forest_ensemble_set_res)
 ```
