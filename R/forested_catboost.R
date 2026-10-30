@@ -21,7 +21,7 @@ if (!rlang::is_installed("catboost")) {
 
 # ------------------------------------------------------------------------------
 
-daemons(5)
+daemons(7)
 load("RData/forested_data.RData")
 cls_mtr <- metric_set(brier_class, roc_auc, pr_auc, mn_log_loss)
 
@@ -120,19 +120,19 @@ ensmbl_stats_extractor <- make_extractor(
 ctb_spec <-
   boost_tree(
     mode = "classification",
-    trees = tune(),
+    trees = 200,
     min_n = tune(),
     mtry = tune(),
     tree_depth = tune(),
-    learn_rate = tune()
+    learn_rate = tune(),
+    stop_iter = 5
   ) |>
-  set_engine("catboost")
+  set_engine("catboost", validation = 0.1)
 
 ctb_param <-
   ctb_spec |>
   extract_parameter_set_dials() |>
   update(
-    trees = trees(c(5, 500)),
     tree_depth = tree_depth(c(2, 16))
   )
 
@@ -145,9 +145,9 @@ forest_ctb_res <-
     grid = 25,
     param_info = ctb_param,
     control = control_grid(
+      extract = ensmbl_stats_extractor,
       save_pred = TRUE,
-      save_workflow = TRUE,
-      extract = ensmbl_stats_extractor
+      save_workflow = TRUE
     ),
     metrics = cls_mtr
   )

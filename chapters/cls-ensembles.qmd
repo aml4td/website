@@ -61,9 +61,9 @@ load("../RData/forest_c5.RData")
 load("../RData/forest_xgboost.RData")
 load("../RData/forest_lightgbm.RData")
 load("../RData/forest_catboost.RData")
+load("../RData/forest_xrf.RData")
 
 # ------------------------------------------------------------------------------
-
 
 cls_mtr <- metric_set(brier_class, roc_auc, pr_auc, mn_log_loss)
 ```
@@ -681,7 +681,7 @@ For a specific predictor vector $\boldsymbol{x}$, the function $g(\boldsymbol{x}
 The overall BART model averages these estimates across $T$ trees to produce:
 
 $$
-\mathcal{F}(\boldsymbol{x}) = \sum_{j=1}^{T} g(\boldsymbol{x};\, \mathcal{T}_j, \Theta_j)
+\mathcal{F}(\boldsymbol{x}) = \sum_{t = 1}^{T} g(\boldsymbol{x};\, \mathcal{T}_t, \Theta_t)
 $$
 
 which is also on the real line. As we'll see below, this value is converted to a probability scale for the final prediction. 
@@ -771,7 +771,7 @@ $\kappa$ is a scaling factor that specifies the usable probit range to effective
 
 The MCMC process for BART is somewhat more complex than the algorithm previously demonstrated for logistic regression. If we run the MCMC chain for $B$ iterations, we will actually make $B\times T$ accept/reject decisions. Each tree in the ensemble goes through the process, rather than one proposal for the whole ensemble. For each tree, these steps are executed: 
 
-1. Remove tree $j$ from the ensemble and calculate its partial residual. These are the current estimate of the latent variable $Z$.
+1. Remove tree $t$ from the ensemble and calculate its partial residual. These are the current estimate of the latent variable $Z$.
 2. Propose a new tree structure
 3. Sample from the leaf prior. 
 4. Compute the likelihood with the new values. 
@@ -780,13 +780,13 @@ The MCMC process for BART is somewhat more complex than the algorithm previously
 For the first step, we can rewrite the latent model as
 
 $$
-Z_i - \gamma = \sum_{j=1}^{T} g(\boldsymbol{x}_i; \mathcal{T}_j, \Theta_j) + \varepsilon_i
+Z_i - \gamma = \sum_{t = 1}^{T} g(\boldsymbol{x}_i; \mathcal{T}_t, \Theta_t) + \varepsilon_i
 $$
 
 The partial residual fixes the predictions for the other trees and subtracts them from the current estimate of the latent variable and its offset: 
 
 $$
-R_{ij} = (Z_i - \gamma) - \sum_{l \neq j} g(\boldsymbol{x}_i; \mathcal{T}_l, \Theta_l)
+R_{it} = (Z_i - \gamma) - \sum_{l \neq t} g(\boldsymbol{x}_i; \mathcal{T}_l, \Theta_l)
 $$
 
 Since we treat the other trees' predictions as constants, we can assume the partial residuals are also Gaussian. The partial residuals are now the response variable in a one-tree Gaussian regression^[We'll see that the sequential use of partial residuals is the backbone of the boosting methods described in the next section. BART's use of them _is not_ the same; it is not boosting. The residuals are used in a cyclic, round-robin way. Boosting uses them differently.]. These values are used to compute the current likelihood. 
@@ -881,60 +881,111 @@ So far, we have not discussed **case weights**. These values, associated with ea
 
 Our focus here is on importance weights, which are general non-negative values used during model training. Most of our models can already accommodate case weights during computations. We define the training set case weights as $w_i$ ($i=1\ldots n_{tr}$), initialized to 1.0 (unless the user overrides this default), and fit the first tree in the ensemble with each training set sample having the same influence on the model.  After this fit, the number of leaves in this tree is used to limit the dpeth of future trees to make all trees about the same size. 
  
-After training tree $\mathcal{T}_j$ of $T$ in the ensemble, the current tree classifies the entire training set. This is also when C5.0 conducts its futility analysis to determine which (if any) points to exclude. We'll denote the available training set points at iteration $j$ as $n_{(j)}$. 
+After training tree $\mathcal{T}_t$ of $T$ in the ensemble, the current tree classifies the entire training set. This is also when C5.0 conducts its futility analysis to determine which (if any) points to exclude. We'll denote the available training set points at iteration $t$ as $n_{(t)}$. 
 
-The probability estimate for class $k$ for tree $j$ is the class-specific count in the node divided by the total count. With missing data, the estimate is a weighted average of the terminal nodes into which its fractional weight was distributed. This is the estimate used (internally) during training and, when predicting new samples, the corrected values described in @sec-tree-estimates are the estimates. 
+The probability estimate for class $k$ for tree $t$ is the class-specific count in the node divided by the total count. With missing data, the estimate is a weighted average of the terminal nodes into which its fractional weight was distributed. This is the estimate used (internally) during training and, when predicting new samples, the corrected values described in @sec-tree-estimates are the estimates. 
 
-The case-weight update algorithm depends on whether the model predicted samples correctly or incorrectly. When the model predicts the correct class, the weights are scaled _multiplicatively_, while the poorly predicted ones have an _additive_ increase.  For tree $j$, we denote the total weights for correctly and incorrectly predicted samples as $W_{+}^{(j)}$ and $W_{-}^{(j)}$, respectively. Also, $\mathcal{E}^{(j)}$ is the unweighted number of misclassified active samples. From these, we compute:
+The case-weight update algorithm depends on whether the model predicted samples correctly or incorrectly. When the model predicts the correct class, the weights are scaled _multiplicatively_, while the poorly predicted ones have an _additive_ increase.  For tree $t$, we denote the total weights for correctly and incorrectly predicted samples as $W_{+}^{(t)}$ and $W_{-}^{(t)}$, respectively. Also, $\mathcal{E}^{(t)}$ is the unweighted number of misclassified active samples. From these, we compute:
 
 $$
 \begin{align}
-\delta^{(j)} &= \frac{W_{+}^{(j)} - W_{-}^{(j)}}{4} \notag \\
-a^{(j)} &= \frac{W_{+}^{(j)} - \delta^{(j)}}{W_{+}^{(j)}} \notag \\
-b^{(j)} &= \frac{\delta^{(j)}}{\mathcal{E}^{(j)}} \notag \\
-\nu^{(j)} &= \frac{n_{(j)}}{W_{+}^{(j)} + W_{-}^{(j)}} \notag 
+\delta^{(t)} &= \frac{W_{+}^{(t)} - W_{-}^{(t)}}{4} \notag \\
+a^{(t)} &= \frac{W_{+}^{(t)} - \delta^{(t)}}{W_{+}^{(t)}} \notag \\
+b^{(t)} &= \frac{\delta^{(t)}}{\mathcal{E}^{(t)}} \notag \\
+\nu^{(t)} &= \frac{n_{(t)}}{W_{+}^{(t)} + W_{-}^{(t)}} \notag 
 \end{align}
 $$
 
-$\delta^{(j)}$ is _how much_ weight moves. This is the total weight taken from the correctly classified group and given to the misclassified group. It is set so that the misclassified group's total ends up halfway between its current total, $W_{-}^{(j)}$, and half of all the weight.  
+$\delta^{(t)}$ is _how much_ weight moves. This is the total weight taken from the correctly classified group and given to the misclassified group. It is set so that the misclassified group's total ends up halfway between its current total, $W_{-}^{(t)}$, and half of all the weight.  
 
 The case-weight update is then: 
 
 $$
-w_i^{(j+1)} =
+w_i^{(t+1)} =
 \begin{cases}
-\max\left(\nu^{(j)}\, a^{(j)}\, w_i^{(j)},\ 0.001\right) & \text{if correctly predicted}  \\
-\nu^{(j)}\left(w_i^{(j)} + b^{(j)}\right) & \text{if incorrectly predicted} \\
+\max\left(\nu^{(t)}\, a^{(t)}\, w_i^{(t)},\ 0.001\right) & \text{if correctly predicted}  \\
+\nu^{(t)}\left(w_i^{(t)} + b^{(t)}\right) & \text{if incorrectly predicted} \\
 0 & \text{if dropped}
 \end{cases}
 $$
 
-$a^{(j)}$ represents how much each correctly classified sample shrinks and $b^{(j)}$ is the additional weight that incorrect samples recieve. The factor $\nu^{(j)}$ makes the active weights sum to $n_{(j)}$.
+$a^{(t)}$ represents how much each correctly classified sample shrinks and $b^{(t)}$ is the additional weight that incorrect samples recieve. The factor $\nu^{(t)}$ makes the active weights sum to $n_{(t)}$.
 
 
-To make the final ensemble prediction, C5.0 uses the sum of the weights for class $k$ in terminal node $\ell$ for tree $j$ ($n_{\ell k}^{(j)}$) as well as the total weights over classes ($n_{\ell}^{(j)}$). They also use the observer class prevalences from the training set ($p_k$). The hard class prediction is determined by finding the largest value for the node that the new sample lands in (denoted as $\ell$ here): 
+To make the final ensemble prediction, C5.0 uses the sum of the weights for class $k$ in terminal node $\ell$ for tree $t$ ($n_{\ell k}^{(t)}$) as well as the total weights over classes ($n_{\ell}^{(t)}$). They also use the observer class prevalences from the training set ($p_k$). The hard class prediction is determined by finding the largest value for the node that the new sample lands in (denoted as $\ell$ here): 
 
 $$
-\widehat{y}^{(j)} = \arg\max_k n_{\ell k}^{(j)}
+\widehat{y}^{(t)} = \arg\max_k n_{\ell k}^{(t)}
 $$
 
 The shrunken terminal node proportion is computed (as mentioned in the previous chapter)
 
 $$
-\widetilde{p}_k^{(j)} = \frac{n_{\ell k}^{(j)} + p_k^{(j)}}{n_{\ell}^{(j)} + 1}
+\widetilde{p}_k^{(t)} = \frac{n_{\ell k}^{(t)} + p_k^{(t)}}{n_{\ell}^{(t)} + 1}
 $$
 
-where $p_k^{(j)}$ is the proportion determined from the data currently in each tree^[Since some training set samples may have been abandoned.]. For the tree, the _confidence value_ is the shrunken proportion corresponding to the predicted class $\widehat{y}^{(j)}$. We'll call that $\widetilde{p}^{(j)}$. 
+where $p_k^{(t)}$ is the proportion determined from the data currently in each tree^[Since some training set samples may have been abandoned.]. For the tree, the _confidence value_ is the shrunken proportion corresponding to the predicted class $\widehat{y}^{(t)}$. We'll call that $\widetilde{p}^{(t)}$. 
 
 Now that we have estimated confidence values for each tree, the final estimate for an unknown sample is a weighted average of the votes: 
 
 $$
-\widehat{p}_{k} = \frac{\sum\limits_{j=1}^{T} \widetilde{p}^{(j)}\, I\big[\widehat{y}^{(j)} = k\big]}{\sum \limits_{j=1}^{T^{}} \widetilde{p}^{(j)}}
+\widehat{p}_{k} = \frac{\sum\limits_{t = 1}^{T} \widetilde{p}^{(t)}\, I\big[\widehat{y}^{(t)} = k\big]}{\sum \limits_{t = 1}^{T^{}} \widetilde{p}^{(t)}}
 $$
 
 The binary class votes provides more weight to trees that have the largest confidence values. 
 
 
+```{r}
+#| label: fig-forest-c5-boost
+#| echo: false
+#| out-width: 100%
+#| fig-width: 12
+#| fig-height: 2.5
+#| fig-cap: "Tuning results for boosted C5.0 trees. The panel on the right reflects the average number of terminal nodes in the ensemble for different tuning parameter candidates."
+
+# fmt: skip
+c5_ord <- 
+  c("Trees", "Minimal Node Size", "# Terminal Nodes (log-10)", "# Rule Terms")
+
+forest_c5_res |>
+  collect_extracts() |>
+  unnest(.extracts) |>
+  summarize(
+    num_terminal_nodes = mean(num_terminal_nodes),
+    num_rule_terms = mean(num_rule_terms),
+    .by = c(.config)
+  ) |>
+  full_join(
+    forest_c5_res |>
+      collect_metrics(type = "wide"),
+    by = ".config"
+  ) |>
+  mutate(
+    num_terminal_nodes = log10(num_terminal_nodes)
+  ) |> 
+  rename(
+    `# Terminal Nodes (log-10)` = num_terminal_nodes,
+    `# Rule Terms`= num_rule_terms,
+    `Minimal Node Size` = min_n,
+    `Trees` = trees
+  ) |>
+  select(-mn_log_loss, -roc_auc, -pr_auc) |> 
+  pivot_longer(
+    -c(.config, brier_class),
+    names_to = "parameter",
+    values_to = "value"
+  ) |>
+  mutate(parameter = factor(parameter, levels = c5_ord)) |>
+  ggplot(aes(value, brier_class)) +
+  geom_point(alpha = 2 / 4, cex = 2) +
+  facet_wrap(~parameter, scales = "free_x", nrow = 1) +
+  labs(y = "Brier Score", x = NULL) + 
+  theme(
+    strip.text = element_text(size = 9),
+    strip.text.x = element_text(margin = margin(t = 4, b = 4))
+  )
+
+```
 
 ### Modern Boosting {#sec-cls-modern-boosting}
 
@@ -950,19 +1001,19 @@ $$
 A boosted tree ensemble is a sum of $T$ trees:
 
 $$
-\mathcal{F}_T(\boldsymbol{x}) = \mathcal{F}_0 + \alpha \sum_{j=1}^{T} f_j(\boldsymbol{x})
+\mathcal{F}_T(\boldsymbol{x}) = \mathcal{F}_0 + \alpha \sum_{t = 1}^{T} f_t(\boldsymbol{x})
 $$
 
-where $\alpha$ is the learning rate and $\mathcal{F}_0$ is an initial score. $\mathcal{F}_0$ is usually the log-odds of the event rate in the training set. $f_j(\boldsymbol{x})$ is the numeric score prediction from the tree created at iteration $j$. If the tree structure $\mathcal{T}_j$ partitions the predictor space into terminal node regions $R_{j1}, \ldots, R_{jK_j}$, then:
+where $\alpha$ is the learning rate and $\mathcal{F}_0$ is an initial score. $\mathcal{F}_0$ is usually the log-odds of the event rate in the training set. $f_t(\boldsymbol{x})$ is the numeric score prediction from the tree created at iteration $t$. If the tree structure $\mathcal{T}_t$ partitions the predictor space into terminal node regions $R_{t1}, \ldots, R_{tK_t}$, then:
 
 $$
-f_j(\boldsymbol{x}) = \sum_{k=1}^{K_j} w_{jk} \, I(\boldsymbol{x} \in R_{jk})
+f_t(\boldsymbol{x}) = \sum_{k=1}^{K_t} w_{tk} \, I(\boldsymbol{x} \in R_{tk})
 $$
 
-The structure $\mathcal{T}_j$ determines which terminal node $\boldsymbol{x}$ lands in, and $w_{jk}$ is the value returned by that node. The ensemble is built one tree at a time:
+The structure $\mathcal{T}_t$ determines which terminal node $\boldsymbol{x}$ lands in, and $w_{tk}$ is the value returned by that node. The ensemble is built one tree at a time:
 
 $$
-\mathcal{F}_j(\boldsymbol{x}) = \mathcal{F}_{j-1}(\boldsymbol{x}) + \alpha \, f_j(\boldsymbol{x})
+\mathcal{F}_t(\boldsymbol{x}) = \mathcal{F}_{t-1}(\boldsymbol{x}) + \alpha \, f_t(\boldsymbol{x})
 $$
 
 As we'll see, this is analogous to the typical gradient step shown in  @eq-gd-step: 
@@ -986,10 +1037,10 @@ $$
 The full objective function adds a penalty $\mathcal{P}$ on the complexity of each tree:
 
 $$
-\psi = \sum_{i=1}^{n_{tr}} \ell(y_i, \mathcal{F}_i) + \sum_{j=1}^{T} \mathcal{P}(\mathcal{T}_j)
+\psi = \sum_{i=1}^{n_{tr}} \ell(y_i, \mathcal{F}_i) + \sum_{t = 1}^{T} \mathcal{P}(\mathcal{T}_t)
 $$
 
-The penalty can depend on both the tree structure (e.g., the number of terminal nodes) and the terminal node values $w_{jk}$. We've already seen examples of penalties in @sec-tree-splitting. The trees are added one at a time, and earlier trees are not changed. So at iteration $j$, the only part of the penalty that matters is $\mathcal{P}(\mathcal{T}_j)$. The three libraries discussed below use different forms of $\mathcal{P}$.
+The penalty can depend on both the tree structure (e.g., the number of terminal nodes) and the terminal node values $w_{tk}$. We've already seen examples of penalties in @sec-tree-splitting. The trees are added one at a time, and earlier trees are not changed. So at iteration $t$, the only part of the penalty that matters is $\mathcal{P}(\mathcal{T}_t)$. The three libraries discussed below use different forms of $\mathcal{P}$.
 
 Now that we have the objective function, what are the gradient and Hessian?
 
@@ -1024,10 +1075,10 @@ The negative gradient, $-g_i = y_i - p_i$, is the raw residual $e_{ik}$ from @se
 How, then, does gradient boosting work? It mirrors gradient descent. The initial score $\mathcal{F}_0$ plays the role of the starting parameter values ($\boldsymbol{\theta}_0$). A gradient descent step would move each score against its gradient:
 
 $$
-\mathcal{F}_i \leftarrow \mathcal{F}_{j-1} - \alpha \, g_{j-1}
+\mathcal{F}_i \leftarrow \mathcal{F}_{t-1} - \alpha \, g_{t-1}
 $$
 
-That step is only defined for the training set points and says nothing about a new $\boldsymbol{x}$. Instead, we build a tree $f_j$ that approximates the negative gradients $y_i - p_i$ as a function of the predictors. These are the residuals of the *current ensemble* ($\mathcal{F}_0$ plus all previous trees). The tree turns the gradient step into a function that can be applied to any sample. Its predictions are on the log-odds scale, not the probability scale, and they are shrunk by $\alpha$ before being added to $\mathcal{F}$.
+That step is only defined for the training set points and says nothing about a new $\boldsymbol{x}$. Instead, we build a tree $f_t$ that approximates the negative gradients $y_i - p_i$ as a function of the predictors. These are the residuals of the *current ensemble* ($\mathcal{F}_0$ plus all previous trees). The tree turns the gradient step into a function that can be applied to any sample. Its predictions are on the log-odds scale, not the probability scale, and they are shrunk by $\alpha$ before being added to $\mathcal{F}$.
 
 The modern libraries also use the Hessian, which makes each update a Newton step rather than a plain gradient step. The general form of Newton's Method is: 
 
@@ -1045,10 +1096,10 @@ This is the variance of the Bernoulli distribution. It is always positive and ha
 
 Recall that the Hessian is a _matrix_, with the mixed second partial derivatives $\partial^2 \psi / \partial \mathcal{F}_i \, \partial \mathcal{F}_{i'}$ on the off-diagonals. Here, each sample's loss depends only on its own score, so $h_{ii'} = 0$ when $i \ne i'$. The $n_{tr} \times n_{tr}$ Hessian is diagonal, and the vector of $h_i$ values contains all the information^[Since it is digonal, we index it by $i$ and not $ii$ for convenience.]. This is not true for $C > 2$ classes (see below).
 
-For the samples in terminal node $k$ of tree $j$, define $G_k = \sum_{i \in k} g_i$ and $H_k = \sum_{i \in k} h_i$. Without a penalty, the Newton step for that node is:
+For the samples in terminal node $l$ of tree $t$, define $G_k = \sum_{i \in l} g_i$ and $H_l = \sum_{i \in l} h_i$. Without a penalty, the Newton step for that node is:
 
 $$
-w_{jk} = -\frac{G_k}{H_k}
+w_{tl} = -\frac{G_l}{H_l}
 $$
 
 The numerator is the sum of the residuals in the node. The denominator rescales it from the probability scale to the real line. The penalty $\mathcal{P}$ changes this formula, and the same sums $G$ and $H$ are used to score candidate splits while the tree is grown. After the tree is added, the probabilities and residuals are recomputed, the next tree is fit to the new residuals, and the process repeats.
@@ -1087,19 +1138,303 @@ Since the probabilities must sum to one, there is a built-in linear dependency, 
 
 @xgb16
 
+```{r}
+#| label: fig-forest-xgb
+#| echo: false
+#| out-width: 100%
+#| fig-width: 12
+#| fig-height: 2.5
+#| fig-cap: "Tuning results for XGBoost The panel on the right reflects the average number of terminal nodes in the ensemble for different tuning parameter candidates."
+
+# fmt: skip
+bst_ord <- 
+  c("Mtry", "Minimal Node Size", "Tree Depth", "Learning Rate (log-10)", 
+    "Min. Loss\nReduction (log-10)", # "# Members (log-10)", 
+    "# Terminal Nodes (log-10)", "# Rule Terms")
+
+forest_xgb_res |>
+  collect_extracts() |>
+  unnest(.extracts) |>
+  summarize(
+    num_terminal_nodes = mean(num_terminal_nodes),
+    num_rule_terms = mean(num_rule_terms),
+    .by = c(.config)
+  ) |>
+  full_join(
+    forest_xgb_res |>
+      collect_metrics(type = "wide"),
+    by = ".config"
+  ) |>
+  mutate(
+    learn_rate = log10(learn_rate),
+    loss_reduction = log10(loss_reduction),
+    num_terminal_nodes = log10(num_terminal_nodes)
+  ) |> 
+  rename(
+    `# Terminal Nodes (log-10)` = num_terminal_nodes,
+    `Learning Rate (log-10)` = learn_rate,
+    `Min. Loss\nReduction (log-10)` = loss_reduction,
+    # `# Members (log-10)`= num_members,
+    `# Rule Terms`= num_rule_terms,
+    `Minimal Node Size` = min_n,
+    Mtry = mtry,
+    `Tree Depth` = tree_depth
+  ) |>
+  select(-mn_log_loss, -roc_auc, -pr_auc) |> 
+  pivot_longer(
+    -c(.config, brier_class),
+    names_to = "parameter",
+    values_to = "value"
+  ) |>
+  mutate(parameter = factor(parameter, levels = bst_ord)) |>
+  ggplot(aes(value, brier_class)) +
+  geom_point(alpha = 2 / 4, cex = 2) +
+  facet_wrap(~parameter, scales = "free_x", nrow = 1) +
+  labs(y = "Brier Score", x = NULL) + 
+  theme(
+    strip.text = element_text(size = 9),
+    strip.text.x = element_text(margin = margin(t = 4, b = 4))
+  )
+
+```
+
 #### LightGBM
 
 @lgb17
+
+
+
+```{r}
+#| label: fig-forest-lgb
+#| echo: false
+#| out-width: 100%
+#| fig-width: 12
+#| fig-height: 2.5
+#| fig-cap: "Tuning results for LightGBM. The panel on the right reflects the average number of terminal nodes in the ensemble for different tuning parameter candidates."
+
+forest_lgb_res |>
+  collect_extracts() |>
+  unnest(.extracts) |>
+  summarize(
+    num_terminal_nodes = mean(num_terminal_nodes),
+    num_rule_terms = mean(num_rule_terms),
+    .by = c(.config)
+  ) |>
+  full_join(
+    forest_lgb_res |>
+      collect_metrics(type = "wide"),
+    by = ".config"
+  ) |>
+  mutate(
+    learn_rate = log10(learn_rate),
+    loss_reduction = log10(loss_reduction),
+    num_terminal_nodes = log10(num_terminal_nodes)
+  ) |> 
+  rename(
+    `# Terminal Nodes (log-10)` = num_terminal_nodes,
+    `Learning Rate (log-10)` = learn_rate,
+    `Min. Loss\nReduction (log-10)` = loss_reduction,
+    # `# Members (log-10)`= num_members,
+    `# Rule Terms`= num_rule_terms,
+    `Minimal Node Size` = min_n,
+    Mtry = mtry,
+    `Tree Depth` = tree_depth
+  ) |>
+  select(-mn_log_loss, -roc_auc, -pr_auc) |> 
+  pivot_longer(
+    -c(.config, brier_class),
+    names_to = "parameter",
+    values_to = "value"
+  ) |>
+  mutate(parameter = factor(parameter, levels = bst_ord)) |>
+  ggplot(aes(value, brier_class)) +
+  geom_point(alpha = 2 / 4, cex = 2) +
+  facet_wrap(~parameter, scales = "free_x", nrow = 1) +
+  labs(y = "Brier Score", x = NULL) + 
+  theme(
+    strip.text = element_text(size = 9),
+    strip.text.x = element_text(margin = margin(t = 4, b = 4))
+  )
+```
+
 
 #### CatBoost
 
 @cat18
 
+
+```{r}
+#| label: fig-forest-ctg
+#| echo: false
+#| out-width: 100%
+#| fig-width: 12
+#| fig-height: 2.5
+#| fig-cap: "Tuning results for CatBoost The panel on the right reflects the average number of terminal nodes in the ensemble for different tuning parameter candidates."
+
+# fmt: skip
+ctb_ord <- 
+  c("Mtry", "Minimal Node Size", "Tree Depth", "Learning Rate (log-10)", 
+    "# Terminal Nodes (log-10)", "# Rule Terms")
+forest_ctb_res |>
+  collect_extracts() |>
+  unnest(.extracts) |>
+  summarize(
+    num_terminal_nodes = mean(num_terminal_nodes),
+    num_rule_terms = mean(num_rule_terms),
+    .by = c(.config)
+  ) |>
+  full_join(
+    forest_ctb_res |>
+      collect_metrics(type = "wide"),
+    by = ".config"
+  ) |>
+  mutate(
+    learn_rate = log10(learn_rate),
+    num_terminal_nodes = log10(num_terminal_nodes)
+  ) |>
+  rename(
+    `# Terminal Nodes (log-10)` = num_terminal_nodes,
+    `Learning Rate (log-10)` = learn_rate,
+    `# Rule Terms` = num_rule_terms,
+    `Minimal Node Size` = min_n,
+    Mtry = mtry,
+     `Tree Depth` = tree_depth
+  ) |>
+  select(-mn_log_loss, -roc_auc, -pr_auc) |>
+  pivot_longer(
+    -c(.config, brier_class),
+    names_to = "parameter",
+    values_to = "value"
+  ) |>
+  mutate(parameter = factor(parameter, levels = ctb_ord)) |>
+  ggplot(aes(value, brier_class)) +
+  geom_point(alpha = 2 / 4, cex = 2) +
+  facet_wrap(~parameter, scales = "free_x", nrow = 1) +
+  labs(y = "Brier Score", x = NULL) +
+  theme(
+    strip.text = element_text(size = 9),
+    strip.text.x = element_text(margin = margin(t = 4, b = 4))
+  )
+```
+
+
 ## Rule-Based Ensembles {#sec-cls-rule-ensembles}
 
 ### C5.0 Rules {#sec-cls-c50-rules}
 
+
+```{r}
+#| label: fig-forest-c5-rule-boost
+#| echo: false
+#| out-width: 80%
+#| fig-width: 7
+#| fig-height: 2.5
+#| fig-cap: "Tuning results for boosted C5.0 rule sets. The panel on the right reflects the average number of terminal nodes in the ensemble for different tuning parameter candidates."
+
+
+forest_c5rules_res |>
+  collect_extracts() |>
+  unnest(.extracts) |>
+  summarize(
+    num_terminal_nodes = mean(num_terminal_nodes),
+    num_rule_terms = mean(num_rule_terms),
+    .by = c(.config)
+  ) |>
+  full_join(
+    forest_c5rules_res |>
+      collect_metrics(type = "wide"),
+    by = ".config"
+  ) |>
+  mutate(
+    num_terminal_nodes = log10(num_terminal_nodes)
+  ) |> 
+  rename(
+    `# Terminal Nodes (log-10)` = num_terminal_nodes,
+    `# Rule Terms`= num_rule_terms,
+    `Minimal Node Size` = min_n,
+    `Trees` = trees
+  ) |>
+  select(-mn_log_loss, -roc_auc, -pr_auc) |> 
+  pivot_longer(
+    -c(.config, brier_class),
+    names_to = "parameter",
+    values_to = "value"
+  ) |>
+  mutate(parameter = factor(parameter, levels = c5_ord)) |>
+  ggplot(aes(value, brier_class)) +
+  geom_point(alpha = 2 / 4, cex = 2) +
+  facet_wrap(~parameter, scales = "free_x", nrow = 1) +
+  labs(y = "Brier Score", x = NULL) + 
+  theme(
+    strip.text = element_text(size = 9),
+    strip.text.x = element_text(margin = margin(t = 4, b = 4))
+  )
+
+```
+
+
 ### RuleFit {#sec-cls-rule-fit}
+
+
+```{r}
+#| label: fig-forest-rulefit
+#| echo: false
+#| out-width: 100%
+#| fig-width: 12
+#| fig-height: 2.5
+#| fig-cap: "Tuning results for RuleFit The panel on the right reflects the average number of terminal nodes in the ensemble for different tuning parameter candidates."
+
+xrf_ord <- 
+  c("Mtry", "Minimal Node Size", 
+    "Tree Depth", "Learning Rate (log-10)", "Min. Loss\nReduction (log-10)", 
+    "Penalty (log-10)", "# Coefficients\n (log-10)", "# Rule Terms")
+
+forest_xrf_res |>
+  collect_extracts() |>
+  select(-penalty) |> 
+  unnest(.extracts) |>
+  summarize(
+    num_coef = mean(num_coef),
+    num_rule_terms = mean(num_rule_terms),
+    .by = c(.config)
+  ) |>
+  full_join(
+    forest_xrf_res |>
+      collect_metrics(type = "wide"),
+    by = ".config"
+  ) |>
+  mutate(
+    learn_rate = log10(learn_rate),
+    loss_reduction = log10(loss_reduction),
+    num_coef = log10(num_coef),
+    penalty = log10(penalty)
+  ) |> 
+  rename(
+    `# Coefficients\n (log-10)` = num_coef,
+    `Learning Rate (log-10)` = learn_rate,
+    `Min. Loss\nReduction (log-10)` = loss_reduction,
+    `# Rule Terms`= num_rule_terms,
+    `Minimal Node Size` = min_n,
+    Mtry = mtry,
+    `Tree Depth` = tree_depth,
+    `Penalty (log-10)` = penalty
+  ) |>
+  select(-mn_log_loss, -roc_auc, -pr_auc) |> 
+  pivot_longer(
+    -c(.config, brier_class),
+    names_to = "parameter",
+    values_to = "value"
+  ) |>
+  mutate(parameter = factor(parameter, levels = xrf_ord)) |>
+  ggplot(aes(value, brier_class)) +
+  geom_point(alpha = 2 / 4, cex = 1) +
+  facet_wrap(~parameter, scales = "free_x", nrow = 1) +
+  labs(y = "Brier Score", x = NULL) + 
+  theme(
+    strip.text = element_text(size = 9),
+    strip.text.x = element_text(margin = margin(t = 4, b = 4))
+  )
+```
 
 ## Comparisons to Previous Models {#sec-cls-ensemble-compare}
 
@@ -1130,11 +1465,13 @@ forest_ensemble_set_res <-
     Bagged_CART = forest_cart_bag_res |> butcher::butcher(),
     RF = forest_rngr_res |> butcher::butcher(),
     `RF (ERT)` = forest_ert_res |> butcher::butcher(),
-    `Oblique RF` = forest_rf_obl_res |> butcher::butcher(),
+    `RF (Oblique)` = forest_rf_obl_res |> butcher::butcher(),
     Boost_C5.0 = forest_c5_res |> butcher::butcher(),
+    `Boost_C5.0 Rules` = forest_c5rules_res |> butcher::butcher(),
     XGBoost = forest_xgb_res |> butcher::butcher(),
     LightGBM = forest_lgb_res |> butcher::butcher(),
-    BART = forest_bart_res |> butcher::butcher()
+    BART = forest_bart_res |> butcher::butcher(),
+    RuleFit = forest_xrf_res |> butcher::butcher()
   )
 
 all_sets <-
@@ -1158,6 +1495,7 @@ all_sets <-
     forest_ctb_set_res
   )
 ```
+
 
 ```{r}
 #| label: cls-ensemble-compare-bayes
