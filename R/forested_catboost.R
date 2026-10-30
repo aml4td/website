@@ -120,7 +120,7 @@ ensmbl_stats_extractor <- make_extractor(
 ctb_spec <-
   boost_tree(
     mode = "classification",
-    trees = 200,
+    trees = 1000,
     min_n = tune(),
     mtry = tune(),
     tree_depth = tune(),

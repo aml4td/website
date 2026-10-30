@@ -47,7 +47,6 @@ xrf_spec <-
     min_n = tune(),
     tree_depth = tune(),
     learn_rate = tune(),
-    loss_reduction = tune(),
     penalty = tune()
   ) |>
   set_mode('classification')

@@ -45,11 +45,10 @@ ensmbl_stats <- function(x) {
 lgb_spec <-
   boost_tree(
     mode = "classification",
-    trees = 5000,
+    trees = 1000,
     mtry = tune(),
     min_n = tune(),
     tree_depth = tune(),
-    loss_reduction = tune(),
     learn_rate = tune(),
     stop_iter = 5
   ) |>
@@ -58,7 +57,7 @@ lgb_spec <-
 lgb_param <-
   lgb_spec |>
   extract_parameter_set_dials() |>
-  update(tree_depth = tree_depth(c(2, 32)))
+  update(tree_depth = tree_depth(c(2, 16)))
 
 set.seed(458)
 forest_lgb_res <-
