@@ -195,6 +195,13 @@ is_tex <- knitr::is_latex_output()
 is_m1_mac <- Sys.info()["machine"] == "arm64"
 
 # ------------------------------------------------------------------------------
+# Convenience functions
+
+fmt <- function(x, digits = 3, ...) {
+  format(x, digits = digits, big.mark = ",", scientific = FALSE)
+}
+
+# ------------------------------------------------------------------------------
 # Differentially set the graphics device depending on the target format
 
 if (is_html) {
