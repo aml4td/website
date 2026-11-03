@@ -43,18 +43,19 @@ ensmbl_stats <- function(x) {
 xgb_spec <-
   boost_tree(
     mode = "classification",
-    trees = 1000,
+    trees = 2000,
     mtry = tune(),
     min_n = tune(),
     tree_depth = tune(),
     learn_rate = tune(),
     stop_iter = 5
-  )
+  ) |> 
+  set_engine("xgboost", validation = 0.1, alpha = tune(), lambda = tune())
 
 xgb_param <-
   xgb_spec |>
   extract_parameter_set_dials() |>
-  update(tree_depth = tree_depth(c(2, 16)))
+  update(tree_depth = tree_depth(c(2, 32)))
 
 set.seed(458)
 forest_xgb_res <-
