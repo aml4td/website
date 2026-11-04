@@ -131,6 +131,7 @@ if [[ -n $setlink_slug ]]; then
   fi
   set_link_in_clone() {
     dev_write_retired_meta "$setlink_slug" "$retire_link"
+    dev_write_retired_stub "$setlink_slug"
     dev_write_root_files
   }
   set_link_in_clone
@@ -223,6 +224,11 @@ if [[ -n $unpublish_slug ]]; then
   # same accidental-domain-change guard applies here as in 2-publish-dev.sh.
   dev_check_domain
 
+  if [[ -f $DEV_CLONE_DIR/$unpublish_slug/$DEV_STUB_MARKER ]]; then
+    echo "3-cleanup-dev.sh: '$unpublish_slug' is already retired (use --set-link to change its link)" >&2
+    exit 1
+  fi
+
   if [[ ! -d $DEV_CLONE_DIR/$unpublish_slug ]]; then
     echo "3-cleanup-dev.sh: no preview named '$unpublish_slug' is published" >&2
     echo "  (previews/3-cleanup-dev.sh --list shows the ones that are)" >&2
@@ -240,11 +246,12 @@ if [[ -n $unpublish_slug ]]; then
       dev_write_retired_meta "$unpublish_slug" "$retire_link"
     fi
     rm -rf "$DEV_CLONE_DIR/$unpublish_slug"
+    dev_write_retired_stub "$unpublish_slug"
     dev_write_root_files
   }
   remove_preview_from_clone
   dev_commit_and_push "remove dev preview: $unpublish_slug" remove_preview_from_clone
-  echo "==> $DEV_BASE_URL/$unpublish_slug/ will 404 once Pages rebuilds"
+  echo "==> $DEV_BASE_URL/$unpublish_slug/ now redirects (to the link if given, else the index) once Pages rebuilds"
 
   # Also drop that preview's local render output, since it is now meaningless.
   rm -rf "$DEV_OUT_ROOT/$unpublish_slug"

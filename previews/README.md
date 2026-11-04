@@ -90,7 +90,7 @@ If a reviewer needs a URL that stays **frozen** while they read, publish a secon
 previews/3-cleanup-dev.sh --unpublish svm-review
 ```
 
-The directory is deleted from the staging site, the index is rewritten in the same commit so it never links to something gone, and that preview's local output under `_book-dev/` is removed too. The URL 404s once Pages rebuilds, usually within 30 seconds.
+The directory is deleted from the staging site, the index is rewritten in the same commit so it never links to something gone, and that preview's local output under `_book-dev/` is removed too. The old URL redirects (see below) once Pages rebuilds, usually within 30 seconds.
 
 | Option | Effect |
 |---|---|
@@ -107,7 +107,9 @@ Removing a preview leaves a small record at `.retired/<slug>` in the staging bra
 previews/3-cleanup-dev.sh --unpublish svm-review --link https://aml4td.org/chapters/svm.html
 ```
 
-Publishing a slug again removes it from the retired table. Previews removed before this feature existed have no record and do not appear.
+Retiring a preview also leaves a one-page redirect at the old URL (`<slug>/index.html`, marked with `.dev-retired`). A bookmark to the preview root goes to the `--link` page, or to the previews index if no link was given. Deep links into the old preview (for example `<slug>/chapters/x.html`) still 404, because GitHub Pages has no server-side redirects. `--set-link` updates the redirect too.
+
+Publishing a slug again removes it from the retired table and replaces the redirect with the real preview. Previews removed before this feature existed have no record and do not appear.
 
 Worth doing when a branch merges or an experiment is abandoned: previews are not free (see Capacity), and a stale preview that still looks like the book is a hazard. There is no bulk remove — removing several means running it several times, deliberately.
 

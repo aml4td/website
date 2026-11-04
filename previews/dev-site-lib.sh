@@ -371,6 +371,47 @@ dev_list_retired() {
   done
 }
 
+# Marker for the redirect stub left at <slug>/ after a preview is retired. Kept
+# separate from $DEV_MARKER so a stub is never listed as a live preview, while
+# dev_list_root_strays still recognises it as legitimate (otherwise --prune-root
+# would delete it).
+DEV_STUB_MARKER=".dev-retired"
+
+# dev_write_retired_stub <slug>
+#   Leave a one-page redirect at <slug>/index.html, so a bookmark to the old
+#   preview URL lands somewhere useful instead of 404ing. GitHub Pages has no
+#   server-side redirects, so this is a meta refresh plus a plain link. It goes
+#   to the retired record's link when there is one, otherwise to the index page.
+#   Only the preview root is covered: deep links (<slug>/chapters/x.html) still 404.
+#
+#   Call after the preview directory has been removed. Re-publishing the slug
+#   replaces the stub, because rsync --delete drops files absent from the render.
+dev_write_retired_stub() {
+  local slug="$1" link target target_html label
+  link="$(dev_read_retired_meta "$slug" link)"
+  target="$DEV_BASE_URL/"
+  label="all previews"
+  if [[ -n $link ]] && dev_valid_link "$link"; then
+    target="$link"
+    label="the related page on $DEV_PROD_NAME"
+  fi
+  target_html="$(dev_html_escape "$target")"
+
+  mkdir -p "$DEV_CLONE_DIR/$slug"
+  : > "$DEV_CLONE_DIR/$slug/$DEV_STUB_MARKER"
+  cat > "$DEV_CLONE_DIR/$slug/index.html" <<HTML
+<!doctype html>
+<html lang="en">
+<meta charset="utf-8">
+<meta name="robots" content="noindex, nofollow">
+<meta http-equiv="refresh" content="0; url=$target_html">
+<link rel="canonical" href="$target_html">
+<title>Preview retired</title>
+<p>The draft preview <code>$slug</code> has been retired. Continue to <a href="$target_html">$label</a>.</p>
+</html>
+HTML
+}
+
 # dev_clear_retired <slug>
 #   Drop a retired record, e.g. because the slug was published again.
 dev_clear_retired() {
@@ -418,6 +459,7 @@ dev_list_root_strays() {
 
     # A directory carrying the marker is a real preview, so leave it be.
     if [[ -d $path && -f $path/$DEV_MARKER ]]; then continue; fi
+    if [[ -d $path && -f $path/$DEV_STUB_MARKER ]]; then continue; fi
 
     printf '%s\n' "$name"
   done

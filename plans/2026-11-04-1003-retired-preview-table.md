@@ -19,6 +19,7 @@ PR #131 added `previews/` scripts that publish branch/PR previews to `aml4td/dev
 - [x] Optional small helper: `3-cleanup-dev.sh --set-link <slug> <url>` to add/fix a link on an already-retired entry (avoids needing to re-publish to fix a typo)
 - [x] `previews/README.md`: document `--link`, the retired table, and `.retired/`
 - [x] Update the existing plan `plans/2026-08-18-1755-dev-preview-sites.md` with a short follow-up section
+- [x] Redirect stub at `<slug>/index.html` (meta refresh to the link, else the index), marked `.dev-retired`; `--prune-root` recognises it; `--unpublish` on an already-retired slug errors; `--set-link` refreshes the stub
 
 ## Details
 
