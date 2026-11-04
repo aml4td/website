@@ -95,7 +95,19 @@ The directory is deleted from the staging site, the index is rewritten in the sa
 | Option | Effect |
 |---|---|
 | `--unpublish <slug>` | Retire one preview. Errors if no preview by that name is published. |
-| `--list` | Show what is published, if you are unsure of the slug. |
+| `--link <url>` | With `--unpublish`: the page on the main site that this preview became (must start with `http://` or `https://`). Optional. |
+| `--set-link <slug> <url>` | Add or fix the link on a preview that is already retired. |
+| `--list` | Show what is published and what is retired, if you are unsure of the slug. |
+
+### Retired previews table
+
+Removing a preview leaves a small record at `.retired/<slug>` in the staging branch (branch, commit, when it was published and retired, and the link). The index page lists these in a "Retired previews" table below the live ones, with the link shown in a "Main site" column, or a dash if none was given.
+
+```sh
+previews/3-cleanup-dev.sh --unpublish svm-review --link https://aml4td.org/chapters/svm.html
+```
+
+Publishing a slug again removes it from the retired table. Previews removed before this feature existed have no record and do not appear.
 
 Worth doing when a branch merges or an experiment is abandoned: previews are not free (see Capacity), and a stale preview that still looks like the book is a hazard. There is no bulk remove — removing several means running it several times, deliberately.
 

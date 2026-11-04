@@ -134,3 +134,7 @@ Tested by planting exactly that debris (including an unpushed junk commit) and c
 - **`dev/` subdirectory of production's own `gh-pages`** — **impossible**, not merely undesirable. An early reading of the provider (the `copy` + `git add -Af .` at `gh-pages.ts:240-248`) suggested the publish was additive and would leave a `dev/` subtree alone. It is not: `withWorktree` runs `git rm -r .` first (`gh-pages.ts:430-435`, commented "remove files in existing site, i.e. start clean"), so every production publish deletes anything else on the branch. Proven live — see incident 3 below.
 - **Quarto Pub** — fine for throwaway one-off shares, not a durable staging site.
 - **Temporarily editing `_quarto.yml` and restoring it in a trap** — an interrupted run leaves a mutated tracked config, risking a committed dev `site-url` or a production publish with dev settings. Profiles achieve the same thing with no window of inconsistency.
+
+## Follow-up: retired previews table
+
+See `plans/2026-11-04-1003-retired-preview-table.md`. `--unpublish` now records a `.retired/<slug>` entry (with an optional `--link` to the main site) and the index lists retired previews in a second table.

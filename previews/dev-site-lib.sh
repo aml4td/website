@@ -295,6 +295,89 @@ format:
 YAML
 }
 
+# Directory (at the staging root) holding one record per retired preview. A
+# retired preview has no site any more; the record lets the index page list it
+# and point at the related page on the main site. One file per slug, so two
+# people retiring different previews never touch the same file.
+DEV_RETIRED_DIR=".retired"
+
+# dev_valid_link <url>
+#   Succeeds for an absolute http(s) URL with no whitespace or characters that
+#   would break out of an HTML attribute. The link is user-supplied and ends up
+#   in index.html, so this rejects things like "javascript:..." up front.
+dev_valid_link() {
+  local url="$1"
+  case "$url" in
+    http://*|https://*) ;;
+    *) return 1 ;;
+  esac
+  case "$url" in
+    *[[:space:]\"\'\<\>\`]*) return 1 ;;
+  esac
+  return 0
+}
+
+# dev_html_escape <text>
+dev_html_escape() {
+  printf '%s' "$1" | sed -e 's/&/\&amp;/g' -e 's/</\&lt;/g' -e 's/>/\&gt;/g' -e 's/"/\&quot;/g'
+}
+
+# dev_write_retired_meta <slug> <link>
+#   Record that <slug> was retired. Copies branch/sha/published from the live
+#   preview's marker, so call it BEFORE the preview directory is removed. If the
+#   preview directory is already gone (a retry, or --set-link), existing values
+#   in the retired record are kept instead. <link> may be empty.
+dev_write_retired_meta() {
+  local slug="$1" link="$2" branch sha published epoch retired
+  branch="$(dev_read_meta "$slug" branch)"
+  sha="$(dev_read_meta "$slug" sha)"
+  published="$(dev_read_meta "$slug" published)"
+  if [[ -z $branch ]]; then branch="$(dev_read_retired_meta "$slug" branch)"; fi
+  if [[ -z $sha ]]; then sha="$(dev_read_retired_meta "$slug" sha)"; fi
+  if [[ -z $published ]]; then published="$(dev_read_retired_meta "$slug" published)"; fi
+  epoch="$(dev_read_retired_meta "$slug" retired_epoch)"
+  if [[ -z $epoch ]]; then epoch="$(date '+%s')"; fi
+  retired="$(dev_read_retired_meta "$slug" retired)"
+  if [[ -z $retired ]]; then retired="$(date -u '+%Y-%m-%d')"; fi
+
+  mkdir -p "$DEV_CLONE_DIR/$DEV_RETIRED_DIR"
+  cat > "$DEV_CLONE_DIR/$DEV_RETIRED_DIR/$slug" <<META
+slug=$slug
+branch=$branch
+sha=$sha
+published=$published
+retired=$retired
+retired_epoch=$epoch
+link=$link
+META
+}
+
+# dev_read_retired_meta <slug> <key>
+dev_read_retired_meta() {
+  local slug="$1" key="$2" file="$DEV_CLONE_DIR/$DEV_RETIRED_DIR/$1" k v
+  [[ -f $file ]] || return 0
+  while IFS='=' read -r k v; do
+    if [[ $k == "$key" ]]; then printf '%s' "$v"; return 0; fi
+  done < "$file"
+}
+
+# dev_list_retired
+#   Slugs of every retired-preview record.
+dev_list_retired() {
+  local f
+  for f in "$DEV_CLONE_DIR/$DEV_RETIRED_DIR"/*; do
+    [[ -f $f ]] || continue
+    basename "$f"
+  done
+}
+
+# dev_clear_retired <slug>
+#   Drop a retired record, e.g. because the slug was published again.
+dev_clear_retired() {
+  rm -f "$DEV_CLONE_DIR/$DEV_RETIRED_DIR/$1"
+  rmdir "$DEV_CLONE_DIR/$DEV_RETIRED_DIR" 2>/dev/null || true
+}
+
 # dev_list_previews
 #   Names of the previews currently published, i.e. every top-level directory
 #   holding a $DEV_MARKER file.
@@ -311,7 +394,7 @@ dev_list_previews() {
 
 # Files that legitimately live at the root of the staging branch. Everything
 # else up there is either a preview directory or debris.
-DEV_ROOT_FILES=(".git" ".nojekyll" "CNAME" "robots.txt" "index.html")
+DEV_ROOT_FILES=(".git" ".nojekyll" "CNAME" "robots.txt" "index.html" ".retired")
 
 # dev_list_root_strays
 #   Top-level entries that are neither a known root file nor a marked preview.
@@ -413,6 +496,7 @@ dev_write_index() {
     color: #1f2328; background: #fff;
   }
   h1 { font-size: 1.6rem; margin: 0 0 0.35rem; }
+  h2 { font-size: 1.2rem; margin: 2.5rem 0 0.35rem; }
   .lede { color: #57606a; margin: 0 0 2rem; }
   .lede a { color: #0969da; }
   table { border-collapse: collapse; width: 100%; font-size: 0.92rem; }
@@ -442,6 +526,37 @@ HTML
         [[ -n $name ]] || continue
         printf '    <tr><td class="slug"><a href="%s/">%s</a></td><td><code>%s</code></td><td><code>%s</code></td><td class="when">%s</td></tr>\n' \
           "$name" "$name" "$branch" "$sha" "$published"
+      done
+      echo '  </tbody>'
+      echo '</table>'
+    fi
+
+    local rrows="" rname rretired rbranch rlink rlink_html rlink_cell
+    while IFS= read -r rname; do
+      [[ -n $rname ]] || continue
+      epoch="$(dev_read_retired_meta "$rname" retired_epoch)"
+      rbranch="$(dev_read_retired_meta "$rname" branch)"
+      rretired="$(dev_read_retired_meta "$rname" retired)"
+      rlink="$(dev_read_retired_meta "$rname" link)"
+      rrows+="${epoch:-0}	$rname	${rbranch:-unknown}	${rretired:-unknown}	$rlink
+"
+    done < <(dev_list_retired)
+
+    if [[ -n $rrows ]]; then
+      echo '<h2>Retired previews</h2>'
+      echo '<p class="lede">These previews have been removed. Where known, the link goes to the related page on the main site.</p>'
+      echo '<table>'
+      echo '  <thead><tr><th>Preview</th><th>Branch</th><th>Retired</th><th>Main site</th></tr></thead>'
+      echo '  <tbody>'
+      printf '%s' "$rrows" | sort -t'	' -k1,1 -rn | while IFS='	' read -r epoch rname rbranch rretired rlink; do
+        [[ -n $rname ]] || continue
+        rlink_cell="&mdash;"
+        if [[ -n $rlink ]] && dev_valid_link "$rlink"; then
+          rlink_html="$(dev_html_escape "$rlink")"
+          rlink_cell="<a href=\"$rlink_html\">$rlink_html</a>"
+        fi
+        printf '    <tr><td class="slug">%s</td><td><code>%s</code></td><td class="when">%s</td><td>%s</td></tr>\n' \
+          "$(dev_html_escape "$rname")" "$(dev_html_escape "$rbranch")" "$(dev_html_escape "$rretired")" "$rlink_cell"
       done
       echo '  </tbody>'
       echo '</table>'

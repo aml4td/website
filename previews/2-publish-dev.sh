@@ -220,6 +220,9 @@ sync_preview_into_clone() {
   # directory that something else dropped at the staging root.
   dev_write_preview_meta "$slug" "$branch" "$short_sha"
 
+  # A slug that is live again is no longer retired.
+  dev_clear_retired "$slug"
+
   # The staging root: .nojekyll, CNAME, robots.txt and the preview index.
   dev_write_root_files
 }
