@@ -941,13 +941,12 @@ The binary class votes provides more weight to trees that have the largest confi
 ```{r}
 #| label: fig-forest-c5-boost
 #| echo: false
-#| out-width: 100%
-#| fig-width: 12
+#| out-width: 80%
+#| fig-width: 7
 #| fig-height: 2.5
 #| fig-cap: "Tuning results for boosted C5.0 trees. The panel on the right reflects the average number of terminal nodes in the ensemble for different tuning parameter candidates."
 # fmt: skip
-c5_ord <- 
-  c("Trees", "Minimal Node Size", "# Terminal Nodes (log-10)", "# Rule Terms")
+c5_ord <- c("Trees", "Minimal Node Size", "# Terminal Nodes (log-10)", "# Rule Terms")
 
 forest_c5_res |>
   collect_extracts() |>
@@ -1137,36 +1136,42 @@ Since the probabilities must sum to one, there is a built-in linear dependency, 
 ```{r}
 #| label: boost-helpers
 #| include: false
-
 actual_trees <- function(x, digits = 3, ...) {
-  total_models <- 
-    x |> collect_metrics(summarize = FALSE) |> 
-    dplyr::filter(.metric == "brier_class") |> 
+  total_models <-
+    x |>
+    collect_metrics(summarize = FALSE) |>
+    dplyr::filter(.metric == "brier_class") |>
     nrow()
-  max_trees <- 
-    x |> 
-    extract_spec_parsnip() |> 
-    pluck("args") |> 
-    pluck("trees") |> 
+  max_trees <-
+    x |>
+    extract_spec_parsnip() |>
+    pluck("args") |>
+    pluck("trees") |>
     rlang::eval_tidy()
   x |>
     collect_extracts() |>
-    unnest(.extracts) |> 
-    mutate(early = num_members < max_trees) |> 
+    unnest(.extracts) |>
+    mutate(early = num_members < max_trees) |>
     summarize(
       early = mean(early) * 100,
       num_members = mean(num_members)
-    ) |> 
-    mutate(max_trees = max_trees, num_models = total_models) |> 
-    mutate(across(c(everything()), ~ fmt(.x, digits = digits, ...))) |> 
+    ) |>
+    mutate(max_trees = max_trees, num_models = total_models) |>
+    mutate(across(c(everything()), ~ fmt(.x, digits = digits, ...))) |>
     as.list()
 }
 
 marginal_boost_plot <- function(x) {
-  bst_ord <- 
-    c("Mtry", "Minimal Node Size", "Tree Depth", "Learning Rate (log-10)", 
-      "# Terminal Nodes (log-10)", "# Rule Terms")
-  
+  bst_ord <-
+    c(
+      "Mtry",
+      "Minimal Node Size",
+      "Tree Depth",
+      "Learning Rate (log-10)",
+      "# Terminal Nodes (log-10)",
+      "# Rule Terms"
+    )
+
   x |>
     collect_extracts() |>
     unnest(.extracts) |>
@@ -1199,18 +1204,19 @@ marginal_boost_plot <- function(x) {
       values_to = "value"
     ) |>
     mutate(
-      is_param = parameter %in% bst_ord[1:5],
+      is_param = parameter %in% bst_ord[1:4],
       parameter = factor(parameter, levels = bst_ord)
     ) |>
-    ggplot(aes(value, brier_class, pch = is_param)) +
+    ggplot(aes(value, brier_class, pch = is_param, col = is_param)) +
     geom_point(alpha = 2 / 4, cex = 2, show.legend = FALSE) +
     facet_wrap(~parameter, scales = "free_x", nrow = 1) +
     labs(y = "Brier Score", x = NULL) +
     theme(
       strip.text = element_text(size = 9),
       strip.text.x = element_text(margin = margin(t = 4, b = 4))
-    ) + 
-    scale_shape_manual(values = c(1, 16))
+    ) +
+    scale_shape_manual(values = c(15, 16)) +
+    scale_color_manual(values = c("#49271BFF", "black"))
 }
 
 trees_xgb <- actual_trees(forest_xgb_res)
@@ -1262,51 +1268,7 @@ marginal_boost_plot(forest_lgb_res)
 #| fig-width: 12
 #| fig-height: 2.5
 #| fig-cap: "Tuning results for CatBoost The panel on the right reflects the average number of terminal nodes in the ensemble for different tuning parameter candidates."
-# fmt: skip
-ctb_ord <- 
-  c("Mtry", "Minimal Node Size", "Tree Depth", "Learning Rate (log-10)", 
-    "# Terminal Nodes (log-10)", "# Rule Terms")
-
-forest_ctb_res |>
-  collect_extracts() |>
-  unnest(.extracts) |>
-  summarize(
-    num_terminal_nodes = mean(num_terminal_nodes),
-    num_rule_terms = mean(num_rule_terms),
-    .by = c(.config)
-  ) |>
-  full_join(
-    forest_ctb_res |>
-      collect_metrics(type = "wide"),
-    by = ".config"
-  ) |>
-  mutate(
-    learn_rate = log10(learn_rate),
-    num_terminal_nodes = log10(num_terminal_nodes)
-  ) |>
-  rename(
-    `# Terminal Nodes (log-10)` = num_terminal_nodes,
-    `Learning Rate (log-10)` = learn_rate,
-    `# Rule Terms` = num_rule_terms,
-    `Minimal Node Size` = min_n,
-    Mtry = mtry,
-    `Tree Depth` = tree_depth
-  ) |>
-  select(-mn_log_loss, -roc_auc, -pr_auc) |>
-  pivot_longer(
-    -c(.config, brier_class),
-    names_to = "parameter",
-    values_to = "value"
-  ) |>
-  mutate(parameter = factor(parameter, levels = ctb_ord)) |>
-  ggplot(aes(value, brier_class)) +
-  geom_point(alpha = 2 / 4, cex = 2) +
-  facet_wrap(~parameter, scales = "free_x", nrow = 1) +
-  labs(y = "Brier Score", x = NULL) +
-  theme(
-    strip.text = element_text(size = 9),
-    strip.text.x = element_text(margin = margin(t = 4, b = 4))
-  )
+marginal_boost_plot(forest_ctb_res)
 ```
 
 ## Rule-Based Ensembles {#sec-cls-rule-ensembles}
@@ -1368,11 +1330,10 @@ forest_c5rules_res |>
 #| fig-width: 12
 #| fig-height: 2.5
 #| fig-cap: "Tuning results for RuleFit The panel on the right reflects the average number of terminal nodes in the ensemble for different tuning parameter candidates."
-
 # fmt: skip
 xrf_ord <- 
   c("Mtry", "Minimal Node Size", 
-    "Tree Depth", "Learning Rate (log-10)", "Min. Loss\nReduction (log-10)", 
+    "Tree Depth", "Learning Rate (log-10)", 
     "Penalty (log-10)", "# Coefficients\n (log-10)", "# Rule Terms")
 
 forest_xrf_res |>
@@ -1391,14 +1352,12 @@ forest_xrf_res |>
   ) |>
   mutate(
     learn_rate = log10(learn_rate),
-    loss_reduction = log10(loss_reduction),
     num_coef = log10(num_coef),
     penalty = log10(penalty)
   ) |>
   rename(
     `# Coefficients\n (log-10)` = num_coef,
     `Learning Rate (log-10)` = learn_rate,
-    `Min. Loss\nReduction (log-10)` = loss_reduction,
     `# Rule Terms` = num_rule_terms,
     `Minimal Node Size` = min_n,
     Mtry = mtry,
