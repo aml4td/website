@@ -9,6 +9,9 @@
 #     previews/3-cleanup-dev.sh --all              # everything local
 #     previews/3-cleanup-dev.sh --list             # list published previews
 #     previews/3-cleanup-dev.sh --unpublish pr-123 # remove one preview from the site
+#     previews/3-cleanup-dev.sh --unpublish pr-123 --link https://aml4td.org/chapters/foo.html
+#                                                  # ...and list it as retired, linking to the main site
+#     previews/3-cleanup-dev.sh --set-link pr-123 URL  # add/fix the link on a retired preview
 #     previews/3-cleanup-dev.sh --prune-root       # delete non-preview debris from the site root
 #
 #
@@ -61,6 +64,8 @@ do_clone=false       # delete $DEV_CLONE_DIR
 do_list=false        # list published previews and exit
 do_prune_root=false  # delete non-preview debris from the staging root
 unpublish_slug=""    # remove this preview from the staging site
+retire_link=""       # optional main-site URL recorded with the retired preview
+setlink_slug=""      # retired preview whose link --set-link changes
 
 while (( $# > 0 )); do
   case "$1" in
@@ -78,6 +83,23 @@ while (( $# > 0 )); do
       unpublish_slug="$(dev_slugify "$2")"
       shift
       ;;
+    --link)
+      if (( $# < 2 )); then
+        echo "3-cleanup-dev.sh: --link needs a URL" >&2
+        exit 1
+      fi
+      retire_link="$2"
+      shift
+      ;;
+    --set-link)
+      if (( $# < 3 )); then
+        echo "3-cleanup-dev.sh: --set-link needs a slug and a URL" >&2
+        exit 1
+      fi
+      setlink_slug="$(dev_slugify "$2")"
+      retire_link="$3"
+      shift 2
+      ;;
     -h|--help)
       # Print this file's own header comment as the help text.
       sed -n '2,/^# ----/p' "${BASH_SOURCE[0]}" | sed 's/^# \{0,1\}//'
@@ -90,6 +112,32 @@ while (( $# > 0 )); do
   esac
   shift
 done
+
+# Validate the link before anything is changed.
+if [[ -n $retire_link ]] && ! dev_valid_link "$retire_link"; then
+  echo "3-cleanup-dev.sh: '$retire_link' is not a usable link (need http:// or https://, no spaces or quotes)" >&2
+  exit 1
+fi
+
+# ---------------------------------------------------------------------------
+# --set-link: add or change the main-site link on an already-retired preview.
+# ---------------------------------------------------------------------------
+if [[ -n $setlink_slug ]]; then
+  dev_refresh_clone
+  dev_check_domain
+  if [[ ! -f $DEV_CLONE_DIR/$DEV_RETIRED_DIR/$setlink_slug ]]; then
+    echo "3-cleanup-dev.sh: '$setlink_slug' is not a retired preview (--list shows them)" >&2
+    exit 1
+  fi
+  set_link_in_clone() {
+    dev_write_retired_meta "$setlink_slug" "$retire_link"
+    dev_write_retired_stub "$setlink_slug"
+    dev_write_root_files
+  }
+  set_link_in_clone
+  dev_commit_and_push "set link for retired preview: $setlink_slug" set_link_in_clone
+  exit 0
+fi
 
 # ---------------------------------------------------------------------------
 # --prune-root: delete anything at the staging root that is neither a known root
@@ -148,6 +196,17 @@ if [[ $do_list == true ]]; then
     printf '  %-24s %s/%s/\n' "$name" "$DEV_BASE_URL" "$name"
   done < <(dev_list_previews)
   [[ $found == false ]] && echo "  (none)"
+
+  echo ""
+  echo "Retired previews:"
+  found=false
+  while IFS= read -r name; do
+    [[ -n $name ]] || continue
+    found=true
+    link="$(dev_read_retired_meta "$name" link)"
+    printf '  %-24s %s\n' "$name" "${link:--}"
+  done < <(dev_list_retired)
+  [[ $found == false ]] && echo "  (none)"
   exit 0
 fi
 
@@ -165,6 +224,11 @@ if [[ -n $unpublish_slug ]]; then
   # same accidental-domain-change guard applies here as in 2-publish-dev.sh.
   dev_check_domain
 
+  if [[ -f $DEV_CLONE_DIR/$unpublish_slug/$DEV_STUB_MARKER ]]; then
+    echo "3-cleanup-dev.sh: '$unpublish_slug' is already retired (use --set-link to change its link)" >&2
+    exit 1
+  fi
+
   if [[ ! -d $DEV_CLONE_DIR/$unpublish_slug ]]; then
     echo "3-cleanup-dev.sh: no preview named '$unpublish_slug' is published" >&2
     echo "  (previews/3-cleanup-dev.sh --list shows the ones that are)" >&2
@@ -176,12 +240,18 @@ if [[ -n $unpublish_slug ]]; then
   # Wrapped so dev_commit_and_push can re-run it if the push is rejected: the
   # retry re-fetches and resets the clone, which would otherwise undo this.
   remove_preview_from_clone() {
+    # Record the retirement first: it copies metadata out of the live preview.
+    # On a push-retry the clone was reset, so the preview is back and this works again.
+    if [[ -d $DEV_CLONE_DIR/$unpublish_slug ]]; then
+      dev_write_retired_meta "$unpublish_slug" "$retire_link"
+    fi
     rm -rf "$DEV_CLONE_DIR/$unpublish_slug"
+    dev_write_retired_stub "$unpublish_slug"
     dev_write_root_files
   }
   remove_preview_from_clone
   dev_commit_and_push "remove dev preview: $unpublish_slug" remove_preview_from_clone
-  echo "==> $DEV_BASE_URL/$unpublish_slug/ will 404 once Pages rebuilds"
+  echo "==> $DEV_BASE_URL/$unpublish_slug/ now redirects (to the link if given, else the index) once Pages rebuilds"
 
   # Also drop that preview's local render output, since it is now meaningless.
   rm -rf "$DEV_OUT_ROOT/$unpublish_slug"
