@@ -121,18 +121,18 @@ ctb_spec <-
   boost_tree(
     mode = "classification",
     trees = 2000,
-    min_n = tune(),
     mtry = tune(),
     tree_depth = tune(),
     learn_rate = tune(),
     stop_iter = 5
   ) |>
-  set_engine("catboost", validation = 0.1)
+  set_engine("catboost", validation = 0.1, l2_leaf_reg = tune())
 
 ctb_param <-
   ctb_spec |>
   extract_parameter_set_dials() |>
   update(
+    learn_rate = learn_rate(c(-6, -0.5)), 
     tree_depth = tree_depth(c(2, 16))
   )
 
