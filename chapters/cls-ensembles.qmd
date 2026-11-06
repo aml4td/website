@@ -1001,13 +1001,13 @@ A boosted tree ensemble is a sum of $T$ trees:
 
 $$
 \mathcal{F}_T(\boldsymbol{x}) = \mathcal{F}_0 + \alpha \sum_{t = 1}^{T} f_t(\boldsymbol{x})
-$$
+$$   {#eq-cls-bst-tree-score}
 
 where $\alpha$ is the learning rate and $\mathcal{F}_0$ is an initial score. $\mathcal{F}_0$ is usually the log-odds of the event rate in the training set. $f_t(\boldsymbol{x})$ is the numeric score prediction from the tree created at iteration $t$. If the tree structure $\mathcal{T}_t$ partitions the predictor space into terminal node regions $R_{t1}, \ldots, R_{tK_t}$, then:
 
 $$
 f_t(\boldsymbol{x}) = \sum_{k=1}^{K_t} w_{tk} \, I(\boldsymbol{x} \in R_{tk})
-$$
+$$  {#eq-cls-bst-tree-node}
 
 The structure $\mathcal{T}_t$ determines which terminal node $\boldsymbol{x}$ lands in, and $w_{tk}$ is the value returned by that node. The ensemble is built one tree at a time:
 
@@ -1221,14 +1221,64 @@ marginal_boost_plot <- function(x) {
 
 trees_xgb <- actual_trees(forest_xgb_res)
 trees_lgb <- actual_trees(forest_lgb_res)
-trees_ctb <- actual_trees(forest_ctb_res)
+# trees_ctb <- actual_trees(forest_ctb_res)
 ```
 
 Now, let's go into details for the three most popular boosting methods. 
 
-#### XGBoost
+#### XGBoost {#sec-cls-xgb}
 
-@xgb16
+XGBoost, short for eXtreme Gradient Boosting, is one of the most popular tools for boosted trees [@xgb16] and set the standard for subsequent models. 
+
+To start, XGBoost uses initial scores $\mathcal{F}_{0k}$ that are the logit of the observed proportions of each class in the training set. This means that the first tree uses residuals based on constant predictions per class. 
+
+Now let's discuss the particulars for creating the individual trees. In @sec-tree-splitting, we discussed the criterion that XGBoost uses to choose splits. Here, let's first review what happens when building a tree. After this, we'll revisit how the ensemble determines the final predicted values. 
+
+We'll focus on the default tree-building process and bias toward the current implementation^[Approximately circa XGBoost version 3.1.] rather than the original scholarship when they diverge. Regarding the defaults: 
+
+- The regularization parameters described in @sec-tree-splitting use default values of $\lambda_2 = 1$ and $\lambda_1 = 0$, meaning that there is strong L<sub>2</sub> penalization and no L<sub>1</sub> penalty. 
+- A minimum loss reduction requirement can be imposed for all splits, but the default for this parameter is zero, meaning any split that increases the gain is acceptable. 
+- XGBoost can institute an $m_{try}$ strategy at different stages, including at each split, over the entire tree training, etc. However, it defaults to evaluating all predictors. 
+- As previously mentioned, _stochastic_ gradient boosting randomly samples the training set for each tree. By default, it uses all samples for tree construction. 
+
+When choosing splits, numeric predictors are discretized into a potentially large number of bins (e.g., 256 by default), effectively constructing a histogram for each predictor. However, this strategy is only used to efficiently choose a single split point (e.g., $x < x_0$) and does not create a split for bin membership ($x_l \le x \le x_u$). The rule uses the bin's smallest predictor value as the split point, which is an observed value. If there are fewer unique values than unique bins, treat each predictor value as its own bin.  For example, the year predictor in the forestation data has 21 distinct values, so there are 21 bins. Recall the "rug" in @fig-tree-splits, which shows the large number of split-point values. Using histograms reduces split-selection time and yields other efficiencies. A parent’s histogram is the sum of its two children’s histograms. So XGBoost only builds the histogram for the child with fewer rows. The larger child’s histogram is the parent’s histogram minus the smaller one. As a result, building the histograms for any level of the tree reads at most half of that level’s rows.
+
+As a reminder, the potential improvement in the gain is
+
+$$
+\psi_{gain} = \frac{G_L^2}{H_L + \lambda_2} + \frac{G_R^2}{H_R + \lambda_2} - \frac{(G_L + G_R)^2}{H_L + H_R + \lambda_2}
+$$
+We don't want to maximize $G^2/(H+\lambda_2)$ since it is the amount by which a leaf reduces the loss, not the loss itself. 
+
+What parameters govern tree depth? The implementation has a potential maximum depth limit (defaulting to 6 splits) but can also prevent splitting by constraining the minimum required loss reduction. While previous tree-based models constrained $n_{min}$, XGBoost constrains $H_{min}$, the sum of Hessian weights required to split. As $n_{min}$ increases, it results in shallower trees, but unlike $n_{min}$, it treats each sample differently. If a predicted probabilities are very uncertain, it has a much larger Hessian than probability estimates near zero or one. This means that the splitting process could stop if most of its current sample set has confident predictions. 
+
+As a result, if the model learns the data well, the number of terminal nodes might decrease as more trees are added to the ensemble; predictions should assign the largest values to the true class, and the Hessian values become smaller. Also, the samples with higher-quality probability values will contribute less to the objective function than the most uncertain samples. 
+
+The overall default _tree growing policy_ is to let the tree grow until these constraints halt it, referred to as "depthwise" growing. We'll discuss other strategies below. By default, XGBoost does not prune the tree after the growth phase. 
+
+An alternative is the _lossguide_ tree growth policy. It focuses on splitting the node with the largest largest gain across the entire tree. Instead of splitting within a branch, it considers all current branches and chooses the best across them. This might lead the tree to have many splits along a few branches, resulting in a very unbalanced structure. In this case, the complexity is controlled by constraining the maximum number of terminal nodes. 
+
+Finally, for multiclass problems where $C > 2$, each boosting iteration creates $C$ separate sequences of class-specific trees. 
+
+As with C5.0 and neural networks, modern boosting models can use early stopping. The overall loss function is computed before construction, and if a pre-specified number of consecutive iterations^[Values betwen five and ten are usually appropriate.] show poor loss values, training stops. This data-driven approach to avoiding overfitting can be very effective and make training more efficient. However, to get realistic loss values, you must set aside a small percentage of the training set as a static internal validation set. Unless the training set is small, this is likely a good approach.
+
+The process for predicting new samples is the same as discussed earlier. For a binary outcome, we determine the terminal node for each tree (@eq-cls-bst-tree-node). These values, along with the base score are summed to create the overall score (@eq-cls-bst-tree-score) that is on the real-line. The final probability applies the logistic function to the scores to get probabilistic predictions. For multiclass outcomes, the softmax function is used to normalize the $C$ probabilities. 
+
+Note that we have a sequence of trees at the end of training. Suppose we were tuning this model over 6 parameters, including the number of trees. Suppose we used a regular grid with $q$ unique values for each tuning parameter, yielding $q^6$ grid points. We could collapse this grid down to $q^5$ candidates by finding the maximum number of trees for each combination of the other parameters. Fitting the largest number of trees for each reduced candidate set would allow us to obtain predictions, for nearly free, for any number of trees less than the maximum. This is the previously discussed submodel trick and is feasible when the grid contains more than one set of tree candidates for the combinations of the other parameters (such as with a regular grid). However, regular grids are needlessly inefficient, and space-filling designs are a better choice. However, an SFD would not have more than one tree value across the other parameters. One option is a hybrid design where an SFD is generated for the non-tree parameters and is crossed with a fuller grid for the number of ensemble members. For example, for 5 parameters we might generate an SFD with 25 candidates, each using 1,000 trees (or some other large number). Once we train each of those 25 models, we can evaluate it over up to 1,000 candidate tree values at very low cost.
+
+Overall, early stopping is a better choice for efficiency.  
+
+For tuning, there are a large number of tuning parameters: 
+
+- The number of trees (optional)
+- Tree growth: the maximum depth, minimum loss reduction, $H_{min}$, and potentially others. 
+- $m_{try}$
+- Up to two regularization parameters. 
+- The learning rate. 
+- The percentage of training set points used to train each tree (for SGB)
+
+as well as other more niche options. Based on experience, the learning rate and $H_{min}$ are probably the most important. While much has been written about tuning these models, the difficulty is fairly low. In a moderately sized grid, perhaps 25 candidates, there is a high likelihood of finding parameters that are close to optimal. From there, fine-tuning via Bayesian optimization or simulated annealing might help with marginal gains. While not as easy to develop as random forests, boosted trees tend not to be difficult to optimize.
+
 
 ```{r}
 #| label: fig-forest-xgb
@@ -1243,7 +1293,7 @@ marginal_boost_plot(forest_xgb_res)
 
 Did models stop early after 5 iterations of poor validation set results? Of the `r trees_xgb$num_models` that were evaluated, the average number of trees in the ensemble was `r trees_xgb$num_members` (out of a maximum of `r trees_xgb$max_trees`), with `r trees_xgb$early`% of the models finish early. 
 
-#### LightGBM
+#### LightGBM {#sec-cls-lgb}
 
 @lgb17
 
@@ -1257,18 +1307,18 @@ Did models stop early after 5 iterations of poor validation set results? Of the 
 marginal_boost_plot(forest_lgb_res)
 ```
 
-#### CatBoost
+#### CatBoost {#sec-cls-ctb}
 
 @cat18
 
 ```{r}
-#| label: fig-forest-ctg
+#| label: fig-forest-ctb
 #| echo: false
 #| out-width: 100%
 #| fig-width: 12
 #| fig-height: 2.5
 #| fig-cap: "Tuning results for CatBoost The panel on the right reflects the average number of terminal nodes in the ensemble for different tuning parameter candidates."
-marginal_boost_plot(forest_ctb_res)
+# marginal_boost_plot(forest_ctb_res)
 ```
 
 ## Rule-Based Ensembles {#sec-cls-rule-ensembles}
