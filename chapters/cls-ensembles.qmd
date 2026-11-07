@@ -1161,67 +1161,91 @@ actual_trees <- function(x, digits = 3, ...) {
     as.list()
 }
 
-marginal_boost_plot <- function(x) {
-  bst_ord <-
-    c(
-      "Mtry",
-      "Minimal Node Size",
-      "Tree Depth",
-      "Learning Rate (log-10)",
-      "# Terminal Nodes (log-10)",
-      "# Rule Terms"
-    )
+marginal_boost_plot <- function(x, num_row = NULL) {
+  mod_spec <- tune::.get_tune_workflow(x) |> extract_spec_parsnip()
+  eng <- mod_spec$engine
 
-  x |>
+  mtr <- collect_metrics(x, type = "wide")
+
+  pset <-
+    x |>
+    .get_tune_parameters() |>
+    dplyr::mutate(label = purrr::map_chr(object, ~ .x$label))
+
+  param_cols <- pset$id
+  is_num <-
+    purrr::map_lgl(dplyr::select(mtr, dplyr::all_of(param_cols)), is.numeric)
+  num_param_cols <- param_cols[is_num]
+  chr_param_cols <- param_cols[!is_num]
+
+  summary_stats <-
+    x |>
     collect_extracts() |>
     unnest(.extracts) |>
     summarize(
-      num_terminal_nodes = mean(num_terminal_nodes),
-      num_rule_terms = mean(num_rule_terms),
+      `# Terminal Nodes (log-10)` = log10(mean(num_terminal_nodes)),
+      `# Rule Terms` = mean(num_rule_terms),
       .by = c(.config)
-    ) |>
-    full_join(
-      x |>
-        collect_metrics(type = "wide"),
-      by = ".config"
-    ) |>
-    mutate(
-      learn_rate = log10(learn_rate),
-      num_terminal_nodes = log10(num_terminal_nodes)
-    ) |>
-    rename(
-      `# Terminal Nodes (log-10)` = num_terminal_nodes,
-      `Learning Rate (log-10)` = learn_rate,
-      `# Rule Terms` = num_rule_terms,
-      `Minimal Node Size` = min_n,
-      Mtry = mtry,
-      `Tree Depth` = tree_depth
-    ) |>
-    select(-mn_log_loss, -roc_auc, -pr_auc) |>
-    pivot_longer(
+    )
+
+  for (prm in param_cols) {
+    pobj <- pset$object[[which(pset$id == prm)]]
+    lab <- tune:::get_param_label(pset, prm)
+    if (identical(lab, min_n()$label) & eng == "xgboost") {
+      lab <- "Minimum Hessian Weight"
+    }
+    if (!is.null(pobj$trans)) {
+      mtr[[prm]] <- pobj$trans$transform(mtr[[prm]])
+      new_name <- paste0(lab, " (", pobj$trans$name, ")")
+    } else {
+      new_name <- lab
+    }
+    names(mtr)[names(mtr) == prm] <- new_name
+    num_param_cols[num_param_cols == prm] <- new_name
+    chr_param_cols[chr_param_cols == prm] <- new_name
+    param_cols[param_cols == prm] <- new_name
+  }
+
+  bst_ord <- c(param_cols, "# Terminal Nodes (log-10)", "# Rule Terms")
+
+  if (eng == "catboost") {
+    # with uniform trees, the tree depth = #rule terms
+    summary_stats <- dplyr::select(
+      summary_stats,
+      -dplyr::contains("Rule Terms")
+    )
+    bst_ord <- bst_ord[bst_ord != "# Rule Terms"]
+  }
+
+  values <-
+    dplyr::full_join(summary_stats, mtr, by = ".config") |>
+    dplyr::select(-mn_log_loss, -roc_auc, -pr_auc) |>
+    tidyr::pivot_longer(
       -c(.config, brier_class),
       names_to = "parameter",
       values_to = "value"
     ) |>
-    mutate(
-      is_param = parameter %in% bst_ord[1:4],
+    dplyr::mutate(
+      is_param = parameter %in% param_cols,
       parameter = factor(parameter, levels = bst_ord)
-    ) |>
+    )
+
+  values |>
     ggplot(aes(value, brier_class, pch = is_param, col = is_param)) +
     geom_point(alpha = 2 / 4, cex = 2, show.legend = FALSE) +
-    facet_wrap(~parameter, scales = "free_x", nrow = 1) +
+    facet_wrap(~parameter, scales = "free_x", nrow = num_row) +
     labs(y = "Brier Score", x = NULL) +
     theme(
       strip.text = element_text(size = 9),
       strip.text.x = element_text(margin = margin(t = 4, b = 4))
     ) +
-    scale_shape_manual(values = c(15, 16)) +
-    scale_color_manual(values = c("#49271BFF", "black"))
+    scale_shape_manual(values = c(17, 16)) +
+    scale_color_manual(values = c("#BE3428FF", "black"))
 }
 
 trees_xgb <- actual_trees(forest_xgb_res)
 trees_lgb <- actual_trees(forest_lgb_res)
-# trees_ctb <- actual_trees(forest_ctb_res)
+trees_ctb <- actual_trees(forest_ctb_res)
 ```
 
 Now, let's go into details for the three most popular boosting methods. 
@@ -1241,13 +1265,14 @@ We'll focus on the default tree-building process and bias toward the current imp
 - XGBoost can institute an $m_{try}$ strategy at different stages, including at each split, over the entire tree training, etc. However, it defaults to evaluating all predictors. 
 - As previously mentioned, _stochastic_ gradient boosting randomly samples the training set for each tree. By default, it uses all samples for tree construction. 
 
-When choosing splits, numeric predictors are discretized into a potentially large number of bins (e.g., 256 by default), effectively constructing a histogram for each predictor. However, this strategy is only used to efficiently choose a single split point (e.g., $x < x_0$) and does not create a split for bin membership ($x_l \le x \le x_u$). The rule uses the bin's smallest predictor value as the split point, which is an observed value. If there are fewer unique values than unique bins, treat each predictor value as its own bin.  For example, the year predictor in the forestation data has 21 distinct values, so there are 21 bins. Recall the "rug" in @fig-tree-splits, which shows the large number of split-point values. Using histograms reduces split-selection time and yields other efficiencies. A parent’s histogram is the sum of its two children’s histograms. So XGBoost only builds the histogram for the child with fewer rows. The larger child’s histogram is the parent’s histogram minus the smaller one. As a result, building the histograms for any level of the tree reads at most half of that level’s rows.
+When choosing splits, numeric predictors are discretized into a potentially large number of bins (e.g., 256 by default), effectively constructing a histogram for each predictor. However, this strategy is only used to efficiently choose a single split point (e.g., $x < x_0$) and does not create a split for bin membership ($x_l \le x \le x_u$). The rule uses the bin's smallest predictor value as the split point, which is an observed value. If there are fewer unique values than unique bins, treat each predictor value as its own bin.  For example, the year predictor in the forestation data has 21 distinct values, so there are 21 bins. Recall the "rug" in @fig-tree-splits, which shows the large number of split-point values. Using histograms reduces split-selection time and yields other efficiencies. A parent's histogram is the sum of its two children's histograms. So XGBoost only builds the histogram for the child with fewer rows. The larger child's histogram is the parent's histogram minus the smaller one. As a result, building the histograms for any level of the tree reads at most half of that level's rows.
 
 As a reminder, the potential improvement in the gain is
 
 $$
 \psi_{gain} = \frac{G_L^2}{H_L + \lambda_2} + \frac{G_R^2}{H_R + \lambda_2} - \frac{(G_L + G_R)^2}{H_L + H_R + \lambda_2}
 $$
+
 We don't want to maximize $G^2/(H+\lambda_2)$ since it is the amount by which a leaf reduces the loss, not the loss itself. 
 
 What parameters govern tree depth? The implementation has a potential maximum depth limit (defaulting to 6 splits) but can also prevent splitting by constraining the minimum required loss reduction. While previous tree-based models constrained $n_{min}$, XGBoost constrains $H_{min}$, the sum of Hessian weights required to split. As $n_{min}$ increases, it results in shallower trees, but unlike $n_{min}$, it treats each sample differently. If a predicted probabilities are very uncertain, it has a much larger Hessian than probability estimates near zero or one. This means that the splitting process could stop if most of its current sample set has confident predictions. 
@@ -1279,64 +1304,158 @@ For tuning, there are a large number of tuning parameters:
 
 as well as other more niche options. Based on experience, the learning rate and $H_{min}$ are probably the most important. While much has been written about tuning these models, the difficulty is fairly low. In a moderately sized grid, perhaps 25 candidates, there is a high likelihood of finding parameters that are close to optimal. From there, fine-tuning via Bayesian optimization or simulated annealing might help with marginal gains. While not as easy to develop as random forests, boosted trees tend not to be difficult to optimize.
 
+To apply this model to the forestation data, a maximum of `r trees_xgb$max_trees` trees were fit for the ensemble, with early stopping occurring after 5 bad iterations. A random 10% of the training set was used to evaluate the stopping rule. The tuning parameters and their ranges were:  
+
 ```{r}
 #| label: xgb-param-list
 #| echo: false
 #| results: asis
-forest_xgb_res |> 
-  .get_tune_parameters() |> 
+forest_xgb_res |>
+  .get_tune_parameters() |>
   as_tibble() |>
   mutate(
     Parameter = map_chr(object, ~ .x$label),
     Lower = map_dbl(object, ~ .x$range[[1]]),
     Upper = map_dbl(object, ~ .x$range[[2]]),
-    transform = 
-      map_chr(object, 
-              ~ ifelse(is.null(.x$trans$name), "", .x$trans$name)),
-    Lower = 
-      map2_chr(Lower, transform, 
-               ~ ifelse(.y == "log-10", paste0("10<sup>", .x, "</sup>"), paste(.x))),
-    Upper = 
-      map2_chr(Upper, transform, 
-               ~ ifelse(.y == "log-10", paste0("10<sup>", .x, "</sup>"), paste(.x))),
-    transform = 
-      map_chr(transform, 
-              ~ ifelse(.x != "", paste0("(", .x, ")"), .x)),
+    transform = map_chr(
+      object,
+      ~ ifelse(is.null(.x$trans$name), "", .x$trans$name)
+    ),
+    Lower = map2_chr(
+      Lower,
+      transform,
+      ~ ifelse(.y == "log-10", paste0("10<sup>", .x, "</sup>"), paste(.x))
+    ),
+    Upper = map2_chr(
+      Upper,
+      transform,
+      ~ ifelse(.y == "log-10", paste0("10<sup>", .x, "</sup>"), paste(.x))
+    ),
+    transform = map_chr(
+      transform,
+      ~ ifelse(.x != "", paste0("(", .x, ")"), .x)
+    ),
     Parameter = ifelse(id == "min_n", "Minimal Hessian Weight", Parameter),
     Parameter = gsub("#", "Number of", Parameter),
     item = paste0(" - ", Parameter, ": ", Lower, " to ", Upper)
-  ) |> 
-  pluck("item") |> 
+  ) |>
+  pluck("item") |>
   cat(sep = "\n")
 ```
 
+@fig-forest-xgb shows the results, including the average number of terminal nodes and the average rule length. Small values of $m_{try}$ appear to be problematic, and the data preferred small values of $H_{min}$ and fairly deep trees. The other parameters did not show significant patterns. Surprisingly, the learning rate did not appear to drive performance, which it often does. Also, there is no evidence of a trend between the Brier score and the overall number of terminal nodes, but trees with longer average rule lengths appear preferable. 
 
 ```{r}
 #| label: fig-forest-xgb
 #| echo: false
 #| out-width: 100%
-#| fig-width: 12
-#| fig-height: 2.5
+#| fig-width: 10
+#| fig-height: 7
 #| fig-cap: "Tuning results for XGBoost. The two rightmost panels show the average number of terminal nodes in the ensemble as well as the number of terms in the rules leading to the terminal nodes."
 # fmt: skip
 marginal_boost_plot(forest_xgb_res)
 ```
 
-Did models stop early after 5 iterations of poor validation set results? Of the `r trees_xgb$num_models` that were evaluated, the average number of trees in the ensemble was `r trees_xgb$num_members` (out of a maximum of `r trees_xgb$max_trees`), with `r trees_xgb$early`% of the models finish early. 
+Did models stop early after 5 iterations of poor validation set results? Of the `r trees_xgb$num_models` that were evaluated, the average number of trees in the ensemble was `r trees_xgb$num_members` (out of a maximum of `r trees_xgb$max_trees`), with `r trees_xgb$early`% of the models finishing early. 
+
+In the end, the best candidate used $H_{min} = `r forest_xgb_best$min_n`$, a depth of `r forest_xgb_best$tree_depth`, `r forest_xgb_best$mtry` features selected at random for each split, a learning rate of 10<sup>`r fmt(log10(forest_xgb_best$learn_rate))`</sup>, along with L<sub>1</sub> and L<sub>2</sub>, penalties of `r fmt(forest_xgb_best$alpha)` and `r fmt(forest_xgb_best$lambda)`, respectively. 
 
 #### LightGBM {#sec-cls-lgb}
 
-@lgb17
+The LightGBM model of @lgb17 is fairly similar to XGBoost but there are a few important differences. First, for binary classification problems, the score function uses a sigmoid scaling parameter $\sigma$, which defaults to 1.00. LightGBM codes the binary outcome as $\tilde{y}_i = \pm 1$  so the gradient and Hessian are
+
+$$
+g_i = \frac{-\tilde{y}_i \sigma}{1 + e^{\tilde{y}_i \sigma \mathcal{F}_i}}
+$$
+
+and 
+
+$$
+h_i = |g_i| \left(\sigma - |g_i|\right)
+$$ 
+
+With the default $\sigma$ value, these reduce to the standard forms. Increasing the value enables more aggressive shifts of the scores towards zero or one. 
+
+One other adjustment is made to the Hessian when there are more than two classes; a multiplier is used
+
+$$
+h_{ik} = \frac{K}{K - 1}\, p_{ik}(1 - p_{ik})
+$$
+
+As previously mentioned, this is likely meant to compensate for approximating the Hessian matrix as diagonal.  
+
+Before training, the initial score is estimated as
+
+$$
+\mathcal{F}_0 = \frac{1}{\sigma} \operatorname{logit}(\bar{y})
+$$
+
+However, after the first tree is grown, $\mathcal{F}_0$ is added to every one of its leaf values. That model's prediction is then just the sum of leaf values.
+
+There are some other differences with XGBoost in the tree construction phase. First, the binning process adds another constraint: the minimum number of samples per bin (defaulting to 3). When the value is less than 3, that bin is shared with its neighbors.  Also, predictor values of zero are given their own bin with very small bin widths. Categorical predictor are given their own bin. While XGBoost uses the smallest value of the bin as the split point, LightGBM uses the midpoint of the bin limits. 
+
+For growing trees, LightGBM defaults to the _lossguide_ approach (called _leafwise growth_) where all leaves are considered at once when a new split is initiated: 
+
+1. Start with all rows in one leaf.
+2. Evaluate any leaf that is new by finding its best split variable and split point
+3. Select the split (out of all current leaves) with the largest gain to grow the tree. 
+4. Repeat until a predefined limit on the number of leaves without a constraint on the depth of the tree. 
+
+By default, the limit on the number of leaves in each tree is 31. Whereas XGBoost's _depthwise_ policy might reduce the number of terminal nodes as the ensemble adds trees, LightGBM's trees should maintain a constant number of leaves (using the defaults). There is also an optional constraint similar to $n_{min}$, where the number of data points is approximated by the Hessian weights, and LightGBM also allows for constraints using $H_{min}$ directly. 
+
+Most of the statistics for gain computations and splitting criteria are consistent with XGBoost, with a few minor exceptions described in the previous chapter. For example, the overall gain formula is the same. LightGBM can also use the number of trees via submodels, and early stopping operates in the same way as XGBoost. For regularization, LightGBM uses neither L<sub>1</sub> nor  L<sub>2</sub> as a default. 
+
+For tuning LightGBM, we used a grid of 25 cancidates generated from a space-fillign desing with ranges: 
+
+```{r}
+#| label: lgb-param-list
+#| echo: false
+#| results: asis
+forest_lgb_res |>
+  .get_tune_parameters() |>
+  as_tibble() |>
+  mutate(
+    Parameter = map_chr(object, ~ .x$label),
+    Lower = map_dbl(object, ~ .x$range[[1]]),
+    Upper = map_dbl(object, ~ .x$range[[2]]),
+    transform = map_chr(
+      object,
+      ~ ifelse(is.null(.x$trans$name), "", .x$trans$name)
+    ),
+    Lower = map2_chr(
+      Lower,
+      transform,
+      ~ ifelse(.y == "log-10", paste0("10<sup>", .x, "</sup>"), paste(.x))
+    ),
+    Upper = map2_chr(
+      Upper,
+      transform,
+      ~ ifelse(.y == "log-10", paste0("10<sup>", .x, "</sup>"), paste(.x))
+    ),
+    transform = map_chr(
+      transform,
+      ~ ifelse(.x != "", paste0("(", .x, ")"), .x)
+    ),
+    Parameter = gsub("#", "Number of", Parameter),
+    item = paste0(" - ", Parameter, ": ", Lower, " to ", Upper)
+  ) |>
+  pluck("item") |>
+  cat(sep = "\n")
+```
+
+The previous XGBoost strategy was used to determine the number of trees. For LightGBM, `r trees_lgb$early`%  of models terminated early, using `r trees_lgb$num_members` trees (on average). @fig-forest-lgb shows the tuning results. 
 
 ```{r}
 #| label: fig-forest-lgb
 #| echo: false
 #| out-width: 100%
-#| fig-width: 12
-#| fig-height: 2.5
+#| fig-width: 10
+#| fig-height: 7
 #| fig-cap: "Tuning results for LightGBM. The panel on the right reflects the average number of terminal nodes in the ensemble for different tuning parameter candidates."
 marginal_boost_plot(forest_lgb_res)
 ```
+
+The results show small performance improvements with larger values of $m_{try}$ and the number of leaves. The learning rate indicates a middle region of good performance with the extremes of the range resulting in large Brier scores (for this model). Neither penalty appears to affect performance for these data. The smallest Brier score corresponded to a candidate with $m_{try} = `r forest_lgb_best$mtry`$, $n_{min} = `r forest_lgb_best$min_n`$, `r forest_lgb_best$max_leaves` leaves per tree, a learning rate of 10<sup>`r fmt(log10(forest_lgb_best$learn_rate), digits = 2)`</sup>, L<sub>1</sub> = 10<sup>`r fmt(log10(forest_lgb_best$lambda_l1), digits = 2)`</sup>, and  L<sub>2</sub> = 10<sup>`r fmt(log10(forest_lgb_best$lambda_l2 ), digits = 2)`</sup>. 
 
 #### CatBoost {#sec-cls-ctb}
 
@@ -1346,10 +1465,10 @@ marginal_boost_plot(forest_lgb_res)
 #| label: fig-forest-ctb
 #| echo: false
 #| out-width: 100%
-#| fig-width: 12
-#| fig-height: 2.5
+#| fig-width: 10
+#| fig-height: 2
 #| fig-cap: "Tuning results for CatBoost The panel on the right reflects the average number of terminal nodes in the ensemble for different tuning parameter candidates."
-# marginal_boost_plot(forest_ctb_res)
+marginal_boost_plot(forest_ctb_res, num_row = 1)
 ```
 
 ## Rule-Based Ensembles {#sec-cls-rule-ensembles}
