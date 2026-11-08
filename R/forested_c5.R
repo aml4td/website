@@ -6,7 +6,7 @@ library(mirai)
 # ------------------------------------------------------------------------------
 
 daemons(5)
-load("RData/forested_data.RData")
+load("~/content/website/RData/forested_data.RData")
 cls_mtr <- metric_set(brier_class, roc_auc, pr_auc, mn_log_loss)
 
 # ------------------------------------------------------------------------------
@@ -50,7 +50,7 @@ c5_spec <-
 c5_param <-
   c5_spec |>
   extract_parameter_set_dials() |>
-  update(trees = trees(c(5, 100)))
+  update(trees = trees(c(5, 1000)))
 
 
 set.seed(498)
@@ -94,7 +94,7 @@ c5rules_spec <-
 c5rules_param <-
   c5rules_spec |>
   extract_parameter_set_dials() |>
-  update(trees = trees(c(5, 100)))
+  update(trees = trees(c(5, 1000)))
 
 set.seed(498)
 forest_c5rules_res <-
