@@ -89,10 +89,10 @@ pr_2_L <- vm_split_left["No"] / vm_split_denom["TRUE"]
 pr_1_R <- vm_split_right["Yes"] / vm_split_denom["FALSE"]
 pr_2_R <- vm_split_right["No"] / vm_split_denom["FALSE"]
 n_L <- vm_split_denom["TRUE"]
-n_R <- vm_split_denom["TRUE"]
+n_R <- vm_split_denom["FALSE"]
 n_tot <- nrow(small_forest)
 # fmt: skip
-gini_tot <- ((n_L / n_tot) * pr_1_L * pr_2_L) + ((n_R / n_tot) * pr_1_R * pr_2_R)
+gini_tot <- ((n_L / n_tot) * 2 * pr_1_L * pr_2_L) + ((n_R / n_tot) * 2 * pr_1_R * pr_2_R)
 # fmt: skip
 ce_tot <- ((n_L / n_tot) * -1 * (pr_1_L * log2(pr_1_L) + pr_2_L * log2(pr_2_L))) + 
   ((n_R / n_tot) * -1 * (pr_1_R * log2(pr_1_R) + pr_2_R * log2(pr_2_R)))
@@ -257,7 +257,7 @@ where $p_1$ and $p_2$ are the class probabilities in the node.  The Gini index c
 
 When evaluating a potential split, the algorithm calculates the weighted average of the Gini indices for the resulting child nodes, with weights proportional to the number of samples in each node. The split that minimizes this weighted average is selected.
 
-For the data in @tbl-small-forest, the Gini index for this node would be $2 \times `r round(pr_1, 3)` \times `r round(pr_2, 3)` = `r round(pr_1 * pr_2, 3)`$. We call the node, prior to being split, the _parent node_. 
+For the data in @tbl-small-forest, the Gini index for this node would be $2 \times `r round(pr_1, 3)` \times `r round(pr_2, 3)` = `r round(2 * pr_1 * pr_2, 3)`$. We call the node, prior to being split, the _parent node_. 
 
 Now, suppose a split value for maximum vapor of `r vm_split` creates two child nodes: 
 
@@ -368,9 +368,9 @@ Using these counts, we can compute the Gini statistic for each rule and then the
 
 $$
 \begin{align}
-\text{Left} &= 2 \times \frac{`r vm_split_left["Yes"]`}{`r vm_split_denom["TRUE"]`} \times \frac{`r vm_split_left["No"]`}{`r vm_split_denom["TRUE"]`} = `r r3(pr_1_L * pr_2_L)` \notag \\
-\text{Right} &= 2 \times \frac{`r vm_split_right["Yes"]`}{`r vm_split_denom["FALSE"]`} \times \frac{`r vm_split_right["No"]`}{`r vm_split_denom["FALSE"]`} = `r r3(pr_1_R * pr_2_R)` \notag \\
-\text{Total} &= \frac{`r n_L`}{`r n_tot`} `r r3(pr_1_L * pr_2_L)` + \frac{`r n_R`}{`r n_tot`} `r r3(pr_1_R * pr_2_R)` = `r r3(gini_tot)` \notag
+\text{Left} &= 2 \times \frac{`r vm_split_left["Yes"]`}{`r vm_split_denom["TRUE"]`} \times \frac{`r vm_split_left["No"]`}{`r vm_split_denom["TRUE"]`} = `r r3(2 * pr_1_L * pr_2_L)` \notag \\
+\text{Right} &= 2 \times \frac{`r vm_split_right["Yes"]`}{`r vm_split_denom["FALSE"]`} \times \frac{`r vm_split_right["No"]`}{`r vm_split_denom["FALSE"]`} = `r r3(2 * pr_1_R * pr_2_R)` \notag \\
+\text{Total} &= \frac{`r n_L`}{`r n_tot`} `r r3(2 * pr_1_L * pr_2_L)` + \frac{`r n_R`}{`r n_tot`} `r r3(2 * pr_1_R * pr_2_R)` = `r r3(gini_tot)` \notag
 \end{align}
 $$
 
@@ -384,7 +384,7 @@ $$
 \end{cases}
 $$
 
-where _L_, _R_, and _P_ represent the statistics from the left split, the right split, and the parent (i.e., prior to splitting). For the Gini statistic, the gain is `r round(pr_1 * pr_2, 3)` - `r r3(gini_tot)` = `r round(pr_1 * pr_2 - gini_tot, 3)`. During training, we can also impose a condition that a split can only be made if the expected gain exceeds a minimum threshold and/or if there are at least $n_{min}$ data points in the leaf. One or both of these can be treated as tuning parameters to discourage excessively deep trees, which may overfit.
+where _L_, _R_, and _P_ represent the statistics from the left split, the right split, and the parent (i.e., prior to splitting). For the Gini statistic, the gain is `r round(2 * pr_1 * pr_2, 3)` - `r r3(gini_tot)` = `r round(2 * pr_1 * pr_2 - gini_tot, 3)`. During training, we can also impose a condition that a split can only be made if the expected gain exceeds a minimum threshold and/or if there are at least $n_{min}$ data points in the leaf. One or both of these can be treated as tuning parameters to discourage excessively deep trees, which may overfit.
 
 When there are $C > 2$ classes, the more general form of the statistic is: 
 
@@ -447,46 +447,48 @@ Since this statistic measures the difference between our model and an uninformat
 
 As we'll see in the next chapter, modern boosting models often use splitting criteria based on the log-likelihood. The rationales for the methods discussed in this chapter are described @sec-cls-modern-boosting. Also, for simplicity, we'll assume that the outcome has $C = 2$ classes. We'll focus on the three most popular models: XGBoost [@xgb16], LightGBM [@lgb17], and CatBoost [@cat18].
 
-These tools often minimize the ratio of two sums, illustratetd for binary classification as
+These tools maximize a gain built from the ratio of two sums. For binary classification, let $e_i = y_{i1} - \widehat{p}_{i1}$ be the raw residual for the event class, where $\widehat{p}_{i1}$ is the prediction from the current model (i.e., before the new tree is added). For the $n$ data points in a node, the statistic is
 
 $$
-\psi = \frac{\sum\limits_{i=1}^n(y_{i1} - \widehat{p}_{i1})^2}{\sum\limits_{i=1}^n\widehat{p}_{i1} (1-\widehat{p}_{i1})}
+\psi = \frac{\left(\sum\limits_{i=1}^n e_i\right)^2}{\sum\limits_{i=1}^n\widehat{p}_{i1} (1-\widehat{p}_{i1})}
 $$ {#eq-xgboost-objective}
 
-It is common to add a small numeric constant to the denominator to avoid division by zero. 
+The residuals are summed _before_ squaring. The denominator is the sum of the second derivatives (the Hessian) of the log-loss with respect to the log-odds. Up to a factor of 1/2, $\psi$ is the increase in the second-order approximation of the log-likelihood obtained by shifting all of the node's predictions by the best constant amount, which is how it relates to the log-likelihood. It is large when the current model systematically under-predicts (or over-predicts) the events in the node.
 
-The XGBoost model adds a few modifications to this statistic that are inspired by standard regularization methods^[We say "inspired" because regularization is a property that arises from an optimization problem. For XGBoost and LightGBM, these modifications are not derived in that way; they just emulate what previously published tools have done.]. Recall that L<sub>1</sub> penalization can shrink model coefficients directly to absolute zero (@sec-logistic-penalized). For XGBoost,  an analogous operation is applied to the raw residuals $e_{ik} = y_{ik} - \widehat{p}_{ik}$ so that only "large" values contribute to the splitting criteria. That function is:
+For binary log-loss, the Hessian happens to equal the binomial variance of the number of events in the node, so the statistic has the form of a one-degree-of-freedom Pearson (score) statistic: the squared difference between the observed and expected numbers of events, divided by its variance, where the "expected" values come from the current model. This is also the splitting criterion used by LogitBoost [@friedman2000]. The match is specific to binary log-loss; for other loss functions, for multiclass models (where XGBoost and LightGBM scale the Hessian by constants), or once a penalty is added, the denominator is no longer a variance. This is discussed in the next chapter. 
+
+The split selection tries to maximize the gain $\psi_L + \psi_R - \psi_P$. It is largest when the split separates data points that the model under-predicts from those it over-predicts. Note that a row-by-row sum of squared residuals would not work here. With the current predictions fixed, that total is the same no matter how the data are divided.
+
+The XGBoost model adds a few modifications to this statistic that are inspired by standard regularization methods^[We say "inspired" because regularization is a property that arises from an optimization problem. For XGBoost and LightGBM, these modifications are not derived in that way; they just emulate what previously published tools have done.]. Recall that L<sub>1</sub> penalization can shrink model coefficients directly to absolute zero (@sec-logistic-penalized). For XGBoost, an analogous operation is applied to the _sum_ of the residuals in the node, $E = \sum_{i=1}^n e_i$, so that only nodes whose residuals add up to a "large" value contribute to the splitting criteria. That function is:
 
 $$
-\tilde{e}_{ik} = \text{sign}(e_{ik})\, \max\left( 0, \,|e_{ik}| - \lambda_1\right) =
+\tilde{E} = \text{sign}(E)\, \max\left( 0, \,|E| - \lambda_1\right) =
 \begin{cases} 
-  e_{ik} - \lambda_1 & \text{if } e_{ik} > \phantom{-}\lambda_1 \\ 
-  e_{ik} + \lambda_1 & \text{if } e_{ik} < -\lambda_1 \\
+  E - \lambda_1 & \text{if } E > \phantom{-}\lambda_1 \\ 
+  E + \lambda_1 & \text{if } E < -\lambda_1 \\
   0 & \text{otherwise} 
 \end{cases}
 $$ {#eq-xgboost-l1}
 
-For example, if a data point from the first class is mis-predicted using $\lambda_1 = 0.01$, it will disregard any data points with $\widehat{p}_{i1} < 0.01$ and will shrink the other residuals towards zero by subtracting 0.01 from their absolute value. 
+For example, with $\lambda_1 = 1$, a node whose residuals add up to 0.8 contributes nothing to the gain, and a node whose residuals add up to 5 is treated as if they added up to 4. Nodes with few data points tend to have small sums, so they are affected the most.
 
-Additionally, it can emulate weight decay by adding an L<sub>2</sub> regularization term $\lambda_2$ that affects the denominator of the statistic:
+Additionally, it can emulate weight decay by adding an L<sub>2</sub> regularization term $\lambda_2$ to the denominator of the statistic. The penalty is added once per node, not once per data point:
 
 $$
-\psi_{xgb}(\lambda_1, \lambda_2) = \frac{\sum\limits_{i=1}^n\tilde{e}_{ik}^2}{\sum\limits_{i=1}^n\Big[\big(\widehat{p}_{i1} (1-\widehat{p}_{i1})\big) + \lambda_2\Big]}
+\psi_{xgb}(\lambda_1, \lambda_2) = \frac{\tilde{E}^2}{\lambda_2 + \sum\limits_{i=1}^n\widehat{p}_{i1} (1-\widehat{p}_{i1})}
 $$ {#eq-xgboost-l2}
 
-Unlike $\lambda_1$, this penalizes the sum of the current data at the node, which can range from 0 to $n/2$. All things being equal, this will penalize nodes with more data more than it does for nodes with fewer data points.  However, very uncertain predictions (values near $\widehat{p}_{ij} = 0.5$) will affect this sum more than others. Both regularization methods can be used simultaneously and treated as tuning parameters. 
+The sum of the variances in the denominator can range from 0 to $n/4$. The penalty matters most when this sum is small: in nodes with few data points, or in nodes where the model is already confident about its predictions (values near $\widehat{p}_{i1} = 0$ or 1, which have small variances). For a node with many uncertain predictions (values near $\widehat{p}_{i1} = 0.5$), adding $\lambda_2$ makes little difference. The penalty also keeps the denominator away from zero. Both regularization methods can be used simultaneously and treated as tuning parameters. The XGBoost defaults are $\lambda_1 = 0$ and $\lambda_2 = 1$. LightGBM takes the same approach, although its default is $\lambda_2 = 0$.
 
-As with previous statistics, this splitting statistic is computed for both sides of the split to measure the gain. LightGBM takes the same approach.
+As with previous statistics, this splitting statistic is computed for the parent and both sides of the split to measure the gain. 
 
-CatBoost uses essentially the same statistics with some slight alterations. First, no L<sub>1</sub> regularization is applied. Second, the L<sub>2</sub> penalty value is scaled to be: 
+CatBoost's default statistic (called "Cosine") differs in three ways. First, it does not use the variances $\widehat{p}_{i1}(1-\widehat{p}_{i1})$; the denominator uses the number of data points instead. Second, no L<sub>1</sub> regularization is applied. Third, CatBoost grows _symmetric_ trees, where every node at the same depth uses the same split (see @sec-cls-modern-boosting). A candidate split is therefore evaluated on all of the nodes at the current depth at once. If the candidate creates nodes $j = 1, \ldots, J$, with residual sums $E_j$ and $n_j$ data points in each, the statistic is
 
 $$
-\lambda_2^* = \frac{\lambda_2}{n}\sum_{i=1}^n \widehat{p}_{i1} (1-\widehat{p}_{i1})
+\psi_{ctb} = \frac{\sum\limits_{j=1}^J E_j^2 / (n_j + \lambda_2)}{\sqrt{\sum\limits_{j=1}^J E_j^2\, n_j / (n_j + \lambda_2)^2}}
 $$
 
-This mechanism is probably intended to ensure that the regularization effect is similar as the tree becomes more and more certain about its predictions. For example, in initial iterations when there are few trees, the uncertainty in the predictions may be high, such that the variances $\widehat{p}_{i1} \widehat{p}_{i2}$ are larger than they will be in later boosting iterations. For example, suppose that, in the first tree created, the variance averages around $0.20$ for the $n$ data points in the node. If the tree improves over iterations, let's suppose they become more certain, and the average variance reduces to about $0.05$. Without scaling, the effect of $\lambda_2$  is largest at early iterations (which very well may be appropriate). When the penalty is scaled, its influence is normalized to be roughly the same across iterations and/or across prediction quality.  
-
-Third, when computing the final splitting statistic, CatBoost does not subtract the parent value (i.e., $\psi_P$).
+The values $E_j / (n_j + \lambda_2)$ are each node's average residual, shrunken towards zero. The statistic measures how closely these node averages line up with the individual residuals; it is proportional to the cosine of the angle between the two. The default is $\lambda_2 = 3$ (multiplied by the average case weight, which is 1 when there are no case weights). CatBoost does not require a split to improve the statistic; the best candidate is used at each depth until the tree reaches its maximum depth. 
 
 ### Quantitative Predictors {#sec-tree-splits-quantitative}
 
@@ -909,9 +911,9 @@ rpart.plot(
 )
 ```
 
-XGBoost and LightGBM take very similar approaches to split selection for categorical predictors. The predictor categories are ordered using some statistic, similar to the CART discussion earlier^[The specific statistics are discussed momentarily.]. If there are "few" category values, a full set of binary indicators is created and treated in the same way as numeric predictors. This would generate a potential set of one-versus-all splits. If there are numerous categories, a two-pass approach is used to limit the total number of possible splits to consider. The forward pass starts with the lowest-ranked categories and sequentially adds them to the left split grouping (all others go to the right). The backward pass does the opposite, sequentially grouping the highest-ranked categories. 
+XGBoost and LightGBM take very similar approaches to split selection for categorical predictors. If there are "few" category values, each candidate split separates one category from all of the others. This is the same set of one-versus-all splits that a full set of binary indicators would generate. LightGBM does this when there are four or fewer categories. XGBoost has the same option, but its default threshold is effectively infinite, so it uses one-versus-all splits for every categorical predictor unless the threshold is changed. Otherwise, the predictor categories are ordered using a statistic similar to the CART discussion earlier^[The specific statistics are discussed momentarily.], and a two-pass approach is used to limit the total number of possible splits to consider. The forward pass starts with the lowest-ranked categories and sequentially adds them to the left split grouping (all others go to the right). The backward pass does the opposite, sequentially grouping the highest-ranked categories. 
 
-For example, suppose we have a predictor with 26 categories, ranked _A_ to _Z_. If we were to only consider a maximum of five categories within a split, we would consider partitions: 
+For example, suppose we have a predictor with 26 categories, ranked _A_ to _Z_. If we were to only consider a maximum of four categories within a group, we would consider partitions: 
 
 ::: {.columns}
 ::::: {.column width="50%"}
@@ -930,29 +932,33 @@ For example, suppose we have a predictor with 26 categories, ranked _A_ to _Z_. 
 
 :::
 
-The final split is the configuration with the best gain statistics for these two methods, as described above. This approach effectively limits the computational costs of splitting categories for a predictor, even when the number of categories is very large. 
+The final split is the configuration with the best gain statistics for these two methods, as described above. This approach effectively limits the computational costs of splitting categories for a predictor, even when the number of categories is very large. By default, the maximum number of categories in a group is 64 for XGBoost and 32 for LightGBM. 
 
-For XGBoost, the ranking metric uses a function of standardized residuals that does not include the square in the numerator: 
+For both, the ranking statistic for category $c$ uses the data in the node that belong to that category. Let $E_c = \sum_{i \in c} e_i$ be the sum of the residuals for the category. XGBoost ranks the categories by the same ratio it uses for estimates in the terminal nodes (shown below in @eq-xgboost-estimate), applied to each category separately. This is a function of the standardized residuals that does not include the square in the numerator: 
 
 $$
-R_{xgb}(\lambda_1, \lambda_2) = \frac{\sum\limits_{i=1}^n-\tilde{e}_{ik}}{\sum\limits_{i=1}^n\Big[\big(\widehat{p}_{i1} (1-\widehat{p}_{i1})\big) + \lambda_2\Big]}
+R_{xgb}(c) = \frac{\tilde{E}_c}{\lambda_2+ \sum\limits_{i \in c}\widehat{p}_{i1} (1-\widehat{p}_{i1})}
 $$ {#eq-xgboost-cat-rank}
 
-LightGBM is very similar, but uses a modified ranking statistic and does not use L<sub>1</sub> regularization: 
+where $\tilde{E}_c$ is the L<sub>1</sub>-thresholded sum from @eq-xgboost-l1. 
+
+LightGBM is very similar, but uses a modified ranking statistic that does not use L<sub>1</sub> or L<sub>2</sub> regularization: 
 
 $$
-R_{lgb}(\lambda_2, \epsilon) = \frac{\sum\limits_{i=1}^n-e_{ik}}{\sum\limits_{i=1}^n\Big[\big(\widehat{p}_{i1} (1-\widehat{p}_{i1})\big) + \lambda_2 + \epsilon\Big]}
+R_{lgb}(c) = \frac{E_c}{\sum\limits_{i \in c}\widehat{p}_{i1} (1-\widehat{p}_{i1}) + \epsilon}
 $$ {#eq-lgb-multi-rank}
 
-where $\epsilon$ is a smoothing value that attempts to provide additional regularization for high cardinality splits. The default value is $\epsilon = 10$. 
+where $\epsilon$ is a smoothing value that attempts to provide additional regularization for high cardinality splits. The default value is $\epsilon = 10$. LightGBM has a few other constraints for these splits. Categories with fewer than $\epsilon$ data points in the node are not ranked and are never moved to the other side of the split, each side of the split must contain at least 100 data points, and the gain for these splits uses an extra L<sub>2</sub> penalty of 10. 
 
-For categorical predictors, CatBoost uses a target encoding strategy similar to that described in @sec-effect-encodings. Its version of this is called Categorical Target Representation (CTR). They use the same Beta-Binomial estimate for the probability of an event for category $j$: 
+For categorical predictors with more than two categories, CatBoost uses a target encoding strategy similar to that described in @sec-effect-encodings. CatBoost calls these encodings CTRs (a name that comes from "click-through rate"); the CatBoost paper calls them _ordered target statistics_. For category $j$, it uses a Beta-Binomial estimate of the probability of an event whose prior has the weight of a single data point: 
 
 $$
-\widehat{p}_j = \frac{n_{+j} + \alpha}{n + \alpha + \beta}
+\widehat{p}_j = \frac{n_{+j} + a}{n_j + 1}
 $$
 
-$n_{+j}$ is the number of events in in category $j$ within all of the $n$ rows under consideration. CatBoost uses $\beta = 1$ and calls $\alpha$ the "prior" parameter, which can be used for tuning. Once all of the $j$ values of $\widehat{p}_j$ are computed, the split determination treats the predictor as if it were quantitative from the start. CatBoost's algorithm, which uses the CTR values to determine the best predictor (and value) to split on, is fairly complex and is detailed in @sec-cls-modern-boosting. 
+where $n_j$ is the number of data points in category $j$, $n_{+j}$ is the number of events among them, and $0 \le a \le 1$ is called the "prior" (in Beta-Binomial terms, $\alpha = a$ and $\beta = 1 - a$). By default, three versions are computed, with $a \in \{0, 0.5, 1\}$, and each becomes a separate predictor. A fourth predictor contains the frequency of each category. 
+
+The important difference from a standard effect encoding is in which data are used. During training, the data are put in a random order, and the counts for each data point only use the data points that come _before_ it in that order. A data point's own outcome is never part of its own encoding, so the encoding does not leak the outcome. As a result, data points in the same category get different values, and the first few in each category have values that are mostly the prior. When predicting new data, the counts from the entire training set are used. Once the encodings are computed, the split determination treats them as if they were quantitative predictors. CatBoost's algorithm, which uses the CTR values to determine the best predictor (and value) to split on, is fairly complex and is detailed in @sec-cls-modern-boosting. 
 
 So far, we've constrained our splits to be binary. C4.5 can create multiway splits for categorical predictors. For example, with categories `A`-`F`, a split might contain three groups such as `{A, B, C}`, `{D}`, and `{E, F}`. To do this, C4.5 uses a greedy, hill-climbing algorithm. When a specific split candidate is evaluated, it is rated using a penalized gain ratio. The gain is the improvement of the information statistic before and after combining categories. The penalty is based on the Minimum Description Length (MDL) principle [@quinlan1987inferring] and uses the logarithm of the number of ways to partition $C$ categories into $k$ groups (a.k.a. a Bell number) divided by the number of data points. 
 
@@ -1359,20 +1365,17 @@ For a new sample, the predicted class probabilities are determined by the termin
 
 Some tree implementations also provide confidence intervals or other measures of uncertainty for these probability estimates. For example, C4.5 uses a pessimistic estimate of the error rate to provide upper and lower bounds on the class probabilities.
 
-The class probability estimates from terminal nodes can be used not only for classification but also for ranking and probability estimation. When a terminal node contains few samples, the quality of the probability estimates decreases. It is possible to apply Laplace smoothing as previously described for naive Bayes or to use a regularized estimate, such as the Beta-binomial method from @eq-beta-bin-mean (as described for CatBoost). 
+The class probability estimates from terminal nodes can be used not only for classification but also for ranking and probability estimation. When a terminal node contains few samples, the quality of the probability estimates decreases. It is possible to apply Laplace smoothing as previously described for naive Bayes or to use a regularized estimate, such as the Beta-binomial method from @eq-beta-bin-mean (CatBoost uses this type of estimate for its categorical encodings, but not for its terminal nodes). 
 
 Alternatively, C4.5 decision trees add the event rate to the numerator count and 1.0 to the denominator. For example, for our previous left split, the raw probability for the "Yes" class was 5/6, and 7/12 of the data were truly forested.  C4.5 would compute it as (5 + (7/12)) / (6 + 1) = `r round((5 + (7/12)) / (6 + 1), 3)` instead of the raw estimate of `r round(5/6, 3)`. In the context of that model, this terminal node estimate is called the "confidence value."
 
-For XGBoost and LightGBM, once the split is made, the probability estimates for the leaves are estimated by: 
+For XGBoost and LightGBM, the terminal nodes do not contain probabilities. Each one contains an adjustment to the log-odds, computed from the same sums used in the splitting statistic. For the $n$ data points in the node:
 
 $$
-\begin{align}
-\widehat{\mathcal{F}}_{ik} &= \sum_{i=1}^n\sum_{k=1}^{2}\frac{\tilde{e}_{ik}}{\widehat{p}_{i1} \widehat{p}_{i2} + \lambda_2}\notag \\
-\widehat{p}_{ik} &= \frac{1}{1 + e^{-\widehat{\mathcal{F}}_{ik}}}\notag
-\end{align}
-$$ {#eq-xgboost-estimate}
+w = \frac{\tilde{E}}{\lambda_2 + \sum\limits_{i=1}^n\widehat{p}_{i1} (1-\widehat{p}_{i1})}
+$$
 
-In these equations, $\widehat{\mathcal{F}}_{ik}$ plays a part similar to a linear predictor and can range across the entire real line. The relationship between that value and the probability $\widehat{p}_{ik}$ is a _logistic_ link. We'll see more of this format in the next chapter. 
+which can be converted to a probability via the logistic function. The weights are used in different and more elaborate ways in boosted trees; see the bext chapter. 
 
 There is also the possibility of including an additional model inside each terminal node. For example, we could embed a logistic or multinomial regression model within each terminal node, trained on the data captured by the rule that leads to that node. One of the earliest proposals of this kind was for regression "model trees" described by @quinlan1992learning. This specific model will be described in @sec-reg-cubist. For classification models, there are similar models: @loh2002regression, @landwehr2005logistic, @chan2004lotus, @gama2004functional, and @zeileis2008model. 
 
