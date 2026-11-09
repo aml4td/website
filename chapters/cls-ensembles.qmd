@@ -731,7 +731,6 @@ combos <- crossing(alpha = c(0.5, 0.7, 0.9), beta = c(0.5, 1.5, 2.0, 2.5))
 
 dpth <- 1:10
 
-
 prior_probs <- NULL
 for (i in 1:nrow(combos)) {
   prior_probs <-
@@ -855,7 +854,7 @@ forest_bart_res |>
     is_param = parameter %in% param_cols,
     parameter = factor(parameter, levels = bart_ord)
   ) |>
-  ggplot(aes(value, brier_class, col = is_param, pch = is_param)) +
+  ggplot(aes(value, brier_class, col = is_param)) +
   geom_point(alpha = 2 / 4, cex = 2, show.legend = FALSE) +
   facet_wrap(~parameter, scales = "free_x", nrow = 1) +
   labs(y = "Brier Score", x = NULL) +
@@ -957,7 +956,7 @@ The binary class votes provides more weight to trees that have the largest confi
 #| fig-height: 2.5
 #| fig-cap: "Tuning results for boosted C5.0 trees. The panel on the right reflects the average number of terminal nodes in the ensemble for different tuning parameter candidates."
 # fmt: skip
-c5_ord <- c("Trees", "Minimal Node Size", "# Terminal Nodes (log-10)", "# Rule Terms")
+c5_ord <- c("Trees", "Minimal Node Size", "# Terminal Nodes (log-10)", "Mean Rule Size")
 param_cols <- c("Trees", "Minimal Node Size")
 
 
@@ -979,7 +978,7 @@ forest_c5_res |>
   ) |>
   rename(
     `# Terminal Nodes (log-10)` = num_terminal_nodes,
-    `# Rule Terms` = num_rule_terms,
+    `Mean Rule Size` = num_rule_terms,
     `Minimal Node Size` = min_n,
     `Trees` = trees
   ) |>
@@ -993,7 +992,7 @@ forest_c5_res |>
     is_param = parameter %in% param_cols,
     parameter = factor(parameter, levels = c5_ord)
   ) |>
-  ggplot(aes(value, brier_class, col = is_param, pch = is_param)) +
+  ggplot(aes(value, brier_class, col = is_param)) +
   geom_point(alpha = 2 / 4, cex = 2, show.legend = FALSE) +
   facet_wrap(~parameter, scales = "free_x", nrow = 1) +
   labs(y = "Brier Score", x = NULL) +
@@ -1179,7 +1178,7 @@ actual_trees <- function(x, digits = 3, ...) {
     as.list()
 }
 
-marginal_boost_plot <- function(x, num_row = NULL) {
+marginal_boost_plot <- function(x, num_row = NULL, point_size = 2) {
   mod_spec <- tune::.get_tune_workflow(x) |> extract_spec_parsnip()
   eng <- mod_spec$engine
 
@@ -1202,7 +1201,7 @@ marginal_boost_plot <- function(x, num_row = NULL) {
     unnest(.extracts) |>
     summarize(
       `# Terminal Nodes (log-10)` = log10(mean(num_terminal_nodes)),
-      `# Rule Terms` = mean(num_rule_terms),
+      `Mean Rule Size` = mean(num_rule_terms),
       .by = c(.config)
     )
 
@@ -1224,7 +1223,7 @@ marginal_boost_plot <- function(x, num_row = NULL) {
     param_cols[param_cols == prm] <- new_name
   }
 
-  bst_ord <- c(param_cols, "# Terminal Nodes (log-10)", "# Rule Terms")
+  bst_ord <- c(param_cols, "# Terminal Nodes (log-10)", "Mean Rule Size")
 
   if (eng == "catboost") {
     # with uniform trees, the tree depth = #rule terms
@@ -1232,7 +1231,7 @@ marginal_boost_plot <- function(x, num_row = NULL) {
       summary_stats,
       -dplyr::contains("Rule Terms")
     )
-    bst_ord <- bst_ord[bst_ord != "# Rule Terms"]
+    bst_ord <- bst_ord[bst_ord != "Mean Rule Size"]
   }
 
   values <-
@@ -1249,8 +1248,8 @@ marginal_boost_plot <- function(x, num_row = NULL) {
     )
 
   values |>
-    ggplot(aes(value, brier_class, pch = is_param, col = is_param)) +
-    geom_point(alpha = 2 / 4, cex = 2, show.legend = FALSE) +
+    ggplot(aes(value, brier_class, col = is_param)) +
+    geom_point(alpha = 1 / 2, cex = point_size, show.legend = FALSE) +
     facet_wrap(~parameter, scales = "free_x", nrow = num_row) +
     labs(y = "Brier Score", x = NULL) +
     theme(
@@ -1600,12 +1599,12 @@ Each ensemble contained a maximum of `r trees_ctb$max_trees` trees but monitored
 #| echo: false
 #| out-width: 100%
 #| fig-width: 10
-#| fig-height: 2
+#| fig-height: 5
 #| fig-cap: "Tuning results for CatBoost The panel on the right reflects the average number of terminal nodes in the ensemble for different tuning parameter candidates."
-marginal_boost_plot(forest_ctb_res, num_row = 1)
+marginal_boost_plot(forest_ctb_res)
 ```
 
-The numerically best settings used $m_{try} = `r forest_ctb_best$mtry`$, a $\lambda_2$ value of 10<sup>`r fmt(log10(forest_ctb_best$l2_leaf_reg), digits = 2)`</sup>, a tree depth of `r forest_ctb_best$tree_depth`, and a learning rate of 10<sup>`r fmt(log10(forest_ctb_best$learn_rate), digits = 2)`</sup>. Across the candidates, `r trees_ctb$early`% triggered early stopping and the average number of trees in the enselmble was `r trees_ctb$num_members`. 
+The numerically best settings used $m_{try} = `r forest_ctb_best$mtry`$ (which translates to `r ceiling(forest_ctb_best$mtry * (ncol(forested_train) - 1))` predictors), a $\lambda_2$ value of 10<sup>`r fmt(log10(forest_ctb_best$l2_leaf_reg), digits = 2)`</sup>, a tree depth of `r forest_ctb_best$tree_depth`, and a learning rate of 10<sup>`r fmt(log10(forest_ctb_best$learn_rate), digits = 2)`</sup>. Across the candidates, `r trees_ctb$early`% triggered early stopping and the average number of trees in the enselmble was `r trees_ctb$num_members`. 
 
 #### Comparisons {#sec-cls-boost-compare}
 
@@ -1616,8 +1615,8 @@ We've discussed numerous characteristics for the three primary boosting implemen
   | Aspect                        | XGBoost                                          | LightGBM                        | CatBoost                                    |
   | ----------------------------- | ------------------------------------------------ | ------------------------------- | ------------------------------------------- |
   | Starting Value                | $\operatorname{logit}(\bar{y})$,                 | $\operatorname{logit}(\bar{y})$ | $0$                                         |
-  | Stochasticity                 | None                                             | None                            | MVS                                         |
-  | Categorical Predictors        | Indicators and/or partition splits on the levels | Partition splits on the levels  | Target encodings plus combinations          |
+  | Stochasticity                 | None                                             | None                            | Minimum Variance Sampling                   |
+  | Categorical Predictors        | Indicators and/or partition splits on the levels | Partition splits on the levels  | Target encoding plus combinations           |
   | Tree Shape                    | Depth-wise limit of 6 splits                     | Leaf-wise, up to 31 leaves      | Symmetric/oblivious to depth fo 6           |
   | Split Criterion               | Gain with gradient and Hessian                   | Gain with gradient and Hessian  | Cosine core with noise, no  Hessian         |
   | L<sub>1</sub> Penalty         | $\lambda_1 = 0$                                  | $\lambda_1 = 0$                 | Not available                               |
@@ -1663,7 +1662,7 @@ forest_c5rules_res |>
   ) |>
   rename(
     `# Terminal Nodes (log-10)` = num_terminal_nodes,
-    `# Rule Terms` = num_rule_terms,
+    `Mean Rule Size` = num_rule_terms,
     `Minimal Node Size` = min_n,
     `Trees` = trees
   ) |>
@@ -1677,7 +1676,7 @@ forest_c5rules_res |>
     is_param = parameter %in% param_cols,
     parameter = factor(parameter, levels = c5_ord)
   ) |>
-  ggplot(aes(value, brier_class, col = is_param, pch = is_param)) +
+  ggplot(aes(value, brier_class, col = is_param)) +
   geom_point(alpha = 2 / 4, cex = 2, show.legend = FALSE) +
   facet_wrap(~parameter, scales = "free_x", nrow = 1) +
   labs(y = "Brier Score", x = NULL) +
@@ -1702,7 +1701,7 @@ forest_c5rules_res |>
 xrf_ord <- 
   c("Mtry", "Minimal Node Size", 
     "Tree Depth", "Learning Rate (log-10)", 
-    "Penalty (log-10)", "# Coefficients (log-10)", "# Rule Terms")
+    "Penalty (log-10)", "# Coefficients (log-10)", "Mean Rule Size")
 param_cols <- c(
   "Mtry",
   "Minimal Node Size",
@@ -1732,7 +1731,7 @@ forest_xrf_res |>
   rename(
     `# Coefficients (log-10)` = num_coef,
     `Learning Rate (log-10)` = learn_rate,
-    `# Rule Terms` = num_rule_terms,
+    `Mean Rule Size` = num_rule_terms,
     `Minimal Node Size` = min_n,
     Mtry = mtry,
     `Tree Depth` = tree_depth,
@@ -1748,7 +1747,7 @@ forest_xrf_res |>
     is_param = parameter %in% param_cols,
     parameter = factor(parameter, levels = xrf_ord)
   ) |>
-  ggplot(aes(value, brier_class, col = is_param, pch = is_param)) +
+  ggplot(aes(value, brier_class, col = is_param)) +
   geom_point(alpha = 0.5, cex = 2, show.legend = FALSE) +
   facet_wrap(~parameter, scales = "free_x") +
   labs(y = "Brier Score", x = NULL) +
