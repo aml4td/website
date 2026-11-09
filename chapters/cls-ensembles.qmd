@@ -1297,9 +1297,9 @@ What parameters govern tree depth? The implementation has a potential maximum de
 
 As a result, if the model learns the data well, the number of terminal nodes might decrease as more trees are added to the ensemble; predictions should assign the largest values to the true class, and the Hessian values become smaller. Also, the samples with higher-quality probability values will contribute less to the objective function than the most uncertain samples. 
 
-The overall default _tree growing policy_ is to let the tree grow until these constraints halt it, referred to as "depthwise" growing. We'll discuss other strategies below. By default, XGBoost does not prune the tree after the growth phase. 
+The overall default _tree growing policy_ is to let the tree grow until these constraints halt it, referred to as "depth-wise" growing. We'll discuss other strategies below. By default, XGBoost does not prune the tree after the growth phase. 
 
-An alternative is the _lossguide_ tree growth policy. It focuses on splitting the node with the largest largest gain across the entire tree. Instead of splitting within a branch, it considers all current branches and chooses the best across them. This might lead the tree to have many splits along a few branches, resulting in a very unbalanced structure. In this case, the complexity is controlled by constraining the maximum number of terminal nodes. 
+An alternative is the _loss-guide_ tree growth policy. It focuses on splitting the node with the largest largest gain across the entire tree. Instead of splitting within a branch, it considers all current branches and chooses the best across them. This might lead the tree to have many splits along a few branches, resulting in a very unbalanced structure. In this case, the complexity is controlled by constraining the maximum number of terminal nodes. 
 
 Finally, for multiclass problems where $C > 2$, each boosting iteration creates $C$ separate sequences of class-specific trees. 
 
@@ -1412,14 +1412,14 @@ However, after the first tree is grown, $\mathcal{F}_0$ is added to every one of
 
 There are some other differences with XGBoost in the tree construction phase. First, the binning process adds another constraint: the minimum number of samples per bin (defaulting to 3). When the value is less than 3, that bin is shared with its neighbors.  Also, predictor values of zero are given their own bin with very small bin widths. Categorical predictor are given their own bin. While XGBoost uses the smallest value of the bin as the split point, LightGBM uses the midpoint of the bin limits. 
 
-For growing trees, LightGBM defaults to the _lossguide_ approach (called _leafwise growth_) where all leaves are considered at once when a new split is initiated: 
+For growing trees, LightGBM defaults to the _loss-guide_ approach (called _leaf-wise growth_) where all leaves are considered at once when a new split is initiated: 
 
 1. Start with all rows in one leaf.
 2. Evaluate any leaf that is new by finding its best split variable and split point
 3. Select the split (out of all current leaves) with the largest gain to grow the tree. 
 4. Repeat until a predefined limit on the number of leaves without a constraint on the depth of the tree. 
 
-By default, the limit on the number of leaves in each tree is 31. Whereas XGBoost's _depthwise_ policy might reduce the number of terminal nodes as the ensemble adds trees, LightGBM's trees should maintain a constant number of leaves (using the defaults). There is also an optional constraint similar to $n_{min}$, where the number of data points is approximated by the Hessian weights, and LightGBM also allows for constraints using $H_{min}$ directly. 
+By default, the limit on the number of leaves in each tree is 31. Whereas XGBoost's depth-wise policy might reduce the number of terminal nodes as the ensemble adds trees, LightGBM's trees should maintain a constant number of leaves (using the defaults). There is also an optional constraint similar to $n_{min}$, where the number of data points is approximated by the Hessian weights, and LightGBM also allows for constraints using $H_{min}$ directly. 
 
 Most of the statistics for gain computations and splitting criteria are consistent with XGBoost, with a few minor exceptions described in the previous chapter. For example, the overall gain formula is the same. LightGBM can also use the number of trees via submodels, and early stopping operates in the same way as XGBoost. For regularization, LightGBM uses neither L<sub>1</sub> nor  L<sub>2</sub> as a default. 
 
@@ -1477,7 +1477,123 @@ The results show small performance improvements with larger values of $m_{try}$ 
 
 #### CatBoost {#sec-cls-ctb}
 
-@cat18
+While there are strong resemblances between XGBoost and LightGBM, CatBoost [@cat18] is fairly dissimilar from them. As described in the previous chapter, CatBoost uses a distinct splitting statistic and a regularized target-encoding approach for categorical predictors. 
+
+The tree creation algorithm is also considerably different in several ways. For example, the initial score $\mathcal{F}_0$ is set to zero so that the baseline probability is 0.5. There is a non-standard option to initialize the ensemble based on the event rates see in the training set. 
+
+CatBoost creates a single tree per iteration and stores all $C$ terminal node weights, as CART, C5.0, and other trees do.
+
+It uses a weighted subsample of the training set at each iteration (80%, by default) called minimum variance sampling [@ibragimov2019minimal]. For the first tree, all sampling weights are equal. After this, the sampling scheme retains all training set data whose squared gradient values exceed a threshold. All other points are sampled with weights proportional to $g_i^2$. Each sample is drawn without replacement^[Despite the implementation labeling it as a "bootstrap type."]. 
+
+The binning scheme uses a greedy optimization for each predictor and defaults to 255 bins. The process iteratively splits the data near the median and chooses the current bin to split to maximize $\log n_L + \log n_R - \log(n_L + n_R)$, where $n_L$ and $n_R$ are the frequencies within the two partitions. Thresholds are bin midpoints.
+
+Another significant difference is that symmetric, oblivious trees are created with a hard maximum depth of 16 splits. Oblivious trees (or data structures in general) are constrained so that every node at the exact same depth splits on the same predictor [@kohavi1995oblivious]. A predictor can be used more than once at different levels. @fig-ctb-tree shows an example using a depth of three. Note that the same predictor and split point are used at each level. This constraint acts as a regularization mechanism but may also yield terminal nodes that are infeasible or contain no training data. The default tree depth is 6 splits.
+
+```{r}
+#| label: fig-ctb-tree
+#| echo: false
+#| warning: false
+#| fig-width: 16
+#| fig-height: 8
+#| fig-align: "center"
+#| out-width: "90%"
+#| fig-cap: A symmetric and oblivious tree produced by CatBoost
+set.seed(1)
+ctb_example_fit <-
+  boost_tree(trees = 3, mode = "classification", tree_depth = 3) |>
+  set_engine("catboost") |>
+  fit(class ~ ., data = forested_train |> select(-county))
+
+ctb_example_fit |>
+  extract_fit_engine() |>
+  as.party(data = forested_train |> select(-county), tree = 2) |>
+  ggparty() +
+  geom_edge() +
+  geom_edge_label(
+    aes(label = breaks_label),
+    fill = "white",
+    nudge_y = 0,
+    linewidth = 0,
+    parse = TRUE,
+    size = 5
+  ) +
+  geom_node_splitvar(
+    fill = "white",
+    size = 7
+  ) +
+  geom_node_plot(
+    gglist = list(
+      geom_bar(
+        aes(x = "", fill = class),
+        position = position_fill(),
+        alpha = 0.7,
+      ),
+      xlab("class"),
+      theme_void(),
+      scale_fill_manual(values = c("#218239", "#d4ad42"))
+    )
+  )
+```
+
+As with XGBoost, depth-wise or loss-wise tree construction can also be used. 
+
+As previously described, the cosine statistic (@eq-ctb-cosine) is used for splitting. Recall that Hessian values are not used in the calculation. One added detail regarding split selection is that CatBoost adds random noise to the cosine score that is Gaussian with zero mean and a standard deviation of 
+
+$$
+\sigma_t = \omega\, \sqrt{\frac{1}{n}\sum_{i=1}^n g_i^2} \cdot \frac{n\, e^{-\alpha (t-1)}}{1 + n\, e^{-\alpha (t-1)}}
+$$
+
+where $t$ is the tree number, $\alpha$ is the learning rate, and  $\omega$ is a potential tuning parameter (defaulted to 1.0). For a fixed gradient sum, this is a sigmoidal logistic function that will decrease over boosting iterations and becomes almost deterministic when the numerator $n\, e^{-\alpha (t-1)}$ approaches zero. Using $\omega = 0$ will make the score deterministic. Like $m_{try}$, the added randomness is meant to encourage slightly suboptimal splits to produce diverse trees for the collection. 
+
+CatBoost also uses an iterative method to estimate the terminal node weights in the tree. For ensembles with fewer than $T < 200$ trees, gradient-based optimization Newton's Method) is used to estimate the nodes. For terminal node $ell$ for a binary outcome: 
+
+$$
+w_\ell \leftarrow w_\ell + \frac{\sum\limits_{i=1}^n g_i}{\lambda_2 + \sum\limits_{i=1}^n h_i }
+$$ 
+
+where $\lambda_2$ is once again an L<sub>2</sub> penalty (with a default of 3). By default, 10 iterations of this process are performed with starting values $w_\ell = 0$. Recall that the weights are on the real line and behave like logits. The previous equation (@eq-xgboost-estimate) for the other boosting methods corresponds to a single step. 
+
+Once the ensemble is created, prediction follows the same pattern: the scores are summed and then converted into probabilities using either the logistic function (for binary problems) or softmax (for multiclass). 
+
+To predict forestation, the model was tuned over:
+
+```{r}
+#| label: ctb-param-list
+#| echo: false
+#| results: asis
+forest_ctb_res |>
+  .get_tune_parameters() |>
+  as_tibble() |>
+  mutate(
+    Parameter = map_chr(object, ~ .x$label),
+    Lower = map_dbl(object, ~ .x$range[[1]]),
+    Upper = map_dbl(object, ~ .x$range[[2]]),
+    transform = map_chr(
+      object,
+      ~ ifelse(is.null(.x$trans$name), "", .x$trans$name)
+    ),
+    Lower = map2_chr(
+      Lower,
+      transform,
+      ~ ifelse(.y == "log-10", paste0("10<sup>", .x, "</sup>"), paste(.x))
+    ),
+    Upper = map2_chr(
+      Upper,
+      transform,
+      ~ ifelse(.y == "log-10", paste0("10<sup>", .x, "</sup>"), paste(.x))
+    ),
+    transform = map_chr(
+      transform,
+      ~ ifelse(.x != "", paste0("(", .x, ")"), .x)
+    ),
+    Parameter = gsub("#", "Number of", Parameter),
+    item = paste0(" - ", Parameter, ": ", Lower, " to ", Upper)
+  ) |>
+  pluck("item") |>
+  cat(sep = "\n")
+```
+
+Each ensemble contained a maximum of `r trees_ctb$max_trees` trees but monitored performance for early stopping. @fig-forest-ctb contains the results. The number of rule terms is not shown since it is directly proportional to the number of terminal nodes. 
 
 ```{r}
 #| label: fig-forest-ctb
@@ -1488,6 +1604,33 @@ The results show small performance improvements with larger values of $m_{try}$ 
 #| fig-cap: "Tuning results for CatBoost The panel on the right reflects the average number of terminal nodes in the ensemble for different tuning parameter candidates."
 marginal_boost_plot(forest_ctb_res, num_row = 1)
 ```
+
+The numerically best settings used $m_{try} = `r forest_ctb_best$mtry`$, a $\lambda_2$ value of 10<sup>`r fmt(log10(forest_ctb_best$l2_leaf_reg), digits = 2)`</sup>, a tree depth of `r forest_ctb_best$tree_depth`, and a learning rate of 10<sup>`r fmt(log10(forest_ctb_best$learn_rate), digits = 2)`</sup>. Across the candidates, `r trees_ctb$early`% triggered early stopping and the average number of trees in the enselmble was `r trees_ctb$num_members`. 
+
+#### Comparisons {#sec-cls-boost-compare}
+
+We've discussed numerous characteristics for the three primary boosting implementations. @tbl-compare-boosting shows a comparison table that summarizes and contrasts the three. 
+
+::: {#tbl-compare-boosting}
+
+  | Aspect                        | XGBoost                                          | LightGBM                        | CatBoost                                    |
+  | ----------------------------- | ------------------------------------------------ | ------------------------------- | ------------------------------------------- |
+  | Starting Value                | $\operatorname{logit}(\bar{y})$,                 | $\operatorname{logit}(\bar{y})$ | $0$                                         |
+  | Stochasticity                 | None                                             | None                            | MVS                                         |
+  | Categorical Predictors        | Indicators and/or partition splits on the levels | Partition splits on the levels  | Target encodings plus combinations          |
+  | Tree Shape                    | Depth-wise limit of 6 splits                     | Leaf-wise, up to 31 leaves      | Symmetric/oblivious to depth fo 6           |
+  | Split Criterion               | Gain with gradient and Hessian                   | Gain with gradient and Hessian  | Cosine core with noise, no  Hessian         |
+  | L<sub>1</sub> Penalty         | $\lambda_1 = 0$                                  | $\lambda_1 = 0$                 | Not available                               |
+  | L<sub>2</sub> Penalty         | $\lambda_2 = 1$                                  | $\lambda_2 = 0$                 | $\lambda_2 = 3$                             |
+  | Main Limit on Tree Size       | $H_{min}$                                        | $n_{min}$                       | Depth Constraint                            |
+  | Leaf Value                    | One Newton step                                  | One Newton step                 | 10 Newton steps                             |
+  | Multiclass Ensemble Structure | $C$ trees per round                              | $C$ trees per round             | One tree per round with $C$ values per leaf |
+
+A concise comparison of the default methodologies for three modern boosting models.
+
+:::
+
+This table highlights the similarities between XGBoost and LightGBM and their differences from CatBoost. 
 
 ## Rule-Based Ensembles {#sec-cls-rule-ensembles}
 
