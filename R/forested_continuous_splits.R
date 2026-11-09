@@ -96,7 +96,11 @@ compute_split_metrics <- function(x, y, split_value, positive_class) {
     intrinsic_info <- intrinsic_info - w_right * log2(w_right)
   }
 
-  gain_ratio <- if (intrinsic_info > 0) info_gain / intrinsic_info else NA_real_
+  if (intrinsic_info > 0) {
+    gain_ratio <- info_gain / intrinsic_info
+  } else {
+    gain_ratio <- NA_real_
+  }
 
   tibble(
     split_value = split_value,
@@ -399,7 +403,8 @@ lgb_splits <- function(
 #' Approximate CatBoost Split Evaluation for Binary Classification
 #'
 #' Evaluates potential split points for a numeric predictor using CatBoost's
-#' default L2 scoring method with log-loss gradients for binary classification.
+#' default Cosine score function (or the optional L2 score function) with
+#' log-loss gradients for binary classification.
 #'
 #' @param x Numeric vector of predictor values. NaN values are handled according
 #'   to \code{nan_mode}.
@@ -408,8 +413,11 @@ lgb_splits <- function(
 #' @param max_bin Integer. Maximum number of splits (split points) to
 #'   evaluate. Default is 254, matching CatBoost's CPU default.
 #' @param binning_method Character. Method for selecting candidate splits. One of
-#'   \code{"GreedyLogSum"} (default), \code{"Median"}, \code{"Uniform"},
-#'   \code{"UniformAndQuantiles"}, \code{"MinEntropy"}, or \code{"MaxLogSum"}.
+#'   \code{"Uniform"} (default here), \code{"GreedyLogSum"} (CatBoost's default),
+#'   \code{"Median"}, \code{"UniformAndQuantiles"}, \code{"MinEntropy"}, or
+#'   \code{"MaxLogSum"}.
+#' @param score_function Character. \code{"Cosine"} (CatBoost's default) or
+#'   \code{"L2"}.
 #' @param l2_reg Numeric. L2 regularization parameter for leaf value calculation.
 #'   Default is 3, matching CatBoost's default.
 #' @param nan_mode Character. How to handle NaN values. One of \code{"Min"}
@@ -421,7 +429,7 @@ lgb_splits <- function(
 #' @return A data frame with columns:
 #'   \describe{
 #'     \item{split_value}{The split threshold value}
-#'     \item{score}{The L2 score for this split (higher is better)}
+#'     \item{score}{The Cosine or L2 score for this split (higher is better)}
 #'     \item{left_count}{Number of samples in the left child (value <= split)}
 #'     \item{right_count}{Number of samples in the right child (value > split)}
 #'     \item{left_grad_sum}{Sum of gradients in the left child}
@@ -449,9 +457,16 @@ lgb_splits <- function(
 #' \itemize{
 #'   \item Gradient: \eqn{g_i = y_i - p_i}
 #'   \item Leaf value: \eqn{v = \sum g_i / (n + \lambda)}
-#'   \item Split score: \eqn{S = v_L \sum g_L + v_R \sum g_R}
+#'   \item Cosine score (default):
+#'     \eqn{S = (v_L \sum g_L + v_R \sum g_R) / \sqrt{v_L^2 n_L + v_R^2 n_R}}
+#'   \item L2 score: \eqn{S = v_L \sum g_L + v_R \sum g_R}
 #' }
 #' where \eqn{\lambda} is \code{l2_reg} and subscripts L/R denote left/right children.
+#'
+#' CatBoost's randomness is deliberately left out: the noise added to split
+#' scores (\code{random_strength}) and the MVS row sampling. For the first tree
+#' (all \eqn{p_i = 0.5}), MVS keeps each row with probability 0.8 and weight 1.25,
+#' so without sampling the expected scores are unchanged.
 #'
 #' @examples
 #' set.seed(42)
@@ -483,12 +498,14 @@ cat_splits <- function(
   ),
   l2_reg = 3,
   nan_mode = c("Min", "Max", "Forbidden"),
-  initial_prediction = 0
+  initial_prediction = 0,
+  score_function = c("Cosine", "L2")
 ) {
   # Validate inputs
 
   binning_method <- match.arg(binning_method)
   nan_mode <- match.arg(nan_mode)
+  score_function <- match.arg(score_function)
 
   if (!is.numeric(x)) {
     stop("`x` must be a numeric vector")
@@ -536,9 +553,15 @@ cat_splits <- function(
 
   # Phase 1: Select candidate splits (excluding NaN)
 
+  # CatBoost reserves one border for the NaN bin
+  if (has_nans) {
+    n_borders <- max_bin - 1L
+  } else {
+    n_borders <- max_bin
+  }
   splits <- select_binning_method(
     x = x_clean,
-    max_bin = if (has_nans) max_bin - 1L else max_bin,
+    max_bin = n_borders,
     method = binning_method
   )
 
@@ -622,12 +645,22 @@ cat_splits <- function(
 
     # Calculate leaf values with L2 regularization
     # Formula: leaf_value = sum_gradient / (count + l2_reg)
-    left_leaf <- if (left_n > 0) left_g / (left_n + l2_reg) else 0
-    right_leaf <- if (right_n > 0) right_g / (right_n + l2_reg) else 0
+    left_leaf <- 0
+    if (left_n > 0) {
+      left_leaf <- left_g / (left_n + l2_reg)
+    }
+    right_leaf <- 0
+    if (right_n > 0) {
+      right_leaf <- right_g / (right_n + l2_reg)
+    }
 
-    # Calculate L2 score
     # Formula: score = left_leaf * left_sum_gradient + right_leaf * right_sum_gradient
     score <- left_leaf * left_g + right_leaf * right_g
+    if (score_function == "Cosine") {
+      # CatBoost starts the denominator at 1e-100 so it is never zero
+      score <- score /
+        sqrt(left_leaf^2 * left_n + right_leaf^2 * right_n + 1e-100)
+    }
 
     results[[i]] <- data.frame(
       split_value = split,
@@ -653,6 +686,7 @@ cat_splits <- function(
   results$l2_reg <- l2_reg
   results$nan_mode <- nan_mode
   results$initial_prediction <- initial_prediction
+  results$score_function <- score_function
   results
 }
 
@@ -754,7 +788,7 @@ binning_median <- function(x, max_bin) {
 }
 
 
-#' Uniform and Quantiles Split Selection (CatBoost default for training data)
+#' Uniform and Quantiles Split Selection
 #' @keywords internal
 #' @keywords internal
 binning_uniform_and_quantiles <- function(x, max_bin) {
@@ -764,16 +798,16 @@ binning_uniform_and_quantiles <- function(x, max_bin) {
 
   x_sorted <- sort(unique(x))
 
-  splits_median <- if (n_median > 0) {
-    binning_median(x, n_median)
+  if (n_median > 0) {
+    splits_median <- binning_median(x, n_median)
   } else {
-    numeric(0)
+    splits_median <- numeric(0)
   }
 
-  splits_uniform <- if (n_uniform > 0) {
-    binning_uniform(x_sorted, n_uniform)
+  if (n_uniform > 0) {
+    splits_uniform <- binning_uniform(x_sorted, n_uniform)
   } else {
-    numeric(0)
+    splits_uniform <- numeric(0)
   }
 
   sort(unique(c(splits_median, splits_uniform)))
@@ -1032,7 +1066,11 @@ binning_exact_logsum <- function(x, max_bin) {
 
   # penalty(i, j) = -log(sum of counts from i to j)
   penalty <- function(i, j) {
-    w <- if (i == 1) cum_counts[j] else cum_counts[j] - cum_counts[i - 1]
+    if (i == 1) {
+      w <- cum_counts[j]
+    } else {
+      w <- cum_counts[j] - cum_counts[i - 1]
+    }
     -log(w + 1e-10)
   }
 
