@@ -24,7 +24,6 @@ library(future)
 library(rpart)
 library(partykit)
 library(patchwork)
-library(rpart.plot)
 library(gt)
 library(gtExtras)
 library(lorax)
@@ -34,6 +33,7 @@ library(forcats)
 library(tidyposterior)
 library(rules)
 library(paletteer)
+library(ggparty)
 
 # ------------------------------------------------------------------------------
 # set options
@@ -795,43 +795,74 @@ To illustrate the binning approach, consider the partitioning model illustrated 
 #| fig-height: 6
 #| fig-cap: Recursive partitioning tree when using the county variable in its adjacent category form.  The labels for the split points for the county variable have been simplified to summarize the number of counties included at each split.
 #| fig-alt: "Decision tree diagram with a maximum depth of three splits. The first split uses maximum vapor at 1,248. Subsequent splits involve grouped county categories (labeled by the number of counties in each group) and other numeric predictors. Each terminal node displays the dominant class, sample counts, and class percentages."
-county_split_fun <- function(x, labs, digits, varlen, faclen) {
-  #sub(" ", "\n", labs)
-  # Get the frame to check variable names
-  frame <- adjacent_split_model$frame
-  split_vars <- as.character(frame$var)
-
-  new_labs <- character(length(labs))
-
-  for (i in 1:length(labs)) {
-    lab <- labs[i]
-
-    # Check if label is long and contains commas (categorical split)
-    if (nchar(lab) > 15 && grepl(",", lab)) {
-      # Count the number of categories
-      categories <- trimws(strsplit(lab, ",")[[1]])
-      n_cats <- length(categories)
-      new_labs[i] <- paste0(n_cats, " counties")
-    } else {
-      new_labs[i] <- sub(" ", "\n", lab)
-    }
-  }
-
-  return(new_labs)
+# Short edge labels: numeric splits keep their cutoff, categorical splits
+# show only the number of levels.
+short_breaks <- function(x) {
+  vapply(
+    x,
+    function(b) {
+      if (length(b) == 1 && is.na(b)) {
+        return(NA_character_)
+      }
+      if (length(b) > 1) {
+        return(paste(length(b), "levels"))
+      }
+      gsub("NA\\*? *", "", b)
+    },
+    character(1)
+  )
 }
 
-# Create the plot
-rpart.plot(
-  adjacent_split_model,
-  type = 4,
-  extra = 101,
-  box.palette = "GnBn",
-  split.fun = county_split_fun,
-  cex = 0.75,
-  tweak = 1.6,
-  clip.right.labs = FALSE,
-  under = TRUE
-)
+# Full level lists, wrapped, for terminal nodes reached by a categorical split.
+level_list <- function(x, width = 24) {
+  vapply(
+    x,
+    function(b) {
+      if (length(b) <= 1) {
+        return(NA_character_)
+      }
+      # Non-breaking spaces keep two-word names (e.g. Walla Walla) on one line.
+      b <- gsub(" ", "\u00a0", tools::toTitleCase(gsub("_", " ", b)))
+      paste(strwrap(paste(b, collapse = ", "), width = width), collapse = "\n")
+    },
+    character(1)
+  )
+}
+
+tree <- as.party(adjacent_split_model)
+
+# Terminal nodes whose incoming split is categorical.
+cat_ids <- which(lengths(ggparty(tree)$data$breaks_label) > 1)
+
+tree |>
+  ggparty(terminal_space = 0.5) +
+  geom_edge() +
+  geom_edge_label(
+    aes(label = short_breaks(breaks_label)),
+    fill = "white",
+    linewidth = 0,
+    size = 4,
+    parse = FALSE
+  ) +
+  geom_node_splitvar(fill = "white", size = 7) +
+  geom_node_plot(
+    gglist = list(
+      geom_bar(aes(x = "", fill = class), position = position_fill(), alpha = 0.7),
+      xlab("class"),
+      theme_void(),
+      scale_fill_manual(values = c("#218239", "#d4ad42"))
+    ),
+    height = 0.6
+  ) +
+  geom_node_label(
+    aes(label = level_list(breaks_label)),
+    ids = cat_ids,
+    nudge_y = -0.42,
+    size = 5,
+    lineheight = 0.9,
+    label.size = 0,
+    na.rm = TRUE
+  )
 ```
 
 The adjacent category methodology creates a split with 7 counties in one group and the remaining counties in the other group.  @fig-split-county demonstrates why the counties were partitioned into these groups.  The x-axis in (a) and (b) of this figure provides the counties ordered from the lowest proportion of forested samples within each county (left) to the highest proportion (right).  The top portion of the figure provides the Gini index for the partitioning of the samples at that county and all counties to the left.  The purity is optimized between the counties of Asotin and Okanogan.  At this split point, 7 counties are placed into one group, and 13 counties are in the other group, as illustrated in @fig-split-adjacent-tree.
@@ -892,25 +923,40 @@ The choice between these approaches can impact model complexity and interpretabi
 #| label: fig-split-binary-tree
 #| echo: false
 #| warning: false
-#| out-width: 90%
-#| fig-width: 14
+#| out-width: 100%
+#| fig-width: 16
 #| fig-height: 11
 #| fig-cap: Recursive partitioning tree when transforming the county variable into many dummy, binary variables.
 #| fig-alt: "Decision tree diagram built using binary indicator variables for each county. The tree is deeper than the adjacent-category version but does not select any county indicator as a split variable, relying entirely on numeric predictors. Each terminal node shows the dominant class, sample counts, and class percentages."
-# Create the plot
-rpart.plot(
-  binary_split_model,
-  type = 4,
-  extra = 101,
-  box.palette = "GnBn",
-  split.fun = function(x, labs, digits, varlen, faclen) {
-    sub(" ", "\n", labs)
-  },
-  cex = 0.75,
-  tweak = 1.6,
-  clip.right.labs = FALSE,
-  under = TRUE
-)
+
+binary_split_model |> 
+  as.party() |> 
+  ggparty() +
+  geom_edge() +
+  geom_edge_label(
+    aes(label = breaks_label),
+    fill = "white",
+    nudge_y = 0,
+    linewidth = 0,
+    parse = TRUE,
+    size = 5
+  ) +
+  geom_node_splitvar(
+    fill = "white",
+    size = 7
+  ) +
+  geom_node_plot(
+    gglist = list(
+      geom_bar(
+        aes(x = "", fill = class),
+        position = position_fill(),
+        alpha = 0.7,
+      ),
+      xlab("class"),
+      theme_void(),
+      scale_fill_manual(values = c("#218239", "#d4ad42"))
+    )
+  )
 ```
 
 XGBoost and LightGBM take very similar approaches to split selection for categorical predictors. If there are "few" category values, each candidate split separates one category from all of the others. This is the same set of one-versus-all splits that a full set of binary indicators would generate. Both libraries control this with a parameter. LightGBM's default of 4 gives one-versus-all splits when there are four or fewer categories. XGBoost used a default of 4 (one-versus-all for three or fewer categories) through version 3.4. Starting with version 3.5, its default is effectively infinite, so every categorical predictor gets one-versus-all splits unless the limit on the number of categories is lowered. Otherwise, the predictor categories are ordered using some statistic, similar to the CART discussion earlier^[The specific statistics are discussed momentarily.], and a two-pass approach is used to limit the total number of possible splits to consider. The forward pass starts with the lowest-ranked categories and sequentially adds them to the left split grouping (all others go to the right). The backward pass does the opposite, sequentially grouping the highest-ranked categories. 
