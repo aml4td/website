@@ -114,13 +114,13 @@ forest_cart_bag_mtr_ex <-
 
 Bagging, short for bootstrap aggregation, was first popularized by @breiman1996. The most commonly used definition of a bagged tree is a collection of decision trees grown to maximum size (i.e., unpruned with a small $n_{min}$) and trained on a bootstrap sample of the training set. If we create an ensemble of $T$ trees, we obtain a collection of $T$ predictions for each data point. The final prediction summarizes the collection. Most often the proportion of hard-class "votes" from each tree is used for probability estimates, although other estimators, such as the mean of the class probabilities, can also be used. 
 
-Using many trees solves the two issues mentioned above. The ensemble's overall model variance is much smaller than a single tree's. STANDARD ERROR OF BETA MEAN?. Since trees are very flexible, they have low model bias. Combined with lower ensemble variance, this makes the overall model error very low and therefore more predictive. 
+Using many trees solves the two issues mentioned above. The ensemble's overall model variance is much smaller than that of a single tree. STANDARD ERROR OF BETA MEAN?. Because trees are highly flexible, they exhibit low model bias. Combined with lower ensemble variance, this results in a very low overall model error and, therefore, greater predictive power. 
 
-Practically, combining $T$ predictions means the predicted values are more granular. To achieve stable performance, $25 \le T \le 50$ is often a good range. However, this is not a tuning parameter; we just need enough ensemble members to obtain a good mean estimate. 
+In practice, combining $T$ predictions yields more granular predictions. To achieve stable performance, $25 \le T \le 50$ is often a good range. However, this is not a tuning parameter; we just need enough ensemble members to obtain a good mean estimate. 
 
 The key thing to realize about bagging is that it only improves high-variance models. Consider logistic regression, where the model estimates parameters using all training data points. Adding or removing rows from the training set, or jittering their values, has a relatively limited effect on predictions. This model has low variance, so averaging its predictions has little impact; we are averaging very similar values. Trees, by contrast, can produce very different splits and/or predictions when the training data are perturbed. 
 
-Why use very deep trees? The mechanics of bagging are designed to increase the diversity of the predicted values produced by each tree. Using a bootstrap sample, some training set samples are removed entirely, while others are replicated multiple times. This data perturbation encourages different trees. Using _unpruned_ and maximally grown trees is another technique to diversify predictions. We know very large trees are more likely to overfit by overreacting to specific training set points. This is generally bad. However, in ensembles, we _want_ higher variance from diverse predictions. 
+Why use very deep trees? The mechanics of bagging are designed to increase the diversity of the predicted values produced by each tree. Using a bootstrap sample, some training set samples are removed entirely, while others are replicated multiple times. This data perturbation encourages different trees. Using _unpruned_ and maximally grown trees is another technique to diversify predictions. We know that very large trees are more likely to overfit by overreacting to specific points in the training set. This is generally bad. However, in ensembles, we _want_ higher variance from diverse predictions. 
 
 ```{r}
 #| label: cls-bagging-demo
@@ -171,7 +171,7 @@ bag_res <-
   )
 ```
 
-To demonstrate, we used the forestation data and created bagged CART ensembles with a range of tuning parameter values to see how tree complexity affects performance. A variety of bagged trees with 50 members, $\lambda \in [10^{-10}, 10^{-1}]$ and $n_{min} \in [1, 100]$ were resampled^[Where $\lambda$ is the cost-complexity parameter from @eq-cost-complexity.]. The figure shows the results where complexity was measured using the average number of terminal nodes within the ensemble. Clearly, simple (i.e., shallow) trees make poor ensembles. As we increase model complexity, performance improves rapidly before plateauing at low Brier scores. This was not a tuning exercise; we generally don't tune these models. This analysis shows that, in ensembles, maximum complexity equates to prediction diversity, which drives predictive performance. CITE PERFORMANCE for main model versus individual trees
+To demonstrate, we used the forestation data to create bagged CART ensembles with a range of tuning parameter values to examine how tree complexity affects performance. A variety of bagged trees with 50 members, $\lambda \in [10^{-10}, 10^{-1}]$ and $n_{min} \in [1, 100]$ were resampled^[Where $\lambda$ is the cost-complexity parameter from @eq-cost-complexity.]. The figure shows results in which complexity was measured by the average number of terminal nodes within the ensemble. Clearly, simple (i.e., shallow) trees make poor ensembles. As we increase model complexity, performance improves rapidly before plateauing at low Brier scores. This was not a tuning exercise; we generally don't tune these models. This analysis shows that, in ensembles, maximum complexity equates to prediction diversity, which drives predictive performance. CITE PERFORMANCE for main model versus individual trees
 
 ```{r}
 #| label: fig-cls-bagging-complexity
@@ -202,7 +202,7 @@ bag_res |>
   labs(y = "Brier Class", x = "Mean # Terminal Nodes per Tree")
 ```
 
-Do other models benefit from being combined in a bagged ensemble? Neural networks for small to medium training sets are fairly unstable. Perturbing the data _and the random seed_ can generate different models and predictions. $K$-nearest neighbors are also very unstable. However, training them with a bagged tree may not be a good idea since a bootstrapped training set contains 2 or more replicated training samples. For $K < 10$, it may not be difficult to produce neighbors that are themselves (resulting in zero error). MARS/FDA models are slightly unstable. In our experience, adaptive regression splines produce diversity in split points when the underlying trend is not linear. For example, if a predictor and the outcome have a quadratic relationship, bagging produces similar models with split points that cluster where the derivative is near zero (e.g., the vertex of the parabola). Bagging these models can slightly improve performance. 
+Do other models benefit from being combined in a bagged ensemble? Neural networks for small to medium training sets are fairly unstable. Perturbing the data _and the random seed_ can generate different models and predictions. $K$-nearest neighbors are also very unstable. However, training them with a bagged tree may not be a good idea since a bootstrapped training set contains 2 or more replicated training samples. For $K < 10$, it may not be difficult to produce neighbors that are themselves (resulting in zero error). MARS/FDA models are slightly unstable. In our experience, adaptive regression splines yield more diverse split points when the underlying trend is nonlinear. For example, if a predictor and the outcome have a quadratic relationship, bagging produces similar models with split points that cluster where the derivative is near zero (e.g., the vertex of the parabola). Bagging these models can slightly improve performance. 
 
 Next we'll talk about a generalization of bagged trees: random forests. 
 
@@ -293,7 +293,12 @@ ert_spec <-
     mtry = tune(),
     trees = 1000
   ) |>
-  set_engine("ranger", splitrule = "extratrees", replace = FALSE, sample.fraction = 1)
+  set_engine(
+    "ranger",
+    splitrule = "extratrees",
+    replace = FALSE,
+    sample.fraction = 1
+  )
 
 set.seed(526)
 forest_ert_res <-
@@ -324,7 +329,7 @@ Canonically, this model is the same as a bagging ensemble, with one additional f
 
 Random forests include an integer tuning parameter commonly called $m_{try}$: at each split point in each tree, the model considers only a random subset of $m_{try}$  predictors as the split variable. This significantly influences the makeup of the trees since the best possible decision may not be possible. It is likely suboptimal and might very well be detrimental to the tree _at that stage_. However, from the ensemble's perspective, the trees are good enough to use and become less correlated with one another, promoting additional tree diversity. In the end, using $m_{try}$ usually improves the model's efficacy. 
 
-@fig-forest-splits shows several individual trees for the forestation data. Each panel fits an artificially small tree on these data and controls the random seed between plots. The blocks in the terminal nodes visualize the relative proportions of the classes from the training set for each rule. Trees (a) and (b) are standard CART fits that are trained on two different bootstrap samples. We can see that the structure is the same, but the split _values_ are slightly different. Tree (c) uses the same bootstrap samples as (a) but uses $m_{try} = 3$ instead of all predictors. We can see a completely different tree structure, with mostly different variables from the previous two trees. 
+@fig-forest-splits shows several individual trees for the forestation data. Each panel fits an artificially small tree on these data and controls the random seed between plots. The blocks in the terminal nodes visualize the relative proportions of the classes from the training set for each rule. Trees (a) and (b) are standard CART fits that are trained on two different bootstrap samples. We can see that the structure is the same, but the split _values_ differ slightly. Tree (c) uses the same bootstrap samples as (a) but uses $m_{try} = 3$ instead of all predictors. We can see a completely different tree structure, with mostly different variables from the previous two trees. 
 
 ```{r}
 #| label: fig-forest-splits
@@ -523,9 +528,9 @@ p_extra <-
 (p_full + p_full_2) / (p_mtry + p_extra)
 ```
 
-However, using $m_{try}$ has a few downsides. First, to ensure informative predictors have enough opportunities to be considered in the split, we have to drastically increase the number of trees in the ensemble. At a minimum, 500 trees are needed, but 1,000 to 2,000 trees are recommended to have a reliable model. The second downside is that it somewhat compromises random forests' ability to perform automatic feature selection. Many uninformative predictors will be selected for a split. Fortunately, random forests pioneered permutation importance, which we discuss in @sec-importance. The original software (and most implementations) use a default value of $m_{try} = \sqrt{p}$ for classification, where $p$ is the number of predictors. 
+However, using $m_{try}$ has a few downsides. First, to ensure informative predictors have enough opportunities to be considered in the split, we have to drastically increase the number of trees in the ensemble. At a minimum, 500 trees are needed, but 1,000 to 2,000 are recommended for a reliable model. The second downside is that it somewhat compromises random forests' ability to perform automatic feature selection. Many uninformative predictors will be selected for a split. Fortunately, random forests pioneered the use of permutation importance, which we discuss in @sec-importance. The original software (and most implementations) use a default value of $m_{try} = \sqrt{p}$ for classification, where $p$ is the number of predictors. 
 
-For the forestation data, a random forest model was optimized over $m_{try}$ for all 16 possible values. Each ensemble consisted of 1,000 trees. The results are shown in @fig-forest-rf along with some variants of the model that will be discussed below. We can see that there is a noticeable trend in the data for this model that results in an optimal value of $m_{try} = `r forest_rngr_best$mtry[1]`$. However, the y-axis shows that the range of possible results is extremely narrow. Almost any of these values would be suitable. This is quite often the pattern that we see for this model. 
+For the forestation data, a random forest model was optimized over $m_{try}$ for all 16 possible values. Each ensemble consisted of 1,000 trees. The results are shown in @fig-forest-rf along with some variants of the model that will be discussed below. We can see a noticeable trend in $m_{try}$ for this model, resulting in an optimal value of $m_{try} = `r forest_rngr_best$mtry[1]`$. However, the y-axis shows that the range of possible results is extremely narrow. Almost any of these values would be suitable. This is quite often the pattern that we see for this model. 
 
 ```{r}
 #| label: forest-rf-mtry
@@ -584,18 +589,18 @@ rf_all_mtr |>
   ggplot(aes(mtry, mean, shape = Model, col = Model)) +
   geom_point() +
   geom_line() +
-  labs(x = expression(m[try]), y = "Brier Score", color = NULL)
+  labs(x = expression(m[try]), y = "Brier Score")
 ```
 
-This robustness to tuning parameters reflects how low-maintenance random forest models are overall. They require very little tuning, need no variable transformations, can leave categorical predictors as-is, and, depending on the implementation, can naturally handle missing data. On average, they rank in the top 10% of models (in terms of performance) and, although they probably aren't uniformly optimal, they can produce a high-quality model with little effort.  TODO CITE Fernández-Delgado why do we need paper
+This robustness to tuning parameters reflects how low-maintenance random forest models are overall. They require very little tuning, need no variable transformations, can leave categorical predictors as-is, and, depending on the implementation, can naturally handle missing data. On average, they rank in the top 10% of models (in terms of performance) and, although they probably aren't uniformly optimal, they can produce a high-quality model with little effort.  @fernandez2014we conducted a comprehensive comparison of various ML models across a variety of datasets. In these comparisons, the random forest achieved the highest accuracy in more than 90% of cases. Keep in mind that this was before modern boosting models or foundational neural networks arrived. Despite this, a random forest model has few requirements and is fast to train; it is a fast way to achieve a potential win.
 
-As one would expect with such a popular model, there have been a multitude of other extensions and enhancements to the standard model. For example, there are also variations of this model for ordinal outcomes [@janitza2016random;@hornung2020ordinal]. Also, there are direct analogs to different single-tree methods described in the previous chapter. For example, instead of CART models, conditional inference trees [@hothorn2006unbiased] can be used as the ensemble's constituents. This offers some improvements, especially if you want to reduce bias in split selection. As will be described in a later chapter, random forests are a primary tool for measuring how important predictors are to the outcome. Random forest variable importance methods are not perfect, but using conditional inference trees makes them more accurate because the model is not predisposed to select predictors based on how many unique values they contain. For comparison, we also tuned this approach over $m_{try}$. The available implementation is limited to categorical predictors with less than 24 splits, so an effect encoding preprocesser was used on the county predictor. 
+As one would expect with such a popular model, there have been a multitude of other extensions and enhancements to the standard model. For example, there are also variations of this model for ordinal outcomes [@janitza2016random;@hornung2020ordinal]. Also, there are direct analogs to different single-tree methods described in the previous chapter. For example, instead of CART models, conditional inference trees [@hothorn2006unbiased] can be used as constituents of the ensemble. This offers some improvements, especially if you want to reduce bias in split selection. As will be described in a later chapter, random forests are a primary tool for assessing the importance of predictors to the outcome. Random forest variable importance methods are not perfect, but using conditional inference trees makes them more accurate because the model is not predisposed to select predictors based on how many unique values they contain. For comparison, we also tuned this approach over $m_{try}$. The available implementation is limited to categorical predictors with fewer than 24 splits, so an effect encoding preprocesser was used on the county predictor. 
 
 @fig-forest-rf shows that, for these data, the conditional inference forest results are slightly worse than the CART ensemble but are most likely practically equivalent. In this case, $m_{try} = `r forest_crf_best$mtry[1]`$ was found to be optimal. 
 
 Additionally, you can use oblique trees [@menze2011oblique;@jaeger2019oblique]. In this case, $m_{try}$ controls how many randomly selected predictors should make up the linear projection used for each split. This functional form likely has much lower variance than rectangular splits, so using it in a random forest model may not be as much of an upgrade as it is for traditional splits. Again, @fig-forest-rf shows these results for the implementation by @jaeger2022aorsf.  While slightly better than conditional inference trees in this analysis, they are minutely worse than traditional forests.  
 
-Lastly, we should mention extremely randomized trees (a.k.a. "extratrees"). These make splits completely at random and with the original training set. Essentially, these are unsupervised split candidates: a randomly chosen predictor and a randomly chosen split point [@geurts2006extremely]. It considers  $m_{try}$ random candidate splits and chooses the best among them. This approach is much faster because it avoids an exhaustive search across predictors. @fig-forest-splits demonstrates the effect of this method in panel (d) where randomized splits were used in conjunction with $m_{try} = 16$ so that 16 candidate splits were evaluated for each node. The structure, predictors, and split values differ significantly from the previous trees.  
+Lastly, we should mention extremely randomized trees (a.k.a. "extratrees"). These make splits completely at random, using the original training set. Essentially, these are unsupervised split candidates: a randomly chosen predictor and a randomly chosen split point [@geurts2006extremely]. It considers $m_{try}$ random candidate splits and chooses the best one. This approach is much faster because it avoids an exhaustive search across predictors. @fig-forest-splits demonstrates the effect of this method in panel (d), where randomized splits were used with $m_{try} = 16$, resulting in 16 candidate splits evaluated for each node. The structure, predictors, and split values differ significantly from the previous trees.  
 
 @fig-forest-rf also shows the results of this model, which slightly edges out the traditional model but found $m_{try} = p$ to be optimal, so every predictor was a candidate at each split, but the split points were still random.
 
@@ -674,7 +679,7 @@ forest_bart_mtr_ex <-
 
 Bayesian additive regression trees (BART) model the outcome with a sum of many small trees [@bart2010;@chipman2006bayesian]. We place prior distributions on each tree's structure, on its leaf parameters, and on the amount of shrinkage. While the model is more complex, the general process mirrors the one described in @sec-logistic-bayes. 
 
-To estimate the model, we use MCMC to sample from the model's posterior distribution. Each MCMC iteration updates every tree in turn and yields one complete ensemble. After the chains converge to the posterior, we can sample from it to create a set of trees that define the ensemble. 
+To estimate the model, we use MCMC to sample from the model's posterior distribution. Each MCMC iteration updates each tree in turn, yielding a complete ensemble. After the chains converge to the posterior, we can sample from it to create a set of trees that define the ensemble. 
 
 To start, let's denote a specific tree as $\mathcal{T}$ (as in the previous chapter) and parameters associated with its terminal nodes as $\Theta$. These parameters are not the probability estimates; they are on the real line and are similar to linear predictor values. 
 
@@ -688,7 +693,7 @@ $$
 
 which is also on the real line. As we'll see below, this value is converted to a probability scale for the final prediction. 
 
-Since BART is a Bayesian method, it relies heavily on probability and likelihood functions for computations. We typically assume that a binary outcome follows a Bernoulli distribution. To make the computations more tractable, BART takes a different approach that focuses on Gaussian quantities [@albert1993bayesian]. It defines a latent Gaussian random variable
+Since BART is a Bayesian method, it relies heavily on the probability and likelihood functions in its computations. We typically assume that a binary outcome follows a Bernoulli distribution. To make the computations more tractable, BART takes a different approach, focusing on Gaussian quantities [@albert1993bayesian]. It defines a latent Gaussian random variable
 
 $$
 Z_i = \mathcal{F}(\boldsymbol{x}_i) + \gamma + \varepsilon_i
@@ -708,7 +713,7 @@ $$
 Pr[{\text{split}}\;\mathcal{N}] = \alpha\,(1 + d_{\mathcal{N}})^{-\beta}
 $$ {#eq-bart-depth-prior}
 
-where $d_{\mathcal{N}}$ is the current depth of the node and $\alpha$ and $\beta$ default to 0.95 and 2.0, respectively. @fig-tree-prior shows how the two parameters relate to the probability and demonstrates how this equation captures our belief about the model. If we think we will need a set of deeper trees to predict the outcome accurately, smaller exponents with a larger coefficient are a good option. Exponents greater than 2.0 are the right choice if we believe a collection of small trees (perhaps even a single split) is best. If we have no _a priori_ thoughts on the matter, we can tune these parameters to see whether larger or smaller trees fit our data better. This parameterization helps us define what is plausible before seeing the data.
+where $d_{\mathcal{N}}$ is the current depth of the node and $\alpha$ and $\beta$ default to 0.95 and 2.0, respectively. @fig-tree-prior shows how the two parameters relate to the probability and demonstrates how this equation captures our belief about the model. If we think we will need a set of deeper trees to predict the outcome accurately, then smaller exponents with larger coefficients are a good option. Exponents greater than 2.0 are the right choice if we believe a collection of small trees (perhaps even a single split) is best. If we have no _a priori_ thoughts on the matter, we can tune these parameters to see whether larger or smaller trees fit our data better. This parameterization helps us define what is plausible before seeing the data.
 
 ::: {#fig-tree-prior}
 
@@ -761,7 +766,7 @@ The effect of the $\alpha$ and $\beta$ parameters for the prior associated with 
 
 :::
 
-There are also uniform priors to select the predictor and the split point (based on a quantile or percent of the predictor's range). 
+There are also uniform priors for selecting the predictor and the split point (based on a quantile or a percentage of the predictor's range). 
 
 What about the terminal node parameters? The individual values are assumed to be Gaussian $\theta_i \sim N\big(0, \sigma_\theta^2\big)$. The corresponding standard deviation is 
 
@@ -801,11 +806,11 @@ For the second step, proposals for new trees use the operations described in @se
 - Pr[redraw the cutpoint of an internal node's rule] = 0.40
 - Pr[exchange the rules of a parent and child internal node] = 0.10
 
-The steps 3 and 5 in the MCMC process for individual trees are more conventional. However, the likelihood is complex, so we'll skip the mechanics of how it is computed, but note that our Gaussian assumptions make the likelihood and posterior analytically tractable and efficient to compute. These models employ an impressive number of computational tricks. For example, we never evaluate the likelihood over the full data. Instead, we retain various sufficient statistics at the leaf level, which makes the Metropolis-Hastings computations very efficient. See @kapelner2013bartmachine, @pratola2014parallel, @emh, and @he2019xbart for more details. 
+The steps 3 and 5 in the MCMC process for individual trees are more conventional. However, the likelihood is complex, so we'll skip the mechanics of its computation; note that our Gaussian assumptions make the likelihood and posterior analytically tractable and efficient to compute. These models employ an impressive number of computational tricks. For example, we never evaluate the likelihood over the entire data set. Instead, we retain various sufficient statistics at the leaf level, which makes the Metropolis-Hastings computations very efficient. See @kapelner2013bartmachine, @pratola2014parallel, @emh, and @he2019xbart for more details. 
 
 We sample the priors for hundreds (or thousands) of iterations. If we believe that the process has converged, we generate our final set of $T$ trees for the ensemble. 
 
-To demonstrate, a BART model was tuned over $\alpha$ and $\beta$ from @eq-bart-depth-prior as well as the $k$ value in $\sigma_\theta$. The model specification used $T$ = 100, required 1,000 warm-up iterations, and retained every 10 pulls from the posterior distribution. The implementation required converting the categorical predictor to indicator variables before model training. @fig-forest-bart shows how the tuning parameters relate to the Brier score. A panel also shows the average number of terminal nodes produced within each tree. The $\alpha$ parameter performed better when close to its upper range, consistent with the parameter's default value ($\alpha$). The exponent ($\beta$) showed little signal for these data. The $k$ multiplier parameter showed a strong effect, with larger values being worse. The final panel shows that more terminal nodes were better (as a consequence of the depth parameters). 
+To demonstrate, a BART model was tuned over $\alpha$ and $\beta$ from @eq-bart-depth-prior as well as the $k$ value in $\sigma_\theta$. The model specification used $T$ = 100, required 1,000 warm-up iterations, and retained every 10 pulls from the posterior distribution. The implementation required converting the categorical predictor to indicator variables before model training. @fig-forest-bart shows how the tuning parameters relate to the Brier score. A panel also shows the average number of terminal nodes produced within each tree. The $\alpha$ parameter performed better when close to its upper range, consistent with the parameter's default value ($\alpha$). The exponent ($\beta$) showed little signal for these data. The $k$ multiplier parameter had a strong effect, with larger values associated with worse performance. The final panel shows that more terminal nodes were better (as a consequence of the depth parameters). 
 
 ```{r}
 #| label: fig-forest-bart
@@ -872,9 +877,9 @@ Boosted trees are ensembles of decision trees created sequentially, with each ne
 
 The boosting model that we think of today is an evolution of an idea that started in the 1980's. @valiant1984 described machine learning models within a theoretical framework for "weak" and "strong" learners, depending on whether they could reach an arbitrarily small error rate. A weak learner was considered barely better than random guessing. @kearns1988 posed the question, "Can we convert a weak learner to a strong one?" and coined the term "boosting." @schapire1990 showed the equivalence of strong and weak learnability and outlined a general algorithm in which a sequence of (binary) classifiers can compensate for the shortcomings of previous models. @freund1995 produced a more specific framework where the collection of models predicted via a majority vote rule, and drucker1993 showed an application of boosting with neural networks. 
 
-The first landmark boosting algorithm was the AdaBoost model of @freundschapire1997. This model used a case-weighting system that helped each learner emphasize training-set points poorly predicted by previous models (i.e., difficult points received larger weights for the next model). Each tree in the ensemble had a corresponding stage weight based on its current error rate. The final prediction was a weighted average of each model's predictions, using the stage weight as the weight. It also used an exponential loss function. At this point, the algorithm was constrained to binary classification and produced only hard-class predictions. In @freundschapire1996, they used C4.5 classifiers as the weak learner. 
+The first landmark boosting algorithm was the AdaBoost model of @freundschapire1997. This model used a case-weighting system that helped each learner emphasize training-set points that previous models had poorly predicted (i.e., difficult points received larger weights in the next model). Each tree in the ensemble had a corresponding stage weight based on its current error rate. The final prediction was a weighted average of each model's predictions, using the stage weight as the weight. It also used an exponential loss function. At this point, the algorithm was constrained to binary classification and produced only hard-class predictions. In @freundschapire1996, C4.5 classifiers were used as the weak learner. 
 
-This is also when Breiman defined the previously described bagging model, and a flurry of papers investigated how AdaBoost worked. It is also when @breiman1999 and @mason2000 realized that the boosting algorithm was conducting _gradient descent_. It is also when the landmark paper @friedman2000 showed the same, noted that the model was an additive function of individual models, and that AdaBoost fits an additive model by stagewise minimization of an exponential loss, whose minimizer is half the log-odds, so it is closely related to (but not the same as) the binomial log-likelihood. Their initial model, LogitBoost, gave a more familiar theoretical statistical framework and generalized the model to include some tuning parameters. 
+This is also when Breiman defined the previously described bagging model, and a flurry of papers investigated how AdaBoost worked. It is also when @breiman1999 and @mason2000 realized that the boosting algorithm was conducting _gradient descent_. It is also when the landmark paper @friedman2000 showed the same, noted that the model was an additive function of individual models, and that AdaBoost fits an additive model by stagewise minimization of an exponential loss, whose minimizer is half the log-odds, so it is closely related to (but not the same as) the binomial log-likelihood. Their initial model, LogitBoost, provided a more familiar theoretical statistical framework and generalized it to include tuning parameters. 
 
 Arguably, the first lasting definition of gradient boosting quickly followed in @friedman2001. It solidified boosting as a gradient descent algorithm and 
 
@@ -884,9 +889,9 @@ Arguably, the first lasting definition of gradient boosting quickly followed in 
 
 This extended boosting to regression models, multi-class classification, and other models. It also framed the learning rate as a form of regularization. The author also introduced relative-importance measures and partial dependence plots for model interpretability.
 
-The next leap forward was @friedman2002. Influenced by bagging, Friedman defined stochastic gradient boosting (SGB). At each stage, the model is fit on a random subset of the training set. This decorrelates the trees and improves their effectiveness. It also trains faster.
+The next leap forward was @friedman2002. Influenced by bagging, Friedman defined stochastic gradient boosting (SGB). At each stage, the model is fit on a random subset of the training set. This decorrelates the trees, improving their effectiveness. It also trains faster.
 
-While some small improvements have been made, fundamentally, modern boosting models are implementations of stochastic gradient boosting (or are capable of using it). The current slate of top-performing models (XGBoost, LightGBM, and CatBoost) build on this framework. All three can subsample rows, although only CatBoost does so by default. Much of their improvement is engineering, but there are methodological changes too: XGBoost and LightGBM use second derivatives to choose splits, and CatBoost has its own approach to categorical predictors. 
+While some small improvements have been made, fundamentally modern boosting models are implementations of stochastic gradient boosting (or can use it). The current slate of top-performing models (XGBoost, LightGBM, and CatBoost) build on this framework. All three can subsample rows, although only CatBoost does so by default. Much of their improvement is engineering, but there are methodological changes too: XGBoost and LightGBM use second derivatives to choose splits, and CatBoost has its own approach to categorical predictors. 
 
 Modern boosting methods do not use sample reweighting to create ensemble members. Although AdaBoost has not persisted as a commonly used method, one sample-weighting method has. C5.0 is a modern successor to Quinlan's C4.5 model. Let's discuss this method before diving into other techniques. 
 
@@ -894,15 +899,15 @@ Modern boosting methods do not use sample reweighting to create ensemble members
 
 C5.0 has several minor differences from its predecessor and also enables boosting via reweighting. Like modern methods, this boosting tool includes a significant amount of engineering embedded within. For example, C5.0 conducts a kind of futility analysis to determine whether training-set points it will _never_ be able to predict correctly and drops them. This discussion provides a general overview of what the methodology does and how well it works. 
 
-So far, we have not discussed **case weights**. These values, associated with each training set sample, often measure how much influence a specific data point should have on computations such as the model's objective function. A wide variety of case weights can be used in different phases (e.g., training, model assessment, etc.). For example, frequency weights are integer values that indicate how often a specific data vector occurs. For example, if the forestation included only the county predictor, we could reduce the training set to `r length(levels(forested_train$county))` rows (one per county) and assign a corresponding frequency weight based on how often each county occurs.  
+So far, we have not discussed **case weights**. These values, associated with each training set sample, often measure how much influence a specific data point should have on computations such as the model's objective function. A wide variety of case weights can be used across different phases (e.g., training, model assessment). For example, frequency weights are integer values that indicate how often a specific data vector occurs. For example, if the forestation included only the county predictor, we could reduce the training set to `r length(levels(forested_train$county))` rows (one per county) and assign a corresponding frequency weight based on how often each county occurs.  
 
-Our focus here is on importance weights, which are general non-negative values used during model training. Most of our models can already accommodate case weights during computations. We define the training set case weights as $w_i$ ($i=1\ldots n_{tr}$), initialized to 1.0 (unless the user overrides this default), and fit the first tree in the ensemble with each training set sample having the same influence on the model.  After this fit, the number of leaves in this tree is used to limit the depth of future trees to make all trees about the same size. 
+Our focus here is on importance weights, which are general non-negative values used during model training. Most of our models can already accommodate case weights during computations. We define the training set case weights as $w_i$ ($i=1\ldots n_{tr}$), initialized to 1.0 (unless the user overrides this default), and fit the first tree in the ensemble with each training set sample having the same influence on the model.  After this fit, the number of leaves in this tree is used to limit the depth of future trees, making all trees about the same size. 
 
-After training tree $\mathcal{T}_t$ of $T$ in the ensemble, the current tree classifies the entire training set. This is also when C5.0 conducts its futility analysis to determine which (if any) points to exclude. We'll denote the available training set points at iteration $t$ as $n_{(t)}$. 
+After training tree $\mathcal{T}_t$ of $T$ in the ensemble, the current tree classifies the entire training set. This is also when C5.0 conducts its futility analysis to determine which (if any) points to exclude. We'll denote the number of available training set points at iteration $t$ by $n_{(t)}$. 
 
-The probability estimate for class $k$ for tree $t$ is the class-specific count in the node divided by the total count. With missing data, the estimate is a weighted average of the terminal nodes into which its fractional weight was distributed. This is the estimate used (internally) during training and, when predicting new samples, the corrected values described in @sec-tree-estimates are the estimates. 
+The probability estimate for class $k$ for tree $t$ is the class-specific count in the node divided by the total count. With missing data, the estimate is a weighted average of the terminal nodes into which its fractional weight was distributed. This is the estimate used (internally) during training, and when predicting new samples, the corrected values described in @sec-tree-estimates are used. 
 
-The case-weight update algorithm depends on whether the model predicted samples correctly or incorrectly. When the model predicts the correct class, the weights are scaled _multiplicatively_, while the poorly predicted ones have an _additive_ increase.  For tree $t$, we denote the total weights for correctly and incorrectly predicted samples as $W_{+}^{(t)}$ and $W_{-}^{(t)}$, respectively. Also, $\mathcal{E}^{(t)}$ is the unweighted number of misclassified active samples. From these, we compute:
+The case-weight update algorithm depends on whether the model predicted samples correctly or incorrectly. When the model predicts the correct class, the weights are scaled _multiplicatively_, whereas poorly predicted classes have an _additive_ increase.  For tree $t$, we denote the total weights for correctly and incorrectly predicted samples as $W_{+}^{(t)}$ and $W_{-}^{(t)}$, respectively. Also, $\mathcal{E}^{(t)}$ is the unweighted number of misclassified active samples. From these, we compute:
 
 $$
 \begin{align}
@@ -913,7 +918,7 @@ b^{(t)} &= \frac{\delta^{(t)}}{\mathcal{E}^{(t)}} \notag \\
 \end{align}
 $$
 
-$\delta^{(t)}$ is _how much_ weight moves. This is the total weight taken from the correctly classified group and given to the misclassified group. It is set so that the misclassified group's total ends up halfway between its current total, $W_{-}^{(t)}$, and half of all the weight.  
+$\delta^{(t)}$ is _how much_ weight moves. This is the total weight transferred from the correctly classified group to the misclassified group. It is set so that the misclassified group's total ends up halfway between its current total, $W_{-}^{(t)}$, and half of all the weight.  
 
 The case-weight update is then: 
 
@@ -948,7 +953,7 @@ $$
 \widehat{p}_{k} = \frac{\sum\limits_{t = 1}^{T} \widetilde{p}^{(t)}\, I\big[\widehat{y}^{(t)} = k\big]}{\sum \limits_{t = 1}^{T^{}} \widetilde{p}^{(t)}}
 $$
 
-The weighted votes give more weight to trees that have the largest confidence values. 
+The weighted votes give greater weight to trees with the highest confidence values. 
 
 ```{r}
 #| label: fig-forest-c5-boost
@@ -1022,7 +1027,7 @@ $$
 \mathcal{F}_T(\boldsymbol{x}) = \mathcal{F}_0 + \alpha \sum_{t = 1}^{T} f_t(\boldsymbol{x})
 $$   {#eq-cls-bst-tree-score}
 
-where $\alpha$ is the learning rate and $\mathcal{F}_0$ is an initial score. $\mathcal{F}_0$ is usually the log-odds of the event rate in the training set^[This is not true for CatBoost but there is an option to use the event rate to determine the starting value]. $f_t(\boldsymbol{x})$ is the numeric score prediction from the tree created at iteration $t$. If the tree structure $\mathcal{T}_t$ partitions the predictor space into terminal node regions $R_{t1}, \ldots, R_{tK_t}$, then:
+where $\alpha$ is the learning rate and $\mathcal{F}_0$ is an initial score. $\mathcal{F}_0$ is usually the log-odds of the event rate in the training set^[This is not true for CatBoost, but there is an option to use the event rate to determine the starting value]. $f_t(\boldsymbol{x})$ is the numeric score prediction from the tree created at iteration $t$. If the tree structure $\mathcal{T}_t$ partitions the predictor space into terminal node regions $R_{t1}, \ldots, R_{tK_t}$, then:
 
 $$
 f_t(\boldsymbol{x}) = \sum_{k=1}^{K_t} w_{tk} \, I(\boldsymbol{x} \in R_{tk})
@@ -1088,7 +1093,7 @@ $$
 g_i = \frac{e^{\mathcal{F}_i}}{1 + e^{\mathcal{F}_i}} - y_i = p_i - y_i
 $$
 
-The negative gradient, $-g_i = y_i - p_i$, is the raw residual $e_{ik}$ from @sec-tree-splitting. It falls in $(-1, 1)$, and in the boosting literature it is called the pseudo-residual. Note the sign: the residual points in the direction that *decreases* the loss.
+The negative gradient, $-g_i = y_i - p_i$, is the raw residual $e_{ik}$ from @sec-tree-splitting. It lies in $(-1, 1)$ and, in the boosting literature, is called the pseudo-residual. Note the sign: the residual points in the direction that *decreases* the loss.
 
 How, then, does gradient boosting work? It mirrors gradient descent. The initial score $\mathcal{F}_0$ plays the role of the starting parameter values ($\boldsymbol{\theta}_0$). A gradient descent step would move each score against its gradient:
 
@@ -1096,7 +1101,7 @@ $$
 \mathcal{F}_{it} \leftarrow \mathcal{F}_{i(t-1)} - \alpha\, g_{i(t-1)}
 $$
 
-That step is only defined for the training set points and says nothing about a new $\boldsymbol{x}$. Instead, we build a tree $f_t$ that models the negative gradients $y_i - p_i$ as a function of the predictors. These are the residuals of the *current ensemble* ($\mathcal{F}_0$ plus all previous trees). The tree turns the gradient step into a function that can be applied to any sample. Its predictions are on the log-odds scale, not the probability scale, and they are shrunk by $\alpha$ before being added to $\mathcal{F}$.
+That step is defined only for the training set points and says nothing about a new $\boldsymbol{x}$. Instead, we build a tree $f_t$ that models the negative gradients $y_i - p_i$ as a function of the predictors. These are the residuals of the *current ensemble* ($\mathcal{F}_0$ plus all previous trees). The tree turns the gradient step into a function that can be applied to any sample. Its predictions are on the log-odds scale, not the probability scale, and they are shrunk by $\alpha$ before being added to $\mathcal{F}$.
 
 The modern libraries also use the Hessian, which makes each update a Newton step rather than a plain gradient step. The general form of Newton's Method is: 
 
@@ -1112,7 +1117,7 @@ $$
 
 This is the variance of the Bernoulli distribution. It is always positive and has a maximum value of 0.25 at $p_i = 0.5$. It is near zero when the model is confident ($p_i$ close to 0 or 1).
 
-Recall that the Hessian is a _matrix_, with the mixed second partial derivatives $\partial^2 \psi / \partial \mathcal{F}_i \, \partial \mathcal{F}_{i'}$ on the off-diagonals. Here, each sample's loss depends only on its own score, so $h_{ii'} = 0$ when $i \ne i'$. The $n_{tr} \times n_{tr}$ Hessian is diagonal, and the vector of $h_i$ values contains all the information^[Since it is digonal, we index it by $i$ and not $ii$ for convenience.]. This is not true for $C > 2$ classes (see below).
+Recall that the Hessian is a _matrix_, with the mixed second partial derivatives $\partial^2 \psi / \partial \mathcal{F}_i \, \partial \mathcal{F}_{i'}$ on the off-diagonals. Here, each sample's loss depends only on its own score, so $h_{ii'} = 0$ when $i \ne i'$. The $n_{tr} \times n_{tr}$ Hessian is diagonal, and the vector of $h_i$ values contains all the information^[Since it is diagonal, we index it by $i$ and not $ii$ for convenience.]. This is not true for $C > 2$ classes (see below).
 
 For the samples in terminal node $l$ of tree $t$, define $G_l = \sum_{i \in l} g_i$ and $H_l = \sum_{i \in l} h_i$. Without a penalty, the Newton step for that node is:
 
@@ -1128,7 +1133,7 @@ A high-level summary of gradient boosting machines: after an initial model, a ne
 
 For multiclass outcomes, there are, of course, some differences.  First, the multinomial log-likelihood is used and is still equivalent to using cross-entropy (@eq-cross-entropy) regardless of the value of $C$. The probabilities $p_{ik}$ are computed using a standard softmax function on the set of $C$ score values $\mathcal{F}_{i1}, \ldots, \mathcal{F}_{iC}$.
 
-The form of the gradient doesn't change, although it does now have $C$ elements ($g_{ik} = p_{ik} - y_{ik}$) per sample. The Hessian is more complex since the off-diagonals are theoretically non-zero: 
+The form of the gradient doesn't change, although it now has $C$ elements ($g_{ik} = p_{ik} - y_{ik}$) per sample. The Hessian is more complex since the off-diagonals are theoretically non-zero: 
 
 $$
 \frac{\partial^2 \ell_i}{\partial \mathcal{F}_{ik} \, \partial \mathcal{F}_{ik'}} =
@@ -1150,7 +1155,7 @@ p_{i1}(1 - p_{i1}) & -p_{i1} p_{i2} & \cdots & -p_{i1} p_{iC} \\
 \end{bmatrix}
 $$
 
-Since the probabilities must sum to one, there is a built-in linear dependency, and we can't invert the block. Practically speaking, the approximation Hessian is used by once again setting the off-diagonals to zero as before [@friedman2000; @friedman2001]. The true Hessian is not possible here anyway, since the trees for different classes probably have different structures and do not share terminal nodes. Some implementations rescale the diagonal terms (e.g., by $C / (C - 1)$) to partially compensate.
+Since the probabilities must sum to one, there is a built-in linear dependency, and we can't invert the block. Practically speaking, the approximation Hessian is used by once again setting the off-diagonals to zero as before [@friedman2000; @friedman2001]. The true Hessian is not possible here, since the trees for different classes likely have different structures and do not share terminal nodes. Some implementations rescale the diagonal terms (e.g., by $C / (C - 1)$) to partially compensate.
 
 ```{r}
 #| label: boost-helpers
@@ -1267,24 +1272,24 @@ trees_lgb <- actual_trees(forest_lgb_res)
 trees_ctb <- actual_trees(forest_ctb_res)
 ```
 
-Now, let's go into details for the three most popular boosting methods. 
+Now, let's go into detail for the three most popular boosting methods. Like foundational neural networks, our description here is mostly informed by interrogating the source code. While the original scholarship is very helpful, some of the ideas and methods in those papers are less important now, and ongoing updates have steered implementations in different directions.  
 
 #### XGBoost {#sec-cls-xgb}
 
 XGBoost, short for eXtreme Gradient Boosting, is one of the most popular tools for boosted trees [@xgb16] and set the standard for subsequent models. 
 
-To start, XGBoost uses initial scores $\mathcal{F}_{0k}$ that are a function of the observed proportions of each class in the training set. This means that the first tree uses residuals based on constant predictions per class. 
+To start, XGBoost uses initial scores $\mathcal{F}_{0k}$ that are a function of the observed proportions of each class in the training set. This means the first tree uses residuals based on constant class-specific predictions. 
 
 Now let's discuss the particulars for creating the individual trees. In @sec-tree-splitting, we discussed the criterion that XGBoost uses to choose splits. Here, let's first review what happens when building a tree. After this, we'll revisit how the ensemble determines the final predicted values. 
 
 We'll focus on the default tree-building process and bias toward the current implementation^[Approximately circa XGBoost version 3.1.] rather than the original scholarship when they diverge. Regarding the defaults: 
 
-- The regularization parameters described in @sec-tree-splitting use default values of $\lambda_2 = 1$ and $\lambda_1 = 0$. Since $h_i \le 0.25$, $\lambda_2 = 1$ is worth about four rows of the largest possible Hessian. This matters for small nodes and nodes with confident predictions, and very little for large nodes. 
-- A minimum loss reduction requirement can be imposed for all splits, but the default for this parameter is zero, meaning any split with a positive gain is acceptable is acceptable. 
+- The regularization parameters described in @sec-tree-splitting use default values of $\lambda_2 = 1$ and $\lambda_1 = 0$. Since $h_i \le 0.25$, $\lambda_2 = 1$ is worth about four rows of the largest possible Hessian, so $\lambda_2$ matters most for small nodes and nodes with confident predictions, and very little for large nodes. 
+- A minimum loss reduction requirement can be imposed for all splits, but the default for this parameter is zero, meaning any split with a positive gain is acceptable. 
 - XGBoost can institute an $m_{try}$ strategy at different stages, including at each split, over the entire tree training, etc. However, it defaults to evaluating all predictors. 
 - As previously mentioned, _stochastic_ gradient boosting randomly samples the training set for each tree. By default, it uses all samples for tree construction. 
 
-When choosing splits, numeric predictors are discretized into a potentially large number of bins (e.g., 256 by default), effectively constructing a histogram for each predictor. However, this strategy is only used to efficiently choose a single split point (e.g., $x < x_0$) and does not create a split for bin membership ($x_l \le x \le x_u$). The rule uses the bin's smallest predictor value as the split point, which is an observed value. If there are fewer unique values than unique bins, treat each predictor value as its own bin.  For example, the year predictor in the forestation data has 21 distinct values, so there are 21 bins. Recall the "rug" in @fig-tree-splits, which shows the large number of split-point values. Using histograms reduces split-selection time and yields other efficiencies. A parent's histogram is the sum of its two children's histograms. So XGBoost only builds the histogram for the child with fewer rows. The larger child's histogram is the parent's histogram minus the smaller one. As a result, building the histograms for any level of the tree reads at most half of that level's rows.
+When choosing splits, numeric predictors are discretized into a potentially large number of bins (e.g., 256 by default), effectively constructing a histogram for each predictor. However, this strategy is used only to efficiently select a single split point (e.g., $x < x_0$) and does not create a split for bin membership ($x_l \le x \le x_u$). The rule uses the bin's smallest predictor value as the split point, which is an observed value. If there are fewer unique values than unique bins, treat each predictor value as its own bin.  For example, the year predictor in the forestation data has 21 distinct values, so there are 21 bins. Recall the "rug" in @fig-tree-splits, which shows the large number of split-point values. Using histograms reduces split selection time and yields additional efficiency. A parent's histogram is the sum of its two children's histograms. So XGBoost only builds the histogram for the child with fewer rows. The larger child's histogram is the parent's histogram minus the smaller one. As a result, building the histograms for any level of the tree reads at most half of that level's rows.
 
 As a reminder, the potential improvement in the gain is
 
@@ -1292,23 +1297,23 @@ $$
 \psi_{gain} = \frac{G_L^2}{H_L + \lambda_2} + \frac{G_R^2}{H_R + \lambda_2} - \frac{(G_L + G_R)^2}{H_L + H_R + \lambda_2}
 $$
 
-When comparing candidate splits of one node, the parent term is constant, so subtracting it does not change which split is chosen. It matters in two places: when the gain is compared with the minimum loss reduction, and when the loss-guide policy compares gains across different leaves (see below).
+When comparing candidate splits for a given node, the parent term is constant, so subtracting it does not change which split is chosen. It matters in two places: when the gain is compared with the minimum loss reduction, and when the loss-guide policy compares gains across different leaves (see below).
 
 What parameters govern tree depth? The implementation has a potential maximum depth limit (defaulting to 6 levels) but can also prevent splitting by constraining the minimum required loss reduction. While previous tree-based models constrained $n_{min}$, XGBoost constrains $H_{min}$, the sum of Hessian weights required to split. As $H_{min}$ increases, it results in shallower trees, but unlike $n_{min}$, it treats each sample differently. If a predicted probability is very uncertain, it has a much larger Hessian than probability estimates near zero or one; rows with uncertain predictions have much larger Hessians than rows with predictions near zero or one. This means that the splitting process could stop if most of its current sample set has confident predictions. 
 
 As a result, if the model learns the data well, the number of terminal nodes might decrease as more trees are added to the ensemble; predictions should assign the largest values to the true class, and the Hessian values become smaller. Also, the samples with higher-quality probability values will contribute less to the objective function than the most uncertain samples. 
 
-The overall default _tree growing policy_ is to let the tree grow until these constraints halt it, referred to as "depth-wise" growing. We'll discuss other strategies below. By default, XGBoost does not prune the tree after the growth phase, but other policies can.  
+The overall default _tree-growing policy_ is to let the tree grow until these constraints halt it, a policy referred to as "depth-wise" growing. We'll discuss other strategies below. By default, XGBoost does not prune the tree after the growth phase, but other policies can do so.  
 
 An alternative is the _loss-guide_ tree growth policy. It focuses on splitting the node with the largest gain across the entire tree. Instead of splitting within a branch, it considers all current branches and chooses the best across them. This might lead the tree to have many splits along a few branches, resulting in a very unbalanced structure. In this case, the complexity is controlled by constraining the maximum number of terminal nodes. 
 
-Finally, for multiclass problems where $C > 2$, each boosting iteration adds $C$ trees, one per class, all using gradients computed from the same probabilities. 
+Finally, for multiclass problems with $C > 2$, each boosting iteration adds $C$ trees, one per class, all using gradients computed from the same set of probabilities. 
 
 As with C5.0 and neural networks, modern boosting models can use early stopping. After each tree is added, the loss is computed on a held-out validation set. If the loss has not improved on its best value for a pre-specified number of consecutive iterations^[Values between five and ten are usually appropriate.], training stops. This data-driven approach to avoiding overfitting can be very effective and make training more efficient. However, to get realistic loss values, you must set aside a small percentage of the training set as a static internal validation set. Unless the training set is small, this is likely a good approach.
 
-The process for predicting new samples is the same as discussed earlier. For a binary outcome, we determine the terminal node for each tree (@eq-cls-bst-tree-node). These values, along with the base score are summed to create the overall score (@eq-cls-bst-tree-score) that is on the real-line. The final probability applies the logistic function to the scores to get probabilistic predictions. For multiclass outcomes, the softmax function is used to normalize the $C$ probabilities. 
+The process for predicting new samples is the same as discussed earlier. For a binary outcome, we determine the terminal node for each tree (@eq-cls-bst-tree-node). These values, along with the base score, are summed to produce the overall score (@eq-cls-bst-tree-score), which lies on the real line. The final probability applies the logistic function to the scores to get probabilistic predictions. For multiclass outcomes, the softmax function is used to normalize the $C$ probabilities. 
 
-Note that we have a sequence of trees at the end of training. Suppose we were tuning this model over 6 parameters, including the number of trees. Suppose we used a regular grid with $q$ unique values for each tuning parameter, yielding $q^6$ grid points. We could collapse this grid down to $q^5$ candidates by finding the maximum number of trees for each combination of the other parameters. Fitting the largest number of trees for each reduced candidate set would allow us to obtain predictions, for nearly free, for any number of trees less than the maximum. This is the previously discussed submodel trick and is feasible when the grid contains more than one set of tree candidates for the combinations of the other parameters (such as with a regular grid). However, regular grids are needlessly inefficient, and space-filling designs are a better choice. However, an SFD would not have more than one tree value across the other parameters. One option is a hybrid design where an SFD is generated for the non-tree parameters and is crossed with a fuller grid for the number of ensemble members. For example, for 5 parameters we might generate an SFD with 25 candidates, each using 1,000 trees (or some other large number). Once we train each of those 25 models, we can evaluate it over up to 1,000 candidate tree values at very low cost.
+Note that we have a sequence of trees at the end of training. Suppose we were tuning this model over 6 parameters, including the number of trees. Suppose we used a regular grid with $q$ unique values for each tuning parameter, yielding $q^6$ grid points. We could collapse this grid down to $q^5$ candidates by finding the maximum number of trees for each combination of the other parameters. Fitting the largest number of trees for each reduced candidate set would allow us to obtain predictions, for nearly free, for any number of trees less than the maximum. This is the previously discussed submodel trick and is feasible when the grid contains more than one set of tree candidates for combinations of the other parameters (as with a regular grid). However, regular grids are needlessly inefficient, and space-filling designs are a better choice. However, an SFD would not have more than one tree value across the other parameters. One option is a hybrid design in which an SFD is generated for the non-tree parameters and then crossed with a fuller grid for the number of ensemble members. For example, for 5 parameters we might generate an SFD with 25 candidates, each using 1,000 trees (or some other large number). Once we train each of those 25 models, we can evaluate it over up to 1,000 candidate tree values at very low cost.
 
 Overall, early stopping is a better choice for efficiency.  
 
@@ -1321,7 +1326,7 @@ For tuning, there are a large number of tuning parameters:
 - The learning rate. 
 - The percentage of training set points used to train each tree (for SGB)
 
-as well as other more niche options. Based on experience, the learning rate and $H_{min}$ are probably the most important. While much has been written about tuning these models, the difficulty is fairly low. In a moderately sized grid, perhaps 25 candidates, there is a high likelihood of finding parameters that are close to optimal. From there, fine-tuning via Bayesian optimization or simulated annealing might help with marginal gains. While not as easy to develop as random forests, boosted trees tend not to be difficult to optimize.
+as well as other more niche options. Based on experience, the learning rate and $H_{min}$ are probably the most important. While much has been written about tuning these models, the difficulty is fairly low. In a moderately sized grid, perhaps 25 candidates, there is a high likelihood of finding parameters that are close to optimal. From there, fine-tuning via Bayesian optimization or simulated annealing might help with marginal gains. While not as easy to develop as random forests, boosted trees are generally not difficult to optimize.
 
 To apply this model to the forestation data, a maximum of `r trees_xgb$max_trees` trees were fit for the ensemble, with early stopping occurring after 5 bad iterations. A random 10% of the training set was used to evaluate the stopping rule. The tuning parameters and their ranges were:  
 
@@ -1375,13 +1380,13 @@ forest_xgb_res |>
 marginal_boost_plot(forest_xgb_res)
 ```
 
-Did models stop early after 5 iterations of poor validation set results? Of the `r trees_xgb$num_models` that were evaluated, the average number of trees in the ensemble was `r trees_xgb$num_members` (out of a maximum of `r trees_xgb$max_trees`), with `r trees_xgb$early`% of the models finishing early. 
+Did the models stop early after 5 iterations of poor validation set results? Of the `r trees_xgb$num_models` that were evaluated, the average number of trees in the ensemble was `r trees_xgb$num_members` (out of a maximum of `r trees_xgb$max_trees`), with `r trees_xgb$early`% of the models finishing early. 
 
 In the end, the best candidate used $H_{min} = `r forest_xgb_best$min_n`$, a depth of `r forest_xgb_best$tree_depth`, `r forest_xgb_best$mtry` features selected at random for each split, a learning rate of 10<sup>`r fmt(log10(forest_xgb_best$learn_rate))`</sup>, along with L<sub>1</sub> and L<sub>2</sub>, penalties of `r fmt(forest_xgb_best$alpha)` and `r fmt(forest_xgb_best$lambda)`, respectively. 
 
 #### LightGBM {#sec-cls-lgb}
 
-The LightGBM model of @lgb17 is fairly similar to XGBoost but there are a few important differences. First, for binary classification problems, the score function uses a sigmoid scaling parameter $\sigma$, which defaults to 1.00. LightGBM codes the binary outcome as $\tilde{y}_i = \pm 1$  so the gradient and Hessian are
+The LightGBM model of @lgb17 is fairly similar to XGBoost, but there are a few important differences. First, for binary classification problems, the score function uses a sigmoid scaling parameter $\sigma$, which defaults to 1.00. LightGBM codes the binary outcome as $\tilde{y}_i = \pm 1$  so the gradient and Hessian are
 
 $$
 g_i = \frac{-\tilde{y}_i \sigma}{1 + e^{\tilde{y}_i \sigma \mathcal{F}_i}}
@@ -1409,7 +1414,7 @@ $$
 \mathcal{F}_0 = \frac{1}{\sigma} \operatorname{logit}(\bar{y})
 $$
 
-However, after the first tree is grown, $\mathcal{F}_0$ is added to every one of its leaf values. That model's prediction is then just the sum of leaf values.
+However, after the first tree is grown, $\mathcal{F}_0$ is added to every one of its leaf values. That model's prediction is simply the sum of the leaf values.
 
 There are some other differences with XGBoost in the tree construction phase. First, the binning process adds another constraint: the minimum number of samples per bin (defaulting to 3). When the value is less than 3, that bin is shared with its neighbors.  Also, predictor values of zero are given their own bin with very small bin widths. Each category of a categorical predictor gets its own bin. While XGBoost uses the smallest value of the bin as the split point, LightGBM uses the midpoint of the bin limits. 
 
@@ -1418,11 +1423,11 @@ For growing trees, LightGBM defaults to the _loss-guide_ approach (called _leaf-
 1. Start with all rows in one leaf.
 2. Evaluate any leaf that is new by finding its best split variable and split point
 3. Select the split (out of all current leaves) with the largest gain to grow the tree. 
-4. Repeat until a predefined limit on the number of leaves is net (without a constraint on the depth of the tree). 
+4. Repeat until a predefined limit on the number of leaves is met (without a constraint on the depth of the tree). 
 
-By default, the limit on the number of leaves in each tree is 31. Also, each leaf must also contain at least 20 rows (a.k.a., $n_{min}$). Since the histograms store only gradient and Hessian sums, this count is estimated from the leaf's share of the Hessian, so leaves with confident predictions count as fewer rows. Trees therefore usually, but not always, reach 31 leaves.
+By default, the limit on the number of leaves in each tree is 31. Also, each leaf must contain at least 20 rows (a.k.a., $n_{min}$). Since the histograms store only gradient and Hessian sums, this count is estimated from the leaf's share of the Hessian, so leaves with confident predictions count as fewer rows. Trees therefore usually, but not always, reach 31 leaves when the defaults are used.
 
-Most of the statistics for gain computations and splitting criteria are consistent with XGBoost, with a few minor exceptions described in the previous chapter. For example, the overall gain formula is the same. LightGBM can also use the number of trees via submodels, and early stopping operates in the same way as XGBoost. For regularization, LightGBM uses neither L<sub>1</sub> nor L<sub>2</sub> as a default. 
+Most of the statistics for gain computations and splitting criteria are consistent with XGBoost, with a few minor exceptions described in the previous chapter. For example, the overall gain formula is the same. LightGBM can also use the number of trees via submodels, and early stopping works the same way as in XGBoost. For regularization, LightGBM uses neither L<sub>1</sub> nor L<sub>2</sub> as a default. 
 
 For tuning LightGBM, we used a grid of 25 candidates generated from a space-filling design with ranges: 
 
@@ -1474,13 +1479,13 @@ The previous XGBoost strategy was used to determine the number of trees. For Lig
 marginal_boost_plot(forest_lgb_res)
 ```
 
-The results show small performance improvements with larger values of $m_{try}$ and the number of leaves. The learning rate indicates a middle region of good performance with the extremes of the range resulting in large Brier scores (for this model). Neither penalty appears to affect performance for these data. The smallest Brier score corresponded to a candidate with $m_{try} = `r forest_lgb_best$mtry`$, $n_{min} = `r forest_lgb_best$min_n`$, `r forest_lgb_best$max_leaves` leaves per tree, a learning rate of 10<sup>`r fmt(log10(forest_lgb_best$learn_rate), digits = 2)`</sup>, L<sub>1</sub> = 10<sup>`r fmt(log10(forest_lgb_best$lambda_l1), digits = 2)`</sup>, and  L<sub>2</sub> = 10<sup>`r fmt(log10(forest_lgb_best$lambda_l2 ), digits = 2)`</sup>. 
+The results show small performance improvements as $m_{try}$ and the number of leaves increase. The learning rate indicates a middle region of good performance, with the extremes of the range resulting in large Brier scores (for this model). Neither penalty appears to affect performance for these data. The smallest Brier score corresponded to a candidate with $m_{try} = `r forest_lgb_best$mtry`$, $n_{min} = `r forest_lgb_best$min_n`$, `r forest_lgb_best$max_leaves` leaves per tree, a learning rate of 10<sup>`r fmt(log10(forest_lgb_best$learn_rate), digits = 2)`</sup>, L<sub>1</sub> = 10<sup>`r fmt(log10(forest_lgb_best$lambda_l1), digits = 2)`</sup>, and  L<sub>2</sub> = 10<sup>`r fmt(log10(forest_lgb_best$lambda_l2 ), digits = 2)`</sup>. 
 
 #### CatBoost {#sec-cls-ctb}
 
 While there are strong resemblances between XGBoost and LightGBM, CatBoost [@cat18] is fairly dissimilar from them. As described in the previous chapter, CatBoost uses a distinct splitting statistic and a regularized target-encoding approach for categorical predictors. 
 
-The tree creation algorithm is also considerably different in several ways. For example, the initial score $\mathcal{F}_0$ is set to zero so that the baseline probability is 0.5. There is a non-standard option to initialize the ensemble based on the event rates see in the training set. 
+The tree creation algorithm is also considerably different in several ways. For example, the initial score $\mathcal{F}_0$ is set to zero so that the baseline probability is 0.5. There is a non-standard option to initialize the ensemble using the event rates observed in the training set. 
 
 CatBoost creates a single tree per iteration and stores all $C$ terminal node weights, as CART, C5.0, and other trees do.
 
@@ -1544,7 +1549,7 @@ $$
 \sigma_t = \omega\, \sqrt{\frac{1}{n}\sum_{i=1}^n g_i^2} \cdot \frac{n\, e^{-\alpha (t-1)}}{1 + n\, e^{-\alpha (t-1)}}
 $$
 
-where $t$ is the tree number, $\alpha$ is the learning rate, and  $\omega$ is a potential tuning parameter (defaulted to 1.0). For a fixed gradient sum, this is a sigmoidal logistic function that will decrease over boosting iterations and becomes almost deterministic when the numerator $n\, e^{-\alpha (t-1)}$ approaches zero. Using $\omega = 0$ will make the score deterministic. Like $m_{try}$, the added randomness is meant to encourage slightly suboptimal splits to produce diverse trees for the collection. 
+where $t$ is the tree number, $\alpha$ is the learning rate, and  $\omega$ is a potential tuning parameter (defaulted to 1.0). For a fixed gradient sum, this is a sigmoidal logistic function that will decrease over boosting iterations and becomes almost deterministic when the numerator $n\, e^{-\alpha (t-1)}$ approaches zero. Setting $\omega = 0$ makes the score deterministic. Like $m_{try}$, the added randomness is meant to encourage slightly suboptimal splits to produce diverse trees for the collection. 
 
 CatBoost also uses an iterative method to estimate the terminal node weights in the tree. For ensembles with fewer than $T < 200$ trees, gradient-based optimization Newton's Method) is used to estimate the nodes. For terminal node $ell$ for a binary outcome: 
 
@@ -1554,7 +1559,7 @@ $$
 
 where $\lambda_2$ is once again an L<sub>2</sub> penalty (with a default of 3). By default, 10 iterations of this process are performed with starting values $w_\ell = 0$. Recall that the weights are on the real line and behave like logits. The previous equation (@eq-xgboost-estimate) for the other boosting methods corresponds to a single step. 
 
-Once the ensemble is created, prediction follows the same pattern: the scores are summed and then converted into probabilities using either the logistic function (for binary problems) or softmax (for multiclass). 
+Once the ensemble is created, prediction follows the same pattern: the scores are summed and then converted into probabilities using either the logistic function (for binary problems) or the softmax function (for multiclass problems). 
 
 To predict forestation, the model was tuned over:
 
@@ -1602,11 +1607,11 @@ Each ensemble contained a maximum of `r trees_ctb$max_trees` trees but monitored
 #| out-width: 100%
 #| fig-width: 10
 #| fig-height: 5
-#| fig-cap: "Tuning results for CatBoost The panel on the right reflects the average number of terminal nodes in the ensemble for different tuning parameter candidates."
+#| fig-cap: "Tuning results for CatBoost. The panel on the right reflects the average number of terminal nodes in the ensemble for different tuning parameter candidates."
 marginal_boost_plot(forest_ctb_res)
 ```
 
-The numerically best settings used $m_{try} = `r forest_ctb_best$mtry`$ (which translates to `r ceiling(forest_ctb_best$mtry * (ncol(forested_train) - 1))` predictors), a $\lambda_2$ value of 10<sup>`r fmt(log10(forest_ctb_best$l2_leaf_reg), digits = 2)`</sup>, a tree depth of `r forest_ctb_best$tree_depth`, and a learning rate of 10<sup>`r fmt(log10(forest_ctb_best$learn_rate), digits = 2)`</sup>. Across the candidates, `r trees_ctb$early`% triggered early stopping and the average number of trees in the enselmble was `r trees_ctb$num_members`. 
+The numerically best settings used $m_{try} = `r forest_ctb_best$mtry`$ (which translates to `r ceiling(forest_ctb_best$mtry * (ncol(forested_train) - 1))` predictors), a $\lambda_2$ value of 10<sup>`r fmt(log10(forest_ctb_best$l2_leaf_reg), digits = 2)`</sup>, a tree depth of `r forest_ctb_best$tree_depth`, and a learning rate of 10<sup>`r fmt(log10(forest_ctb_best$learn_rate), digits = 2)`</sup>. Across the candidates, `r trees_ctb$early`% triggered early stopping, and the average number of trees in the ensemble was `r trees_ctb$num_members`. 
 
 #### Comparisons {#sec-cls-boost-compare}
 
@@ -1631,7 +1636,7 @@ A concise comparison of the default methodologies for three modern boosting mode
 
 :::
 
-This table highlights the similarities between XGBoost and LightGBM and their differences from CatBoost. 
+This table highlights the similarities between XGBoost and LightGBM, as well as their differences from CatBoost. 
 
 ## Rule-Based Ensembles {#sec-cls-rule-ensembles}
 
@@ -1698,7 +1703,7 @@ forest_c5rules_res |>
 #| out-width: 90%
 #| fig-width: 10
 #| fig-height: 6
-#| fig-cap: "Tuning results for RuleFit The panel on the right reflects the average number of terminal nodes in the ensemble for different tuning parameter candidates."
+#| fig-cap: "Tuning results for RuleFit. The panel on the right reflects the average number of terminal nodes in the ensemble for different tuning parameter candidates."
 # fmt: skip
 xrf_ord <- 
   c("Mtry", "Minimal Node Size", 
@@ -1867,7 +1872,7 @@ ensemble_best_brier <- round(
 )
 ```
 
-How well do these models perform relative to previously discussed techniques?  @fig-cls-ensemble-compare visualizes the Brier score results across models. The Bayesian methods in @sec-compare-resample-bayes were used to estimate the probability distributions for each of the best candidates for each model. The intervals show the 0.05, 0.50, and 0.95 quantiles. Currently, the `r ensemble_best` model has the smallest Brier score with a Bayesian point estimate of `r ensemble_best_brier`.
+How well do these models perform relative to previously discussed techniques?  @fig-cls-ensemble-compare visualizes the Brier score results across models. The Bayesian methods in @sec-compare-resample-bayes were used to estimate the probability distributions for the best candidates of each model. The intervals show the 0.05, 0.50, and 0.95 quantiles. Currently, the `r ensemble_best` model has the smallest Brier score with a Bayesian point estimate of `r ensemble_best_brier`.
 
 ```{r}
 #| label: fig-cls-ensemble-compare
