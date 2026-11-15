@@ -62,6 +62,33 @@ load("../RData/forest_lightgbm.RData")
 load("../RData/forest_catboost.RData")
 load("../RData/forest_xrf.RData")
 
+load("../RData/forest_logistic_set_res.Rdata")
+load("../RData/forest_glmnet_set_res.Rdata")
+load("../RData/forest_linear_res.Rdata")
+
+load("../RData/forest_fda_set_res.Rdata")
+load("../RData/forest_knn_set_res.Rdata")
+
+load("../RData/forest_mlp_set_res.Rdata")
+load("../RData/forest_autoint_set_res.Rdata")
+load("../RData/forest_saint_set_res.Rdata")
+load("../RData/forest_tabpfn_set_res.Rdata")
+load("../RData/forest_tabicl_set_res.Rdata")
+
+load("../RData/forest_cart_set_res.RData")
+load("../RData/forest_c5_set_res.RData")
+load("../RData/forest_cit_set_res.RData")
+load("../RData/forested_obl_set_res.RData")
+load("../RData/forest_c5rules_set_res.RData")
+
+load("../RData/c5_weights.RData")
+
+best_cart <- 
+  forest_cart_set_res$result[[1]] |> 
+  show_best(n = 1, metric = "brier_class") |> 
+  pluck("mean") |> 
+  signif(digits = 3)
+
 # ------------------------------------------------------------------------------
 
 cls_mtr <- metric_set(brier_class, roc_auc, pr_auc, mn_log_loss)
@@ -169,6 +196,21 @@ bag_res <-
     param_info = bag_param,
     control = control_grid(extract = extr_term_nodes)
   )
+
+set.seed(8262)
+bag_default_res <-
+  workflow(
+    class ~ .,
+    bag_tree(mode = "classification") |>
+      set_engine("rpart", times = 50)
+  ) |>
+  fit_resamples(resamples = forested_rs)
+
+best_bag <- 
+  bag_default_res |> 
+  show_best(n = 1, metric = "brier_class") |> 
+  pluck("mean") |> 
+  signif(digits = 3)
 ```
 
 To demonstrate, we used the forestation data to create bagged CART ensembles with a range of tuning parameter values to examine how tree complexity affects performance. A variety of bagged trees with 50 members, $\lambda \in [10^{-10}, 10^{-1}]$ and $n_{min} \in [1, 100]$ were resampled^[Where $\lambda$ is the cost-complexity parameter from @eq-cost-complexity.]. The figure shows results in which complexity was measured by the average number of terminal nodes within the ensemble. Clearly, simple (i.e., shallow) trees make poor ensembles. As we increase model complexity, performance improves rapidly before plateauing at low Brier scores. This was not a tuning exercise; we generally don't tune these models. This analysis shows that, in ensembles, maximum complexity equates to prediction diversity, which drives predictive performance. CITE PERFORMANCE for main model versus individual trees
@@ -201,6 +243,8 @@ bag_res |>
   scale_x_log10() +
   labs(y = "Brier Class", x = "Mean # Terminal Nodes per Tree")
 ```
+
+As evidence of how much it improves the decision trees, the best CART model had an estimated Brier score of `r best_cart`, and bagging with the default parameters reduced the Brier score to `r best_bag`.
 
 Do other models benefit from being combined in a bagged ensemble? Neural networks for small to medium training sets are fairly unstable. Perturbing the data _and the random seed_ can generate different models and predictions. $K$-nearest neighbors are also very unstable. However, training them with a bagged tree may not be a good idea since a bootstrapped training set contains 2 or more replicated training samples. For $K < 10$, it may not be difficult to produce neighbors that are themselves (resulting in zero error). MARS/FDA models are slightly unstable. In our experience, adaptive regression splines yield more diverse split points when the underlying trend is nonlinear. For example, if a predictor and the outcome have a quadratic relationship, bagging produces similar models with split points that cluster where the derivative is near zero (e.g., the vertex of the parabola). Bagging these models can slightly improve performance. 
 
@@ -325,7 +369,7 @@ forest_ert_mtr_ex <-
   cls_mtr(class, estimate = .pred_class, .pred_Yes)
 ```
 
-Canonically, this model is the same as a bagging ensemble, with one additional feature designed to make its constituent trees more diverse [@breiman2001random]. Recall that most decision trees are _greedy_ since they choose the best predictor and split point that has the best result at the current location in the tree. They focus on the choice that matters most at that specific point. 
+Canonically, this model is the same as a bagging ensemble, with one additional feature designed to make its constituent trees more diverse [@breiman2001random]. Recall that most decision trees are _greedy_ since they choose the best predictor and split point that has the best result at the current location in the tree. They focus on the choice that matters most at that specific moment. 
 
 Random forests include an integer tuning parameter commonly called $m_{try}$: at each split point in each tree, the model considers only a random subset of $m_{try}$  predictors as the split variable. This significantly influences the makeup of the trees since the best possible decision may not be possible. It is likely suboptimal and might very well be detrimental to the tree _at that stage_. However, from the ensemble's perspective, the trees are good enough to use and become less correlated with one another, promoting additional tree diversity. In the end, using $m_{try}$ usually improves the model's efficacy. 
 
@@ -530,7 +574,7 @@ p_extra <-
 
 However, using $m_{try}$ has a few downsides. First, to ensure informative predictors have enough opportunities to be considered in the split, we have to drastically increase the number of trees in the ensemble. At a minimum, 500 trees are needed, but 1,000 to 2,000 are recommended for a reliable model. The second downside is that it somewhat compromises random forests' ability to perform automatic feature selection. Many uninformative predictors will be selected for a split. Fortunately, random forests pioneered the use of permutation importance, which we discuss in @sec-importance. The original software (and most implementations) use a default value of $m_{try} = \sqrt{p}$ for classification, where $p$ is the number of predictors. 
 
-For the forestation data, a random forest model was optimized over $m_{try}$ for all 16 possible values. Each ensemble consisted of 1,000 trees. The results are shown in @fig-forest-rf along with some variants of the model that will be discussed below. We can see a noticeable trend in $m_{try}$ for this model, resulting in an optimal value of $m_{try} = `r forest_rngr_best$mtry[1]`$. However, the y-axis shows that the range of possible results is extremely narrow. Almost any of these values would be suitable. This is quite often the pattern that we see for this model. 
+For the forestation data, a random forest model was optimized over $m_{try}$ for all 16 possible values. Each ensemble consisted of 1,000 trees. The results are shown in @fig-forest-rf along with some variants of the model that will be discussed below. We can see a noticeable trend in $m_{try}$ for this model, resulting in an optimal value of $m_{try} = `r forest_rngr_best$mtry[1]`$. However, the y-axis shows that the range of possible results is extremely narrow. Almost any of these values would be suitable. This is quite often the pattern that we see for this model. We can see that $m_{try}$ has some effect: the best Brier score for this model was `r forest_rngr_mtr_ex$.estimate |> min() |> signif(digits = 3)` compared to the bagged tree's Brier score of `r best_bag`. This decrease is substantially less than the drop between a single tree and a bagged ensemble. 
 
 ```{r}
 #| label: forest-rf-mtry
@@ -594,7 +638,7 @@ rf_all_mtr |>
 
 This robustness to tuning parameters reflects how low-maintenance random forest models are overall. They require very little tuning, need no variable transformations, can leave categorical predictors as-is, and, depending on the implementation, can naturally handle missing data. On average, they rank in the top 10% of models (in terms of performance) and, although they probably aren't uniformly optimal, they can produce a high-quality model with little effort.  @fernandez2014we conducted a comprehensive comparison of various ML models across a variety of datasets. In these comparisons, the random forest achieved the highest accuracy in more than 90% of cases. Keep in mind that this was before modern boosting models or foundational neural networks arrived. Despite this, a random forest model has few requirements and is fast to train; it is a fast way to achieve a potential win.
 
-As one would expect with such a popular model, there have been a multitude of other extensions and enhancements to the standard model. For example, there are also variations of this model for ordinal outcomes [@janitza2016random;@hornung2020ordinal]. Also, there are direct analogs to different single-tree methods described in the previous chapter. For example, instead of CART models, conditional inference trees [@hothorn2006unbiased] can be used as constituents of the ensemble. This offers some improvements, especially if you want to reduce bias in split selection. As will be described in a later chapter, random forests are a primary tool for assessing the importance of predictors to the outcome. Random forest variable importance methods are not perfect, but using conditional inference trees makes them more accurate because the model is not predisposed to select predictors based on how many unique values they contain. For comparison, we also tuned this approach over $m_{try}$. The available implementation is limited to categorical predictors with fewer than 24 splits, so an effect encoding preprocesser was used on the county predictor. 
+As one would expect with such a popular model, there have been a multitude of other extensions and enhancements to the standard model. For example, there are also variations of this model for ordinal outcomes [@janitza2016random;@hornung2020ordinal]. Also, there are direct analogs to different single-tree methods described in the previous chapter. For example, instead of CART models, conditional inference trees [@hothorn2006unbiased] can be used as constituents of the ensemble. This offers some improvements, especially if you want to reduce bias in split selection. As will be described in a later chapter, random forests are a primary tool for assessing the importance of predictors to the outcome. Random forest variable importance methods are not perfect, but using conditional inference trees makes them more accurate because the model is not predisposed to select predictors based on how many unique values they contain. For comparison, we also tuned this approach over $m_{try}$. The available implementation is limited to categorical predictors with fewer than 24 splits, so an effect encoding preprocesser was used on the county predictor (for this model only). 
 
 @fig-forest-rf shows that, for these data, the conditional inference forest results are slightly worse than the CART ensemble but are most likely practically equivalent. In this case, $m_{try} = `r forest_crf_best$mtry[1]`$ was found to be optimal. 
 
@@ -677,9 +721,9 @@ forest_bart_mtr_ex <-
   cls_mtr(class, estimate = .pred_class, .pred_Yes)
 ```
 
-Bayesian additive regression trees (BART) model the outcome with a sum of many small trees [@bart2010;@chipman2006bayesian]. We place prior distributions on each tree's structure, on its leaf parameters, and on the amount of shrinkage. While the model is more complex, the general process mirrors the one described in @sec-logistic-bayes. 
+Bayesian additive regression trees (BART) model the outcome with a sum of many small trees [@bart2010;@chipman2006bayesian]. We place prior distributions on each tree's structure, on its leaf parameters, and on the amount of shrinkage. While the model is more complex, the general estimation process mirrors the MCMC procedure described in @sec-logistic-bayes. 
 
-To estimate the model, we use MCMC to sample from the model's posterior distribution. Each MCMC iteration updates each tree in turn, yielding a complete ensemble. After the chains converge to the posterior, we can sample from it to create a set of trees that define the ensemble. 
+To estimate the model, we use MCMC to sample from the model's posterior distribution. Each MCMC iteration updates each tree in turn, yielding a complete ensemble. After the chains converge to the posterior, we can sample from it to create a fixed set of trees that define the ensemble. 
 
 To start, let's denote a specific tree as $\mathcal{T}$ (as in the previous chapter) and parameters associated with its terminal nodes as $\Theta$. These parameters are not the probability estimates; they are on the real line and are similar to linear predictor values. 
 
@@ -771,10 +815,10 @@ There are also uniform priors for selecting the predictor and the split point (b
 What about the terminal node parameters? The individual values are assumed to be Gaussian $\theta_i \sim N\big(0, \sigma_\theta^2\big)$. The corresponding standard deviation is 
 
 $$
-\sigma_\theta = \frac{\kappa}{k\sqrt{T}}. 
+\sigma_\theta = \frac{\kappa_1}{\kappa_2\sqrt{T}}. 
 $$
 
-$\kappa$ is a scaling factor that specifies the usable probit range to effectively be $\pm \kappa$. Its default is 3.0. The parameter $k$ helps modulate how many prior standard deviations $\mathcal{F}$ stays inside that range defined by $\kappa$. $k$ can shrink or expand the prior variance in the denominator, allowing more (or fewer) extreme probabilities to be plausible. 
+$\kappa_1$ is a scaling factor that specifies the usable probit range to effectively be $\pm \kappa_1$. Its default is 3.0. The parameter $\kappa_2$ helps modulate how many prior standard deviations $\mathcal{F}$ stays inside that range defined by $\kappa_1$. $\kappa_2$ can shrink or expand the prior variance in the denominator, allowing more (or fewer) extreme probabilities to be plausible. 
 
 The MCMC process for BART is somewhat more complex than the algorithm previously demonstrated for logistic regression. If we run the MCMC chain for $B$ iterations, we will actually make $B\times T$ accept/reject decisions. Each tree in the ensemble goes through the process, rather than one proposal for the whole ensemble. For each tree, these steps are executed: 
 
@@ -810,7 +854,7 @@ The steps 3 and 5 in the MCMC process for individual trees are more conventional
 
 We sample the priors for hundreds (or thousands) of iterations. If we believe that the process has converged, we generate our final set of $T$ trees for the ensemble. 
 
-To demonstrate, a BART model was tuned over $\alpha$ and $\beta$ from @eq-bart-depth-prior as well as the $k$ value in $\sigma_\theta$. The model specification used $T$ = 100, required 1,000 warm-up iterations, and retained every 10 pulls from the posterior distribution. The implementation required converting the categorical predictor to indicator variables before model training. @fig-forest-bart shows how the tuning parameters relate to the Brier score. A panel also shows the average number of terminal nodes produced within each tree. The $\alpha$ parameter performed better when close to its upper range, consistent with the parameter's default value ($\alpha$). The exponent ($\beta$) showed little signal for these data. The $k$ multiplier parameter had a strong effect, with larger values associated with worse performance. The final panel shows that more terminal nodes were better (as a consequence of the depth parameters). 
+To demonstrate, a BART model was tuned over $\alpha$ and $\beta$ from @eq-bart-depth-prior as well as the $\kappa_2$ value in $\sigma_\theta$. The model specification used $T$ = 100, 1,000 warm-up iterations, and retained every 10 pulls from the posterior distribution. The implementation required converting the categorical predictor to indicator variables before model training. @fig-forest-bart shows how the tuning parameters relate to the Brier score. A panel also shows the average number of terminal nodes produced within each tree. The $\alpha$ parameter performed better when close to its upper range, consistent with the parameter's default value ($\alpha$). The exponent ($\beta$) showed little signal for these data. The $\kappa_2$ multiplier parameter had a strong effect, with larger values associated with worse performance. The final panel shows that more terminal nodes were better (as a consequence of the depth parameters). 
 
 ```{r}
 #| label: fig-forest-bart
@@ -869,13 +913,13 @@ forest_bart_res |>
   scale_color_manual(values = c("#BE3428FF", "black"))
 ```
 
-In the end, the chosen parameter candidates were $\alpha$ = `r round(forest_bart_best$prior_terminal_node_coef, 2)`, $\beta$ = `r round(forest_bart_best$prior_terminal_node_expo, 2)`, and $k = `r round(forest_bart_best$prior_outcome_range, 2)`$ with a corresponding Brier score was `r round(forest_bart_mtr_ex$.estimate[forest_bart_mtr_ex$.metric == "brier_class"], 3)`.
+In the end, the chosen parameter candidates were $\alpha$ = `r round(forest_bart_best$prior_terminal_node_coef, 2)`, $\beta$ = `r round(forest_bart_best$prior_terminal_node_expo, 2)`, and $\kappa_2 = `r round(forest_bart_best$prior_outcome_range, 2)`$ with a corresponding Brier score was `r round(forest_bart_mtr_ex$.estimate[forest_bart_mtr_ex$.metric == "brier_class"], 3)`.
 
 ## Boosting {#sec-cls-boosting}
 
 Boosted trees are ensembles of decision trees created sequentially, with each new member reacting to what occurred in the previous tree(s). The tree ensembles discussed so far create a collection of independent trees. Boosting, by contrast, is an iterative process. 
 
-The boosting model that we think of today is an evolution of an idea that started in the 1980's. @valiant1984 described machine learning models within a theoretical framework for "weak" and "strong" learners, depending on whether they could reach an arbitrarily small error rate. A weak learner was considered barely better than random guessing. @kearns1988 posed the question, "Can we convert a weak learner to a strong one?" and coined the term "boosting." @schapire1990 showed the equivalence of strong and weak learnability and outlined a general algorithm in which a sequence of (binary) classifiers can compensate for the shortcomings of previous models. @freund1995 produced a more specific framework where the collection of models predicted via a majority vote rule, and drucker1993 showed an application of boosting with neural networks. 
+The boosting model that we think of today is an evolution of an idea that started in the 1980's. @valiant1984 described machine learning models within a theoretical framework for "weak" and "strong" learners, depending on whether they could reach an arbitrarily small error rate. A weak learner was considered barely better than random guessing. @kearns1988 posed the question, "Can we convert a weak learner to a strong one?" and coined the term "boosting." @schapire1990 showed the equivalence of strong and weak learnability and outlined a general algorithm in which a sequence of (binary) classifiers can compensate for the shortcomings of previous models. @freund1995 produced a more specific framework where the collection of models predicted via a majority vote rule, and @drucker1993 showed an application of boosting with neural networks. 
 
 The first landmark boosting algorithm was the AdaBoost model of @freundschapire1997. This model used a case-weighting system that helped each learner emphasize training-set points that previous models had poorly predicted (i.e., difficult points received larger weights in the next model). Each tree in the ensemble had a corresponding stage weight based on its current error rate. The final prediction was a weighted average of each model's predictions, using the stage weight as the weight. It also used an exponential loss function. At this point, the algorithm was constrained to binary classification and produced only hard-class predictions. In @freundschapire1996, C4.5 classifiers were used as the weak learner. 
 
@@ -893,7 +937,7 @@ The next leap forward was @friedman2002. Influenced by bagging, Friedman defined
 
 While some small improvements have been made, fundamentally modern boosting models are implementations of stochastic gradient boosting (or can use it). The current slate of top-performing models (XGBoost, LightGBM, and CatBoost) build on this framework. All three can subsample rows, although only CatBoost does so by default. Much of their improvement is engineering, but there are methodological changes too: XGBoost and LightGBM use second derivatives to choose splits, and CatBoost has its own approach to categorical predictors. 
 
-Modern boosting methods do not use sample reweighting to create ensemble members. Although AdaBoost has not persisted as a commonly used method, one sample-weighting method has. C5.0 is a modern successor to Quinlan's C4.5 model. Let's discuss this method before diving into other techniques. 
+Modern boosting methods do not use sample reweighting to create ensemble members. Although AdaBoost has not persisted as a commonly used method, one similar method has. C5.0 is a modern successor to Quinlan's C4.5 model. Let's discuss this method before diving into other techniques. 
 
 ### Classical Boosting {#sec-cls-classic-boosting}
 
@@ -901,7 +945,9 @@ C5.0 has several minor differences from its predecessor and also enables boostin
 
 So far, we have not discussed **case weights**. These values, associated with each training set sample, often measure how much influence a specific data point should have on computations such as the model's objective function. A wide variety of case weights can be used across different phases (e.g., training, model assessment). For example, frequency weights are integer values that indicate how often a specific data vector occurs. For example, if the forestation included only the county predictor, we could reduce the training set to `r length(levels(forested_train$county))` rows (one per county) and assign a corresponding frequency weight based on how often each county occurs.  
 
-Our focus here is on importance weights, which are general non-negative values used during model training. Most of our models can already accommodate case weights during computations. We define the training set case weights as $w_i$ ($i=1\ldots n_{tr}$), initialized to 1.0 (unless the user overrides this default), and fit the first tree in the ensemble with each training set sample having the same influence on the model.  After this fit, the number of leaves in this tree is used to limit the depth of future trees, making all trees about the same size. 
+Our focus here is on importance weights, which are general non-negative values used during model training. Most of our models can already accommodate case weights during computations. We define the training set case weights as $w_i$ ($i=1\ldots n_{tr}$), initialized to 1.0 (unless the user overrides this default), and fit the first tree in the C5.0 ensemble with each training set sample having the same influence on the model.  
+
+After this fit, the number of leaves in this tree is used to limit the depth of future trees, making all trees about the same size. 
 
 After training tree $\mathcal{T}_t$ of $T$ in the ensemble, the current tree classifies the entire training set. This is also when C5.0 conducts its futility analysis to determine which (if any) points to exclude. We'll denote the number of available training set points at iteration $t$ by $n_{(t)}$. 
 
@@ -931,7 +977,25 @@ w_i^{(t+1)} =
 \end{cases}
 $$
 
-$a^{(t)}$ represents how much each correctly classified sample shrinks and $b^{(t)}$ is the additional weight that incorrect samples recieve. The factor $\nu^{(t)}$ makes the active weights sum to $n_{(t)}$.
+$a^{(t)}$ represents how much each correctly classified sample shrinks and $b^{(t)}$ is the additional weight that incorrect samples recieve. The factor $\nu^{(t)}$ makes the active weights sum to $n_{(t)}$. @fig-c5-weights shows an example for a sample that is, in the end, confidently predicted correctly with a probability of forestation close to 95%. 
+
+```{r}
+#| label: fig-c5-weights
+#| echo: false
+#| out-width: 80%
+#| fig-width: 7
+#| fig-height: 3.5
+#| fig-cap: "An example from the forestation data to illustrate how C5.0's case weighting scheme adjusts over boosting iterations."
+
+c5_weights |>
+  ggplot(aes(trial, weight)) +
+  geom_line(alpha = 1 / 6) +
+  geom_point(cex = 1, aes(col = Prediction)) +
+  scale_color_manual(values = c("black", "#95C65CFF", "#BE3428FF")) +
+  labs(x = "Boosting Iteration", y = "Case Weight")
+```
+
+This figure shows that the weights decay to zero as more iterations correctly predict the sample. However, once a single incomplete iteration is encountered, the weights increase quickly and drastically. 
 
 To make the final ensemble prediction, C5.0 uses the sum of the weights for class $k$ in terminal node $\ell$ for tree $t$ ($n_{\ell k}^{(t)}$) as well as the total weights over classes ($n_{\ell}^{(t)}$). They also use the observed class prevalences from the training set ($p_k$). The hard class prediction is determined by finding the largest value for the node that the new sample lands in (denoted as $\ell$ here): 
 
@@ -954,6 +1018,8 @@ $$
 $$
 
 The weighted votes give greater weight to trees with the highest confidence values. 
+
+TODO: show how weighs change over time
 
 ```{r}
 #| label: fig-forest-c5-boost
@@ -1033,13 +1099,15 @@ $$
 f_t(\boldsymbol{x}) = \sum_{k=1}^{K_t} w_{tk} \, I(\boldsymbol{x} \in R_{tk})
 $$  {#eq-cls-bst-tree-node}
 
-The structure $\mathcal{T}_t$ determines which terminal node $\boldsymbol{x}$ lands in, and $w_{tk}$ is the value returned by that node. The ensemble is built one tree at a time:
+The structure $\mathcal{T}_t$ determines which terminal node $\boldsymbol{x}$ lands in, and $w_{tk}$ is the value returned by that node. 
+
+The ensemble is built one tree at a time:
 
 $$
 \mathcal{F}_t(\boldsymbol{x}) = \mathcal{F}_{t-1}(\boldsymbol{x}) + \alpha \, f_t(\boldsymbol{x})
 $$
 
-As we'll see, this is analogous to the typical gradient step shown in  @eq-gd-step (with proper indices): 
+where $\alpha$ is the learning rate. As we'll see, this is analogous to the typical gradient step shown in  @eq-gd-step (with proper indices): 
 
 $$
 \boldsymbol{\theta}_{t} = \boldsymbol{\theta}_{t-1} - \alpha\:g(\boldsymbol{\theta}_{t-1})
@@ -1771,24 +1839,6 @@ forest_xrf_res |>
 ```{r}
 #| label: cls-ensemble-compare
 #| include: false
-load("../RData/forest_logistic_set_res.Rdata")
-load("../RData/forest_glmnet_set_res.Rdata")
-load("../RData/forest_linear_res.Rdata")
-
-load("../RData/forest_fda_set_res.Rdata")
-load("../RData/forest_knn_set_res.Rdata")
-
-load("../RData/forest_mlp_set_res.Rdata")
-load("../RData/forest_autoint_set_res.Rdata")
-load("../RData/forest_saint_set_res.Rdata")
-load("../RData/forest_tabpfn_set_res.Rdata")
-load("../RData/forest_tabicl_set_res.Rdata")
-
-load("../RData/forest_cart_set_res.RData")
-load("../RData/forest_c5_set_res.RData")
-load("../RData/forest_cit_set_res.RData")
-load("../RData/forested_obl_set_res.RData")
-load("../RData/forest_c5rules_set_res.RData")
 
 forest_ensemble_set_res <-
   as_workflow_set(
