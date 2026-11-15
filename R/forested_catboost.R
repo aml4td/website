@@ -132,8 +132,8 @@ ctb_param <-
   ctb_spec |>
   extract_parameter_set_dials() |>
   update(
-    learn_rate = learn_rate(c(-6, -0.5)), 
-    tree_depth = tree_depth(c(2, 16))
+    tree_depth = tree_depth(c(2, 16)),
+    l2_leaf_reg = l2_leaf_reg(c(-4, log10(25)))
   )
 
 set.seed(458)
