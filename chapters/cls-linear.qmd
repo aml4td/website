@@ -1948,6 +1948,680 @@ The _posterior predictive distribution_ is used to generate predictions for new 
 
 `r r_comp("cls-linear.html#sec-logistic-bayes")`
 
+## Partial Least Squares {#sec-cls-pls}
+
+As we just saw in @sec-logistic-multicollinearity, multicollinearity poses a fundamental problem for estimating the coefficients of a logistic regression model. The root of the problem is mathematical.  Specifically, solving for the coefficients requires inverting the covariance matrix of the predictors. When two predictors are perfectly correlated, this matrix is singular and cannot be inverted, so no unique set of coefficient estimates exists.  When predictors are highly collinear but not perfectly correlated, the inversion is possible but numerically unstable, which inflates the variance of the coefficient estimates and produces models that are unreliable for both interpretation and prediction. A closely related difficulty arises when the number of predictors exceeds the number of observations; in this case the covariance matrix is singular, and the usual estimation procedure fails. Regularization, as demonstrated above, is one effective solution to these problems.
+
+Sections [-@sec-pca] and [-@sec-pls]  described principal component analysis (PCA) or partial least squares (PLS), respectively. Here, we'll focus again on PLS and describe how it can be used as the supervised model (rather than a preprocessor).
+
+Let's summarize our previous points from @sec-pls related to PLS and PCA: 
+
+- Like PCA, PLS creates new features, called components, that are linear combinations of the original predictors. 
+- Unlike PCA, PLS is supervised. PLS is intended to use outcome data alongside predictors to derive components. 
+- We usually center and scale the predictors before performing PLS. 
+
+PCA is designed to find components that maximize the variances of the data. Its objective function aims to capture as much information as possible (i.e., variance and covariance) from the original predictors. It tries to represent the predictor space well. 
+
+PLS, by contrast, is a **supervised** dimension reduction procedure. Its linear combinations are chosen to maximally summarize the covariance with the response. This means that PLS finds components that summarize the variation of the predictors while simultaneously requiring these components to have maximum correlation with the response. PLS therefore strikes a compromise between the objectives of predictor-space dimension reduction and a predictive relationship with the response. Because the class information is considered while the dimension of the predictor space is being reduced, PLS is steered toward the subspace that is actually useful for classification.
+
+Let's examine a simple example to contrast the objectives of PCA and PLS. Consider the data in @fig-pca-pls-directions, which contain two correlated predictors and a binary response. In this example, the two predictors are highly correlated.  The first PCA component points in the direction of maximum variability.  However, the classes are partitioned along the boundary of maximum variance which is nearly orthogonal to the direction that will provide optimal classification. The right-hand panel of @fig-pca-pls-directions shows the first PLS direction for the same data. Because PLS utilizes the class information, it identifies the direction that best separates the classes while reducing dimension, even though this direction accounts for a lower proportion of the total predictor variability.
+
+```{r}
+#| label: cls-pca-pls-comparison
+#| include: false
+
+set.seed(816)
+n <- 200
+x1 <- 10 * runif(n)
+x2 <- x1 + rnorm(n, sd = 2.5)
+
+example_data <- tibble(x1 = x1, x2 = x2)
+
+trans_data <- scale(example_data) |> as.matrix()
+
+# PCA rotation (unsupervised directions)
+pca_rot <- prcomp(trans_data)$rotation
+
+# Class separation lies along the LOW-variance (PC2) direction, so that the
+# first principal component carries essentially no class information.
+pc1 <- as.numeric(trans_data %*% pca_rot[, 1])
+pc2 <- as.numeric(trans_data %*% pca_rot[, 2])
+
+set.seed(816)
+class_bin <- ifelse(pc2 > median(pc2), 1, 0)
+# A small amount of label noise
+flip <- sample(seq_len(n), size = round(0.03 * n))
+class_bin[flip] <- 1 - class_bin[flip]
+
+y_class <- factor(
+  ifelse(class_bin == 1, "A", "B"),
+  levels = c("A", "B")
+)
+
+pls_example <- tibble(
+  x1 = trans_data[, 1],
+  x2 = trans_data[, 2],
+  Class = y_class
+)
+
+# First PLS direction (supervised weights): covariance of each predictor with
+# the 0/1 class indicator, normalized to unit length.
+y01 <- as.numeric(y_class) - 1
+pls_w <- as.numeric(t(trans_data) %*% y01)
+pls_w <- pls_w / sqrt(sum(pls_w^2))
+
+# Component scores
+pc1_score <- as.numeric(trans_data %*% pca_rot[, 1])
+pls1_score <- as.numeric(trans_data %*% pls_w)
+
+scores_df <- tibble(
+  PC1 = pc1_score,
+  PLS1 = pls1_score,
+  Class = y_class
+)
+```
+
+```{r}
+#| label: fig-pca-pls-directions
+#| echo: false
+#| out-width: 70%
+#| fig-width: 7
+#| fig-height: 4.5
+#| fig-cap: An example contrasting first PCA and PLS directions for a simple data set with two predictors and a binary response.
+#| fig-alt: "An example contrasting first PCA and PLS directions for a simple data set with two predictors and a binary response. **Left**: The first principal component direction (arrow) follows the maximal predictor variability, which is ineffective in partitioning the groups. **Right**: The first PLS direction (arrow) effectively separates the groups, even though it accounts for less of the total predictor variability."
+
+plot_df <- tibble(x1 = trans_data[, 1], x2 = trans_data[, 2], Class = y_class)
+
+# Scale arrows for visibility
+arrow_len <- 1.6
+pca_arrow <- tibble(
+  x = 0,
+  y = 0,
+  xend = arrow_len * pca_rot[1, 1],
+  yend = arrow_len * pca_rot[2, 1]
+)
+pls_arrow <- tibble(
+  x = 0,
+  y = 0,
+  xend = arrow_len * pls_w[1],
+  yend = arrow_len * pls_w[2]
+)
+
+x_pad <- 0.9
+y_pad <- 1.1
+
+p_pca <- ggplot(plot_df, aes(x = x1, y = x2, color = Class, shape = Class)) +
+  geom_point(size = 2.2, alpha = 0.85) +
+  scale_color_manual(values = c("A" = "#DF91A3FF", "B" = "#A3AD62FF")) +
+  scale_shape_manual(values = c("A" = 17, "B" = 16)) +
+  geom_segment(
+    data = pca_arrow,
+    aes(x = x, y = y, xend = xend, yend = yend),
+    inherit.aes = FALSE,
+    arrow = arrow(length = unit(0.25, "cm")),
+    linewidth = 1.2,
+    linetype = "solid",
+    color = "black"
+  ) +
+  coord_obs_pred() +
+  labs(x = "Predictor 1", y = "Predictor 2", title = "PCA Direction") +
+  theme(legend.position = "none")
+
+p_pls <- ggplot(plot_df, aes(x = x1, y = x2, color = Class, shape = Class)) +
+  geom_point(size = 2.2, alpha = 0.85) +
+  scale_color_manual(values = c("A" = "#DF91A3FF", "B" = "#A3AD62FF")) +
+  scale_shape_manual(values = c("A" = 17, "B" = 16)) +
+  geom_segment(
+    data = pls_arrow,
+    aes(x = x, y = y, xend = xend, yend = yend),
+    inherit.aes = FALSE,
+    arrow = arrow(length = unit(0.25, "cm")),
+    linewidth = 1.2,
+    color = "black"
+  ) +
+  coord_obs_pred() +
+  labs(x = "Predictor 1", y = "Predictor 2", title = "PLS Direction") +
+  theme(legend.position = "right")
+
+p_pca +
+  p_pls +
+  plot_layout(guides = 'collect') &
+  theme(legend.position = "bottom")
+```
+
+@fig-pca-pls-separation helps contrast one of the key differences between PCA and PLS. The left-hand panel displays the class-conditional distribution of the first principal component score. Because the first PCA direction was chosen without knowledge of the class labels, the two classes overlap entirely along this component.  This means that the first principal component contains essentially no predictive information about the response. The right-hand panel shows the corresponding distribution of the first PLS component score. Here the two classes are shifted apart, reflecting the fact that the PLS direction was constructed to be maximally correlated with the classification outcome. The same two predictors therefore yield a useless first PCA component but a useful first PLS, simply because PLS was allowed to utilize the response.
+
+```{r}
+#| label: fig-pca-pls-separation
+#| echo: false
+#| out-width: 80%
+#| fig-width: 8
+#| fig-height: 3.75
+#| fig-cap: Class separation achieved by the first component of each method.
+#| fig-alt: "Class separation achieved by the first component of each method. **Left**: The first principal component shows almost no separation between the classes. **Right**: The first PLS component shows substantially better separation."
+
+scores_long <- scores_df |>
+  pivot_longer(
+    cols = c(PC1, PLS1),
+    names_to = "Component",
+    values_to = "Score"
+  ) |>
+  mutate(
+    Component = dplyr::recode(
+      Component,
+      PC1 = "First PCA component",
+      PLS1 = "First PLS component"
+    )
+  )
+
+ggplot(scores_long, aes(x = Score, fill = Class)) +
+  geom_density(alpha = 0.6, color = NA) +
+  geom_rug(aes(color = Class), alpha = 0.5, length = unit(0.05, "npc")) +
+  scale_color_manual(values = c("A" = "#DF91A3FF", "B" = "#A3AD62FF")) +
+  scale_fill_manual(values = c("A" = "#DF91A3FF", "B" = "#A3AD62FF")) +
+  facet_wrap(~Component, scales = "free_x") +
+  labs(x = "Component score", y = "Density") +
+  theme(legend.position = "top")
+```
+
+Clearly this example is designed to highlight an important flaw of unsupervised dimension reduction for classification. In practice, PCA usually does not fail this drastically.  However, PLS will perform as well as or better than PCA for classification.  Based on our experience, the number of components retained via cross-validation using PCA is always equal to or greater than the number retained by PLS. This is because the dimensions retained by PLS have been chosen to be optimally related to the response, while those chosen by PCA have not.
+
+### Mathematical Formulation {#sec-pls-math}
+
+PLS originated with Herman Wold's non-linear iterative partial least squares (NIPALS) algorithm [@wold1966estimation; @wold1982soft], which linearized models that were non-linear in the parameters. Subsequently, @Wold1983 adapted the NIPALS method for the regression setting with correlated predictors and called this adaptation "partial least squares." The application of PLS to a classification problem dates back to at least the mid-1980s [@berntsson1986comparison]. Not surprisingly, the chemometrics community, which developed and refined the original algorithm, also explored and extended the use of PLS to the classification setting, terming the technique PLS discriminant analysis (PLSDA) [@barker2003partial].
+
+To describe the method, we first must address a practical matter: the coding of the response. For a two-group problem, the classes are encoded into a set of 0/1 dummy variables. With $C$ classes, the result is a set of $C$ dummy variables, where each sample has a one in the column representing its corresponding class.^[Mathematically, if we know $C - 1$ of the dummy variables, then the value of the last dummy variable is directly implied. Hence, it is also possible to use only $C - 1$ dummy variables.] As a result, the response is represented by a *matrix* of dummy variables, $\boldsymbol{Y}$, rather than by a single vector.  Based on the context of this chapter, we will focus on the binary classification case represented by a binary reponse vector.
+
+Briefly, the NIPALS algorithm iteratively seeks to find underlying, or *latent*, relationships among the predictors that are highly correlated with the response. Each iteration of the algorithm assesses the relationship between the predictors, $\underset{n\times p}{\boldsymbol{X}}$, and the response, $\underset{n\times 1}{\boldsymbol{Y}}$, and numerically summarizes this relationship with a vector of weights, $\underset{p\times 1}{\boldsymbol{w}}$; this vector is also known as a *direction*. The predictor data are then orthogonally projected onto the direction to generate scores, $\underset{n\times 1}{\boldsymbol{t}}$. The scores are used to generate loadings, $\boldsymbol{q_{px1}}$, which measure the correlation of the score vector to the original predictors. At the end of each iteration, the predictors and the response are "deflated" by subtracting the current estimate of the predictor and response structure, respectively. The deflated predictor and response information are then used to generate the next set of weights, scores, and loadings. These quantities are sequentially stored in matrices $\boldsymbol{W}$, $\boldsymbol{T}$, and $\boldsymbol{Q}$, and are used for predicting new samples and computing predictor importance. A thorough explanation of the algorithm can be found in @Geladi1986, and the algorithm is outlined in @alg-nipals.
+
+::: {#alg-nipals}
+
+::::: {.columns}
+
+::::::: {.column width="10%"}
+
+:::::::
+
+::::::: {.column width="80%"}
+
+```pseudocode
+#| html-line-number: true
+#| html-line-number-punc: ":"
+#| label: nipals-alg
+
+\begin{algorithm}
+\begin{algorithmic}
+\State $\boldsymbol{X}$: $n \times p$ matrix of predictors (centered and scaled)
+\State $\boldsymbol{y}$: $n \times 1$ binary response vector, $y_i \in \{0, 1\}$, (centered) for the two-class problem
+\State $M$: number of latent variables
+\State $\boldsymbol{X}_{1} \gets \boldsymbol{X}$, \quad $\boldsymbol{y}_{1} \gets \boldsymbol{y}$ \Comment{initialize matrices}
+\For{$m = 1$ \To $M$}
+  \State $\boldsymbol{w}_{m} \gets \boldsymbol{X}_{m}^{\top}\boldsymbol{y}_{m}$
+  \State $\boldsymbol{w}_{m} \gets \boldsymbol{w}_{m} / \|\boldsymbol{w}_{m}\|$
+  \State $\boldsymbol{t}_{m} \gets \boldsymbol{X}_{m}\boldsymbol{w}_{m}$ \Comment{component scores}
+  \State $\boldsymbol{q}_{m} \gets \boldsymbol{X}_{m}^{\top}\boldsymbol{t}_{m} / (\boldsymbol{t}_{m}^{\top}\boldsymbol{t}_{m})$ \Comment{predictor loadings}
+  \State $c_{m} \gets \boldsymbol{y}_{m}^{\top}\boldsymbol{t}_{m} / (\boldsymbol{t}_{m}^{\top}\boldsymbol{t}_{m})$
+  \State $\boldsymbol{X}_{m+1} \gets \boldsymbol{X}_{m} - \boldsymbol{t}_{m}\boldsymbol{q}_{m}^{\top}$ \Comment{deflate the predictors}
+  \State $\boldsymbol{y}_{m+1} \gets \boldsymbol{y}_{m} - c_{m}\boldsymbol{t}_{m}$ \Comment{deflate the response}
+  \State Store $\boldsymbol{w}_{m}$, $\boldsymbol{t}_{m}$, and $\boldsymbol{q}_{m}$ as column $m$ of $\boldsymbol{W}$, $\boldsymbol{T}$, and $\boldsymbol{Q}$, respectively
+\EndFor
+\State $\boldsymbol{c} \gets (c_{1}, \ldots, c_{m})^{\top}$
+\State $\boldsymbol{\beta} \gets \boldsymbol{W}(\boldsymbol{Q}^{\top}\boldsymbol{W})^{-1}\boldsymbol{c}$ \Comment{regression coefficients on the original predictor scale}
+\State \Return $\boldsymbol{W}$, $\boldsymbol{T}$, $\boldsymbol{Q}$, and $\boldsymbol{\beta}$ (with $\hat{\boldsymbol{y}} = \boldsymbol{X}\boldsymbol{\beta}$ for prediction)
+\end{algorithmic}
+\end{algorithm}
+```
+
+:::::::
+
+::::::: {.column width="10%"}
+
+:::::::
+
+:::::
+
+The NIPALS algorithm @alg-nipals.
+
+:::
+
+To better understand the algorithm's function, @stone1990continuum linked it to the well-known statistical concepts of covariance and regression. In particular, Stone and Brooks showed that, like PCA, PLS finds linear combinations of the predictors. These linear combinations are commonly called *components* or latent variables. While the PCA linear combinations are chosen to maximally summarize predictor-space variability, the PLS linear combinations are chosen to maximally summarize covariance with the response. Formally, the first PLS direction is the vector of weights $\boldsymbol{w}_1$ that solves
+
+$$
+\boldsymbol{w}_1 = \arg\max_{\boldsymbol{w}} \; \operatorname{cov}^2\!\left(\boldsymbol{X}\boldsymbol{w},\, \boldsymbol{Y}\right)
+\quad \text{subject to} \quad \|\boldsymbol{w}\| = 1,
+$$
+
+and the corresponding component scores are $\boldsymbol{t}_1 = \boldsymbol{X}\boldsymbol{w}_1$. Subsequent directions are found by applying the same maximization to the deflated predictor and response matrices, subject to the constraint that each new score vector is orthogonal to those already extracted. In the classification setting, where $\boldsymbol{Y}$ is the matrix of class dummy variables, this objective is to find the linear combination of the predictors whose scores have optimal covariance with the classification response. This is how PLS components are constructed using *both* predictor variability and response information.
+
+Applying PLS in the classification setting with a multivariate response has strong mathematical connections to both canonical correlation analysis and linear discriminant analysis (see @barker2003partial for technical details). Assuming the coding structure described above for the outcome, they showed that the PLS directions in this context are the eigenvectors of a slightly perturbed between-groups covariance matrix (i.e., $\boldsymbol{B}$ from LDA^[The perturbed covariance structure is due to the optimality constraints for the response matrix. @barker2003partial astutely recognized that the response optimality constraint in this setting did not make sense, removed the constraint, and re-solved the problem. Without the response-space constraint, the PLS solution is one that involves exactly the between-groups covariance matrix.]). PLS is therefore seeking to achieve optimal group separation while guided by between-group information. In contrast, PCA seeks to reduce dimensionality using the total variation as directed by the overall covariance matrix of the predictors, which mixes between-group and within-group variation without distinguishing between them.
+
+This research provides a clear rationale for choosing PLS over PCA when dimension reduction is required for classification. However, @Liu2007b point out that if dimension reduction is *not* necessary and classification is the goal, then LDA will always provide a lower misclassification rate than PLS. Hence, LDA still has a necessary place in the classification toolbox.
+
+### Model Forestation Data using PLS {#sec-pls-modeling}
+
+`r r_comp("cls-linear.html#sec-cls-pls")`
+
+```{r}
+#| label: forest-pls-elements
+#| include: false
+
+pls_spec <-
+  pls(num_comp = tune()) |>
+  set_engine("mixOmics") |>
+  set_mode("classification")
+
+pls_set <-
+  workflow_set(
+    preproc = list(
+      simple = bare_rec,
+      "encoded + transformations + splines" = forest_spline_rec
+    ),
+    models = list(pls = pls_spec)
+  )
+
+pls_grid <- tibble(num_comp = seq(1,15,by=2))
+```
+
+```{r}
+#| label: forest-pls-run
+#| include: false
+#| cache: true
+
+pls_res <-
+  pls_set |>
+  workflow_map(
+    fn = "tune_grid",
+    resamples = forested_rs,
+    grid = pls_grid,
+    metrics = cls_mtr,
+    control = control_grid(save_pred = TRUE, save_workflow = TRUE),
+    seed = 1018,
+    verbose = FALSE
+  )
+```
+
+```{r}
+#| label: forest-pls-tuning
+#| include: false
+
+pls_tune_mtr <-
+  pls_res |>
+  mutate(metrics = map(result, collect_metrics)) |>
+  select(wflow_id, metrics) |>
+  unnest(metrics) |>
+  mutate(
+    pipeline = gsub("_pls$", "", wflow_id),
+    pipeline = factor(
+      pipeline,
+      levels = c("simple", "encoded + transformations + splines")
+    )
+  )
+
+pls_best_mtr <-
+  pls_tune_mtr |>
+  filter(.metric == "brier_class") |>
+  slice_min(mean, n = 1, by = pipeline, with_ties = FALSE)
+
+pls_best_mtr_auc <-
+  pls_tune_mtr |>
+  filter(.metric == "roc_auc") |>
+  slice_max(mean, n = 1, by = pipeline, with_ties = FALSE)
+
+logistic_simple <-
+  forest_res |>
+  extract_workflow_set_result(
+    "simple_logistic_mle"
+  ) |>
+  collect_metrics(summarize = TRUE)
+
+```
+
+```{r}
+#| label: forest-pls-best-fits
+#| include: false
+
+pls_simple_best <-
+  pls_res |>
+  extract_workflow_set_result("simple_pls") |>
+  select_best(metric = "brier_class")
+
+pls_spline_best <-
+  pls_res |>
+  extract_workflow_set_result("encoded + transformations + splines_pls") |>
+  select_best(metric = "brier_class")
+
+pls_simple_fit <-
+  pls_res |>
+  extract_workflow("simple_pls") |>
+  finalize_workflow(pls_simple_best) |>
+  fit(forested_train)
+
+pls_spline_fit <-
+  pls_res |>
+  extract_workflow("encoded + transformations + splines_pls") |>
+  finalize_workflow(pls_spline_best) |>
+  fit(forested_train)
+```
+
+```{r}
+#| label: forest-pls-vip-values
+#| include: false
+
+pls_vip <-
+  bind_rows(
+    pls_simple_fit |>
+      extract_fit_engine() |>
+      vip::vi() |>
+      mutate(pipeline = "simple"),
+    pls_spline_fit |>
+      extract_fit_engine() |>
+      vip::vi() |>
+      mutate(pipeline = "encoded + transformations + splines")
+  ) |>
+  mutate(
+    pipeline = factor(
+      pipeline,
+      levels = c("simple", "encoded + transformations + splines")
+    )
+  )
+```
+
+```{r}
+#| label: pls-pdp
+#| include: false
+#| cache: true
+
+pls_prob_yes <- function(model, newdata) {
+  pls_obj <- extract_fit_engine(model)
+  x <-
+    model |>
+    extract_recipe() |>
+    bake(new_data = newdata, all_predictors()) |>
+    as.matrix()
+  y_hat <- predict(pls_obj, newdata = x, dist = "max.dist")$predict
+  y_hat <- y_hat[, , pls_obj$ncomp]
+  # Softmax of the fitted indicators for two classes
+  1 / (1 + exp(y_hat[, "No"] - y_hat[, "Yes"]))
+}
+
+explainer_pls <-
+  explain_tidymodels(
+    pls_spline_fit,
+    data = forested_train |> select(-class),
+    y = as.numeric(forested_train$class == "Yes"),
+    predict_function = pls_prob_yes,
+    label = "",
+    type = "prob",
+    verbose = FALSE
+  )
+
+# Same seed and sample size as the logistic regression PDP so that the same
+# 1,000 locations are profiled.
+set.seed(1805)
+pdp_pls_longitude <- model_profile(
+  explainer_pls,
+  N = 1000,
+  variables = "longitude"
+)
+```
+
+```{r}
+#| label: forest-pls-back-calc
+#| include: false
+
+# Back-calculate the regression coefficients for the processed predictors
+# (i.e., the columns produced by the recipe). mixOmics centers and scales the
+# predictors (X) and the class indicator matrix (Y). With the predictor
+# loadings W and the component scores T, the coefficients on that scale are
+#
+#   B = W (P'W)^-1 C',  where P = X'T and C = Y'T.
+#
+# This is the same calculation used by `predict()` (its `B.hat` element).
+#
+# For two classes, the fitted indicator values sum to one, and plsmod converts
+# them to probabilities with a softmax. This reduces to a logistic function
+# with logit = y_yes - y_no = 2 * y_yes - 1. Rescaling the coefficients for
+# the "Yes" indicator back to the original units of the processed predictors,
+# and then doubling them, puts them on the same logit scale used by logistic
+# regression.
+
+pls_back_calc <- function(wflow_fit, positive = "Yes") {
+  pls_obj <- extract_fit_engine(wflow_fit)
+  num_comp <- pls_obj$ncomp
+
+  # Both matrices are stored after centering and scaling
+  x_scaled <- pls_obj$X
+  y_scaled <- scale(pls_obj$ind.mat)
+  scores <- pls_obj$variates$X[, 1:num_comp, drop = FALSE]
+
+  W <- pls_obj$loadings$X[, 1:num_comp, drop = FALSE]
+  P <- crossprod(x_scaled, scores)
+  C <- crossprod(y_scaled, scores)
+  coef_scaled <- W %*% solve(t(P) %*% W) %*% t(C)
+
+  x_mean <- attr(x_scaled, "scaled:center")
+  x_sd <- attr(x_scaled, "scaled:scale")
+  # Mean and standard deviation of the 0/1 indicator for the positive class
+  y_ind <- as.numeric(pls_obj$Y == positive)
+  y_mean <- mean(y_ind)
+  y_sd <- sd(y_ind)
+
+  # Coefficients for the positive class indicator in the original units of
+  # the processed predictors
+  slopes <- coef_scaled[, positive] * y_sd / x_sd
+  intercept <- y_mean - sum(x_mean * slopes)
+
+  tibble(
+    term = c("(Intercept)", names(slopes)),
+    # Logit scale
+    estimate = c(2 * intercept - 1, 2 * slopes),
+    # Change in the logit for a one standard deviation increase in the term
+    std_estimate = c(NA_real_, 2 * slopes * x_sd)
+  )
+}
+
+pls_simple_coef <- pls_back_calc(pls_simple_fit)
+pls_spline_coef <- pls_back_calc(pls_spline_fit)
+```
+
+```{r}
+#| label: forest-pls-text-values
+#| include: false
+
+pls_ncomp <- function(x) pls_best_mtr$num_comp[pls_best_mtr$pipeline == x]
+pls_brier <- function(x) {
+  signif(pls_best_mtr$mean[pls_best_mtr$pipeline == x], 3)
+}
+glm_brier <- function(x) {
+  forest_res |>
+    extract_workflow_set_result(paste0(x, "_logistic_mle")) |>
+    collect_metrics() |>
+    filter(.metric == "brier_class") |>
+    pluck("mean") |>
+    signif(3)
+}
+
+spl <- "encoded + transformations + splines"
+
+pls_num_spline_terms <- nrow(pls_spline_coef) - 1
+```
+
+The main tuning parameter for PLS is the number of components.  If too few components are used, then the model will not capture a sufficient amount of the predictive signal and will underfit the data yielding a final model that will not optimally predict the outcome.  On the other hand, if too many components are used, the model will overfit the data and will also yield a final model that will not optimally predict the outcome.  To identify the optimal number of components, we will use cross-validation with the training set.
+
+Like logistic regression, PLS only uses the features as they originally exist in the data.  Therefore, the incorporation of feature engineering can help to improve the predictive ability of a PLS model.  Here we will evaluate the two extreme feature sets that were used with logistic regression. The simple pipeline uses dummy variables for county and the predictors in their original units. The full pipeline adds effect encoding for county, ordered quantile normalization, the five interactions identified by the H-statistic, and natural splines, which yields `r pls_num_spline_terms` model terms. These two bracket the range of preprocessing complexity and match the endpoints of the logistic regression comparison.
+
+For the PLS modeling, 1 to 15 latent variables were evaluated.  @fig-forest-pls-tuning shows that, for both feature sets, the Brier score is reduced over the first few components and then levels off. Beyond about five components, the reduction in score is smaller than the uncertainty in the estimates. The numerically best values are `r pls_ncomp("simple")` components for the simple pipeline and `r pls_ncomp(spl)` for the spline pipeline, but the profiles are essentially flat after 5 components. A one-standard-error rule would choose a far simpler model (i.e. fewer components) with little loss in performance.
+
+```{r}
+#| label: fig-forest-pls-tuning
+#| echo: false
+#| out-width: 70%
+#| fig-width: 6
+#| fig-height: 3.5
+#| fig-cap: Cross-validated Brier scores for PLS-DA models as a function of the number of PLS components for two feature engineering pipelines. The red dashed line represents the permutation estimate of the no-information rate. The error bars are 90% confidence intervals based on the naive standard error estimates produced during resampling.
+#| fig-alt: "Line plot with vertical error bars showing cross-validated Brier scores against the number of PLS components (1 to 15) for the simple and the encoded + transformations + splines pipelines. A red dashed horizontal reference line shows the permutation no-information Brier score."
+
+pls_tune_mtr |>
+  filter(.metric == "brier_class") |>
+  mutate(ci_pm = qnorm(0.95) * std_err) |>
+  ggplot(aes(num_comp, mean, col = pipeline)) +
+  geom_hline(yintercept = brier_perm$permutation, col = "red", lty = 2) +
+  geom_point() +
+  geom_line(alpha = 1 / 2) +
+  geom_errorbar(aes(ymin = mean - ci_pm, ymax = mean + ci_pm), width = 1 / 3) +
+  scale_x_continuous(breaks = scales::pretty_breaks()) +
+  scale_y_continuous(limits = c(0, 0.4)) +
+  labs(x = "# PLS Components", y = "Brier Score", col = NULL) +
+  theme(legend.position = "top")
+```
+
+The best cross-validated Brier scores are `r pls_brier("simple")` for the simple pipeline and `r pls_brier(spl)` for the full pipeline. Both sit well below the no-information rate of `r signif(brier_perm$permutation, 3)`, and, as with logistic regression, the added features clearly improves performance.  Both scores are worse than the corresponding logistic regression values of `r glm_brier("simple")` and `r glm_brier(spl)`, however. Most of this gap comes from calibration rather than discrimination: the areas under the ROC curves for the two models are nearly identical:  logistic simple pipeline (`r signif(logistic_simple$mean[logistic_simple$.metric == "roc_auc"], 3)`) versus PLS simple pipeline (`r signif(pls_best_mtr_auc$mean[which(pls_best_mtr_auc$wflow_id == "simple_pls")], 3)`), and logistic full pipeline (`r signif(logistic_mtr$mean[logistic_mtr$.metric == "roc_auc"], 3)`) versus PLS full pipeline (`r signif(pls_best_mtr_auc$mean[which(pls_best_mtr_auc$wflow_id == "encoded + transformations + splines_pls")], 3)`).  PLS-DA fits the class indicators by least squares and converts the fitted values to probabilities with a softmax function.
+
+### Interpreting the Model {#sec-pls-interpreting}
+
+Because PLS is a linear projection technique, it offers a couple of different ways of interpretation.  The first approach is to compute the variable importance in the projection (VIP)^[This was originally termed variable influence on projection.], which measures how much each term contributes to the components, weighted by how much outcome variation each component explains [@wold2001pls].  The second approach involves utilizing the predictor weights and component regression coefficients to estimate coefficients for each predictor.
+
+Mathematically, the variable importance of the $j^{th}$ predictor is defined as:
+
+$$
+\mathrm{VIP}_j = \sqrt{\frac{p \sum_{k=1}^{K} \left( SSY_k \, \frac{w_{jk}^2}{\lVert \mathbf{w}_k \rVert^2} \right)}{\sum_{k=1}^{K} SSY_k}}
+$$ {#eq-pls-vip}
+
+where:
+* $p$ is the number of original predictors
+* $K$ is the number of selected PLS components
+* $SSY_k = q_k^2\mathbf{t_{k}^T}\mathbf{t_{k}}$; $q_k$ is the Y-loading and $\mathbf{t_{k}}$ is the score vector for component $k$
+* $w_{jk}$ is the weight of the $j^{th}$ variable on the $k^{th}$ component, and
+* $\lVert \mathbf{w}_k \rVert^2$ is the squared norm of the weight vector for component $k$
+
+Examining the formula, we see that the more contribution to the response for component $k$ and the larger the weight of predictor $j$ on component $k$, the larger the value of the variable importance of predictor $j$.  The predictors that have the largest contributions to components that best explain the response will have the highest importance scores.  @wold2001pls suggest the value of 1 as a threshold for identifying important predictors.  However, this is not based on a formal statistical test.  Instead, VIP provides a relative ranking of predictors and enables us to understand which ones have the most impact on the response.
+
+In @fig-forest-pls-vip, the simple pipeline is dominated in importance by moisture, temperature, and location variables.  In the full pipeline, the effect-encoded county is the single most important term, followed by spline terms for moisture and temperature. Here, importance is spread across many basis functions of the same few underlying predictors.
+
+```{r}
+#| label: fig-forest-pls-vip
+#| echo: false
+#| out-width: 90%
+#| fig-width: 9
+#| fig-height: 5
+#| fig-cap: The top 10 model terms ranked by their variable importance in the projection (VIP) scores for the best PLS-DA model from each feature engineering pipeline. The dashed line at a value of one is a common rule-of-thumb threshold for important predictors.
+#| fig-alt: "Two-panel horizontal bar chart of VIP scores. The left panel shows the top 10 terms for the simple pipeline and the right panel shows the top 10 terms for the encoded + transformations + splines pipeline. A vertical dashed line marks a VIP value of one."
+
+pls_vip |>
+  slice_max(Importance, n = 10, by = pipeline, with_ties = FALSE) |>
+  mutate(
+    term = paste(Variable, as.integer(pipeline), sep = "___"),
+    term = reorder(term, Importance)
+  ) |>
+  ggplot(aes(Importance, term)) +
+  geom_col(alpha = 1 / 2, col = "black", width = 0.8) +
+  geom_vline(xintercept = 1, lty = 2) +
+  facet_wrap(~pipeline, scales = "free_y") +
+  scale_y_discrete(labels = function(x) gsub("___.*$", "", x)) +
+  labs(x = "Variable Importance in the Projection (VIP)", y = NULL)
+```
+
+The partial dependence profile for longitude in @fig-forest-pls-pdp has the a similar shape as the logistic regression profile in @fig-longitude-pdp. There is a moderate valley in the western part of the state near -122 degrees, a rise to a peak near -119 degrees, and a decline at the eastern border. For this model, the individual profiles are nearly parallel. The logistic regression profiles, by contrast, range from near zero to near one.  The dampening and smoothing of the impact of longitude on the probability of forestation is because each component is a linear combination of all predictors.
+
+```{r}
+#| label: fig-forest-pls-pdp
+#| echo: false
+#| out-width: 70%
+#| fig-width: 6
+#| fig-height: 4
+#| fig-cap: "A partial dependency plot for longitude from the best PLS-DA model with the encoded + transformations + splines pipeline, averaged over 1,000 random draws of the training set. The red line shows the average trend while the grey lines show the profiles for the individual locations."
+#| fig-alt: "Partial dependence plot of longitude versus the predicted probability of forestation for the PLS-DA model. A bold red line shows the average trend across 1,000 sampled locations, with semi-transparent grey profile lines for each location in the background."
+#| warning: false
+
+as_tibble(pdp_pls_longitude$agr_profiles) |>
+  ggplot(aes(`_x_`, `_yhat_`)) +
+  geom_line(
+    data = as_tibble(pdp_pls_longitude$cp_profiles),
+    aes(x = longitude, group = `_ids_`),
+    linewidth = 0.5,
+    alpha = 0.05,
+    color = "gray50"
+  ) +
+  scale_y_continuous(limits=c(0, 1), breaks=c(0, 0.25, 0.5, 0.75, 1)) +
+  geom_line(color = "darkred", linewidth = 1.2, alpha = 0.8) +
+  labs(y = "Probability of Forestation", x = "Longitude")
+```
+
+A second approach to interpreting the PLS model is to estimate a coefficient per term.  Although the model is fit on components, it remains linear in the original model terms. Combining the predictor weights with the component regression coefficients gives one coefficient per term.  The equation for this coefficient is $\mathbf{\beta} = \boldsymbol{W}(\boldsymbol{P}^{\top}\boldsymbol{W})^{-1}\boldsymbol{c}$, and can be found on line 13 of @nipals-alg.  The coefficients can be interpreted like a logistic regression slope.
+
+Let $\eta = \mathbf{X\mathbf{\beta}}$ be the vector of fitted values, so that for the $i$th sample
+
+$$
+\eta_i = \sum_{k=1}^{p} b_k \, x_{ik},
+$$
+
+is the linear predictor on the fitted indicator scale.  With a binary response, the softmax of the fitted indicators reduces to a logistic function.  In our example, the probability of forested would then be
+
+$$
+\Pr[\text{forested}] = \frac{\exp(\eta)}{\exp(\eta) + \exp(1 - \eta)} = \frac{1}{1 + \exp\left[-\left(2\eta - 1\right)\right]}.
+$$
+
+The log-odds is therefore, $2\eta - 1$. Doubling the coefficient for the forested indicator places it on the logit scale,
+
+$$
+\beta_k = 2\,b_k,
+$$
+
+since $2\eta - 1 = 2\sum_k b_k x_k - 1$. Multiplying by each term's standard deviation then makes the magnitudes comparable across terms,
+
+$$
+\beta_k^{\text{std}} = \beta_k \, s_k,
+$$
+
+so that $\beta_k^{\text{std}}$ is the change in the log-odds associated with a one standard deviation increase in the $k$th model term.
+
+@tbl-pls-simple-coef shows that, in the simple pipeline, maximum vapor pressure and minimum annual temperature have the largest effects, and both reduce the probability of forestation. Annual precipitation and the maximum, mean, and January minimum temperatures increase it. Several counties, including Stevens, Ferry, and Okanogan, have the largest positive county indicators.
+
+```{r}
+#| label: tbl-pls-simple-coef
+#| tbl-cap: "Back-calculated coefficients (on the logit scale) for the best PLS-DA model using the simple pipeline. The top section lists the numeric predictors in their original units, ordered by the absolute standardized coefficient (the change in the logit for a one standard deviation increase). The bottom section shows the five county indicators with the largest standardized coefficients."
+#| echo: false
+
+pls_simple_tbl <-
+  pls_simple_coef |>
+  filter(term != "(Intercept)") |>
+  mutate(
+    listing = ifelse(
+      grepl("^county_", term),
+      "County Indicators (Largest Five)",
+      "Numeric Predictors"
+    ),
+    term = gsub("^county_", "", term),
+    term = gsub("_", " ", term)
+  ) |>
+  arrange(desc(abs(std_estimate)))
+
+bind_rows(
+  pls_simple_tbl |> filter(listing == "Numeric Predictors"),
+  pls_simple_tbl |>
+    filter(listing != "Numeric Predictors") |>
+    slice_max(abs(std_estimate), n = 5)
+) |>
+  group_by(listing) |>
+  gt() |>
+  fmt_number(
+    columns = c(estimate, std_estimate),
+    n_sigfig = 3,
+    drop_trailing_zeros = FALSE
+  ) |>
+  cols_label(
+    term = "Model Term",
+    estimate = "Estimate",
+    std_estimate = "Standardized"
+  ) |>
+  tab_style(
+    style = cell_text(style = "italic"),
+    locations = cells_row_groups()
+  )
+```
+
+`r r_comp("cls-linear.html#sec-cls-pls")`
+
 ## Multinomial Regression {#sec-multinomial-reg}
 
 Logistic regression is technically constrained to use outcomes with two possible classes. Its multiclass analog is called _multinomial regression_, primarily because the outcome data are assumed to follow a multinomial distribution. The most basic model is parameterized such that each class level has its own linear predictor $\eta_{j} = \boldsymbol{x}'\boldsymbol{\beta}_{j}$. The fundamental complication is that the $C$ probability estimates must sum to 1 and this constraint must be addressed when estimating models.
