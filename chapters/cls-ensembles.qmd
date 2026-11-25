@@ -60,7 +60,7 @@ load("../RData/forest_c5.RData")
 load("../RData/forest_xgboost.RData")
 load("../RData/forest_lightgbm.RData")
 load("../RData/forest_catboost.RData")
-load("../RData/forest_xrf.RData")
+load("../RData/forest_rbe.RData")
 
 load("../RData/forest_logistic_set_res.Rdata")
 load("../RData/forest_glmnet_set_res.Rdata")
@@ -1761,76 +1761,142 @@ The RuleFit model of @friedman2008predictive is an interesting amalgamation of b
  
 The rule set can be pruned for performance (e.g., via C5.0 rule pruning) or to address issues such as zero-variance terms. For some tree structures, the complete set of rules for a single tree is likely to create linear dependencies between predictors, which can also be pruned. Overall, it is probably easier to let the regularized model eliminate non-informative or pathological terms using Lasso/L<sub>1</sub> penalization, which can be optimized during tuning. 
 
-tuning parameters, hybrid grid, etc. turn off CTR via `final_ctr_computation_mode='Skip'`
+For each of the three modern boosting models, the following parameters were optimized for performance:  
+
+```{r}
+#| label: rbe-param-list
+#| echo: false
+#| results: asis
+
+rbe_mtr <- 
+  forest_rbe_res |> 
+  collect_metrics() |> 
+  filter(.metric == "brier_class")
+
+can_size <- 
+  rbe_mtr |> 
+  nrow()
+
+sfd_size <- 
+  rbe_mtr |> 
+  count(learn_rate) |> 
+  nrow()
+
+submod_size <- 
+  forest_rbe_res |> 
+  collect_metrics() |> 
+  count(penalty) |> 
+  nrow()
+
+forest_rbe_res |>
+  .get_tune_parameters() |>
+  as_tibble() |>
+  filter(id != "method") |> 
+  mutate(
+    Parameter = map_chr(object, ~ .x$label),
+    Lower = map_dbl(object, ~ .x$range[[1]]),
+    Upper = map_dbl(object, ~ .x$range[[2]]),
+    transform = map_chr(
+      object,
+      ~ ifelse(is.null(.x$trans$name), "", .x$trans$name)
+    ),
+    Lower = map2_chr(
+      Lower,
+      transform,
+      ~ ifelse(.y == "log-10", paste0("10<sup>", .x, "</sup>"), paste(.x))
+    ),
+    Upper = map2_chr(
+      Upper,
+      transform,
+      ~ ifelse(.y == "log-10", paste0("10<sup>", .x, "</sup>"), paste(.x))
+    ),
+    transform = map_chr(
+      transform,
+      ~ ifelse(.x != "", paste0("(", .x, ")"), .x)
+    ),
+    Parameter = gsub("#", "Number of", Parameter),
+    item = paste0(" - ", Parameter, ": ", Lower, " to ", Upper)
+  ) |>
+  pluck("item") |>
+  cat(sep = "\n")
+```
+
+The number of trees for each was fixed at 50. 
+
+For this model, the boosting parameters generate the rules, and a regularized model then selects which rules to include. When we tune this model, we'd like to decouple rule generation from feature selection so we don't generate a lot of redundant computation. The glmnet penalization approach computes model parameters across all possible penalties at once. For efficiency, we create a hybrid grid that has a space-filling design for the boosting parameters (with `r sfd_size` candidates) and is crossed with a regular grid containing `r submod_size * 3` candidates: `r submod_size` values of the regularization penalty and a parameter for which boosting model should be used (e.g., XGBoost, etc.). This means that we _evaluate_ `r can_size` candidates, but we only train `r can_size / submod_size` models (per resample). 
+
+The results are in @fig-forest-rulefit where there is a different row for each of the boosting models. Post-training, we also computed the mean number of model terms (after regularization) and the mean rule size. In general, the $m_{try}$ parameter had little effect, although CatBoost did not like extremely small values. The Brier scores appear to decrease as depth moves from one to three splits, then increase after that. The learning rate did not appear to affect performance in any significant way. The L<sub>1</sub> penalization parameter showed a strong trend: large values removed too many rules, and small values did not remove enough. The best values were between 0.01 and 0.001. In the end, the best configuration used  `r forest_rbe_best$method` with $m_{try} = `r round(forest_rbe_best$mtry[1], 2)`$, a tree depth of `r forest_rbe_best$tree_depth[1]`, a learning rate of 10<sup>`r fmt(log10(forest_rbe_best$learn_rate), digits = 3)`</sup>, and a penalty of L<sub>1</sub> penalty of `r fmt(forest_rbe_best$penalty)`.  
 
 ```{r}
 #| label: fig-forest-rulefit
 #| echo: false
-#| out-width: 90%
-#| fig-width: 10
+#| out-width: 100%
+#| fig-width: 11
 #| fig-height: 6
-#| fig-cap: "Tuning results for RuleFit. The panel on the right reflects the average number of terminal nodes in the ensemble for different tuning parameter candidates."
+#| fig-cap: "Tuning results for RuleFit. "
 # fmt: skip
-xrf_ord <- 
-  c("Mtry", "Minimal Node Size", 
-    "Tree Depth", "Learning Rate (log-10)", 
-    "Penalty (log-10)", "# Coefficients (log-10)", "Mean Rule Size")
-param_cols <- c(
-  "Mtry",
-  "Minimal Node Size",
-  "Tree Depth",
-  "Learning Rate (log-10)",
-  "Penalty (log-10)"
-)
-forest_xrf_res |>
+rbe_ord <-
+  c(
+    "Proportion Randomly Selected Predictors",
+    "Tree Depth",
+    "Learning Rate (log10)",
+    "Amount of Regularization (log10)",
+    "# Coefficients (log10)",
+    "Mean Rule Size"
+  )
+param_cols <- rbe_ord[1:4]
+
+forest_rbe_res |>
   collect_extracts() |>
   select(-penalty) |>
   unnest(.extracts) |>
   summarize(
-    num_coef = mean(num_coef),
-    num_rule_terms = mean(num_rule_terms),
-    .by = c(.config)
+    `# Coefficients` = mean(`# Coefficients`),
+    `Mean Rule Size` = mean(`Mean Rule Size`),
+    .by = c(mtry, tree_depth, learn_rate, penalty, method)
   ) |>
   full_join(
-    forest_xrf_res |>
+    forest_rbe_res |>
       collect_metrics(type = "wide"),
-    by = ".config"
+    by = join_by(mtry, tree_depth, learn_rate, penalty, method)
   ) |>
   mutate(
     learn_rate = log10(learn_rate),
-    num_coef = log10(num_coef),
-    penalty = log10(penalty)
+    penalty = log10(penalty),
+    `# Coefficients` = log10(`# Coefficients`)
   ) |>
   rename(
-    `# Coefficients (log-10)` = num_coef,
-    `Learning Rate (log-10)` = learn_rate,
-    `Mean Rule Size` = num_rule_terms,
-    `Minimal Node Size` = min_n,
-    Mtry = mtry,
+    `Proportion Randomly Selected Predictors` = mtry,
+    `Learning Rate (log10)` = learn_rate,
+    `Amount of Regularization (log10)` = penalty,
     `Tree Depth` = tree_depth,
-    `Penalty (log-10)` = penalty
-  ) |>
-  select(-mn_log_loss, -roc_auc, -pr_auc) |>
-  pivot_longer(
-    -c(.config, brier_class),
-    names_to = "parameter",
-    values_to = "value"
-  ) |>
+    `# Coefficients (log10)` = `# Coefficients`
+  ) |> select(-.config, -mn_log_loss, -pr_auc, -roc_auc) |>
+  pivot_longer(cols = c(-method, -brier_class)) |>
   mutate(
-    is_param = parameter %in% param_cols,
-    parameter = factor(parameter, levels = xrf_ord)
-  ) |>
-  ggplot(aes(value, brier_class, col = is_param)) +
-  geom_point(alpha = 0.5, cex = 2, show.legend = FALSE) +
-  facet_wrap(~parameter, scales = "free_x") +
-  labs(y = "Brier Score", x = NULL) +
-  theme(
-    strip.text = element_text(size = 12),
-    strip.text.x = element_text(margin = margin(t = 4, b = 4))
+    name = factor(name, levels = rbe_ord),
+    is_param = name %in% param_cols,
+    method = if_else(method == "xgboost", "XGBoost", method),
+    method = if_else(method == "lightgbm", "LightGBM", method),
+    method = if_else(method == "catboost", "CatBoost", method)
+    ) |>
+  ggplot(aes(value, brier_class)) +
+  geom_point(
+    aes(col = is_param, shape = is_param),
+    alpha = 1 / 2,
+    cex = 1,
+    show.legend = FALSE
   ) +
+  # geom_smooth(se = FALSE, col = "blue") +
+  facet_grid(method ~ name, scale = "free_x") +
+  theme_bw() +
+  theme(legend.position = "top") +
+  labs(x = NULL, y = "Brier Score") +
   scale_shape_manual(values = c(17, 16)) +
   scale_color_manual(values = c("#BE3428FF", "black"))
 ```
+
+Looking at the two columns on the right-hand side, the number of model coefficients reemphasizes that the penalization effect is the most important tuning factor for these data. The mean rule size depends on the penalty and the tree depth. These results show that rules with one or two components are less likely to reduce performance. 
 
 ## Comparisons to Previous Models {#sec-cls-ensemble-compare}
 
@@ -1849,7 +1915,7 @@ forest_ensemble_set_res <-
     XGBoost = forest_xgb_res |> butcher::butcher(),
     LightGBM = forest_lgb_res |> butcher::butcher(),
     BART = forest_bart_res |> butcher::butcher(),
-    RuleFit = forest_xrf_res |> butcher::butcher()
+    RuleFit = forest_rbe_res |> butcher::butcher()
   )
 
 all_sets <-
