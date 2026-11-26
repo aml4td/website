@@ -48,24 +48,25 @@ lgb_spec <-
     trees = 2000,
     mtry = tune(),
     min_n = tune(),
-    tree_depth = tune(),
     learn_rate = tune(),
-    stop_iter = 25
+    stop_iter = 5
   ) |>
   set_engine(
     "lightgbm",
     validation = 0.1,
     lambda_l1 = tune(),
-    lambda_l2 = tune()
+    lambda_l2 = tune(),
+    max_leaves = tune()
   )
 
 lgb_param <-
   lgb_spec |>
   extract_parameter_set_dials() |>
   update(
-    tree_depth = tree_depth(c(2, 32)),
     lambda_l1 = penalty_L1(),
-    lambda_l2 = penalty_L2())
+    lambda_l2 = penalty_L2(),
+    max_leaves = max_leaves()
+  )
 
 set.seed(458)
 forest_lgb_res <-

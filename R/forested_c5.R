@@ -5,8 +5,8 @@ library(mirai)
 
 # ------------------------------------------------------------------------------
 
-daemons(5)
-load("~/content/website/RData/forested_data.RData")
+daemons(8)
+load("RData/forested_data.RData")
 cls_mtr <- metric_set(brier_class, roc_auc, pr_auc, mn_log_loss)
 
 # ------------------------------------------------------------------------------
