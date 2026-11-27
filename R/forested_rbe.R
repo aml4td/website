@@ -56,7 +56,8 @@ rbe_spec <-
 
 rbe_param <-
   rbe_spec |>
-  extract_parameter_set_dials() 
+  extract_parameter_set_dials() |> 
+  update(tree_depth = tree_depth(c(1, 6)))
 
 rbe_grid <-
   rbe_param |>
