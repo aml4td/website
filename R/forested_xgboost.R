@@ -6,7 +6,7 @@ library(mirai)
 
 # ------------------------------------------------------------------------------
 
-daemons(5)
+daemons(8)
 load("RData/forested_data.RData")
 cls_mtr <- metric_set(brier_class, roc_auc, pr_auc, mn_log_loss)
 
@@ -50,7 +50,7 @@ xgb_spec <-
     learn_rate = tune(),
     stop_iter = 5
   ) |> 
-  set_engine("xgboost", validation = 0.1, alpha = tune(), lambda = tune())
+  set_engine("xgboost3", validation = 0.1, alpha = tune(), lambda = tune())
 
 xgb_param <-
   xgb_spec |>

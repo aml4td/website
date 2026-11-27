@@ -21,7 +21,7 @@ if (!rlang::is_installed("catboost")) {
 
 # ------------------------------------------------------------------------------
 
-daemons(7)
+daemons(3)
 load("RData/forested_data.RData")
 cls_mtr <- metric_set(brier_class, roc_auc, pr_auc, mn_log_loss)
 
